@@ -186,6 +186,65 @@ describe("strategist provider service routing", () => {
     expect(resolved.decision.executionAdapterId).toBe("local-ollama");
     expect(resolved.decision.fallbackPolicyId).toBe("strict-supported-only");
   });
+
+  it("ignores stale selected models that are outside the active Strategist strategy", () => {
+    const state = buildDefaultState([]);
+    const model = "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF:Q4_K_M";
+    const provider = {
+      ...state.providers.find((item) => item.id === "gx10-local-llama")!,
+      id: "local-llamacpp-primary",
+      label: "Local llama.cpp Test",
+      apiBaseUrl: "http://192.168.1.13:8081/v1",
+      allowedModels: [model],
+      primaryModel: model,
+      modelContext: [{ model, maxContextTokens: 8192, tokenEstimateMethod: "provider-metadata" as const, source: "runtime-node" as const }],
+      status: "ready" as const,
+      credentialStatus: "configured" as const,
+    };
+    const runtimeNode = {
+      ...state.runtimeNodes.find((item) => item.id === "node-gx10-qwen")!,
+      id: "node-local-llamacpp-primary",
+      label: "Local llama.cpp Test Runtime",
+      providerProfileId: provider.id,
+      endpoint: "http://192.168.1.13:8081/v1",
+      supportedModels: [model],
+      healthState: "ready" as const,
+    };
+    const configuredState = {
+      ...state,
+      providers: [...state.providers, provider],
+      runtimeNodes: [...state.runtimeNodes, runtimeNode],
+      agents: state.agents.map((agent) =>
+        agent.id === "strategist.core"
+          ? { ...agent, providerProfileId: provider.id, fallbackProviderProfileId: "shared-openai" }
+          : agent,
+      ),
+      modelStrategy: {
+        ...state.modelStrategy,
+        workloadStrategies: state.modelStrategy.workloadStrategies.map((strategy) =>
+          strategy.id === "strategy-augmentor-primary"
+            ? {
+                ...strategy,
+                primaryRoute: {
+                  providerProfileId: provider.id,
+                  runtimeNodeId: runtimeNode.id,
+                  model,
+                  costPosture: "free-local" as const,
+                },
+                fallbackChainId: "chain-local-llamacpp-test",
+              }
+            : strategy,
+        ),
+      },
+    };
+
+    const resolved = resolveStrategistChatRoute(configuredState, "batiai/gemma4-e2b:q4");
+
+    expect(resolved.provider?.id).toBe("local-llamacpp-primary");
+    expect(resolved.runtimeNode?.id).toBe("node-local-llamacpp-primary");
+    expect(resolved.decision.executionAdapterId).toBe("cloud-openai-compatible");
+    expect(resolved.model).toBe(model);
+  });
 });
 
 describe("workload strategy routing", () => {
