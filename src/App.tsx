@@ -1280,30 +1280,33 @@ export function App() {
       setChatNotice("Stop the current response before sending a follow-up correction.");
       return;
     }
-    await executeChatTurn({
-      snapshot: { state, bundled, sideloaded },
-      activeThread,
-      composer,
-      attachments,
-      activeChatModel,
-      thinkingDepth,
-      overrideMessage,
-      commitReadyState,
-      setComposer,
-      setAttachments,
-      setChatNotice,
-      setChatBusy,
-      setChatRunPhase,
-      setChatRunEvents,
-      setAgentActivityLabel,
-      setProviderDiagnostics,
-      setRecoveryRuntimeStatus,
-      runToken,
-      isRunCurrent: (token) => activeChatRunTokenRef.current === token,
-      errorMessageOf,
-    });
-    if (releaseChatRun(activeChatRunTokenRef, runToken)) {
-      setChatRunPhase("idle");
+    try {
+      await executeChatTurn({
+        snapshot: { state, bundled, sideloaded },
+        activeThread,
+        composer,
+        attachments,
+        activeChatModel,
+        thinkingDepth,
+        overrideMessage,
+        commitReadyState,
+        setComposer,
+        setAttachments,
+        setChatNotice,
+        setChatBusy,
+        setChatRunPhase,
+        setChatRunEvents,
+        setAgentActivityLabel,
+        setProviderDiagnostics,
+        setRecoveryRuntimeStatus,
+        runToken,
+        isRunCurrent: (token) => activeChatRunTokenRef.current === token,
+        errorMessageOf,
+      });
+    } finally {
+      if (releaseChatRun(activeChatRunTokenRef, runToken)) {
+        setChatRunPhase("idle");
+      }
     }
   };
 
@@ -1366,31 +1369,34 @@ export function App() {
       return;
     }
 
-    await executeChatTurn({
-      snapshot: { state: stateWithThread, bundled, sideloaded },
-      activeThread: thread,
-      composer: "",
-      attachments: [],
-      activeChatModel,
-      thinkingDepth,
-      overrideMessage: message,
-      overrideContextPrompt: contextPrompt,
-      commitReadyState,
-      setComposer,
-      setAttachments,
-      setChatNotice,
-      setChatBusy,
-      setChatRunPhase,
-      setChatRunEvents,
-      setAgentActivityLabel,
-      setProviderDiagnostics,
-      setRecoveryRuntimeStatus,
-      runToken,
-      isRunCurrent: (token) => activeChatRunTokenRef.current === token,
-      errorMessageOf,
-    });
-    if (releaseChatRun(activeChatRunTokenRef, runToken)) {
-      setChatRunPhase("idle");
+    try {
+      await executeChatTurn({
+        snapshot: { state: stateWithThread, bundled, sideloaded },
+        activeThread: thread,
+        composer: "",
+        attachments: [],
+        activeChatModel,
+        thinkingDepth,
+        overrideMessage: message,
+        overrideContextPrompt: contextPrompt,
+        commitReadyState,
+        setComposer,
+        setAttachments,
+        setChatNotice,
+        setChatBusy,
+        setChatRunPhase,
+        setChatRunEvents,
+        setAgentActivityLabel,
+        setProviderDiagnostics,
+        setRecoveryRuntimeStatus,
+        runToken,
+        isRunCurrent: (token) => activeChatRunTokenRef.current === token,
+        errorMessageOf,
+      });
+    } finally {
+      if (releaseChatRun(activeChatRunTokenRef, runToken)) {
+        setChatRunPhase("idle");
+      }
     }
   };
 
@@ -1452,30 +1458,33 @@ export function App() {
       setChatNotice("Hermes is already working on a response. Please wait.");
       return;
     }
-    await executeChatTurn({
-      snapshot: { state: nextState, bundled, sideloaded },
-      activeThread: thread,
-      composer: "",
-      attachments: [],
-      activeChatModel,
-      thinkingDepth,
-      overrideMessage: buildArchivePreflightAugmentorPrompt(report),
-      commitReadyState,
-      setComposer,
-      setAttachments,
-      setChatNotice,
-      setChatBusy,
-      setChatRunPhase,
-      setChatRunEvents,
-      setAgentActivityLabel,
-      setProviderDiagnostics,
-      setRecoveryRuntimeStatus,
-      runToken,
-      isRunCurrent: (token) => activeChatRunTokenRef.current === token,
-      errorMessageOf,
-    });
-    if (releaseChatRun(activeChatRunTokenRef, runToken)) {
-      setChatRunPhase("idle");
+    try {
+      await executeChatTurn({
+        snapshot: { state: nextState, bundled, sideloaded },
+        activeThread: thread,
+        composer: "",
+        attachments: [],
+        activeChatModel,
+        thinkingDepth,
+        overrideMessage: buildArchivePreflightAugmentorPrompt(report),
+        commitReadyState,
+        setComposer,
+        setAttachments,
+        setChatNotice,
+        setChatBusy,
+        setChatRunPhase,
+        setChatRunEvents,
+        setAgentActivityLabel,
+        setProviderDiagnostics,
+        setRecoveryRuntimeStatus,
+        runToken,
+        isRunCurrent: (token) => activeChatRunTokenRef.current === token,
+        errorMessageOf,
+      });
+    } finally {
+      if (releaseChatRun(activeChatRunTokenRef, runToken)) {
+        setChatRunPhase("idle");
+      }
     }
   };
 

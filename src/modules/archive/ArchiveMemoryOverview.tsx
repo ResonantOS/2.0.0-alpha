@@ -141,23 +141,26 @@ export function ArchiveMemoryOverview({
       latestLibrary && shouldInspectImportedLibraryCoverage(message)
         ? await runCoverageInspection(latestLibrary)
         : null;
-    await onAskAugmentor(
-      message,
-      [
-        "Living Archive workspace context for this turn:",
-        "You are helping me configure the Living Archive in ResonantOS.",
-        "Do the work for me where possible. Ask only one necessary question at a time.",
-        "This conversation is happening inside the Living Archive workspace. Do not tell the user to move to the right chat rail.",
-        "Do not claim you will run a check, listing, scan, import, repair, or archive operation unless the host has already returned that result in this turn.",
-        "If host inspection results are supplied below, answer from those results and clearly separate imported, skipped, unsupported, and genuinely missing coverage.",
-        latestLibrary
-          ? `Current imported library: ${latestLibrary.libraryName} at ${latestLibrary.canonicalRoot}.`
-          : "No library is imported yet.",
-        `Recommended next action from the archive system: ${recommendedAction.title}. ${recommendedAction.description}`,
-        inspectionContext ? `\n${inspectionContext}` : "",
-      ].join("\n"),
-    );
-    setAgentStatus(null);
+    try {
+      await onAskAugmentor(
+        message,
+        [
+          "Living Archive workspace context for this turn:",
+          "You are helping me configure the Living Archive in ResonantOS.",
+          "Do the work for me where possible. Ask only one necessary question at a time.",
+          "This conversation is happening inside the Living Archive workspace. Do not tell the user to move to the right chat rail.",
+          "Do not claim you will run a check, listing, scan, import, repair, or archive operation unless the host has already returned that result in this turn.",
+          "If host inspection results are supplied below, answer from those results and clearly separate imported, skipped, unsupported, and genuinely missing coverage.",
+          latestLibrary
+            ? `Current imported library: ${latestLibrary.libraryName} at ${latestLibrary.canonicalRoot}.`
+            : "No library is imported yet.",
+          `Recommended next action from the archive system: ${recommendedAction.title}. ${recommendedAction.description}`,
+          inspectionContext ? `\n${inspectionContext}` : "",
+        ].join("\n"),
+      );
+    } finally {
+      setAgentStatus(null);
+    }
   };
   const runCoverageInspection = async (library: ArchiveImportedLibrarySummary): Promise<string> => {
     setAgentStatus(`Inspecting ${library.libraryName} folder coverage before Augmentor answers...`);

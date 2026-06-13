@@ -3952,7 +3952,10 @@ describe("App boot flow", () => {
   });
 
   it("shows string backend errors instead of collapsing them into a generic message", async () => {
-    requestProviderServiceChatCompletionMock.mockRejectedValue("You exceeded your current quota.");
+    requestProviderServiceChatCompletionMock
+      .mockRejectedValueOnce("You exceeded your current quota.")
+      .mockRejectedValueOnce("You exceeded your current quota.")
+      .mockResolvedValueOnce("Recovered after provider failure.");
 
     render(<App />);
 
@@ -3964,6 +3967,14 @@ describe("App boot flow", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "Send message" })[0]);
 
     expect((await screen.findAllByText("You exceeded your current quota.")).length).toBeGreaterThan(0);
+
+    fireEvent.change(screen.getAllByPlaceholderText("Message Augmentor")[0], {
+      target: { value: "try again" },
+    });
+    fireEvent.click(screen.getAllByRole("button", { name: "Send message" })[0]);
+
+    expect(await screen.findByText("Recovered after provider failure.")).toBeTruthy();
+    expect(requestProviderServiceChatCompletionMock).toHaveBeenCalledTimes(3);
   });
 
   it("injects Living Archive context into Strategist chat turns", async () => {
