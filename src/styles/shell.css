@@ -33,6 +33,13 @@
   grid-template-columns: 76px minmax(0, 1fr) 60px;
 }
 
+.shell.center-chat-owner {
+  grid-template-columns: 76px minmax(0, 1fr);
+  grid-template-areas:
+    "topbar topbar"
+    "dock main";
+}
+
 .shell.chat-unavailable {
   grid-template-columns: 76px minmax(0, 1fr);
   grid-template-areas:
@@ -49,6 +56,13 @@
 
 .shell.layout-chat-main.chat-closed {
   grid-template-columns: 76px 60px minmax(0, 1fr);
+}
+
+.shell.layout-chat-main.center-chat-owner {
+  grid-template-columns: 76px minmax(0, 1fr);
+  grid-template-areas:
+    "topbar topbar"
+    "dock main";
 }
 
 .shell.layout-chat-main.chat-unavailable {

@@ -726,6 +726,11 @@ export function App() {
 
   const toggleWorkspaceLayout = () => {
     updateRuntimeState((draft) => {
+      if (currentSection === "archive" && !isFloatingChatSurface) {
+        draft.uiPreferences.activeSection = "overview";
+        draft.uiPreferences.chatSidebarOpen = true;
+        return draft;
+      }
       draft.uiPreferences.workspaceLayout = draft.uiPreferences.workspaceLayout === "chat-main" ? "main-chat" : "chat-main";
       draft.uiPreferences.chatSidebarOpen = true;
       return draft;
@@ -2062,7 +2067,7 @@ export function App() {
     <div className="app-zoom-viewport" style={zoomStyle}>
       <div className="app-zoom-stage">
         <div
-          className={`shell ${effectiveChatOpen ? "chat-open" : "chat-closed"} ${chatInterfaceAvailable ? "" : "chat-unavailable"} ${isFloatingChatSurface ? "floating-chat-surface" : ""} ${homeChatSurface ? "home-chat-surface" : ""} layout-${state.uiPreferences.workspaceLayout}`}
+          className={`shell ${effectiveChatOpen ? "chat-open" : "chat-closed"} ${chatInterfaceAvailable ? "" : "chat-unavailable"} ${isFloatingChatSurface ? "floating-chat-surface" : ""} ${homeChatSurface ? "home-chat-surface" : ""} ${centerWorkspaceOwnsAgentChat ? "center-chat-owner" : ""} layout-${state.uiPreferences.workspaceLayout}`}
           style={shellStyle}
         >
       <header className="system-topbar" aria-label="ResonantOS system bar">
@@ -2079,12 +2084,16 @@ export function App() {
             type="button"
             className="system-icon-button"
             title={
-              state.uiPreferences.workspaceLayout === "chat-main"
+              centerWorkspaceOwnsAgentChat
+                ? "Open main chat"
+                : state.uiPreferences.workspaceLayout === "chat-main"
                 ? "Move chat back to the right"
                 : "Move chat beside the launcher"
             }
             aria-label={
-              state.uiPreferences.workspaceLayout === "chat-main"
+              centerWorkspaceOwnsAgentChat
+                ? "Open main chat"
+                : state.uiPreferences.workspaceLayout === "chat-main"
                 ? "Move chat back to the right"
                 : "Move chat beside the launcher"
             }
@@ -2093,7 +2102,9 @@ export function App() {
           >
             <VendorIcon
               icon={
-                state.uiPreferences.workspaceLayout === "chat-main"
+                centerWorkspaceOwnsAgentChat
+                  ? "layout-sidebar-left-expand"
+                  : state.uiPreferences.workspaceLayout === "chat-main"
                   ? "layout-sidebar-right-collapse"
                   : "layout-sidebar-left-expand"
               }
@@ -2703,6 +2714,7 @@ export function App() {
       {chatInterfaceAvailable && (
       <StrategistChatRail
         isOpen={effectiveChatOpen}
+        showCollapsedToggle={!centerWorkspaceOwnsAgentChat}
         mode={recoveryModeActive ? "emergency" : "strategist"}
         title={activeChatAgentName}
         eyebrow={

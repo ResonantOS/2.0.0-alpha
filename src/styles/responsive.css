@@ -24,12 +24,20 @@
     grid-template-columns: 76px minmax(0, 1fr) 56px;
   }
 
+  .shell.center-chat-owner {
+    grid-template-columns: 76px minmax(0, 1fr);
+  }
+
   .shell.layout-chat-main {
     grid-template-columns: 76px minmax(320px, min(var(--chat-rail-width, 520px), 42vw)) minmax(0, 1fr);
   }
 
   .shell.layout-chat-main.chat-closed {
     grid-template-columns: 76px 56px minmax(0, 1fr);
+  }
+
+  .shell.layout-chat-main.center-chat-owner {
+    grid-template-columns: 76px minmax(0, 1fr);
   }
 
   .nav-item small {
@@ -85,6 +93,13 @@
     grid-template-areas:
       "topbar topbar topbar"
       "dock main chat";
+  }
+
+  .shell.center-chat-owner {
+    grid-template-columns: 76px minmax(0, 1fr);
+    grid-template-areas:
+      "topbar topbar"
+      "dock main";
   }
 
   .shell.home-chat-surface {

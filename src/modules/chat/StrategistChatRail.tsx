@@ -51,6 +51,7 @@ const supportsThinkingDepth = (model: string): boolean => model.startsWith("gpt-
 
 type StrategistChatRailProps = {
   isOpen: boolean;
+  showCollapsedToggle?: boolean;
   mode: "strategist" | "emergency";
   title: string;
   eyebrow: string;
@@ -502,6 +503,9 @@ export function StrategistChatRail(props: StrategistChatRailProps) {
   };
 
   if (!props.isOpen) {
+    if (props.showCollapsedToggle === false) {
+      return null;
+    }
     return (
       <aside className={`chat-sidebar closed ${props.mode === "emergency" ? "emergency" : ""}`}>
         <button type="button" className="chat-collapsed-toggle" onClick={props.onToggleSidebar}>
