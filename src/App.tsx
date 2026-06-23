@@ -426,12 +426,19 @@ export function App() {
       if (cancelled) {
         return;
       }
-      currentReadyStateRef.current = nextState;
-      setLoadState((current) =>
-        current.phase === "ready"
-          ? { ...current, state: nextState }
-          : current,
-      );
+      // The host broadcasts a security-filtered state: fields it owns exclusively
+      // (installations, providerProfiles, securityPolicy, trustTier, ...) are
+      // stripped before the `runtime-state-updated` payload is emitted. Merge the
+      // incoming safe fields onto our existing full state instead of replacing it,
+      // so those host-owned fields are preserved rather than dropped to undefined.
+      setLoadState((current) => {
+        if (current.phase !== "ready") {
+          return current;
+        }
+        const mergedState = { ...current.state, ...nextState };
+        currentReadyStateRef.current = mergedState;
+        return { ...current, state: mergedState };
+      });
     }).then((cleanup) => {
       if (cancelled) {
         cleanup();

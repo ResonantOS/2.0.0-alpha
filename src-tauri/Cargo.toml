@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "ResonantOS vNext desktop shell foundation"
 authors = ["Resonant Alpha"]
 edition = "2021"
+default-run = "resonantos_vnext"
 
 [lib]
 name = "resonantos_vnext_lib"
