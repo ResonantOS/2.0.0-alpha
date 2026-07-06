@@ -208,6 +208,13 @@
   transform: translateY(-1px);
 }
 
+.button-quiet.danger {
+  color: var(--danger);
+}
+.button-quiet.danger:hover {
+  color: #fca5a5;
+}
+
 .recovery-toggle.warning {
   border-color: rgba(251, 191, 36, 0.34);
   background: rgba(251, 191, 36, 0.08);

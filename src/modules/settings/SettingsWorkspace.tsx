@@ -77,6 +77,7 @@ type SettingsWorkspaceProps = {
   onProbeAllProviders: () => void;
   onSetupProvider: (profileId: string) => void;
   onSmokeTestProvider: (profileId: string) => void;
+  onDeleteProvider: (profileId: string) => void;
   onRefreshMemoryServiceStatus: () => void;
   onStartMemoryService: () => void;
   onStopMemoryService: () => void;
@@ -771,6 +772,9 @@ export function SettingsWorkspace(props: SettingsWorkspaceProps) {
                       </button>
                       <button type="button" className="button-quiet" onClick={() => props.onSmokeTestProvider(profile.id)} disabled={props.providerSmokeBusyId === profile.id}>
                         Test
+                      </button>
+                      <button type="button" className="button-quiet danger" onClick={() => props.onDeleteProvider(profile.id)}>
+                        Remove
                       </button>
                     </div>
                   </div>

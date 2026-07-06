@@ -79,6 +79,13 @@ type ExecuteCreateProviderProfileInput = CreateProviderProfileInput & {
   errorMessageOf: (error: unknown, fallback: string) => string;
 };
 
+type ExecuteDeleteProviderProfileInput = {
+  profileId: string;
+  updateRuntimeState: (updater: (current: ResonantShellState) => ResonantShellState) => void;
+  setSettingsNotice: Dispatch<SetStateAction<string | null>>;
+  errorMessageOf: (error: unknown, fallback: string) => string;
+};
+
 type ExecuteSetupProviderProfileInput = {
   snapshot: ReadyShellSnapshot;
   profileId: string;
@@ -381,6 +388,38 @@ export const executeCreateProviderProfile = async ({
   } catch (error) {
     setSettingsNotice(errorMessageOf(error, "Failed to add provider profile."));
   }
+};
+
+export const executeDeleteProviderProfile = ({
+  profileId,
+  updateRuntimeState,
+  setSettingsNotice,
+  errorMessageOf,
+}: ExecuteDeleteProviderProfileInput): void => {
+  let removed = false;
+  updateRuntimeState((draft) => {
+    const provider = draft.providers.find((item) => item.id === profileId);
+    if (!provider) {
+      return draft;
+    }
+    removed = true;
+    const updatedStrategies = draft.modelStrategy.workloadStrategies.map((strategy) => {
+      if (strategy.primaryRoute.providerProfileId === profileId) {
+        return { ...strategy, primaryRoute: { providerProfileId: "", runtimeNodeId: "", model: "", costPosture: "unknown" as const } };
+      }
+      return strategy;
+    });
+    return {
+      ...draft,
+      providers: draft.providers.filter((item) => item.id !== profileId),
+      runtimeNodes: draft.runtimeNodes.filter((node) => node.providerProfileId !== profileId),
+      modelStrategy: {
+        ...draft.modelStrategy,
+        workloadStrategies: updatedStrategies,
+      },
+    };
+  });
+  setSettingsNotice(removed ? "Provider removed." : `Provider ${profileId} was not found.`);
 };
 
 export const executeSetupProviderProfile = async ({

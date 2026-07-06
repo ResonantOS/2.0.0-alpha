@@ -197,10 +197,6 @@ export const saveProviderSecret = async (providerId: string, apiKey: string): Pr
     await hostInvoke("save_provider_secret", { providerId, apiKey });
     return;
   }
-  if (hasCommandHost()) {
-    await invoke("save_provider_secret", { providerId, apiKey });
-    return;
-  }
   // SECURITY: credentials resolved host-side via provider_service.
   // Raw API keys must never be stored in the renderer (localStorage is readable
   // by any script in the same origin). Record only an opaque profile-configured
@@ -1346,18 +1342,12 @@ export const requestProviderSetupProbe = async (input: {
       source: "unsupported-adapter",
     };
   }
-  if (hasCommandHost()) {
-    return (await invoke("provider_setup_probe", input)) as ProviderSetupProbeResult;
-  }
   throw new Error("Provider setup probes are available only through the local bridge.");
 };
 
 const readPersistedState = async (): Promise<ResonantShellState | null> => {
   if (hasCommandHost()) {
     return (await hostInvoke<ResonantShellState | null>("load_runtime_state")) ?? null;
-  }
-  if (hasCommandHost()) {
-    return ((await invoke("load_runtime_state")) as ResonantShellState | null) ?? null;
   }
   const raw = window.localStorage.getItem(STORAGE_KEY);
   if (!raw) {
@@ -1371,10 +1361,6 @@ export const persistState = async (state: ResonantShellState): Promise<void> => 
   // state, provider secrets, and capability grants are not written from here.
   if (hasCommandHost()) {
     await hostInvoke("save_runtime_state", { state });
-    return;
-  }
-  if (hasCommandHost()) {
-    await invoke("save_runtime_state", { state });
     return;
   }
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));

@@ -8,6 +8,7 @@ import {
   updateWorkloadStrategy,
 } from "./model-strategy";
 import { resolveRoutineRoute } from "./provider-service";
+import type { ProviderProfile, ProviderRuntimeNode } from "./contracts";
 
 describe("model strategy planner", () => {
   it("builds editable route options with cost posture metadata", () => {
@@ -45,5 +46,57 @@ describe("model strategy planner", () => {
   it("ignores unknown route option keys rather than corrupting a strategy", () => {
     const state = buildDefaultState([]);
     expect(routeFromOptionKey(state, "missing")).toBeUndefined();
+  });
+
+  it("propagates a newly created provider into route options", () => {
+    const state = buildDefaultState([]);
+
+    const newProvider: ProviderProfile = {
+      id: "provider-openrouter-a1b2c3d4",
+      label: "OpenRouter",
+      providerType: "openai-compatible",
+      authSource: "shared-vault",
+      authMethod: "api-key",
+      authTier: "supported",
+      apiBaseUrl: "https://openrouter.ai/api/v1",
+      allowedModels: ["openai/gpt-5.5", "anthropic/claude-sonnet-4.5", "google/gemini-2.5-pro"],
+      primaryModel: "openai/gpt-5.5",
+      fallbackModel: "anthropic/claude-sonnet-4.5",
+      modelContext: [],
+      consumerScopes: ["strategist", "setup", "routine"],
+      shared: true,
+      status: "ready",
+      credentialStatus: "configured",
+    };
+
+    const newRuntimeNode: ProviderRuntimeNode = {
+      id: "node-provider-openrouter-a1b2c3d4",
+      label: "OpenRouter Runtime",
+      providerProfileId: "provider-openrouter-a1b2c3d4",
+      kind: "cloud",
+      locality: "cloud",
+      endpoint: "https://openrouter.ai/api/v1",
+      supportedModels: ["openai/gpt-5.5", "anthropic/claude-sonnet-4.5", "google/gemini-2.5-pro"],
+      authTier: "supported",
+      healthState: "ready",
+      deployableOnDemand: false,
+      notes: [],
+    };
+
+    const updatedState = {
+      ...state,
+      providers: [...state.providers, newProvider],
+      runtimeNodes: [...state.runtimeNodes, newRuntimeNode],
+    };
+
+    const options = buildStrategyRouteOptions(updatedState);
+
+    const openRouterOptions = options.filter((o) => o.providerLabel === "OpenRouter");
+    expect(openRouterOptions).toHaveLength(3);
+    expect(openRouterOptions.map((o) => o.model).sort()).toEqual([
+      "anthropic/claude-sonnet-4.5",
+      "google/gemini-2.5-pro",
+      "openai/gpt-5.5",
+    ]);
   });
 });

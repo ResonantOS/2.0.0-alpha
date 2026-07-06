@@ -159,6 +159,7 @@ import {
 import { createAddOnSurfaceDockRoutes } from "./sdk/addons";
 import {
   executeCreateProviderProfile,
+  executeDeleteProviderProfile,
   executeRefreshProviderDiagnostics,
   executeRefreshMemoryServiceStatus,
   executeProviderSmokeTest,
@@ -792,6 +793,15 @@ export function App() {
   const handleCreateProviderProfile = async (input: CreateProviderProfileInput) => {
     await executeCreateProviderProfile({
       ...input,
+      updateRuntimeState,
+      setSettingsNotice,
+      errorMessageOf,
+    });
+  };
+
+  const handleDeleteProviderProfile = (profileId: string) => {
+    executeDeleteProviderProfile({
+      profileId,
       updateRuntimeState,
       setSettingsNotice,
       errorMessageOf,
@@ -2492,6 +2502,7 @@ export function App() {
                 onProbeAllProviders={() => void refreshProviderDiagnostics()}
                 onSetupProvider={(profileId) => void handleSetupProviderProfile(profileId)}
                 onSmokeTestProvider={(profileId) => void runProviderSmokeTest(profileId)}
+                onDeleteProvider={(profileId) => handleDeleteProviderProfile(profileId)}
                 onRefreshMemoryServiceStatus={() => void refreshMemoryServiceStatus()}
                 onStartMemoryService={() => void startMemoryService()}
                 onStopMemoryService={() => void stopMemoryService()}
