@@ -2842,6 +2842,8 @@ export interface ResonantShellState {
   strategistIdentity: StrategistIdentity;
   coreServices: CoreService[];
   providers: ProviderProfile[];
+  /** Provider profiles explicitly removed by the user, including bundled defaults. */
+  deletedProviderProfileIds: string[];
   runtimeNodes: ProviderRuntimeNode[];
   providerRouting: ProviderRoutingState;
   computeFabric: ComputeFabricState;

@@ -80,6 +80,7 @@ type ExecuteCreateProviderProfileInput = CreateProviderProfileInput & {
 };
 
 type ExecuteDeleteProviderProfileInput = {
+  snapshot: ReadyShellSnapshot;
   profileId: string;
   updateRuntimeState: (updater: (current: ResonantShellState) => ResonantShellState) => void;
   setSettingsNotice: Dispatch<SetStateAction<string | null>>;
@@ -382,6 +383,7 @@ export const executeCreateProviderProfile = async ({
     updateRuntimeState((draft) => ({
       ...draft,
       providers: [...draft.providers, setupResult.provider],
+      deletedProviderProfileIds: draft.deletedProviderProfileIds.filter((id) => id !== providerId),
       runtimeNodes: [...draft.runtimeNodes, setupResult.runtimeNode],
     }));
     setSettingsNotice(`${cleanLabel} was added. ${setupResult.notice}`);
@@ -390,36 +392,120 @@ export const executeCreateProviderProfile = async ({
   }
 };
 
+// Provider reference sites (all must be cleaned up on deletion):
+//   - providers[]                          (filtered out)
+//   - runtimeNodes[]                       (filtered by providerProfileId)
+//   - agents[].providerProfileId           (reassigned to a surviving provider)
+//   - agents[].fallbackProviderProfileId   (cleared)
+//   - workloadStrategies[].primaryRoute    (reset to empty route)
+//   - fallbackChains[].orderedRoutes[]     (filtered out)
+//   - fallbackChains[].lastResortRoute     (cleared if it matches)
+//   - emergencyPolicy.orderedPromotionTargets[]  (filtered out)
+//   - emergencyPolicy.hardFloorRoute       (cleared if it matches)
+//   - fallbackPolicies[].orderedProviderProfileIds[]  (filtered out)
+//   - fallbackPolicies[].orderedRuntimeNodeIds[] (filtered out)
+//   - recoveryActions[].runtimeNodeId       (filtered out)
 export const executeDeleteProviderProfile = ({
+  snapshot,
   profileId,
   updateRuntimeState,
   setSettingsNotice,
   errorMessageOf,
-}: ExecuteDeleteProviderProfileInput): void => {
-  let removed = false;
-  updateRuntimeState((draft) => {
-    const provider = draft.providers.find((item) => item.id === profileId);
-    if (!provider) {
-      return draft;
+}: ExecuteDeleteProviderProfileInput): Promise<void> => {
+  if (!snapshot.state.providers.some((item) => item.id === profileId)) {
+    setSettingsNotice(`Provider ${profileId} was not found.`);
+    return Promise.resolve();
+  }
+
+  return (async () => {
+    try {
+      await saveProviderSecret(profileId, "");
+      updateRuntimeState((draft) => {
+        const provider = draft.providers.find((item) => item.id === profileId);
+        if (!provider) {
+          return draft;
+        }
+
+        const remainingProviders = draft.providers.filter((item) => item.id !== profileId);
+        const removedRuntimeNodeIds = new Set(
+          draft.runtimeNodes
+            .filter((node) => node.providerProfileId === profileId)
+            .map((node) => node.id),
+        );
+
+        const updatedAgents = draft.agents.map((agent) => {
+          const patch: Partial<Pick<typeof agent, "providerProfileId" | "fallbackProviderProfileId">> = {};
+          if (agent.providerProfileId === profileId) {
+            const replacement = remainingProviders.find(
+              (p) => p.consumerScopes.includes("strategist") || p.consumerScopes.includes("setup"),
+            );
+            patch.providerProfileId = replacement?.id ?? "";
+          }
+          if (agent.fallbackProviderProfileId === profileId) {
+            patch.fallbackProviderProfileId = undefined;
+          }
+          return Object.keys(patch).length ? { ...agent, ...patch } : agent;
+        });
+
+        const updatedStrategies = draft.modelStrategy.workloadStrategies.map((strategy) => {
+          const primary =
+            strategy.primaryRoute.providerProfileId === profileId
+              ? { providerProfileId: "", runtimeNodeId: "", model: "", costPosture: "unknown" as const }
+              : strategy.primaryRoute;
+          return { ...strategy, primaryRoute: primary };
+        });
+
+        const updatedChains = draft.modelStrategy.fallbackChains.map((chain) => ({
+          ...chain,
+          orderedRoutes: chain.orderedRoutes.filter((r) => r.providerProfileId !== profileId),
+          lastResortRoute: chain.lastResortRoute?.providerProfileId === profileId ? undefined : chain.lastResortRoute,
+        }));
+
+        const emergencyPromotionTargets = draft.modelStrategy.emergencyPolicy.orderedPromotionTargets.filter(
+          (target) => target.providerProfileId !== profileId,
+        );
+        const emergencyHardFloor =
+          draft.modelStrategy.emergencyPolicy.hardFloorRoute.providerProfileId === profileId
+            ? { providerProfileId: "", runtimeNodeId: "", model: "", costPosture: "unknown" as const }
+          : draft.modelStrategy.emergencyPolicy.hardFloorRoute;
+
+        const updatedFallbackPolicies = draft.providerRouting.fallbackPolicies.map((policy) => ({
+          ...policy,
+          orderedProviderProfileIds: policy.orderedProviderProfileIds.filter((id) => id !== profileId),
+          orderedRuntimeNodeIds: (policy.orderedRuntimeNodeIds ?? []).filter((id) => !removedRuntimeNodeIds.has(id)),
+        }));
+        const updatedRecoveryActions = draft.providerRouting.recoveryActions.filter(
+          (action) => !removedRuntimeNodeIds.has(action.runtimeNodeId),
+        );
+
+        return {
+          ...draft,
+          providers: remainingProviders,
+          deletedProviderProfileIds: Array.from(new Set([...draft.deletedProviderProfileIds, profileId])),
+          runtimeNodes: draft.runtimeNodes.filter((node) => node.providerProfileId !== profileId),
+          agents: updatedAgents,
+          modelStrategy: {
+            ...draft.modelStrategy,
+            workloadStrategies: updatedStrategies,
+            fallbackChains: updatedChains,
+            emergencyPolicy: {
+              ...draft.modelStrategy.emergencyPolicy,
+              orderedPromotionTargets: emergencyPromotionTargets,
+              hardFloorRoute: emergencyHardFloor,
+            },
+          },
+          providerRouting: {
+            ...draft.providerRouting,
+            fallbackPolicies: updatedFallbackPolicies,
+            recoveryActions: updatedRecoveryActions,
+          },
+        };
+      });
+      setSettingsNotice("Provider removed.");
+    } catch (error) {
+      setSettingsNotice(errorMessageOf(error, "Failed to remove provider credential; provider was not removed."));
     }
-    removed = true;
-    const updatedStrategies = draft.modelStrategy.workloadStrategies.map((strategy) => {
-      if (strategy.primaryRoute.providerProfileId === profileId) {
-        return { ...strategy, primaryRoute: { providerProfileId: "", runtimeNodeId: "", model: "", costPosture: "unknown" as const } };
-      }
-      return strategy;
-    });
-    return {
-      ...draft,
-      providers: draft.providers.filter((item) => item.id !== profileId),
-      runtimeNodes: draft.runtimeNodes.filter((node) => node.providerProfileId !== profileId),
-      modelStrategy: {
-        ...draft.modelStrategy,
-        workloadStrategies: updatedStrategies,
-      },
-    };
-  });
-  setSettingsNotice(removed ? "Provider removed." : `Provider ${profileId} was not found.`);
+  })();
 };
 
 export const executeSetupProviderProfile = async ({
@@ -481,7 +567,22 @@ export const updateModelWorkloadStrategyRoute = (
 ): void => {
   updateRuntimeState((draft) => {
     const route = routeFromOptionKey(draft, routeKey);
-    return route ? updateWorkloadStrategy(draft, strategyId, { primaryRoute: route }) : draft;
+    if (!route) {
+      return draft;
+    }
+    const updated = updateWorkloadStrategy(draft, strategyId, { primaryRoute: route });
+    const strategy = updated.modelStrategy.workloadStrategies.find((s) => s.id === strategyId);
+    if (!strategy || strategy.ownerType !== "agent") {
+      return updated;
+    }
+    return {
+      ...updated,
+      agents: updated.agents.map((agent) =>
+        agent.id === strategy.ownerId
+          ? { ...agent, providerProfileId: route.providerProfileId }
+          : agent,
+      ),
+    };
   });
 };
 

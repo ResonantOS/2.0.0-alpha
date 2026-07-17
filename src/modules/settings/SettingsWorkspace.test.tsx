@@ -232,4 +232,53 @@ describe("SettingsWorkspace strategy planner", () => {
     expect(screen.getByText("Evidence trust policy")).toBeTruthy();
     expect(screen.getByText("before-task-complete")).toBeTruthy();
   });
+
+  it("calls onDeleteProvider when Remove is clicked on a provider", () => {
+    const onDeleteProvider = vi.fn();
+    const state = buildDefaultState([]);
+
+    render(
+      <SettingsWorkspace
+        state={state}
+        manifests={[]}
+        settingsSection="providers"
+        settingsNotice={null}
+        providerDiagnostics={[]}
+        providerDiagnosticsBusy={false}
+        activeProviderProbeId={null}
+        providerSmokeResults={{}}
+        providerSmokeBusyId={null}
+        providerDrafts={{}}
+        memoryServiceStatus={null}
+        memoryServiceBusy={false}
+        memoryServiceLastResult={null}
+        onSettingsSectionChange={vi.fn()}
+        onUpdateProvider={vi.fn()}
+        onCreateProvider={vi.fn()}
+        onUpdateWorkloadStrategy={vi.fn()}
+        onUpdateWorkloadStrategyRoute={vi.fn()}
+        onProviderDraftChange={vi.fn()}
+        onSaveProviderSecret={vi.fn()}
+        onProbeProvider={vi.fn()}
+        onProbeAllProviders={vi.fn()}
+        onSetupProvider={vi.fn()}
+        onSmokeTestProvider={vi.fn()}
+        onDeleteProvider={onDeleteProvider}
+        onRefreshMemoryServiceStatus={vi.fn()}
+        onStartMemoryService={vi.fn()}
+        onStopMemoryService={vi.fn()}
+        onOpenLogicianAddOn={vi.fn()}
+      />,
+    );
+
+    const providerLabel = screen.getByText("Shared MiniMax");
+    const providerArticle = providerLabel.closest("article");
+    expect(providerArticle).toBeTruthy();
+
+    const removeButton = within(providerArticle!).getByRole("button", { name: "Remove" });
+    fireEvent.click(removeButton);
+
+    expect(onDeleteProvider).toHaveBeenCalledTimes(1);
+    expect(onDeleteProvider).toHaveBeenCalledWith("shared-minimax");
+  });
 });

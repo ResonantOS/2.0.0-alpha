@@ -911,6 +911,7 @@ export const buildDefaultState = (manifests: AddOnManifest[]): ResonantShellStat
     },
     coreServices,
     providers: providerProfiles,
+    deletedProviderProfileIds: [],
     runtimeNodes,
     providerRouting,
     computeFabric,

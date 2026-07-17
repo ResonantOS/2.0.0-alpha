@@ -799,8 +799,9 @@ export function App() {
     });
   };
 
-  const handleDeleteProviderProfile = (profileId: string) => {
-    executeDeleteProviderProfile({
+  const handleDeleteProviderProfile = async (profileId: string) => {
+    await executeDeleteProviderProfile({
+      snapshot: { state, bundled, sideloaded },
       profileId,
       updateRuntimeState,
       setSettingsNotice,

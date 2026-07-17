@@ -1,13 +1,29 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AddOnManifest, ResonantShellState } from "./contracts";
 import { buildDefaultState } from "./defaults";
-import { applyProviderCredentialStatuses, normalizeState, rebaseStateOnManifests, requestProviderSmokeTest } from "./runtime";
+import { applyProviderCredentialStatuses, normalizeState, rebaseStateOnManifests, requestProviderSmokeTest, saveProviderSecret } from "./runtime";
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
 describe("runtime state migration", () => {
+  it("clears the browser provider-secret marker when a secret is cleared", async () => {
+    const values = new Map<string, string>();
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: (key: string) => values.get(key) ?? null,
+        setItem: (key: string, value: string) => values.set(key, value),
+        removeItem: (key: string) => values.delete(key),
+      },
+    });
+
+    await saveProviderSecret("provider-test", "secret-value");
+    await saveProviderSecret("provider-test", "");
+
+    expect(values.get("resonantos-vnext.runtime-state.secret.provider-test")).toBeUndefined();
+  });
+
   it("migrates legacy recovery state onto the Resonant Engineer Agent and Gemma local runtime", () => {
     const base = buildDefaultState([]);
     const legacy = {
@@ -274,16 +290,18 @@ describe("runtime state migration", () => {
 
     expect(normalized.providers.find((provider) => provider.id === "shared-zai-glm")?.primaryModel).toBe("zai/glm-5.2");
     expect(normalized.runtimeNodes.find((node) => node.id === "node-zai-glm-cloud")?.supportedModels).toEqual(["zai/glm-5.2"]);
+    // Fallback policies and chains now merge persisted routes rather than resetting
+    // to defaults — explicit removals from the old state are preserved.
     expect(
       normalized.providerRouting.fallbackPolicies
         .find((policy) => policy.id === "core-default")
         ?.orderedProviderProfileIds,
-    ).toContain("shared-zai-glm");
+    ).not.toContain("shared-zai-glm");
     expect(
       normalized.modelStrategy.fallbackChains
         .find((chain) => chain.id === "chain-core-fast")
         ?.orderedRoutes.some((route) => route.providerProfileId === "shared-zai-glm"),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("adds the default workspace layout to older persisted UI preferences", () => {

@@ -201,7 +201,12 @@ export const saveProviderSecret = async (providerId: string, apiKey: string): Pr
   // Raw API keys must never be stored in the renderer (localStorage is readable
   // by any script in the same origin). Record only an opaque profile-configured
   // marker so the UI can reflect credential status without holding the secret.
-  window.localStorage.setItem(`${STORAGE_KEY}.secret.${providerId}`, "__configured__");
+  const secretMarkerKey = `${STORAGE_KEY}.secret.${providerId}`;
+  if (apiKey.trim()) {
+    window.localStorage.setItem(secretMarkerKey, "__configured__");
+  } else {
+    window.localStorage.removeItem(secretMarkerKey);
+  }
 };
 
 export const saveTelegramBotToken = async (botToken: string): Promise<void> => {
@@ -1556,9 +1561,11 @@ const mergeConversationThreads = (
 const normalizeProviders = (
   persisted: ResonantShellState["providers"] | undefined,
   defaults: ResonantShellState["providers"],
+  deletedProviderProfileIds: readonly string[],
 ): ResonantShellState["providers"] => {
+  const deletedProviderIds = new Set(deletedProviderProfileIds);
   const defaultIds = new Set(defaults.map((profile) => profile.id));
-  const normalizedDefaults = defaults.map((profile) => {
+  const normalizedDefaults = defaults.filter((profile) => !deletedProviderIds.has(profile.id)).map((profile) => {
     const current = persisted?.find((item) => item.id === profile.id);
     if (!current) {
       return profile;
@@ -1588,7 +1595,7 @@ const normalizeProviders = (
     };
   });
   const extraPersisted = (persisted ?? [])
-    .filter((profile) => !defaultIds.has(profile.id))
+    .filter((profile) => !defaultIds.has(profile.id) && !deletedProviderIds.has(profile.id))
     .map((profile) => {
       const isLegacyGx10 =
         profile.providerType === "openai-compatible" &&
@@ -1619,9 +1626,11 @@ const normalizeProviders = (
 const normalizeRuntimeNodes = (
   persisted: ResonantShellState["runtimeNodes"] | undefined,
   defaults: ResonantShellState["runtimeNodes"],
+  deletedProviderProfileIds: readonly string[],
 ): ResonantShellState["runtimeNodes"] => {
+  const deletedProviderIds = new Set(deletedProviderProfileIds);
   const defaultIds = new Set(defaults.map((node) => node.id));
-  const normalizedDefaults = defaults.map((node) => {
+  const normalizedDefaults = defaults.filter((node) => !deletedProviderIds.has(node.providerProfileId)).map((node) => {
     const current = persisted?.find((item) => item.id === node.id);
     if (!current) {
       return node;
@@ -1647,7 +1656,7 @@ const normalizeRuntimeNodes = (
     return merged;
   });
   const extraPersisted = (persisted ?? [])
-    .filter((node) => !defaultIds.has(node.id) && !RETIRED_RUNTIME_NODE_IDS.has(node.id))
+    .filter((node) => !defaultIds.has(node.id) && !RETIRED_RUNTIME_NODE_IDS.has(node.id) && !deletedProviderIds.has(node.providerProfileId))
     .map((node) => {
       const isLegacyGx10 =
         String(node.endpoint ?? "").includes("192.168.1.77:30000") &&
@@ -1761,31 +1770,52 @@ const mergeInstallations = (
 const normalizeProviderRouting = (
   persisted: ResonantShellState["providerRouting"] | undefined,
   defaults: ResonantShellState["providerRouting"],
-): ResonantShellState["providerRouting"] => ({
-  ...defaults,
-  ...(persisted ?? {}),
-  executionAdapters: defaults.executionAdapters.map((defaultAdapter) => ({
-    ...defaultAdapter,
-    ...(persisted?.executionAdapters ?? []).find((adapter) => adapter.id === defaultAdapter.id),
-    supportedProviderTypes: defaultAdapter.supportedProviderTypes,
-    supportedRuntimeKinds: defaultAdapter.supportedRuntimeKinds,
-    supportedAuthMethods: defaultAdapter.supportedAuthMethods,
-    requiresCredential: defaultAdapter.requiresCredential,
-    experimental: defaultAdapter.experimental,
-    supportsStreaming:
-      (persisted?.executionAdapters ?? []).find((adapter) => adapter.id === defaultAdapter.id)?.supportsStreaming ??
-      defaultAdapter.supportsStreaming,
-    supportsAbort:
-      (persisted?.executionAdapters ?? []).find((adapter) => adapter.id === defaultAdapter.id)?.supportsAbort ??
-      defaultAdapter.supportsAbort,
-  })),
-  fallbackPolicies: defaults.fallbackPolicies,
-  recoveryActions: defaults.recoveryActions,
-  experimentalPolicy: {
-    ...defaults.experimentalPolicy,
-    ...(persisted?.experimentalPolicy ?? {}),
-  },
-});
+): ResonantShellState["providerRouting"] => {
+  const defaultPoliciesById = new Map(defaults.fallbackPolicies.map((p) => [p.id, p]));
+  const fallbackPolicies = (persisted?.fallbackPolicies?.length ? persisted.fallbackPolicies : defaults.fallbackPolicies).map((policy) => {
+    const defaultPolicy = defaultPoliciesById.get(policy.id);
+    if (!defaultPolicy) {
+      return policy;
+    }
+    return {
+      ...defaultPolicy,
+      ...policy,
+      id: defaultPolicy.id,
+      label: defaultPolicy.label,
+      onFailure: defaultPolicy.onFailure,
+      allowExperimentalAuth: defaultPolicy.allowExperimentalAuth,
+      allowResurrection: defaultPolicy.allowResurrection,
+    };
+  });
+  return {
+    ...defaults,
+    ...(persisted ?? {}),
+    executionAdapters: defaults.executionAdapters.map((defaultAdapter) => ({
+      ...defaultAdapter,
+      ...(persisted?.executionAdapters ?? []).find((adapter) => adapter.id === defaultAdapter.id),
+      supportedProviderTypes: defaultAdapter.supportedProviderTypes,
+      supportedRuntimeKinds: defaultAdapter.supportedRuntimeKinds,
+      supportedAuthMethods: defaultAdapter.supportedAuthMethods,
+      requiresCredential: defaultAdapter.requiresCredential,
+      experimental: defaultAdapter.experimental,
+      supportsStreaming:
+        (persisted?.executionAdapters ?? []).find((adapter) => adapter.id === defaultAdapter.id)?.supportsStreaming ??
+        defaultAdapter.supportsStreaming,
+      supportsAbort:
+        (persisted?.executionAdapters ?? []).find((adapter) => adapter.id === defaultAdapter.id)?.supportsAbort ??
+        defaultAdapter.supportsAbort,
+    })),
+    fallbackPolicies,
+    // Persisted recovery actions intentionally win here: an empty array is an
+    // explicit removal, not a signal to restore the default action whose node
+    // may have been deleted with its provider.
+    recoveryActions: persisted?.recoveryActions ?? defaults.recoveryActions,
+    experimentalPolicy: {
+      ...defaults.experimentalPolicy,
+      ...(persisted?.experimentalPolicy ?? {}),
+    },
+  };
+};
 
 const normalizeModelStrategy = (
   persisted: ResonantShellState["modelStrategy"] | undefined,
@@ -1808,16 +1838,38 @@ const normalizeModelStrategy = (
     }
     return strategy;
   });
+  const defaultChainsById = new Map(defaults.fallbackChains.map((chain) => [chain.id, chain]));
+  const fallbackChains = (persisted?.fallbackChains?.length ? persisted.fallbackChains : defaults.fallbackChains).map((chain) => {
+    const defaultChain = defaultChainsById.get(chain.id);
+    if (!defaultChain) {
+      return chain;
+    }
+    return {
+      ...defaultChain,
+      ...chain,
+      id: defaultChain.id,
+      label: defaultChain.label,
+      rule: defaultChain.rule,
+    };
+  });
+  const persistedEmergency = persisted?.emergencyPolicy;
+  // An explicit empty list means every emergency promotion target was removed.
+  // Only legacy state that lacks the field entirely should inherit defaults.
+  const emergencyOrderedPromotionTargets = persistedEmergency?.orderedPromotionTargets
+    ?? defaults.emergencyPolicy.orderedPromotionTargets;
+  const emergencyHardFloor = persistedEmergency?.hardFloorRoute
+    ? persistedEmergency.hardFloorRoute
+    : defaults.emergencyPolicy.hardFloorRoute;
   return {
     ...defaults,
     ...(persisted ?? {}),
-    fallbackChains: defaults.fallbackChains,
+    fallbackChains,
     workloadStrategies,
     emergencyPolicy: {
       ...defaults.emergencyPolicy,
-      ...(persisted?.emergencyPolicy ?? {}),
-      orderedPromotionTargets: defaults.emergencyPolicy.orderedPromotionTargets,
-      hardFloorRoute: defaults.emergencyPolicy.hardFloorRoute,
+      ...(persistedEmergency ?? {}),
+      orderedPromotionTargets: emergencyOrderedPromotionTargets,
+      hardFloorRoute: emergencyHardFloor,
     },
   };
 };
@@ -1861,6 +1913,7 @@ const normalizeArchiveAutomationPolicy = (
 
 export const normalizeState = (state: ResonantShellState, base: ResonantShellState): ResonantShellState => {
   const installations = mergeInstallations(state.installations, base.installations);
+  const deletedProviderProfileIds = Array.from(new Set(state.deletedProviderProfileIds ?? []));
   return {
     ...base,
     ...state,
@@ -1895,8 +1948,9 @@ export const normalizeState = (state: ResonantShellState, base: ResonantShellSta
       },
     },
     coreServices: mergeById(state.coreServices, base.coreServices),
-    providers: normalizeProviders(state.providers, base.providers),
-    runtimeNodes: normalizeRuntimeNodes(state.runtimeNodes, base.runtimeNodes),
+    providers: normalizeProviders(state.providers, base.providers, deletedProviderProfileIds),
+    deletedProviderProfileIds,
+    runtimeNodes: normalizeRuntimeNodes(state.runtimeNodes, base.runtimeNodes, deletedProviderProfileIds),
     providerRouting: normalizeProviderRouting(state.providerRouting, base.providerRouting),
     computeFabric: state.computeFabric
       ? {

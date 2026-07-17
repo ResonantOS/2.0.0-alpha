@@ -105,7 +105,7 @@ export const resolveAgentChatRoute = (
   const strategy = strategyForAgent(state, agentId);
   const isRecoveryAgent = agentId === state.recoverySession.engineerAgentId;
   const localRecoveryPinned = agent?.providerProfileId === "shared-local" && !isRecoveryAgent;
-  const usingStrategy = Boolean(strategy) && !localRecoveryPinned && agent?.providerProfileId === strategy?.primaryRoute.providerProfileId;
+  const usingStrategy = Boolean(strategy) && !localRecoveryPinned && Boolean(agent?.providerProfileId) && agent?.providerProfileId === strategy?.primaryRoute.providerProfileId;
   const decision = usingStrategy && strategy
     ? resolveStrategyRoute(state, strategy, {
         consumerId: agent?.id ?? agentId,
