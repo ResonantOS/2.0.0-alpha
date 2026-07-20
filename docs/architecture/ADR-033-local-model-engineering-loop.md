@@ -1,8 +1,14 @@
 # ADR-033: Local Model Engineering Loop
 
-Status: Accepted
+## Decision Metadata
 
-Date: 2026-05-12
+- Decision status: Accepted
+- Alpha applicability: Development only
+- Superseded by: None
+- Owner: Engineering workflow
+- Decision date: 2026-05-12
+- Alpha note: Governs local-model contribution work, not a shipped runtime
+  component.
 
 ## Context
 

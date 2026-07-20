@@ -1,5 +1,5 @@
 // Intent citation: docs/architecture/ADR-002-modular-codebase.md
-// Intent citation: docs/product/UX-001-resonantos-app-shell.md
+// Intent citation: docs/product/PRODUCT_GUIDE.md
 
 import { useState } from "react";
 import type { AddOnInstallation, AddOnManifest, InstallationStatus, ResonantShellState } from "../../core/contracts";

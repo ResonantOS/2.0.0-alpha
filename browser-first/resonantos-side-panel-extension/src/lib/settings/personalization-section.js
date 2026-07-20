@@ -93,14 +93,13 @@ function skillCard(skill) {
   return noteCard({ title: skill.name, body: skill.detail });
 }
 
-export function renderPersonalizationSection(container, {
-  bridgeRequest,
-  storage,
+export function renderPersonalizationSection(container, { bridgeRequest, getBridgeRequest, storage,
   storageKeys = {},
   onOpenWorkspace = null,
   onProfileUpdated = null,
   onSelectSection = null
 }) {
+  const bridge = () => (typeof getBridgeRequest === "function" ? getBridgeRequest() : bridgeRequest);
   const status = document.createElement("p");
   status.className = "settings-status";
   status.textContent = "Loading identity settings...";
@@ -226,7 +225,7 @@ export function renderPersonalizationSection(container, {
       return;
     }
     try {
-      const result = await bridgeRequest("/memory/settings", { method: "GET" });
+      const result = await bridge()("/memory/settings", { method: "GET" });
       const settings = result.settings ?? {};
       const memoryStatusResult = result.status ?? {};
       const memoryAddons = Array.isArray(result.memoryAddons) ? result.memoryAddons : [];
@@ -267,7 +266,7 @@ export function renderPersonalizationSection(container, {
       return;
     }
     try {
-      const result = await bridgeRequest("/addons/status", { method: "GET" });
+      const result = await bridge()("/addons/status", { method: "GET" });
       const addons = Array.isArray(result.addons) ? result.addons : [];
       pluginGrid.replaceChildren(...addons.map(pluginCard));
       setStatus(pluginStatus, addons.length

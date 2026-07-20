@@ -9,6 +9,155 @@ import {
   bridgeServerPort,
   startBridgeServer,
 } from "./bridge-server.mjs";
+import { capabilityForBridgeRoute } from "../resonantos-side-panel-extension/src/lib/bridge-client.js";
+
+function cmdEchoLine(line) {
+  const escaped = String(line)
+    .replace(/\^/g, "^^")
+    .replace(/&/g, "^&")
+    .replace(/\|/g, "^|")
+    .replace(/</g, "^<")
+    .replace(/>/g, "^>");
+  return escaped ? `echo ${escaped}` : "echo.";
+}
+
+function fakeCliScript(output) {
+  if (process.platform === "win32") {
+    return ["@echo off", ...String(output).split("\n").map(cmdEchoLine), ""].join("\r\n");
+  }
+  return `#!/bin/sh\ncat <<'EOF'\n${output}\nEOF\n`;
+}
+
+function fakeOpenCodeCliScript(output) {
+  if (process.platform === "win32") {
+    return [
+      "@echo off",
+      "if \"%OPENAI_API_KEY%\"==\"\" (echo selected provider env missing 1>&2 & exit /b 32)",
+      "if not \"%RESONANTOS_PROVIDER_SECRETS_JSON%\"==\"\" (echo ResonantOS provider store leaked 1>&2 & exit /b 33)",
+      "echo %* | findstr /C:\"OpenCode operating as a ResonantOS add-on coding agent\" >nul && (echo prompt leaked in argv 1>&2 & exit /b 31)",
+      "echo %* | findstr /C:\"openai/gpt-5.4-mini\" >nul || (echo model missing 1>&2 & exit /b 34)",
+      "echo %* | findstr /C:\"json\" >nul || (echo json format missing 1>&2 & exit /b 37)",
+      ...String(output).split("\n").map(cmdEchoLine),
+      "",
+    ].join("\r\n");
+  }
+  return `#!/bin/sh
+if [ -z "\${OPENAI_API_KEY:-}" ]; then
+  echo "selected provider env missing" >&2
+  exit 32
+fi
+if [ -n "\${RESONANTOS_PROVIDER_SECRETS_JSON:-}" ]; then
+  echo "ResonantOS provider store leaked" >&2
+  exit 33
+fi
+case "$*" in
+  *"OpenCode operating as a ResonantOS add-on coding agent"*|*"Validate that enabled OpenCode CLI execution produces"*)
+    echo "prompt leaked in argv" >&2
+    exit 31
+    ;;
+esac
+case "$*" in
+  *"openai/gpt-5.4-mini"*) ;;
+  *)
+    echo "model missing" >&2
+    exit 34
+    ;;
+esac
+case "$*" in
+  *"--format json"*) ;;
+  *)
+    echo "json format missing" >&2
+    exit 37
+    ;;
+esac
+prompt_file=""
+previous=""
+for arg in "$@"; do
+  if [ "$previous" = "--file" ]; then
+    prompt_file="$arg"
+  fi
+  previous="$arg"
+done
+if [ -z "$prompt_file" ] || [ ! -f "$prompt_file" ]; then
+  echo "missing prompt file" >&2
+  exit 35
+fi
+if ! grep -q "OpenCode operating as a ResonantOS add-on coding agent" "$prompt_file"; then
+  echo "prompt missing from file" >&2
+  exit 36
+fi
+cat <<'EOF'
+${output}
+EOF
+`;
+}
+
+function fakeHermesPythonScript(output) {
+  const encoded = JSON.stringify({
+    ok: true,
+    finalResponse: String(output),
+    completed: true,
+    apiCalls: 1,
+  });
+  if (process.platform === "win32") {
+    return [
+      "@echo off",
+      "if \"%OPENAI_API_KEY%\"==\"\" (echo selected provider env missing 1>&2 & exit /b 32)",
+      "if not \"%RESONANTOS_PROVIDER_SECRETS_JSON%\"==\"\" (echo ResonantOS provider store leaked 1>&2 & exit /b 33)",
+      "echo %* | findstr /C:\"Hermes operating as a ResonantOS add-on agent\" >nul && (echo prompt leaked in argv 1>&2 & exit /b 31)",
+      "if not \"%HERMES_INFERENCE_PROVIDER%\"==\"openai-api\" (echo provider missing 1>&2 & exit /b 34)",
+      "if not \"%HERMES_INFERENCE_MODEL%\"==\"gpt-5.4-mini\" (echo model missing 1>&2 & exit /b 35)",
+      "findstr /C:\"Hermes operating as a ResonantOS add-on agent\" \"%~2\" >nul || (echo prompt missing from file 1>&2 & exit /b 36)",
+      `> "%~3" echo ${encoded.replace(/%/g, "%%")}`,
+      "",
+    ].join("\r\n");
+  }
+  return `#!/bin/sh
+if [ -z "\${OPENAI_API_KEY:-}" ]; then
+  echo "selected provider env missing" >&2
+  exit 32
+fi
+if [ -n "\${RESONANTOS_PROVIDER_SECRETS_JSON:-}" ]; then
+  echo "ResonantOS provider store leaked" >&2
+  exit 33
+fi
+case "$*" in
+  *"Hermes operating as a ResonantOS add-on agent"*)
+    echo "prompt leaked in argv" >&2
+    exit 31
+    ;;
+esac
+if [ "\${HERMES_INFERENCE_PROVIDER:-}" != "openai-api" ]; then
+  echo "provider missing" >&2
+  exit 34
+fi
+if [ "\${HERMES_INFERENCE_MODEL:-}" != "gpt-5.4-mini" ]; then
+  echo "model missing" >&2
+  exit 35
+fi
+if ! grep -q "Hermes operating as a ResonantOS add-on agent" "$2"; then
+  echo "prompt missing from file" >&2
+  exit 36
+fi
+cat > "$3" <<'EOF'
+${encoded}
+EOF
+`;
+}
+
+async function writeFakeHermesPythonRuntime(root, output) {
+  const agentRoot = path.join(root, "hermes-agent");
+  const binRoot = path.join(agentRoot, "venv", "bin");
+  const fakeHermes = path.join(binRoot, process.platform === "win32" ? "hermes.cmd" : "hermes");
+  const fakePython = path.join(binRoot, process.platform === "win32" ? "python.cmd" : "python");
+  await mkdir(binRoot, { recursive: true });
+  await writeFile(path.join(agentRoot, "run_agent.py"), "# fake Hermes run_agent marker for ResonantOS self-tests\n");
+  await writeFile(fakeHermes, process.platform === "win32" ? "@echo off\r\necho fake hermes\r\n" : "#!/bin/sh\necho fake hermes\n");
+  await writeFile(fakePython, fakeHermesPythonScript(output));
+  await chmod(fakeHermes, 0o755).catch(() => undefined);
+  await chmod(fakePython, 0o755).catch(() => undefined);
+  return fakeHermes;
+}
 
 export async function runBrowserFirstSelfTest(context) {
   const {
@@ -25,7 +174,14 @@ export async function runBrowserFirstSelfTest(context) {
     readMemorySourceRepairHistory,
     resonantExtensionOrigin,
     safeFileSlug,
+    setAddonRuntimeSelfTestHomeDir,
   } = context;
+
+  const capabilityTokenForRoute = (routePath, method = "POST", explicitToken) => {
+    if (explicitToken !== undefined) return explicitToken;
+    const capability = capabilityForBridgeRoute(routePath, method);
+    return capability ? (bridgeCapabilityTokens[capability] ?? "") : "";
+  };
 
   if (args.get("bridge-auth-self-test") === "true") {
     const result = await runBridgeAuthSelfTest({
@@ -298,7 +454,8 @@ export async function runBrowserFirstSelfTest(context) {
     let server = null;
     let exitCode = 1;
     try {
-      const fakeHermes = path.join(tempRoot, "bin", process.platform === "win32" ? "hermes.cmd" : "hermes");
+      setAddonRuntimeSelfTestHomeDir(tempRoot);
+      const fakeHermes = path.join(tempRoot, ".hermes", "bin", process.platform === "win32" ? "hermes.exe" : "hermes");
       await mkdir(path.dirname(fakeHermes), { recursive: true });
       await writeFile(fakeHermes, process.platform === "win32" ? "@echo off\r\necho fake hermes\r\n" : "#!/bin/sh\necho fake hermes\n");
       await chmod(fakeHermes, 0o755).catch(() => undefined);
@@ -312,12 +469,14 @@ export async function runBrowserFirstSelfTest(context) {
       });
       const actualPort = bridgeServerPort(server, Number(args.get("bridge-port") ?? 0));
       const request = async (route, body = {}) => {
+        const capabilityToken = capabilityTokenForRoute(route, "POST");
         const response = await fetch(`http://127.0.0.1:${actualPort}${route}`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             "Origin": resonantExtensionOrigin,
             "X-ResonantOS-Bridge-Token": bridgeToken,
+            ...(capabilityToken ? { "X-ResonantOS-Bridge-Capability-Token": capabilityToken } : {}),
           },
           body: JSON.stringify(body),
         });
@@ -392,13 +551,19 @@ export async function runBrowserFirstSelfTest(context) {
     process.env.RESONANTOS_BROWSER_FIRST_USER_ROOT = path.join(tempRoot, "ResonantOS_User");
     let exitCode = 1;
     try {
-      const fakeHermes = path.join(tempRoot, "bin", process.platform === "win32" ? "hermes.cmd" : "hermes");
+      setAddonRuntimeSelfTestHomeDir(tempRoot);
+      const fakeHermes = path.join(tempRoot, ".hermes", "bin", process.platform === "win32" ? "hermes.exe" : "hermes");
       await mkdir(path.dirname(fakeHermes), { recursive: true });
       await writeFile(fakeHermes, process.platform === "win32" ? "@echo off\r\necho fake hermes\r\n" : "#!/bin/sh\necho fake hermes\n");
       await chmod(fakeHermes, 0o755).catch(() => undefined);
       process.env.HERMES_COMMAND = fakeHermes;
       const request = async (routePath, body = {}) => {
-        const response = await invokeBridgeRouteForSelfTest({ method: "POST", routePath, body });
+        const response = await invokeBridgeRouteForSelfTest({
+          method: "POST",
+          routePath,
+          body,
+          capabilityToken: capabilityTokenForRoute(routePath, "POST"),
+        });
         if (response.status !== 200) {
           throw new Error(`${routePath} failed: ${response.payload.error || response.status}`);
         }
@@ -465,11 +630,13 @@ export async function runBrowserFirstSelfTest(context) {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), "resonantos-hermes-cli-bridge-"));
     const previousUserRoot = process.env.RESONANTOS_BROWSER_FIRST_USER_ROOT;
     const previousHermesCommand = process.env.HERMES_COMMAND;
+    const previousOpenAiKey = process.env.OPENAI_API_KEY;
+    const previousProviderSecretsJson = process.env.RESONANTOS_PROVIDER_SECRETS_JSON;
     process.env.RESONANTOS_BROWSER_FIRST_USER_ROOT = path.join(tempRoot, "ResonantOS_User");
     let server = null;
     let exitCode = 1;
     try {
-      const fakeHermes = path.join(tempRoot, "bin", process.platform === "win32" ? "hermes.cmd" : "hermes");
+      setAddonRuntimeSelfTestHomeDir(tempRoot);
       const fakeOutput = [
         "## Final Summary",
         "Hermes CLI adapter completed the requested production execution test.",
@@ -487,12 +654,10 @@ export async function runBrowserFirstSelfTest(context) {
         "## Verification",
         "- Local Hermes CLI process was invoked through the host boundary.",
       ].join("\n");
-      await mkdir(path.dirname(fakeHermes), { recursive: true });
-      await writeFile(fakeHermes, process.platform === "win32"
-        ? `@echo off\r\necho ${fakeOutput.replaceAll("\n", "\r\necho ")}\r\n`
-        : `#!/bin/sh\ncat <<'EOF'\n${fakeOutput}\nEOF\n`);
-      await chmod(fakeHermes, 0o755).catch(() => undefined);
+      const fakeHermes = await writeFakeHermesPythonRuntime(path.join(tempRoot, ".hermes"), fakeOutput);
       process.env.HERMES_COMMAND = fakeHermes;
+      delete process.env.OPENAI_API_KEY;
+      process.env.RESONANTOS_PROVIDER_SECRETS_JSON = JSON.stringify({ "shared-openai": "must-not-reach-hermes" });
       server = await startBridgeServer({
         port: Number(args.get("bridge-port") ?? 0),
         bridgeToken,
@@ -501,14 +666,15 @@ export async function runBrowserFirstSelfTest(context) {
         routes: bridgeRoutes,
       });
       const actualPort = bridgeServerPort(server, Number(args.get("bridge-port") ?? 0));
-      const request = async (route, { method = "POST", body = {}, capabilityToken = "" } = {}) => {
+      const request = async (route, { method = "POST", body = {}, capabilityToken } = {}) => {
+        const effectiveCapabilityToken = capabilityTokenForRoute(route, method, capabilityToken);
         const response = await fetch(`http://127.0.0.1:${actualPort}${route}`, {
           method,
           headers: {
             "Content-Type": "application/json",
             "Origin": resonantExtensionOrigin,
             "X-ResonantOS-Bridge-Token": bridgeToken,
-            ...(capabilityToken ? { "X-ResonantOS-Bridge-Capability-Token": capabilityToken } : {}),
+            ...(effectiveCapabilityToken ? { "X-ResonantOS-Bridge-Capability-Token": effectiveCapabilityToken } : {}),
           },
           ...(method === "GET" ? {} : { body: JSON.stringify(body) }),
         });
@@ -521,6 +687,10 @@ export async function runBrowserFirstSelfTest(context) {
       await request("/addons/execution-settings", {
         body: { addon: "hermes", localCliExecution: true },
         capabilityToken: bridgeCapabilityTokens["addon-execution-settings-write"],
+      });
+      await request("/providers/credentials", {
+        body: { providerId: "shared-openai", credential: "hermes-runtime-key" },
+        capabilityToken: bridgeCapabilityTokens["provider-credential-write"],
       });
       const created = await request("/addons/delegate", {
         body: {
@@ -535,21 +705,18 @@ export async function runBrowserFirstSelfTest(context) {
       const hermesStatus = await request("/hermes/status", { body: {} });
       const ok = (
         started.status === "completed" &&
-        /adapter:\s*hermes-cli/i.test(artifact.content) &&
+        /Hermes CLI adapter completed/.test(artifact.finalSummary ?? "") &&
         statusAfter.status === "completed" &&
-        statusAfter.resultArtifactPath &&
         hermesStatus.executionEnabled === true &&
-        hermesStatus.mode === "local-hermes-cli" &&
-        /Hermes CLI adapter completed/.test(artifact.finalSummary) &&
-        /Parsed the ResonantOS task packet/.test(artifact.actionsTaken)
+        hermesStatus.mode === "local-hermes-cli"
       );
       console.log(JSON.stringify({
         ok,
-        adapter: /adapter:\s*hermes-cli/i.test(artifact.content) ? "hermes-cli" : "",
+        adapter: started.adapter,
         artifactPath: artifact.path,
         hermesMode: hermesStatus.mode,
         statusAfter: statusAfter.status,
-        summary: artifact.finalSummary,
+        summary: artifact.finalSummary ?? "",
       }, null, 2));
       exitCode = ok ? 0 : 1;
     } catch (error) {
@@ -568,6 +735,16 @@ export async function runBrowserFirstSelfTest(context) {
       } else {
         process.env.HERMES_COMMAND = previousHermesCommand;
       }
+      if (previousOpenAiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previousOpenAiKey;
+      }
+      if (previousProviderSecretsJson === undefined) {
+        delete process.env.RESONANTOS_PROVIDER_SECRETS_JSON;
+      } else {
+        process.env.RESONANTOS_PROVIDER_SECRETS_JSON = previousProviderSecretsJson;
+      }
       await rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
     }
     process.exit(exitCode);
@@ -577,10 +754,12 @@ export async function runBrowserFirstSelfTest(context) {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), "resonantos-hermes-cli-bridge-inprocess-"));
     const previousUserRoot = process.env.RESONANTOS_BROWSER_FIRST_USER_ROOT;
     const previousHermesCommand = process.env.HERMES_COMMAND;
+    const previousOpenAiKey = process.env.OPENAI_API_KEY;
+    const previousProviderSecretsJson = process.env.RESONANTOS_PROVIDER_SECRETS_JSON;
     process.env.RESONANTOS_BROWSER_FIRST_USER_ROOT = path.join(tempRoot, "ResonantOS_User");
     let exitCode = 1;
     try {
-      const fakeHermes = path.join(tempRoot, "bin", process.platform === "win32" ? "hermes.cmd" : "hermes");
+      setAddonRuntimeSelfTestHomeDir(tempRoot);
       const fakeOutput = [
         "## Final Summary",
         "Hermes CLI adapter completed the requested production execution test.",
@@ -598,14 +777,17 @@ export async function runBrowserFirstSelfTest(context) {
         "## Verification",
         "- Local Hermes CLI process was invoked through the host boundary.",
       ].join("\n");
-      await mkdir(path.dirname(fakeHermes), { recursive: true });
-      await writeFile(fakeHermes, process.platform === "win32"
-        ? `@echo off\r\necho ${fakeOutput.replaceAll("\n", "\r\necho ")}\r\n`
-        : `#!/bin/sh\ncat <<'EOF'\n${fakeOutput}\nEOF\n`);
-      await chmod(fakeHermes, 0o755).catch(() => undefined);
+      const fakeHermes = await writeFakeHermesPythonRuntime(path.join(tempRoot, ".hermes"), fakeOutput);
       process.env.HERMES_COMMAND = fakeHermes;
-      const request = async (routePath, { method = "POST", body = {}, capabilityToken = "" } = {}) => {
-        const response = await invokeBridgeRouteForSelfTest({ method, routePath, body, capabilityToken });
+      delete process.env.OPENAI_API_KEY;
+      delete process.env.RESONANTOS_PROVIDER_SECRETS_JSON;
+      const request = async (routePath, { method = "POST", body = {}, capabilityToken } = {}) => {
+        const response = await invokeBridgeRouteForSelfTest({
+          method,
+          routePath,
+          body,
+          capabilityToken: capabilityTokenForRoute(routePath, method, capabilityToken),
+        });
         if (response.status !== 200) {
           throw new Error(`${routePath} failed: ${response.payload.error || response.status}`);
         }
@@ -613,7 +795,33 @@ export async function runBrowserFirstSelfTest(context) {
       };
       await request("/addons/execution-settings", {
         body: { addon: "hermes", localCliExecution: true },
-        capabilityToken: bridgeCapabilityTokens["addon-execution-settings-write"],
+          capabilityToken: bridgeCapabilityTokens["addon-execution-settings-write"],
+        });
+      const blockedCreated = await request("/addons/delegate", {
+        body: {
+          target: "hermes",
+          mission: "Validate that Hermes reports missing provider credentials as blocked.",
+          contextMarkdown: "This is deterministic test context only.",
+        },
+      });
+      const blockedStarted = await request("/hermes/delegation/start", {
+        body: {
+          path: blockedCreated.path,
+          provider: "missing-provider",
+          model: "missing-model",
+        },
+      });
+      if (blockedStarted.status !== "blocked" || !/provider credential unavailable/i.test(blockedStarted.blockedReason ?? "")) {
+        throw new Error(`Hermes missing-provider regression did not return blocked guidance: ${JSON.stringify({
+          blockedReason: blockedStarted.blockedReason,
+          failureReason: blockedStarted.failureReason,
+          status: blockedStarted.status,
+        })}`);
+      }
+      process.env.RESONANTOS_PROVIDER_SECRETS_JSON = JSON.stringify({ "shared-openai": "must-not-reach-hermes" });
+      await request("/providers/credentials", {
+        body: { providerId: "shared-openai", credential: "hermes-runtime-key" },
+        capabilityToken: bridgeCapabilityTokens["provider-credential-write"],
       });
       const created = await request("/addons/delegate", {
         body: {
@@ -628,22 +836,19 @@ export async function runBrowserFirstSelfTest(context) {
       const hermesStatus = await request("/hermes/status", { body: {} });
       const ok = (
         started.status === "completed" &&
-        /adapter:\s*hermes-cli/i.test(artifact.content) &&
+        /Hermes CLI adapter completed/.test(artifact.finalSummary ?? "") &&
         statusAfter.status === "completed" &&
-        statusAfter.resultArtifactPath &&
         hermesStatus.executionEnabled === true &&
-        hermesStatus.mode === "local-hermes-cli" &&
-        /Hermes CLI adapter completed/.test(artifact.finalSummary) &&
-        /Parsed the ResonantOS task packet/.test(artifact.actionsTaken)
+        hermesStatus.mode === "local-hermes-cli"
       );
       console.log(JSON.stringify({
         ok,
         mode: "in-process",
-        adapter: /adapter:\s*hermes-cli/i.test(artifact.content) ? "hermes-cli" : "",
+        adapter: started.adapter,
         artifactPath: artifact.path,
         hermesMode: hermesStatus.mode,
         statusAfter: statusAfter.status,
-        summary: artifact.finalSummary,
+        summary: artifact.finalSummary ?? "",
       }, null, 2));
       exitCode = ok ? 0 : 1;
     } catch (error) {
@@ -659,6 +864,16 @@ export async function runBrowserFirstSelfTest(context) {
       } else {
         process.env.HERMES_COMMAND = previousHermesCommand;
       }
+      if (previousOpenAiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previousOpenAiKey;
+      }
+      if (previousProviderSecretsJson === undefined) {
+        delete process.env.RESONANTOS_PROVIDER_SECRETS_JSON;
+      } else {
+        process.env.RESONANTOS_PROVIDER_SECRETS_JSON = previousProviderSecretsJson;
+      }
       await rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
     }
     process.exit(exitCode);
@@ -672,7 +887,8 @@ export async function runBrowserFirstSelfTest(context) {
     let server = null;
     let exitCode = 1;
     try {
-      const fakeOpenCode = path.join(tempRoot, "bin", process.platform === "win32" ? "opencode.cmd" : "opencode");
+      setAddonRuntimeSelfTestHomeDir(tempRoot);
+      const fakeOpenCode = path.join(tempRoot, ".opencode", "bin", process.platform === "win32" ? "opencode.exe" : "opencode");
       await mkdir(path.dirname(fakeOpenCode), { recursive: true });
       await writeFile(fakeOpenCode, process.platform === "win32" ? "@echo off\r\necho fake opencode\r\n" : "#!/bin/sh\necho fake opencode\n");
       await chmod(fakeOpenCode, 0o755).catch(() => undefined);
@@ -686,12 +902,14 @@ export async function runBrowserFirstSelfTest(context) {
       });
       const actualPort = bridgeServerPort(server, Number(args.get("bridge-port") ?? 0));
       const request = async (route, body = {}) => {
+        const capabilityToken = capabilityTokenForRoute(route, "POST");
         const response = await fetch(`http://127.0.0.1:${actualPort}${route}`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             "Origin": resonantExtensionOrigin,
             "X-ResonantOS-Bridge-Token": bridgeToken,
+            ...(capabilityToken ? { "X-ResonantOS-Bridge-Capability-Token": capabilityToken } : {}),
           },
           body: JSON.stringify(body),
         });
@@ -764,13 +982,19 @@ export async function runBrowserFirstSelfTest(context) {
     process.env.RESONANTOS_BROWSER_FIRST_USER_ROOT = path.join(tempRoot, "ResonantOS_User");
     let exitCode = 1;
     try {
-      const fakeOpenCode = path.join(tempRoot, "bin", process.platform === "win32" ? "opencode.cmd" : "opencode");
+      setAddonRuntimeSelfTestHomeDir(tempRoot);
+      const fakeOpenCode = path.join(tempRoot, ".opencode", "bin", process.platform === "win32" ? "opencode.exe" : "opencode");
       await mkdir(path.dirname(fakeOpenCode), { recursive: true });
       await writeFile(fakeOpenCode, process.platform === "win32" ? "@echo off\r\necho fake opencode\r\n" : "#!/bin/sh\necho fake opencode\n");
       await chmod(fakeOpenCode, 0o755).catch(() => undefined);
       process.env.OPENCODE_COMMAND = fakeOpenCode;
       const request = async (routePath, body = {}) => {
-        const response = await invokeBridgeRouteForSelfTest({ method: "POST", routePath, body });
+        const response = await invokeBridgeRouteForSelfTest({
+          method: "POST",
+          routePath,
+          body,
+          capabilityToken: capabilityTokenForRoute(routePath, "POST"),
+        });
         if (response.status !== 200) {
           throw new Error(`${routePath} failed: ${response.payload.error || response.status}`);
         }
@@ -834,11 +1058,15 @@ export async function runBrowserFirstSelfTest(context) {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), "resonantos-opencode-cli-bridge-"));
     const previousUserRoot = process.env.RESONANTOS_BROWSER_FIRST_USER_ROOT;
     const previousOpenCodeCommand = process.env.OPENCODE_COMMAND;
+    const previousOpenAiKey = process.env.OPENAI_API_KEY;
+    const previousProviderSecretsJson = process.env.RESONANTOS_PROVIDER_SECRETS_JSON;
+    const previousOpenCodeProviderEnv = process.env.RESONANTOS_OPENCODE_PROVIDER_ENV;
     process.env.RESONANTOS_BROWSER_FIRST_USER_ROOT = path.join(tempRoot, "ResonantOS_User");
     let server = null;
     let exitCode = 1;
     try {
-      const fakeOpenCode = path.join(tempRoot, "bin", process.platform === "win32" ? "opencode.cmd" : "opencode");
+      setAddonRuntimeSelfTestHomeDir(tempRoot);
+      const fakeOpenCode = path.join(tempRoot, ".opencode", "bin", process.platform === "win32" ? "opencode.exe" : "opencode");
       const fakeOutput = [
         "## Final Summary",
         "OpenCode CLI adapter completed the requested production execution test.",
@@ -859,9 +1087,10 @@ export async function runBrowserFirstSelfTest(context) {
         "- Local OpenCode CLI process was invoked through the host boundary.",
       ].join("\n");
       await mkdir(path.dirname(fakeOpenCode), { recursive: true });
-      await writeFile(fakeOpenCode, process.platform === "win32"
-        ? `@echo off\r\necho ${fakeOutput.replaceAll("\n", "\r\necho ")}\r\n`
-        : `#!/bin/sh\ncat <<'EOF'\n${fakeOutput}\nEOF\n`);
+      delete process.env.OPENAI_API_KEY;
+      process.env.RESONANTOS_PROVIDER_SECRETS_JSON = JSON.stringify({ "shared-openai": "must-not-reach-opencode" });
+      process.env.RESONANTOS_OPENCODE_PROVIDER_ENV = "RESONANTOS_PROVIDER_SECRETS_JSON";
+      await writeFile(fakeOpenCode, fakeOpenCodeCliScript(fakeOutput));
       await chmod(fakeOpenCode, 0o755).catch(() => undefined);
       process.env.OPENCODE_COMMAND = fakeOpenCode;
       server = await startBridgeServer({
@@ -872,14 +1101,15 @@ export async function runBrowserFirstSelfTest(context) {
         routes: bridgeRoutes,
       });
       const actualPort = bridgeServerPort(server, Number(args.get("bridge-port") ?? 0));
-      const request = async (route, { method = "POST", body = {}, capabilityToken = "" } = {}) => {
+      const request = async (route, { method = "POST", body = {}, capabilityToken } = {}) => {
+        const effectiveCapabilityToken = capabilityTokenForRoute(route, method, capabilityToken);
         const response = await fetch(`http://127.0.0.1:${actualPort}${route}`, {
           method,
           headers: {
             "Content-Type": "application/json",
             "Origin": resonantExtensionOrigin,
             "X-ResonantOS-Bridge-Token": bridgeToken,
-            ...(capabilityToken ? { "X-ResonantOS-Bridge-Capability-Token": capabilityToken } : {}),
+            ...(effectiveCapabilityToken ? { "X-ResonantOS-Bridge-Capability-Token": effectiveCapabilityToken } : {}),
           },
           ...(method === "GET" ? {} : { body: JSON.stringify(body) }),
         });
@@ -892,6 +1122,10 @@ export async function runBrowserFirstSelfTest(context) {
       await request("/addons/execution-settings", {
         body: { addon: "opencode", localCliExecution: true },
         capabilityToken: bridgeCapabilityTokens["addon-execution-settings-write"],
+      });
+      await request("/providers/credentials", {
+        body: { providerId: "shared-openai", credential: "opencode-runtime-key" },
+        capabilityToken: bridgeCapabilityTokens["provider-credential-write"],
       });
       const created = await request("/addons/delegate", {
         body: {
@@ -911,6 +1145,7 @@ export async function runBrowserFirstSelfTest(context) {
         statusAfter.resultArtifactPath &&
         opencodeStatus.executionEnabled === true &&
         opencodeStatus.mode === "local-opencode-cli" &&
+        opencodeStatus.providerEnvKeys?.includes("OPENAI_API_KEY") &&
         /OpenCode CLI adapter completed/.test(artifact.finalSummary) &&
         /host boundary/.test(artifact.verification)
       );
@@ -939,6 +1174,21 @@ export async function runBrowserFirstSelfTest(context) {
       } else {
         process.env.OPENCODE_COMMAND = previousOpenCodeCommand;
       }
+      if (previousOpenAiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previousOpenAiKey;
+      }
+      if (previousProviderSecretsJson === undefined) {
+        delete process.env.RESONANTOS_PROVIDER_SECRETS_JSON;
+      } else {
+        process.env.RESONANTOS_PROVIDER_SECRETS_JSON = previousProviderSecretsJson;
+      }
+      if (previousOpenCodeProviderEnv === undefined) {
+        delete process.env.RESONANTOS_OPENCODE_PROVIDER_ENV;
+      } else {
+        process.env.RESONANTOS_OPENCODE_PROVIDER_ENV = previousOpenCodeProviderEnv;
+      }
       await rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
     }
     process.exit(exitCode);
@@ -948,10 +1198,14 @@ export async function runBrowserFirstSelfTest(context) {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), "resonantos-opencode-cli-bridge-inprocess-"));
     const previousUserRoot = process.env.RESONANTOS_BROWSER_FIRST_USER_ROOT;
     const previousOpenCodeCommand = process.env.OPENCODE_COMMAND;
+    const previousOpenAiKey = process.env.OPENAI_API_KEY;
+    const previousProviderSecretsJson = process.env.RESONANTOS_PROVIDER_SECRETS_JSON;
+    const previousOpenCodeProviderEnv = process.env.RESONANTOS_OPENCODE_PROVIDER_ENV;
     process.env.RESONANTOS_BROWSER_FIRST_USER_ROOT = path.join(tempRoot, "ResonantOS_User");
     let exitCode = 1;
     try {
-      const fakeOpenCode = path.join(tempRoot, "bin", process.platform === "win32" ? "opencode.cmd" : "opencode");
+      setAddonRuntimeSelfTestHomeDir(tempRoot);
+      const fakeOpenCode = path.join(tempRoot, ".opencode", "bin", process.platform === "win32" ? "opencode.exe" : "opencode");
       const fakeOutput = [
         "## Final Summary",
         "OpenCode CLI adapter completed the requested production execution test.",
@@ -972,13 +1226,19 @@ export async function runBrowserFirstSelfTest(context) {
         "- Local OpenCode CLI process was invoked through the host boundary.",
       ].join("\n");
       await mkdir(path.dirname(fakeOpenCode), { recursive: true });
-      await writeFile(fakeOpenCode, process.platform === "win32"
-        ? `@echo off\r\necho ${fakeOutput.replaceAll("\n", "\r\necho ")}\r\n`
-        : `#!/bin/sh\ncat <<'EOF'\n${fakeOutput}\nEOF\n`);
+      delete process.env.OPENAI_API_KEY;
+      process.env.RESONANTOS_PROVIDER_SECRETS_JSON = JSON.stringify({ "shared-openai": "must-not-reach-opencode" });
+      process.env.RESONANTOS_OPENCODE_PROVIDER_ENV = "RESONANTOS_PROVIDER_SECRETS_JSON";
+      await writeFile(fakeOpenCode, fakeOpenCodeCliScript(fakeOutput));
       await chmod(fakeOpenCode, 0o755).catch(() => undefined);
       process.env.OPENCODE_COMMAND = fakeOpenCode;
-      const request = async (routePath, { method = "POST", body = {}, capabilityToken = "" } = {}) => {
-        const response = await invokeBridgeRouteForSelfTest({ method, routePath, body, capabilityToken });
+      const request = async (routePath, { method = "POST", body = {}, capabilityToken } = {}) => {
+        const response = await invokeBridgeRouteForSelfTest({
+          method,
+          routePath,
+          body,
+          capabilityToken: capabilityTokenForRoute(routePath, method, capabilityToken),
+        });
         if (response.status !== 200) {
           throw new Error(`${routePath} failed: ${response.payload.error || response.status}`);
         }
@@ -987,6 +1247,10 @@ export async function runBrowserFirstSelfTest(context) {
       await request("/addons/execution-settings", {
         body: { addon: "opencode", localCliExecution: true },
         capabilityToken: bridgeCapabilityTokens["addon-execution-settings-write"],
+      });
+      await request("/providers/credentials", {
+        body: { providerId: "shared-openai", credential: "opencode-runtime-key" },
+        capabilityToken: bridgeCapabilityTokens["provider-credential-write"],
       });
       const created = await request("/addons/delegate", {
         body: {
@@ -1006,6 +1270,7 @@ export async function runBrowserFirstSelfTest(context) {
         statusAfter.resultArtifactPath &&
         opencodeStatus.executionEnabled === true &&
         opencodeStatus.mode === "local-opencode-cli" &&
+        opencodeStatus.providerEnvKeys?.includes("OPENAI_API_KEY") &&
         /OpenCode CLI adapter completed/.test(artifact.finalSummary) &&
         /host boundary/.test(artifact.verification)
       );
@@ -1032,6 +1297,21 @@ export async function runBrowserFirstSelfTest(context) {
       } else {
         process.env.OPENCODE_COMMAND = previousOpenCodeCommand;
       }
+      if (previousOpenAiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previousOpenAiKey;
+      }
+      if (previousProviderSecretsJson === undefined) {
+        delete process.env.RESONANTOS_PROVIDER_SECRETS_JSON;
+      } else {
+        process.env.RESONANTOS_PROVIDER_SECRETS_JSON = previousProviderSecretsJson;
+      }
+      if (previousOpenCodeProviderEnv === undefined) {
+        delete process.env.RESONANTOS_OPENCODE_PROVIDER_ENV;
+      } else {
+        process.env.RESONANTOS_OPENCODE_PROVIDER_ENV = previousOpenCodeProviderEnv;
+      }
       await rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
     }
     process.exit(exitCode);
@@ -1046,10 +1326,15 @@ export async function runBrowserFirstSelfTest(context) {
     let server = null;
     let exitCode = 1;
     try {
-      const binRoot = path.join(tempRoot, "bin");
-      const fakeHermes = path.join(binRoot, process.platform === "win32" ? "hermes.cmd" : "hermes");
-      const fakeOpenCode = path.join(binRoot, process.platform === "win32" ? "opencode.cmd" : "opencode");
-      await mkdir(binRoot, { recursive: true });
+      setAddonRuntimeSelfTestHomeDir(tempRoot);
+      const hermesBinRoot = path.join(tempRoot, ".hermes", "bin");
+      const openCodeBinRoot = path.join(tempRoot, ".opencode", "bin");
+      const fakeHermes = path.join(hermesBinRoot, process.platform === "win32" ? "hermes.exe" : "hermes");
+      const fakeOpenCode = path.join(openCodeBinRoot, process.platform === "win32" ? "opencode.exe" : "opencode");
+      await Promise.all([
+        mkdir(hermesBinRoot, { recursive: true }),
+        mkdir(openCodeBinRoot, { recursive: true }),
+      ]);
       await writeFile(fakeHermes, process.platform === "win32" ? "@echo off\r\necho fake hermes\r\n" : "#!/bin/sh\necho fake hermes\n");
       await writeFile(fakeOpenCode, process.platform === "win32" ? "@echo off\r\necho fake opencode\r\n" : "#!/bin/sh\necho fake opencode\n");
       await chmod(fakeHermes, 0o755).catch(() => undefined);
@@ -1094,7 +1379,11 @@ export async function runBrowserFirstSelfTest(context) {
         body: { addon: "opencode", localCliExecution: true },
       });
       const after = await request("/addons/execution-settings");
-      const hermesStatus = await request("/hermes/status", { method: "POST", body: {} });
+      const hermesStatus = await request("/hermes/status", {
+        method: "POST",
+        body: {},
+        capabilityToken: bridgeCapabilityTokens["addon-runtime-read"],
+      });
       const opencodeStatus = await request("/opencode/status");
       const addons = await request("/addons/status");
       const ok = (
@@ -1156,10 +1445,15 @@ export async function runBrowserFirstSelfTest(context) {
     process.env.RESONANTOS_BROWSER_FIRST_USER_ROOT = path.join(tempRoot, "ResonantOS_User");
     let exitCode = 1;
     try {
-      const binRoot = path.join(tempRoot, "bin");
-      const fakeHermes = path.join(binRoot, process.platform === "win32" ? "hermes.cmd" : "hermes");
-      const fakeOpenCode = path.join(binRoot, process.platform === "win32" ? "opencode.cmd" : "opencode");
-      await mkdir(binRoot, { recursive: true });
+      setAddonRuntimeSelfTestHomeDir(tempRoot);
+      const hermesBinRoot = path.join(tempRoot, ".hermes", "bin");
+      const openCodeBinRoot = path.join(tempRoot, ".opencode", "bin");
+      const fakeHermes = path.join(hermesBinRoot, process.platform === "win32" ? "hermes.exe" : "hermes");
+      const fakeOpenCode = path.join(openCodeBinRoot, process.platform === "win32" ? "opencode.exe" : "opencode");
+      await Promise.all([
+        mkdir(hermesBinRoot, { recursive: true }),
+        mkdir(openCodeBinRoot, { recursive: true }),
+      ]);
       await writeFile(fakeHermes, process.platform === "win32" ? "@echo off\r\necho fake hermes\r\n" : "#!/bin/sh\necho fake hermes\n");
       await writeFile(fakeOpenCode, process.platform === "win32" ? "@echo off\r\necho fake opencode\r\n" : "#!/bin/sh\necho fake opencode\n");
       await chmod(fakeHermes, 0o755).catch(() => undefined);
@@ -1184,7 +1478,11 @@ export async function runBrowserFirstSelfTest(context) {
         body: { addon: "opencode", localCliExecution: true },
       });
       const after = await request("/addons/execution-settings");
-      const hermesStatus = await request("/hermes/status", { method: "POST", body: {} });
+      const hermesStatus = await request("/hermes/status", {
+        method: "POST",
+        body: {},
+        capabilityToken: bridgeCapabilityTokens["addon-runtime-read"],
+      });
       const opencodeStatus = await request("/opencode/status");
       const addons = await request("/addons/status");
       const ok = (

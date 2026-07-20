@@ -34,11 +34,18 @@ export { reviewRequestNextAction } from "./memory-review-renderers.js";
 export function renderLivingArchiveWorkspace({
   container,
   bridgeRequest,
+  // Optional getter for the late-bound bridge client. The extension's
+  // rebind chain sets the module-level `bridgeRequest` *after* this
+  // workspace is constructed, so passing a value here captures a
+  // stale `null`. When a getter is provided, it wins.
+  getBridgeRequest,
   initialQuery = "",
   initialReviewPath = "",
   initialArtifactPath = "",
   initialPromotedPage = ""
 }) {
+  // Resolve at call time. Falls back to the captured value.
+  const bridge = () => (typeof getBridgeRequest === "function" ? getBridgeRequest() : bridgeRequest);
   const {
     contentInput,
     draftPreview,
@@ -76,7 +83,7 @@ export function renderLivingArchiveWorkspace({
 
   const loadStatus = async () => {
     try {
-      const status = await bridgeRequest("/memory/status", { method: "GET" });
+      const status = await bridge()("/memory/status", { method: "GET" });
       const [wikiPages, intakeArtifacts, reviewWork] = metrics.querySelectorAll(".memory-metric strong");
       const [wikiMeta, intakeMeta, reviewMeta] = metrics.querySelectorAll(".memory-metric small");
       wikiPages.textContent = formatCount(status.wiki?.pages);
@@ -92,7 +99,7 @@ export function renderLivingArchiveWorkspace({
 
   const loadWikiHealth = async () => {
     try {
-      const health = await bridgeRequest("/memory/wiki/health", { method: "GET" });
+      const health = await bridge()("/memory/wiki/health", { method: "GET" });
       const card = wikiHealthCard(health, () => {
         wikiHealthPanel.replaceChildren();
         wikiHealthPanel.textContent = "Refreshing wiki health…";
@@ -101,7 +108,7 @@ export function renderLivingArchiveWorkspace({
         wikiHealthPanel.replaceChildren();
         wikiHealthPanel.textContent = "Running wiki lint and writing review artifact…";
         try {
-          const result = await bridgeRequest("/memory/wiki/lint", {
+          const result = await bridge()("/memory/wiki/lint", {
             method: "POST",
             capability: "memory-source-review",
             body: { reason: "Manual Living Archive workspace lint" }
@@ -126,7 +133,7 @@ export function renderLivingArchiveWorkspace({
     reviewList.replaceChildren();
     setMemoryStatus(reviewStatus, "Loading review queue…");
     try {
-      const result = await bridgeRequest("/archive/review/list", {
+      const result = await bridge()("/archive/review/list", {
         method: "POST",
         body: { limit: 12 }
       });
@@ -173,7 +180,7 @@ export function renderLivingArchiveWorkspace({
     promotionPreview.replaceChildren();
     setMemoryStatus(promotionStatus, "Loading promotion history…");
     try {
-      const result = await bridgeRequest("/archive/review/promotions/list", {
+      const result = await bridge()("/archive/review/promotions/list", {
         method: "POST",
         body: { limit: 10 }
       });
@@ -249,7 +256,7 @@ export function renderLivingArchiveWorkspace({
     sourcePreview.replaceChildren();
     setMemoryStatus(sourceStatus, "Loading connected sources…");
     try {
-      const result = await bridgeRequest("/memory/settings", { method: "GET" });
+      const result = await bridge()("/memory/settings", { method: "GET" });
       connectedSources = result.settings?.sources ?? [];
       sourceSyncHistoryEntries = result.syncHistory ?? [];
       sourceRepairHistoryEntries = result.sourceRepairHistory ?? [];
@@ -270,12 +277,12 @@ export function renderLivingArchiveWorkspace({
     refreshSources.disabled = true;
     setMemoryStatus(sourceStatus, "Running governed source sync…");
     try {
-      const result = await bridgeRequest("/memory/source/sync", {
+      const result = await bridge()("/memory/source/sync", {
         method: "POST",
         capability: "memory-source-file-intake",
         body: { limit: 2_000 }
       });
-      const settingsResult = await bridgeRequest("/memory/settings", { method: "GET" });
+      const settingsResult = await bridge()("/memory/settings", { method: "GET" });
       connectedSources = settingsResult.settings?.sources ?? connectedSources;
       sourceSyncHistoryEntries = settingsResult.syncHistory ?? sourceSyncHistoryEntries;
       sourceRepairHistoryEntries = settingsResult.sourceRepairHistory ?? sourceRepairHistoryEntries;
@@ -310,7 +317,7 @@ export function renderLivingArchiveWorkspace({
     sourcePreview.replaceChildren();
     setMemoryStatus(sourceStatus, `Reviewing ${source.path || source.id}…`);
     try {
-      const result = await bridgeRequest("/memory/source/review", {
+      const result = await bridge()("/memory/source/review", {
         method: "POST",
         capability: "memory-source-review",
         body: { sourceId: source.id, limit: 2_000 }
@@ -331,7 +338,7 @@ export function renderLivingArchiveWorkspace({
     }
     setMemoryStatus(sourceStatus, `Loading diff for ${candidate.path}…`);
     try {
-      const result = await bridgeRequest("/memory/source/diff", {
+      const result = await bridge()("/memory/source/diff", {
         method: "POST",
         capability: "memory-source-review",
         body: {
@@ -354,7 +361,7 @@ export function renderLivingArchiveWorkspace({
     }
     setMemoryStatus(sourceStatus, "Repairing source version tracking…");
     try {
-      const result = await bridgeRequest("/memory/source/versions/repair", {
+      const result = await bridge()("/memory/source/versions/repair", {
         method: "POST",
         capability: "memory-source-manage",
         body: {
@@ -362,7 +369,7 @@ export function renderLivingArchiveWorkspace({
           confirmation: "REPAIR SOURCE VERSIONS"
         }
       });
-      const refreshedReview = await bridgeRequest("/memory/source/review", {
+      const refreshedReview = await bridge()("/memory/source/review", {
         method: "POST",
         capability: "memory-source-review",
         body: { sourceId: review.source.id, limit: 2_000 }
@@ -370,7 +377,7 @@ export function renderLivingArchiveWorkspace({
       sourcePreview.replaceChildren(sourceReviewCard(refreshedReview, createSelectedFileIntake, (candidate) => {
         void previewSourceDiff(refreshedReview.source, candidate);
       }, repairSourceVersions));
-      const settingsResult = await bridgeRequest("/memory/settings", { method: "GET" });
+      const settingsResult = await bridge()("/memory/settings", { method: "GET" });
       connectedSources = settingsResult.settings?.sources ?? connectedSources;
       sourceSyncHistoryEntries = settingsResult.syncHistory ?? sourceSyncHistoryEntries;
       sourceRepairHistoryEntries = settingsResult.sourceRepairHistory ?? sourceRepairHistoryEntries;
@@ -391,7 +398,7 @@ export function renderLivingArchiveWorkspace({
     sourcePreview.replaceChildren();
     setMemoryStatus(sourceStatus, `Loading source versions for ${source.path || source.id}…`);
     try {
-      const result = await bridgeRequest("/memory/source/versions", {
+      const result = await bridge()("/memory/source/versions", {
         method: "POST",
         body: { sourceId: source.id, limit: 100 }
       });
@@ -409,7 +416,7 @@ export function renderLivingArchiveWorkspace({
     }
     setMemoryStatus(sourceStatus, `Creating governed intake from ${files.length} selected file(s)…`);
     try {
-      const result = await bridgeRequest("/memory/source/file-intake", {
+      const result = await bridge()("/memory/source/file-intake", {
         method: "POST",
         capability: "memory-source-file-intake",
         body: {
@@ -418,7 +425,7 @@ export function renderLivingArchiveWorkspace({
         }
       });
       for (const created of result.created ?? []) {
-        await bridgeRequest("/archive/review/request", {
+        await bridge()("/archive/review/request", {
           method: "POST",
           body: {
             path: created.path,
@@ -434,7 +441,7 @@ export function renderLivingArchiveWorkspace({
       await loadStatus();
       await loadReviewQueue();
       if (review.source?.id) {
-        const refreshedReview = await bridgeRequest("/memory/source/review", {
+        const refreshedReview = await bridge()("/memory/source/review", {
           method: "POST",
           capability: "memory-source-review",
           body: { sourceId: review.source.id, limit: 2_000 }
@@ -456,12 +463,12 @@ export function renderLivingArchiveWorkspace({
   const createSourceIntake = async (source) => {
     setMemoryStatus(sourceStatus, `Creating governed intake summary for ${source.path || source.id}…`);
     try {
-      const result = await bridgeRequest("/memory/source/intake", {
+      const result = await bridge()("/memory/source/intake", {
         method: "POST",
         capability: "memory-source-intake",
         body: { sourceId: source.id }
       });
-      const reviewRequest = await bridgeRequest("/archive/review/request", {
+      const reviewRequest = await bridge()("/archive/review/request", {
         method: "POST",
         body: {
           path: result.path,
@@ -491,7 +498,7 @@ export function renderLivingArchiveWorkspace({
     }
     setMemoryStatus(promotionStatus, `Restoring ${entry.promotedPage || "wiki page"} from backup…`);
     try {
-      const result = await bridgeRequest("/archive/review/promotions/restore", {
+      const result = await bridge()("/archive/review/promotions/restore", {
         method: "POST",
         body: { path: entry.path }
       });
@@ -510,7 +517,7 @@ export function renderLivingArchiveWorkspace({
     }
     setMemoryStatus(promotionStatus, `Loading ${entry.promotedPage}…`);
     try {
-      const result = await bridgeRequest("/memory/wiki/page/read", {
+      const result = await bridge()("/memory/wiki/page/read", {
         method: "POST",
         body: { path: entry.promotedPage }
       });
@@ -536,7 +543,7 @@ export function renderLivingArchiveWorkspace({
     }
     setMemoryStatus(reviewStatus, `Updating review request to ${status}…`);
     try {
-      const result = await bridgeRequest("/archive/review/transition", {
+      const result = await bridge()("/archive/review/transition", {
         method: "POST",
         body: {
           path: request.path,
@@ -561,7 +568,7 @@ export function renderLivingArchiveWorkspace({
     }
     setMemoryStatus(reviewStatus, "Generating draft wiki update artifact…");
     try {
-      const result = await bridgeRequest("/archive/review/draft", {
+      const result = await bridge()("/archive/review/draft", {
         method: "POST",
         body: { path: request.path }
       });
@@ -582,7 +589,7 @@ export function renderLivingArchiveWorkspace({
     draftPreview.hidden = true;
     draftPreview.replaceChildren();
     try {
-      const result = await bridgeRequest("/archive/intake/read", {
+      const result = await bridge()("/archive/intake/read", {
         method: "POST",
         body: { path: request.artifactPath }
       });
@@ -603,7 +610,7 @@ export function renderLivingArchiveWorkspace({
     draftPreview.hidden = true;
     draftPreview.replaceChildren();
     try {
-      const result = await bridgeRequest("/memory/wiki/page/read", {
+      const result = await bridge()("/memory/wiki/page/read", {
         method: "POST",
         body: { path: request.promotedPage }
       });
@@ -624,7 +631,7 @@ export function renderLivingArchiveWorkspace({
     draftPreview.hidden = true;
     draftPreview.replaceChildren();
     try {
-      const result = await bridgeRequest("/archive/review/artifact/read", {
+      const result = await bridge()("/archive/review/artifact/read", {
         method: "POST",
         body: { path: request.draftArtifactPath }
       });
@@ -691,7 +698,7 @@ export function renderLivingArchiveWorkspace({
     }
     setMemoryStatus(reviewStatus, "Loading verifier artifact preview…");
     try {
-      const result = await bridgeRequest("/archive/review/verification/read", {
+      const result = await bridge()("/archive/review/verification/read", {
         method: "POST",
         body: { path }
       });
@@ -721,7 +728,7 @@ export function renderLivingArchiveWorkspace({
     }
     setMemoryStatus(reviewStatus, "Verifying draft wiki update…");
     try {
-      const result = await bridgeRequest("/archive/review/artifact/verify", {
+      const result = await bridge()("/archive/review/artifact/verify", {
         method: "POST",
         body: { path }
       });
@@ -748,7 +755,7 @@ export function renderLivingArchiveWorkspace({
     }
     setMemoryStatus(reviewStatus, "Revising draft from verifier findings…");
     try {
-      const result = await bridgeRequest("/archive/review/artifact/revise", {
+      const result = await bridge()("/archive/review/artifact/revise", {
         method: "POST",
         body: { path }
       });
@@ -769,7 +776,7 @@ export function renderLivingArchiveWorkspace({
     }
     setMemoryStatus(reviewStatus, "Promoting draft into trusted AI Memory…");
     try {
-      const result = await bridgeRequest("/archive/review/artifact/promote", {
+      const result = await bridge()("/archive/review/artifact/promote", {
         method: "POST",
         body: { path }
       });
@@ -803,7 +810,7 @@ export function renderLivingArchiveWorkspace({
     setMemoryStatus(searchStatus, "Searching AI Memory…");
     searchResults.replaceChildren();
     try {
-      const result = await bridgeRequest("/memory/search", {
+      const result = await bridge()("/memory/search", {
         method: "POST",
         body: { query, limit: 8 }
       });
@@ -840,7 +847,7 @@ export function renderLivingArchiveWorkspace({
     intakeButton.disabled = true;
     setMemoryStatus(intakeStatus, "Saving governed intake…");
     try {
-      const result = await bridgeRequest("/archive/intake", {
+      const result = await bridge()("/archive/intake", {
         method: "POST",
         body: { title, content, origin: "main-workspace" }
       });

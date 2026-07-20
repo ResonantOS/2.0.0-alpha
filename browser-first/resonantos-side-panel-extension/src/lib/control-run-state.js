@@ -1,3 +1,5 @@
+import { publicControlOverlayActionForStep } from "./control-overlay-actions.js";
+
 export function createControlRunState({
   browserJobStore,
   getCurrentControlRun,
@@ -44,6 +46,11 @@ export function createControlRunState({
 
   const updateOverlayForStep = (step, state, note = "") => {
     if (!["active", "blocked", "failed", "cancelled"].includes(state)) return;
+    if (state === "active") {
+      const action = publicControlOverlayActionForStep(step);
+      void setPageControlOverlay(true, action.label, action.phase);
+      return;
+    }
     const prefix = state === "active"
       ? "Augmentor"
       : state === "blocked"

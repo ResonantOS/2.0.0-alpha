@@ -6,7 +6,7 @@
 
 import { readFileSync, writeFileSync, unlinkSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "node:test";
 import assert from "node:assert";
 import { spawnSync } from "node:child_process";
@@ -15,7 +15,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..");
 
 // Dynamically import the module under test
-const healthCheck = await import(join(REPO_ROOT, "scripts", "health-check.mjs"));
+const healthCheck = await import(pathToFileURL(join(REPO_ROOT, "scripts", "health-check.mjs")));
 
 const { redactSecretValue, extractProviderUrls, extractModelIdentifiers, parseDefaults } = healthCheck;
 

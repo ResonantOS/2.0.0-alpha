@@ -1,7 +1,14 @@
 # ADR-001: Platform Stack
 
-Status: Accepted  
-Date: 2026-04-23
+## Decision Metadata
+
+- Decision status: Accepted
+- Alpha applicability: Partial
+- Superseded by: None
+- Owner: Core architecture
+- Decision date: 2026-04-23
+- Alpha note: React, TypeScript, and capability boundaries apply. The Tauri and
+  Rust host stack is not part of Alpha; see `ALPHA_RUNTIME_BOUNDARY.md`.
 
 ## Decision
 

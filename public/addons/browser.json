@@ -5,7 +5,7 @@
   "author": "Resonant Alpha",
   "category": "tool",
   "sdkVersion": "0.1.0",
-  "description": "Native embedded Chromium browser add-on for web work and future AI-controlled browsing. Product Browser requires an embedded native host with Phantom Wallet and Bitwarden compatibility.",
+  "description": "Chrome extension browser layer for side-panel web work, audited page context, and bridge-mediated AI control.",
   "runtimeType": "local-service",
   "surfaces": [
     {
@@ -61,8 +61,8 @@
   "grantPresets": [
     {
       "id": "browser-controlled-session",
-      "label": "Live Chromium session",
-      "description": "Allows ResonantOS to attach a live browser surface and future audited AI-control tools.",
+      "label": "Browser extension session",
+      "description": "Allows ResonantOS to use the Chrome extension surface and audited bridge-mediated browser tools.",
       "grants": [
         {
           "capability": "network",
@@ -102,40 +102,15 @@
     "canWriteKnowledgePages": false
   },
   "health": {
-    "strategy": "native-browser-host-probe"
+    "strategy": "browser-first-bridge-status"
   },
   "service": {
-    "protocol": "host-command",
-    "entrypoint": "addons/resonant-browser-native/native-browser-host.contract.json",
-    "healthCommand": "browser.native.probe",
-    "shutdownCommand": "browser.native.close"
+    "protocol": "http-json",
+    "entrypoint": "browser-first/host/run-bridge-minimal.mjs",
+    "healthCommand": "/status",
+    "shutdownCommand": ""
   },
   "tools": [
-    {
-      "name": "browser.native.bridge_probe",
-      "description": "Check that the in-process native Browser bridge library exists and exports the required C ABI.",
-      "requiredCapabilities": ["ui-embedding", "browser-control"],
-      "inputSchema": {
-        "type": "object"
-      },
-      "outputSchema": {
-        "type": "object",
-        "required": ["status", "integrationMode", "bridgeLibraryStatus", "cAbiStatus", "checkedAt"],
-        "properties": {
-          "status": { "type": "string" },
-          "integrationMode": { "type": "string" },
-          "bridgeLibraryStatus": { "type": "string" },
-          "cAbiStatus": { "type": "string" },
-          "checkedAt": { "type": "string" }
-        }
-      },
-      "audit": {
-        "logRequest": true,
-        "logResult": true,
-        "artifactTypes": ["diagnostic-report"]
-      },
-      "requiresHumanApproval": false
-    },
     {
       "name": "browser.health",
       "description": "Check the controlled Chromium browser host state.",

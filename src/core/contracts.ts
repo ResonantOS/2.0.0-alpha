@@ -789,6 +789,7 @@ export interface HermesChatResult {
 export interface HermesDashboardStatus {
   running: boolean;
   url: string;
+  dashboardProxyUrl?: string;
   host: string;
   port: number;
   detail: string;
@@ -2303,64 +2304,6 @@ export interface BrowserEngineInstallResult {
   log: string;
 }
 
-export interface BrowserNativeWebviewBounds {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
-export interface BrowserNativeWebviewResult {
-  label: string;
-  url?: string | null;
-  visible: boolean;
-  status: string;
-}
-
-export type NativeBrowserProbeStatus = "ready" | "partial" | "blocked";
-export type NativeBrowserCapabilityStatus = "ready" | "present-unverified" | "missing" | "blocked";
-
-export interface NativeBrowserProbeResult {
-  status: NativeBrowserProbeStatus;
-  engineCandidate: string;
-  hostBinaryStatus: NativeBrowserCapabilityStatus;
-  sourceScaffoldStatus: NativeBrowserCapabilityStatus;
-  embeddedViewStatus: NativeBrowserCapabilityStatus;
-  extensionCompatibilityStatus: NativeBrowserCapabilityStatus;
-  phantomStatus: NativeBrowserCapabilityStatus;
-  bitwardenStatus: NativeBrowserCapabilityStatus;
-  blockers: string[];
-  nextActions: string[];
-  checkedAt: string;
-}
-
-export type NativeBrowserAttachSmokeStatus = "attached" | "blocked" | "unsupported";
-
-export interface NativeBrowserAttachSmokeResult {
-  status: NativeBrowserAttachSmokeStatus;
-  platform: string;
-  parentHandleKind: string;
-  parentHandlePresent: boolean;
-  hostIntegrationMode: string;
-  blocker?: string | null;
-  nextActions: string[];
-  checkedAt: string;
-}
-
-export type NativeBrowserBridgeProbeStatus = "ready" | "partial" | "missing";
-
-export interface NativeBrowserBridgeProbeResult {
-  status: NativeBrowserBridgeProbeStatus;
-  integrationMode: string;
-  bridgeLibraryStatus: NativeBrowserCapabilityStatus;
-  cAbiStatus: NativeBrowserCapabilityStatus;
-  bridgeLibraryPath?: string | null;
-  exportedSymbols: string[];
-  blockers: string[];
-  nextActions: string[];
-  checkedAt: string;
-}
-
 export interface BrowserPageLink {
   text: string;
   href: string;
@@ -2399,7 +2342,7 @@ export interface BrowserHostAuditEvent {
 export interface BrowserHostHealthResult {
   ready: boolean;
   sessionId: string | null;
-  engine: "chromium" | "electron-chromium";
+  engine: "chromium";
   headless?: boolean;
   url: string | null;
   title?: string | null;
@@ -2447,19 +2390,13 @@ export interface BrowserExtensionState {
   enabled: boolean;
   source: "chrome-web-store" | "local-unpacked" | "resonantos-registry";
   requestedCapabilities: string[];
-  compatibilityState?: "supported" | "degraded" | "unsupported-in-electron";
+  compatibilityState?: "supported" | "degraded" | "unsupported";
   compatibilityNotes?: string[];
 }
 
 export interface BrowserExtensionListResult {
   sessionId: string | null;
   extensions: BrowserExtensionState[];
-  audit: BrowserHostAuditEvent[];
-}
-
-export interface BrowserExtensionLoadResult {
-  sessionId: string | null;
-  extension: BrowserExtensionState;
   audit: BrowserHostAuditEvent[];
 }
 
@@ -2474,7 +2411,6 @@ export interface BrowserToolCommand {
     | "close"
     | "health"
     | "extensions_list"
-    | "extensions_load_unpacked"
     | "extensions_set_pinned"
     | "extensions_disable"
     | "wallet_host_health"
@@ -2517,6 +2453,16 @@ export interface OpenCodeStatus {
   version?: string | null;
   binaryPath?: string | null;
   installHint: string;
+  installCommand?: string | null;
+  alternativeInstallCommands?: string[];
+  configureCommand?: string | null;
+  searchedCommands?: string[];
+  searchedPaths?: string[];
+  searchedPathCount?: number;
+  searchedPathOmitted?: number;
+  overrideConfigured?: boolean;
+  overridePath?: string | null;
+  overrideFound?: boolean;
   supportsWebUi: boolean;
   supportsServerApi: boolean;
 }

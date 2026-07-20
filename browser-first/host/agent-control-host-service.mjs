@@ -222,6 +222,8 @@ export function createAgentControlHostService(dependencies = {}) {
     fetchImpl = globalThis.fetch,
     openAiReasoningEffort,
     providerRouteForModel,
+    allModelCatalog,
+    allProviderProfiles,
     readProviderSecrets,
     sanitizeAssistantContent,
   } = dependencies;
@@ -241,8 +243,21 @@ export function createAgentControlHostService(dependencies = {}) {
   const reasoningEffort = required("openAiReasoningEffort", openAiReasoningEffort);
   const fetchFn = required("fetchImpl", fetchImpl);
 
+  // Route through the dynamic catalog when the host provides it, so a user-added
+  // provider selected for planning reaches its own endpoint instead of the
+  // built-in default. Falls back to built-in routing when not injected.
+  const dynamicCatalog = typeof allModelCatalog === "function" ? allModelCatalog : null;
+  const dynamicProfiles = typeof allProviderProfiles === "function" ? allProviderProfiles : null;
+  async function routeForModel(model) {
+    if (dynamicCatalog && dynamicProfiles) {
+      const [catalog, profiles] = await Promise.all([dynamicCatalog(), dynamicProfiles()]);
+      return providerRoute(model, { catalog, profiles });
+    }
+    return providerRoute(model);
+  }
+
   async function executeControlPlan(payload = {}) {
-    const route = providerRoute(payload.model);
+    const route = await routeForModel(payload.model);
     const secrets = await readSecrets();
     const apiKey = secrets[route.providerId];
     if (!apiKey) {
@@ -312,7 +327,7 @@ export function createAgentControlHostService(dependencies = {}) {
   }
 
   async function executeNextAction(payload = {}) {
-    const route = providerRoute(payload.model);
+    const route = await routeForModel(payload.model);
     const secrets = await readSecrets();
     const apiKey = secrets[route.providerId];
     if (!apiKey) {
@@ -421,9 +436,24 @@ export function createAgentControlHostService(dependencies = {}) {
 
   return {
     agentControlRoutes: [
-      { method: "POST", path: "/augmentor/control-plan", handler: executeControlPlan },
-      { method: "POST", path: "/augmentor/next-action", handler: executeNextAction },
-      { method: "POST", path: "/web/news", handler: executeNewsSearch },
+      {
+        method: "POST",
+        path: "/augmentor/control-plan",
+        requiredCapability: "agent-control-plan",
+        handler: executeControlPlan,
+      },
+      {
+        method: "POST",
+        path: "/augmentor/next-action",
+        requiredCapability: "agent-control-plan",
+        handler: executeNextAction,
+      },
+      {
+        method: "POST",
+        path: "/web/news",
+        requiredCapability: "agent-control-plan",
+        handler: executeNewsSearch,
+      },
     ],
     executeControlPlan,
     executeNextAction,

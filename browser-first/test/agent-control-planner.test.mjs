@@ -27,6 +27,13 @@ test("agent control planner builds deterministic browser plans from user goals",
     { type: "click", text: "Pricing" },
     { type: "type", text: "hello", submit: false }
   ]);
+
+  assert.deepEqual(planControlSteps("open resonantos.com and click About"), [
+    { type: "inspect" },
+    { type: "open", target: "resonantos.com" },
+    { type: "read" },
+    { type: "click", text: "About" }
+  ]);
 });
 
 test("agent control planner deduplicates repeated steps and labels actions", () => {

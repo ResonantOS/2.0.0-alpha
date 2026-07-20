@@ -38,7 +38,6 @@ describe("archive policy", () => {
   const buildState = () =>
     buildDefaultState([
       testManifest("addon.openclaw"),
-      testManifest("addon.audio2tol"),
       testManifest("addon.obsidian"),
       testManifest("addon.telegram-channel"),
     ]);
@@ -50,7 +49,7 @@ describe("archive policy", () => {
 
   it("allows intake-only writes for approved add-ons", () => {
     const state = buildState();
-    expect(canPerformArchiveAction(state, "addon.audio2tol", "archive-intake-write", "_LivingArchive/INTAKE/audio2tol/session-1")).toBe(true);
+    expect(canPerformArchiveAction(state, "addon.openclaw", "archive-intake-write", "_LivingArchive/INTAKE/external-agents/session-1")).toBe(true);
   });
 
   it("keeps knowledge page writes reserved for the ingest service", () => {

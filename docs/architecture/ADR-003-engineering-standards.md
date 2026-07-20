@@ -1,7 +1,14 @@
 # ADR-003: Engineering Standards
 
-Status: Accepted  
-Date: 2026-04-23
+## Decision Metadata
+
+- Decision status: Accepted
+- Alpha applicability: Development only
+- Superseded by: None
+- Owner: Engineering workflow
+- Decision date: 2026-04-23
+- Alpha note: Governs repository implementation and review, not a shipped
+  runtime component.
 
 ## Intent
 

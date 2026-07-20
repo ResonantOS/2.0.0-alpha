@@ -126,3 +126,32 @@ test("Hermes workspace reports bundled contract separately from missing local CL
     cleanup();
   }
 });
+
+test("Hermes workspace replaces raw bridge fetch failures with setup guidance", async () => {
+  const { container, cleanup } = setupDom();
+  const bridgeRequest = async () => {
+    throw new TypeError("Failed to fetch");
+  };
+
+  try {
+    renderHermesDashboardWorkspace({
+      container,
+      bridgeRequest,
+      statusForAddon: async () => ({
+        available: true,
+        execution: { runtimeAvailable: true },
+        id: "addon.hermes",
+        name: "Hermes"
+      })
+    });
+    await waitTick();
+    await waitTick();
+
+    assert.match(container.textContent, /Hermes status unavailable/);
+    assert.match(container.textContent, /ResonantOS bridge is unreachable/);
+    assert.match(container.textContent, /Settings > Bridge Target/);
+    assert.doesNotMatch(container.textContent, /Failed to fetch/);
+  } finally {
+    cleanup();
+  }
+});

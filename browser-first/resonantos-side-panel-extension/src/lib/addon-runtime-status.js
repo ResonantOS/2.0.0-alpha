@@ -1,3 +1,5 @@
+import { bridgeSetupMessage, isBridgeNetworkError, redactSensitiveErrorMessage } from "./runtime-error-messages.js";
+
 function statusCountLine(taskCounts = {}) {
   const entries = Object.entries(taskCounts)
     .filter(([, count]) => Number(count) > 0)
@@ -35,19 +37,24 @@ export function formatHermesRuntimeStatus(status = {}) {
   ].filter(Boolean).join("\n");
 }
 
-export async function buildHermesRuntimeStatusMessage({ bridgeRequest }) {
-  if (typeof bridgeRequest !== "function") {
+export async function buildHermesRuntimeStatusMessage({ bridgeRequest, getBridgeRequest }) {
+  const bridge = () => (typeof getBridgeRequest === "function" ? getBridgeRequest() : bridgeRequest);
+  const bridgeFn = bridge();
+  if (typeof bridgeFn !== "function") {
     return "Hermes status is unavailable because the ResonantOS bridge is not connected.";
   }
   try {
-    const status = await bridgeRequest("/hermes/status", { method: "POST", body: {} });
+    const status = await bridgeFn("/hermes/status", { method: "POST", body: {} });
     return formatHermesRuntimeStatus(status);
   } catch (error) {
+    const reason = isBridgeNetworkError(error)
+      ? bridgeSetupMessage()
+      : redactSensitiveErrorMessage(error);
     return [
       "Hermes runtime status",
       "- CLI: unknown",
       "- Execution: unavailable",
-      `Reason: ${error instanceof Error ? error.message : String(error)}`,
+      `Reason: ${reason}`,
       "Next action: open Settings > Add-ons or the Hermes workspace to inspect the runtime configuration."
     ].join("\n");
   }

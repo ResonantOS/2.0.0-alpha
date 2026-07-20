@@ -3,6 +3,8 @@ import test from "node:test";
 
 import { promotionBackupFilename, promotionBackupPath } from "../host/archive-promotion-paths.mjs";
 
+const toPortablePath = (value) => String(value ?? "").replace(/\\/g, "/");
+
 test("promotion backup filenames include the full wiki-relative path identity", () => {
   const first = promotionBackupFilename("AI_MEMORY/wiki/projects/dao/index.md");
   const second = promotionBackupFilename("AI_MEMORY/wiki/people/dao/index.md");
@@ -37,6 +39,6 @@ test("promotion backup paths stay under the selected backup category", () => {
     category: "restores",
   });
 
-  assert.match(promotionPath, /AI_MEMORY\/backups\/promotions\/2026-06-01T10-00-00-000Z\/projects-dao-index-[a-f0-9]{12}\.md$/);
-  assert.match(restorePath, /AI_MEMORY\/backups\/restores\/2026-06-01T10-00-00-000Z\/projects-dao-index-[a-f0-9]{12}\.md$/);
+  assert.match(toPortablePath(promotionPath), /AI_MEMORY\/backups\/promotions\/2026-06-01T10-00-00-000Z\/projects-dao-index-[a-f0-9]{12}\.md$/);
+  assert.match(toPortablePath(restorePath), /AI_MEMORY\/backups\/restores\/2026-06-01T10-00-00-000Z\/projects-dao-index-[a-f0-9]{12}\.md$/);
 });

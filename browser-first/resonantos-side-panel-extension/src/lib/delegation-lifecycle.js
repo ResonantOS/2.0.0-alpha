@@ -20,14 +20,16 @@ function conciseArtifactSummary(started) {
   return summary.length > 500 ? `${summary.slice(0, 497).trimEnd()}...` : summary;
 }
 
-export async function startDelegationLifecycle(result, { bridgeRequest }) {
-  if (!["hermes", "opencode"].includes(result?.target) || !result?.path || typeof bridgeRequest !== "function") {
+export async function startDelegationLifecycle(result, { bridgeRequest, getBridgeRequest }) {
+  const bridge = () => (typeof getBridgeRequest === "function" ? getBridgeRequest() : bridgeRequest);
+  const bridgeFn = bridge();
+  if (!["hermes", "opencode"].includes(result?.target) || !result?.path || typeof bridgeFn !== "function") {
     return "";
   }
   const label = delegationTargetLabel(result.target);
   let started;
   try {
-    started = await bridgeRequest(`/${result.target}/delegation/start`, {
+    started = await bridgeFn(`/${result.target}/delegation/start`, {
       method: "POST",
       body: { path: result.path }
     });
@@ -50,7 +52,7 @@ export async function startDelegationLifecycle(result, { bridgeRequest }) {
     let summary = conciseArtifactSummary(started);
     if (!summary && started.resultArtifactPath) {
       try {
-        const artifact = await bridgeRequest(`/${result.target}/delegation/artifact`, {
+        const artifact = await bridgeFn(`/${result.target}/delegation/artifact`, {
           method: "POST",
           body: { path: result.path }
         });

@@ -1,9 +1,6 @@
 // Intent citation: docs/architecture/ADR-005-provider-fabric-routing.md
 // Intent citation: docs/architecture/ADR-006-addon-runtime-sdk.md
 
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
 import type {
   AddOnManifest,
   ArchiveAiMemoryBuildJobSummary,
@@ -15,8 +12,6 @@ import type {
   ArchiveQueuedIngestRequest,
   ArchiveReviewArtifact,
   ArchiveReviewDecisionResult,
-  ArchiveTolBundleBuildResult,
-  ArchiveTolBundleCandidate,
   ArchiveIngestRequestResult,
   ArchiveIngestProbeResult,
   ArchiveIntakeWriteResult,
@@ -39,14 +34,8 @@ import type {
   ArchiveWikiNavigationRefreshResult,
   BrowserEngineInstallResult,
   BrowserEngineStatus,
-  BrowserNativeWebviewBounds,
-  BrowserNativeWebviewResult,
-  NativeBrowserAttachSmokeResult,
-  NativeBrowserBridgeProbeResult,
-  NativeBrowserProbeResult,
   BrowserCloseSessionResult,
   BrowserExtensionListResult,
-  BrowserExtensionLoadResult,
   BrowserInteractionResult,
   BrowserOpenUrlResult,
   BrowserReadPageResult,
@@ -98,8 +87,6 @@ import type {
   ResonantShellState,
   TaskWorkspace,
   TaskWorkspacePayload,
-  TerminalPtySessionResult,
-  TerminalRunCommandResult,
   TelegramServiceStatus,
   TrustKernelAdvisory,
 } from "./contracts";
@@ -110,28 +97,18 @@ import { normalizeGoalWorkspaces } from "./goal-workspace";
 import { providerNeedsStoredCredential } from "./provider-credentials";
 import { createInstallationSnapshot } from "./policies";
 import { assertValidAddOnManifest } from "../sdk/addons";
-import { createBrowserToolRunner } from "./browser-tools";
+import { webInvoke } from "./web-transport";
 
 const STORAGE_KEY = "resonantos-vnext.runtime-state";
 
-const hasTauri = (): boolean => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-type ResonantElectronBridge = {
-  invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
-};
-const electronBridge = (): ResonantElectronBridge | null => {
-  if (typeof window === "undefined") {
-    return null;
-  }
-  return ((window as Window & { resonantosElectron?: ResonantElectronBridge }).resonantosElectron ?? null);
-};
-const hasElectronHost = (): boolean => Boolean(electronBridge());
-const electronInvoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
-  const bridge = electronBridge();
-  if (!bridge) {
-    throw new Error("Electron host bridge is not available.");
-  }
-  return (await bridge.invoke(command, args)) as T;
-};
+const hasCommandHost = (): boolean => false;
+const invoke = async <T = unknown>(command: string, args: Record<string, unknown> = {}): Promise<T> => webInvoke<T>(command, args);
+const listen = async <T>(
+  _eventName: string,
+  _handler: (event: { payload: T }) => void,
+): Promise<() => void> => () => undefined;
+const open = async (_options: Record<string, unknown>): Promise<null> => null;
+const hostInvoke = invoke;
 
 export type BrowserLiveWebviewBounds = {
   x: number;
@@ -186,7 +163,7 @@ export const loadBundledManifests = async (): Promise<AddOnManifest[]> => {
 };
 
 export const loadSideloadedManifests = async (): Promise<AddOnManifest[]> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     const manifests = (await invoke("list_sideloaded_addons")) as unknown[];
     return manifests.map((manifest, index) =>
       assertValidAddOnManifest(manifest, { source: "sideload", label: `sideloaded add-on ${index + 1}` }),
@@ -196,31 +173,31 @@ export const loadSideloadedManifests = async (): Promise<AddOnManifest[]> => {
 };
 
 export const sideloadManifest = async (manifestPath: string): Promise<AddOnManifest> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return assertValidAddOnManifest(await invoke("sideload_addon_manifest", { manifestPath }), {
       source: "sideload",
       label: manifestPath,
     });
   }
-  throw new Error("Sideloading add-ons is available only in the desktop shell.");
+  throw new Error("Sideloading add-ons is available only through the local bridge.");
 };
 
 export const loadProviderCredentialStatuses = async (): Promise<Record<string, boolean>> => {
-  if (hasElectronHost()) {
-    return electronInvoke<Record<string, boolean>>("load_provider_secret_statuses");
+  if (hasCommandHost()) {
+    return hostInvoke<Record<string, boolean>>("load_provider_secret_statuses");
   }
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("load_provider_secret_statuses")) as Record<string, boolean>;
   }
   return {};
 };
 
 export const saveProviderSecret = async (providerId: string, apiKey: string): Promise<void> => {
-  if (hasElectronHost()) {
-    await electronInvoke("save_provider_secret", { providerId, apiKey });
+  if (hasCommandHost()) {
+    await hostInvoke("save_provider_secret", { providerId, apiKey });
     return;
   }
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     await invoke("save_provider_secret", { providerId, apiKey });
     return;
   }
@@ -232,7 +209,7 @@ export const saveProviderSecret = async (providerId: string, apiKey: string): Pr
 };
 
 export const saveTelegramBotToken = async (botToken: string): Promise<void> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     await invoke("telegram_save_bot_token", { botToken });
     return;
   }
@@ -242,7 +219,7 @@ export const saveTelegramBotToken = async (botToken: string): Promise<void> => {
 };
 
 export const requestTelegramServiceStatus = async (channelId = "telegram-primary"): Promise<TelegramServiceStatus> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("telegram_service_status", { channelId })) as TelegramServiceStatus;
   }
   return {
@@ -257,14 +234,14 @@ export const startTelegramService = async (input: {
   allowedChatIds?: string[];
   preferredModel?: string;
 }): Promise<TelegramServiceStatus> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("telegram_service_start", { request: input })) as TelegramServiceStatus;
   }
-  throw new Error("Telegram channel service is available only in the desktop shell.");
+  throw new Error("Telegram channel service is available only through the local bridge.");
 };
 
 export const stopTelegramService = async (channelId = "telegram-primary"): Promise<TelegramServiceStatus> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("telegram_service_stop", { channelId })) as TelegramServiceStatus;
   }
   return { running: false, tokenConfigured: false, channelId };
@@ -287,13 +264,7 @@ export const requestProviderServiceChatCompletion = async (input: {
   systemPrompt: string;
   messages: ConversationMessage[];
 }): Promise<string> => {
-  if (hasElectronHost()) {
-    return electronInvoke<string>("provider_service_chat_completion", input);
-  }
-  if (hasTauri()) {
-    return (await invoke("provider_service_chat_completion", input)) as string;
-  }
-  throw new Error("Real Strategist chat is available only in the desktop shell.");
+  return (await invoke("provider_service_chat_completion", input)) as string;
 };
 
 export const requestStrategistReply = requestProviderServiceChatCompletion;
@@ -324,95 +295,81 @@ export const requestProviderServiceChatCompletionStream = async (
   },
   onEvent: (event: ProviderChatStreamEvent) => void,
 ): Promise<string> => {
-  if (hasElectronHost()) {
-    const reply = await electronInvoke<string>("provider_service_chat_completion_stream", input);
-    onEvent({ runId: input.runId, type: "chunk", content: reply });
-    onEvent({ runId: input.runId, type: "completed", content: "" });
-    return reply;
-  }
-  if (!hasTauri()) {
-    throw new Error("Streaming Strategist chat is available only in the desktop shell.");
-  }
-
-  const unlisten = await listen<ProviderChatStreamEvent>(`provider-chat-stream-${input.runId}`, (event) => {
-    onEvent(event.payload);
-  });
-  try {
-    return (await invoke("provider_service_chat_completion_stream", input)) as string;
-  } finally {
-    unlisten();
-  }
+  const reply = await requestProviderServiceChatCompletion(input);
+  onEvent({ runId: input.runId, type: "chunk", content: reply });
+  onEvent({ runId: input.runId, type: "completed", content: "" });
+  return reply;
 };
 
 export const abortProviderServiceChatCompletion = async (runId: string): Promise<void> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     await invoke("provider_service_abort_chat_completion", { runId });
   }
 };
 
 export const requestLocalRuntimeStatus = async (targetModel?: string): Promise<LocalRuntimeStatus> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("local_runtime_status", { targetModel })) as LocalRuntimeStatus;
   }
-  throw new Error("Local runtime diagnostics are available only in the desktop shell.");
+  throw new Error("Local runtime diagnostics are available only through the local bridge.");
 };
 
 export const requestComputeLocalPassiveDiagnostics = async (): Promise<ComputePassiveDiagnosticsResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("compute_local_passive_diagnostics")) as ComputePassiveDiagnosticsResult;
   }
   const platform = typeof navigator === "undefined" ? "web-preview" : navigator.platform || "web-preview";
   const userAgent = typeof navigator === "undefined" ? "" : navigator.userAgent;
   return {
-    nodeId: "compute-desktop-local",
+    nodeId: "compute-local-node",
     os: platform.toLowerCase().includes("mac") ? "macos" : platform.toLowerCase().includes("win") ? "windows" : "web-preview",
     arch: userAgent.includes("arm64") || userAgent.includes("aarch64") ? "aarch64" : "unknown",
     family: "web-preview",
     executableSuffix: "",
     checkedAt: "web-preview",
-    summary: "Web preview can only report browser platform hints. Desktop passive diagnostics run inside Tauri.",
+    summary: "Web preview can only report browser platform hints. Local diagnostics are exposed through the alpha bridge.",
   };
 };
 
 export const requestComputeLocalSafeCommand = async (
   request: ComputeSafeCommandRequest,
 ): Promise<ComputeSafeCommandResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("compute_local_safe_command", { request })) as ComputeSafeCommandResult;
   }
-  throw new Error("Compute safe commands are available only in the desktop shell.");
+  throw new Error("Compute safe commands are available only through the local bridge.");
 };
 
 export const requestComputeRemoteProbe = async (
   request: ComputeRemoteProbeRequest,
 ): Promise<ComputeRemoteProbeResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("compute_remote_probe", { request })) as ComputeRemoteProbeResult;
   }
-  throw new Error("Remote compute probes are available only in the desktop shell.");
+  throw new Error("Remote compute probes are available only through the local bridge.");
 };
 
 export const requestGx10LlamaStatus = async (): Promise<Gx10LlamaStatusResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("compute_gx10_llama_status")) as Gx10LlamaStatusResult;
   }
-  throw new Error("GX10 llama status is available only in the desktop shell.");
+  throw new Error("GX10 llama status is available only through the local bridge.");
 };
 
 export const requestGx10LlamaSwitch = async (
   request: Gx10LlamaSwitchRequest,
 ): Promise<Gx10LlamaSwitchResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("compute_gx10_llama_switch", { request })) as Gx10LlamaSwitchResult;
   }
-  throw new Error("GX10 llama model switching is available only in the desktop shell.");
+  throw new Error("GX10 llama model switching is available only through the local bridge.");
 };
 
 export const requestNasBackupStatus = async (): Promise<NasBackupStatusResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("compute_nas_backup_status")) as NasBackupStatusResult;
   }
-  throw new Error("NAS backup status is available only in the desktop shell.");
+  throw new Error("NAS backup status is available only through the local bridge.");
 };
 
 export const requestEngineerRecoveryTurn = async (input: {
@@ -427,24 +384,24 @@ export const requestEngineerRecoveryTurn = async (input: {
   runtimeNodeEndpoint?: string;
   authTier?: string;
 }): Promise<EngineerRecoveryTurnResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("engineer_recovery_turn", input)) as EngineerRecoveryTurnResult;
   }
-  throw new Error("Engineer recovery tooling is available only in the desktop shell.");
+  throw new Error("Engineer recovery tooling is available only through the local bridge.");
 };
 
 export const requestRecoveryRouteCandidates = async (): Promise<RecoveryRouteCandidate[]> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("recovery_route_candidates")) as RecoveryRouteCandidate[];
   }
-  throw new Error("Recovery route probing is available only in the desktop shell.");
+  throw new Error("Recovery route probing is available only through the local bridge.");
 };
 
 export const requestHermesStatus = async (input: {
   profileHome?: string;
   executable?: boolean;
 } = {}): Promise<HermesInstallStatus> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("hermes_status", {
       request: {
         profileHome: input.profileHome,
@@ -452,14 +409,14 @@ export const requestHermesStatus = async (input: {
       },
     })) as HermesInstallStatus;
   }
-  throw new Error("Hermes compatibility audit is available only in the desktop shell.");
+  throw new Error("Hermes compatibility audit is available only through the local bridge.");
 };
 
 export const requestHermesInstall = async (input: {
   profileHome?: string;
   branch?: string;
 } = {}): Promise<HermesInstallResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("hermes_install", {
       request: {
         profileHome: input.profileHome,
@@ -467,14 +424,14 @@ export const requestHermesInstall = async (input: {
       },
     })) as HermesInstallResult;
   }
-  throw new Error("Hermes installation is available only in the desktop shell.");
+  throw new Error("Hermes installation is available only through the local bridge.");
 };
 
 export const requestHermesWorkspaceSnapshot = async (profileHome?: string): Promise<HermesWorkspaceSnapshot> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("hermes_workspace_snapshot", { profileHome })) as HermesWorkspaceSnapshot;
   }
-  throw new Error("Hermes workspace snapshot is available only in the desktop shell.");
+  throw new Error("Hermes workspace snapshot is available only through the local bridge.");
 };
 
 export const requestHermesDashboardStart = async (input: {
@@ -483,7 +440,7 @@ export const requestHermesDashboardStart = async (input: {
   port?: number;
   includeTui?: boolean;
 }): Promise<HermesDashboardStatus> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("hermes_dashboard_start", {
       request: {
         profileHome: input.profileHome,
@@ -493,14 +450,14 @@ export const requestHermesDashboardStart = async (input: {
       },
     })) as HermesDashboardStatus;
   }
-  throw new Error("Hermes dashboard launch is available only in the desktop shell.");
+  throw new Error("Hermes dashboard launch is available only through the local bridge.");
 };
 
 export const requestHermesDashboardStop = async (profileHome?: string): Promise<HermesDashboardStatus> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("hermes_dashboard_stop", { profileHome })) as HermesDashboardStatus;
   }
-  throw new Error("Hermes dashboard stop is available only in the desktop shell.");
+  throw new Error("Hermes dashboard stop is available only through the local bridge.");
 };
 
 export const requestHermesChatCompletion = async (input: {
@@ -508,7 +465,7 @@ export const requestHermesChatCompletion = async (input: {
   profileHome?: string;
   model?: string;
 }): Promise<HermesChatResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("hermes_chat", {
       request: {
         prompt: input.prompt,
@@ -517,7 +474,7 @@ export const requestHermesChatCompletion = async (input: {
       },
     })) as HermesChatResult;
   }
-  throw new Error("Hermes chat bridge is available only in the desktop shell.");
+  throw new Error("Hermes chat bridge is available only through the local bridge.");
 };
 
 export const requestArchiveIngestProbe = async (input: {
@@ -532,24 +489,24 @@ export const requestArchiveIngestProbe = async (input: {
   sourceLabel: string;
   sourceExcerpt: string;
 }): Promise<ArchiveIngestProbeResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("archive_ingest_probe", input)) as ArchiveIngestProbeResult;
   }
-  throw new Error("Archive ingest probing is available only in the desktop shell.");
+  throw new Error("Archive ingest probing is available only through the local bridge.");
 };
 
 export const requestArchiveRuntimeStatus = async (): Promise<ArchiveRuntimeStatus> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("archive_runtime_status")) as ArchiveRuntimeStatus;
   }
-  throw new Error("Living Archive runtime status is available only in the desktop shell.");
+  throw new Error("Living Archive runtime status is available only through the local bridge.");
 };
 
 export const requestLivingArchiveMemoryServiceStatus = async (input: {
   port?: number;
   sessionId?: string;
 } = {}): Promise<LivingArchiveMemoryServiceStatus> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("living_archive_memory_service_status", { request: input })) as LivingArchiveMemoryServiceStatus;
   }
   return {
@@ -561,7 +518,7 @@ export const requestLivingArchiveMemoryServiceStatus = async (input: {
     readonly: false,
     pid: null,
     command: "node examples/living-archive-memory-service.mjs",
-    statusDetail: "Living Archive memory service controls are available only in the desktop shell.",
+    statusDetail: "Living Archive memory service controls are available only through the local bridge.",
   };
 };
 
@@ -570,26 +527,26 @@ export const requestLivingArchiveMemoryServiceStart = async (input: {
   sessionId?: string;
   readonly?: boolean;
 } = {}): Promise<LivingArchiveMemoryServiceResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("living_archive_memory_service_start", { request: input })) as LivingArchiveMemoryServiceResult;
   }
-  throw new Error("Living Archive memory service launch is available only in the desktop shell.");
+  throw new Error("Living Archive memory service launch is available only through the local bridge.");
 };
 
 export const requestLivingArchiveMemoryServiceStop = async (
   sessionId?: string,
 ): Promise<LivingArchiveMemoryServiceResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("living_archive_memory_service_stop", { request: { sessionId } })) as LivingArchiveMemoryServiceResult;
   }
-  throw new Error("Living Archive memory service shutdown is available only in the desktop shell.");
+  throw new Error("Living Archive memory service shutdown is available only through the local bridge.");
 };
 
 export const requestArchiveSourceFolderScan = async (rootPath?: string): Promise<ArchiveSourceFolderScanResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("archive_scan_source_folders", { request: { rootPath } })) as ArchiveSourceFolderScanResult;
   }
-  throw new Error("Living Archive source folder scanning is available only in the desktop shell.");
+  throw new Error("Living Archive source folder scanning is available only through the local bridge.");
 };
 
 export const requestArchiveLibraryImport = async (input: {
@@ -600,47 +557,47 @@ export const requestArchiveLibraryImport = async (input: {
   actorId: string;
   excludedTopFolders?: string[];
 }): Promise<ArchiveLibraryImportResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("archive_import_library", { request: input })) as ArchiveLibraryImportResult;
   }
-  throw new Error("Living Archive library import is available only in the desktop shell.");
+  throw new Error("Living Archive library import is available only through the local bridge.");
 };
 
 export const requestArchiveLibraryPreflight = async (sourcePath: string): Promise<ArchiveLibraryPreflightResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("archive_preflight_library_import", { request: { sourcePath } })) as ArchiveLibraryPreflightResult;
   }
-  throw new Error("Living Archive library preflight is available only in the desktop shell.");
+  throw new Error("Living Archive library preflight is available only through the local bridge.");
 };
 
 export const requestArchiveImportedLibraries = async (): Promise<ArchiveImportedLibrarySummary[]> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("archive_imported_libraries")) as ArchiveImportedLibrarySummary[];
   }
-  throw new Error("Living Archive imported library registry is available only in the desktop shell.");
+  throw new Error("Living Archive imported library registry is available only through the local bridge.");
 };
 
 export const requestArchiveLibraryClassificationReview = async (
   classificationManifestPath: string,
 ): Promise<ArchiveLibraryClassificationReview> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("archive_library_classification_review", {
       request: { classificationManifestPath },
     })) as ArchiveLibraryClassificationReview;
   }
-  throw new Error("Living Archive classification review is available only in the desktop shell.");
+  throw new Error("Living Archive classification review is available only through the local bridge.");
 };
 
 export const requestArchiveLibraryReorganisationPlan = async (
   classificationManifestPath: string,
   actorId: string,
 ): Promise<ArchiveLibraryReorganisationPlan> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("archive_library_reorganisation_plan", {
       request: { classificationManifestPath, actorId },
     })) as ArchiveLibraryReorganisationPlan;
   }
-  throw new Error("Living Archive reorganisation planning is available only in the desktop shell.");
+  throw new Error("Living Archive reorganisation planning is available only through the local bridge.");
 };
 
 export const requestArchiveQueueImportedLibraryIngest = async (input: {
@@ -648,28 +605,28 @@ export const requestArchiveQueueImportedLibraryIngest = async (input: {
   actorId?: string;
   maxRecords?: number;
 }): Promise<ArchiveQueueImportedLibraryResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("archive_queue_imported_library_ingest", { request: input })) as ArchiveQueueImportedLibraryResult;
   }
-  throw new Error("Living Archive imported-library ingest queueing is available only in the desktop shell.");
+  throw new Error("Living Archive imported-library ingest queueing is available only through the local bridge.");
 };
 
 export const requestArchiveSystemMemory = async (): Promise<ArchiveSystemMemoryStatus> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("archive_system_memory")) as ArchiveSystemMemoryStatus;
   }
-  throw new Error("ResonantOS system memory status is available only in the desktop shell.");
+  throw new Error("ResonantOS system memory status is available only through the local bridge.");
 };
 
 export const requestArchiveSystemMemoryRefresh = async (): Promise<ArchiveSystemMemoryRefreshResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("archive_refresh_system_memory")) as ArchiveSystemMemoryRefreshResult;
   }
-  throw new Error("ResonantOS system memory refresh is available only in the desktop shell.");
+  throw new Error("ResonantOS system memory refresh is available only through the local bridge.");
 };
 
 export const requestArchiveLibraryFolderSelection = async (): Promise<string | null> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     const selected = await open({
       directory: true,
       multiple: false,
@@ -677,11 +634,11 @@ export const requestArchiveLibraryFolderSelection = async (): Promise<string | n
     });
     return typeof selected === "string" ? selected : null;
   }
-  throw new Error("Native folder selection is available only in the desktop shell.");
+  throw new Error("Folder selection is available only through the local bridge.");
 };
 
 export const requestObsidianVaultFolderSelection = async (): Promise<string | null> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     const selected = await open({
       directory: true,
       multiple: false,
@@ -689,35 +646,35 @@ export const requestObsidianVaultFolderSelection = async (): Promise<string | nu
     });
     return typeof selected === "string" ? selected : null;
   }
-  throw new Error("Native vault selection is available only in the desktop shell.");
+  throw new Error("Vault selection is available only through the local bridge.");
 };
 
 export const requestObsidianVaultStatus = async (vaultPath: string): Promise<ObsidianVaultStatus> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("obsidian_vault_status", { request: { vaultPath } })) as ObsidianVaultStatus;
   }
-  throw new Error("Obsidian vault status is available only in the desktop shell.");
+  throw new Error("Obsidian vault status is available only through the local bridge.");
 };
 
 export const requestObsidianNoteList = async (vaultPath: string, limit = 200): Promise<ObsidianNoteSummary[]> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("obsidian_list_notes", { request: { vaultPath, limit } })) as ObsidianNoteSummary[];
   }
-  throw new Error("Obsidian note listing is available only in the desktop shell.");
+  throw new Error("Obsidian note listing is available only through the local bridge.");
 };
 
 export const requestObsidianNote = async (vaultPath: string, notePath: string): Promise<ObsidianNotePayload> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("obsidian_read_note", { request: { vaultPath, notePath } })) as ObsidianNotePayload;
   }
-  throw new Error("Obsidian note reads are available only in the desktop shell.");
+  throw new Error("Obsidian note reads are available only through the local bridge.");
 };
 
 export const requestObsidianOpenNote = async (vaultPath: string, notePath: string): Promise<ObsidianOpenNoteResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("obsidian_open_note", { request: { vaultPath, notePath } })) as ObsidianOpenNoteResult;
   }
-  throw new Error("Opening Obsidian notes is available only in the desktop shell.");
+  throw new Error("Opening Obsidian notes is available only through the local bridge.");
 };
 
 export const requestObsidianWriteNote = async (input: {
@@ -727,10 +684,10 @@ export const requestObsidianWriteNote = async (input: {
   expectedModifiedAt?: string;
   actorId?: string;
 }): Promise<ObsidianWriteNoteResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("obsidian_write_note", { request: input })) as ObsidianWriteNoteResult;
   }
-  throw new Error("Obsidian note writes are available only in the desktop shell.");
+  throw new Error("Obsidian note writes are available only through the local bridge.");
 };
 
 export const requestObsidianCreateNote = async (input: {
@@ -739,10 +696,10 @@ export const requestObsidianCreateNote = async (input: {
   content?: string;
   actorId?: string;
 }): Promise<ObsidianNoteOperationResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("obsidian_create_note", { request: input })) as ObsidianNoteOperationResult;
   }
-  throw new Error("Obsidian note creation is available only in the desktop shell.");
+  throw new Error("Obsidian note creation is available only through the local bridge.");
 };
 
 export const requestObsidianCreateFolder = async (input: {
@@ -750,10 +707,10 @@ export const requestObsidianCreateFolder = async (input: {
   folderPath: string;
   actorId?: string;
 }): Promise<ObsidianNoteOperationResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("obsidian_create_folder", { request: input })) as ObsidianNoteOperationResult;
   }
-  throw new Error("Obsidian folder creation is available only in the desktop shell.");
+  throw new Error("Obsidian folder creation is available only through the local bridge.");
 };
 
 export const requestObsidianMoveNote = async (input: {
@@ -763,10 +720,10 @@ export const requestObsidianMoveNote = async (input: {
   expectedModifiedAt?: string;
   actorId?: string;
 }): Promise<ObsidianNoteOperationResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("obsidian_move_note", { request: input })) as ObsidianNoteOperationResult;
   }
-  throw new Error("Obsidian note moves are available only in the desktop shell.");
+  throw new Error("Obsidian note moves are available only through the local bridge.");
 };
 
 export const requestObsidianArchiveNote = async (input: {
@@ -775,21 +732,21 @@ export const requestObsidianArchiveNote = async (input: {
   expectedModifiedAt?: string;
   actorId?: string;
 }): Promise<ObsidianNoteOperationResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("obsidian_archive_note", { request: input })) as ObsidianNoteOperationResult;
   }
-  throw new Error("Obsidian note archiving is available only in the desktop shell.");
+  throw new Error("Obsidian note archiving is available only through the local bridge.");
 };
 
 export const requestObsidianVaultIndex = async (vaultPath: string, query = "", limit = 200): Promise<ObsidianVaultIndex> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("obsidian_vault_index", { request: { vaultPath, query, limit } })) as ObsidianVaultIndex;
   }
-  throw new Error("Obsidian vault indexing is available only in the desktop shell.");
+  throw new Error("Obsidian vault indexing is available only through the local bridge.");
 };
 
 export const requestOpenCodeWorkspaceFolderSelection = async (): Promise<string | null> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     const selected = await open({
       directory: true,
       multiple: false,
@@ -797,16 +754,16 @@ export const requestOpenCodeWorkspaceFolderSelection = async (): Promise<string 
     });
     return typeof selected === "string" ? selected : null;
   }
-  throw new Error("Native OpenCode workspace selection is available only in the desktop shell.");
+  throw new Error("OpenCode workspace selection is available only through the local bridge.");
 };
 
 export const requestOpenCodeStatus = async (): Promise<OpenCodeStatus> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("opencode_status")) as OpenCodeStatus;
   }
   return {
     installed: false,
-    installHint: "OpenCode status is available only in the desktop shell.",
+    installHint: "OpenCode status is available only through the local bridge.",
     supportsWebUi: true,
     supportsServerApi: true,
   };
@@ -818,17 +775,17 @@ export const requestOpenCodeStartService = async (input: {
   mode?: OpenCodeLaunchMode;
   sessionId?: string;
 }): Promise<OpenCodeServiceResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("opencode_start_service", { request: input })) as OpenCodeServiceResult;
   }
-  throw new Error("OpenCode service launch is available only in the desktop shell.");
+  throw new Error("OpenCode service launch is available only through the local bridge.");
 };
 
 export const requestOpenCodeStopService = async (sessionId?: string): Promise<OpenCodeServiceResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("opencode_stop_service", { request: { sessionId } })) as OpenCodeServiceResult;
   }
-  throw new Error("OpenCode service shutdown is available only in the desktop shell.");
+  throw new Error("OpenCode service shutdown is available only through the local bridge.");
 };
 
 export const requestOpenCodeTrustEventRecord = async (input: {
@@ -841,10 +798,10 @@ export const requestOpenCodeTrustEventRecord = async (input: {
   returncode?: number;
   metadata?: Record<string, unknown>;
 }): Promise<TrustKernelAdvisory> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("opencode_record_trust_event", { request: input })) as TrustKernelAdvisory;
   }
-  throw new Error("OpenCode Trust Kernel event recording is available only in the desktop shell.");
+  throw new Error("OpenCode Trust Kernel event recording is available only through the local bridge.");
 };
 
 export const requestOpenCodeInjectPrompt = async (input: {
@@ -853,15 +810,15 @@ export const requestOpenCodeInjectPrompt = async (input: {
   clearExisting?: boolean;
   submit?: boolean;
 }): Promise<OpenCodeInjectPromptResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("opencode_inject_prompt", { request: input })) as OpenCodeInjectPromptResult;
   }
-  throw new Error("OpenCode prompt injection is available only in the desktop shell.");
+  throw new Error("OpenCode prompt injection is available only through the local bridge.");
 };
 
 export const requestPaperclipStatus = async (endpoint?: string): Promise<PaperclipStatus> => {
   const normalizedEndpoint = endpoint?.trim() || "http://127.0.0.1:3100";
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("paperclip_status", { request: { endpoint: normalizedEndpoint } })) as PaperclipStatus;
   }
   return {
@@ -870,7 +827,7 @@ export const requestPaperclipStatus = async (endpoint?: string): Promise<Papercl
     binaryPath: null,
     endpoint: normalizedEndpoint,
     endpointReachable: false,
-    installHint: "Paperclip status is available only in the desktop shell.",
+    installHint: "Paperclip status is available only through the local bridge.",
     supportsWebUi: true,
     supportsServerApi: true,
     managedLaunchAvailable: false,
@@ -881,17 +838,17 @@ export const requestPaperclipStartService = async (input: {
   endpoint?: string;
   sessionId?: string;
 }): Promise<PaperclipServiceResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("paperclip_start_service", { request: input })) as PaperclipServiceResult;
   }
-  throw new Error("Paperclip connection is available only in the desktop shell.");
+  throw new Error("Paperclip connection is available only through the local bridge.");
 };
 
 export const requestPaperclipStopService = async (sessionId?: string): Promise<PaperclipServiceResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("paperclip_stop_service", { request: { sessionId } })) as PaperclipServiceResult;
   }
-  throw new Error("Paperclip disconnect is available only in the desktop shell.");
+  throw new Error("Paperclip disconnect is available only through the local bridge.");
 };
 
 export const requestPaperclipDashboardSnapshot = async (input: {
@@ -899,10 +856,10 @@ export const requestPaperclipDashboardSnapshot = async (input: {
   apiToken: string;
   companyId?: string;
 }): Promise<PaperclipDashboardSnapshot> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("paperclip_dashboard_snapshot", { request: input })) as PaperclipDashboardSnapshot;
   }
-  throw new Error("Paperclip API snapshots are available only in the desktop shell.");
+  throw new Error("Paperclip API snapshots are available only through the local bridge.");
 };
 
 export const requestPaperclipCreateIssueFromDelegation = async (input: {
@@ -917,252 +874,73 @@ export const requestPaperclipCreateIssueFromDelegation = async (input: {
   goalId?: string;
   parentId?: string;
 }): Promise<PaperclipCreateIssueResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("paperclip_create_issue_from_delegation", { request: input })) as PaperclipCreateIssueResult;
   }
-  throw new Error("Paperclip issue creation is available only in the desktop shell.");
+  throw new Error("Paperclip issue creation is available only through the local bridge.");
 };
 
 export const requestBrowserOpenUrl = async (url: string, viewport?: BrowserViewportInput): Promise<BrowserOpenUrlResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("browser_open_url", { request: { url, ...viewport } })) as BrowserOpenUrlResult;
   }
-  throw new Error("Chromium Browser engine is available only in the desktop shell.");
+  throw new Error("Chromium Browser engine is available only through the local bridge.");
 };
 
 export const requestBrowserEngineStatus = async (): Promise<BrowserEngineStatus> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("browser_engine_status")) as BrowserEngineStatus;
   }
-  throw new Error("Chromium Browser engine status is available only in the desktop shell.");
+  throw new Error("Chromium Browser engine status is available only through the local bridge.");
 };
 
 export const requestBrowserInstallEngine = async (): Promise<BrowserEngineInstallResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("browser_install_engine")) as BrowserEngineInstallResult;
   }
-  throw new Error("Chromium Browser engine install is available only in the desktop shell.");
-};
-
-export const requestBrowserNativeWebviewShow = async (input: {
-  url: string;
-  bounds: BrowserNativeWebviewBounds;
-  navigate: boolean;
-}): Promise<BrowserNativeWebviewResult> => {
-  if (hasElectronHost()) {
-    return electronInvoke<BrowserNativeWebviewResult>("browser_native_webview_show", {
-      request: { url: input.url, ...input.bounds, navigate: input.navigate },
-    });
-  }
-  if (hasTauri()) {
-    return (await invoke("browser_native_webview_show", {
-      request: { url: input.url, ...input.bounds, navigate: input.navigate },
-    })) as BrowserNativeWebviewResult;
-  }
-  throw new Error("Native Browser webview is available only in the desktop shell.");
-};
-
-export const requestBrowserNativeWebviewResize = async (bounds: BrowserNativeWebviewBounds): Promise<BrowserNativeWebviewResult> => {
-  if (hasElectronHost()) {
-    return electronInvoke<BrowserNativeWebviewResult>("browser_native_webview_resize", { request: bounds });
-  }
-  if (hasTauri()) {
-    return (await invoke("browser_native_webview_resize", { request: bounds })) as BrowserNativeWebviewResult;
-  }
-  throw new Error("Native Browser webview resize is available only in the desktop shell.");
-};
-
-export const requestBrowserNativeWebviewHide = async (): Promise<BrowserNativeWebviewResult> => {
-  if (hasElectronHost()) {
-    return electronInvoke<BrowserNativeWebviewResult>("browser_native_webview_hide");
-  }
-  if (hasTauri()) {
-    return (await invoke("browser_native_webview_hide")) as BrowserNativeWebviewResult;
-  }
-  throw new Error("Native Browser webview hide is available only in the desktop shell.");
-};
-
-export const requestBrowserNativeWebviewClick = async (input: {
-  x: number;
-  y: number;
-}): Promise<BrowserNativeWebviewResult> => {
-  if (hasTauri()) {
-    return (await invoke("browser_native_webview_click", { request: input })) as BrowserNativeWebviewResult;
-  }
-  throw new Error("Native Browser click control is available only in the desktop shell.");
-};
-
-export const requestBrowserNativeWebviewScroll = async (input: {
-  x: number;
-  y: number;
-  deltaX: number;
-  deltaY: number;
-}): Promise<BrowserNativeWebviewResult> => {
-  if (hasTauri()) {
-    return (await invoke("browser_native_webview_scroll", { request: input })) as BrowserNativeWebviewResult;
-  }
-  throw new Error("Native Browser scroll control is available only in the desktop shell.");
-};
-
-export const requestBrowserNativeWebviewTypeText = async (input: { text: string }): Promise<BrowserNativeWebviewResult> => {
-  if (hasTauri()) {
-    return (await invoke("browser_native_webview_type_text", { request: input })) as BrowserNativeWebviewResult;
-  }
-  throw new Error("Native Browser text control is available only in the desktop shell.");
-};
-
-export const requestNativeBrowserProbe = async (engineCandidate = "cef-chrome-runtime"): Promise<NativeBrowserProbeResult> => {
-  if (hasTauri()) {
-    return (await invoke("browser_native_probe", {
-      request: { engineCandidate },
-    })) as NativeBrowserProbeResult;
-  }
-  return {
-    status: "blocked",
-    engineCandidate,
-    hostBinaryStatus: "missing",
-    sourceScaffoldStatus: "missing",
-    embeddedViewStatus: "blocked",
-    extensionCompatibilityStatus: "blocked",
-    phantomStatus: "blocked",
-    bitwardenStatus: "blocked",
-    blockers: [
-      "Native Browser probing is available only in the desktop shell.",
-      "Phantom Wallet and Bitwarden compatibility must be proven in the native host before Browser is ready.",
-    ],
-    nextActions: [
-      "Run this probe from the Tauri desktop shell.",
-      "Build the native embedded Browser host behind the ADR-025 contract.",
-    ],
-    checkedAt: "browser-probe:web-preview",
-  };
-};
-
-export const requestNativeBrowserAttachSmoke = async (
-  hostIntegrationMode = "external-process",
-): Promise<NativeBrowserAttachSmokeResult> => {
-  if (hasTauri()) {
-    return (await invoke("browser_native_attach_smoke", {
-      request: { hostIntegrationMode },
-    })) as NativeBrowserAttachSmokeResult;
-  }
-  return {
-    status: "blocked",
-    platform: "web-preview",
-    parentHandleKind: "none",
-    parentHandlePresent: false,
-    hostIntegrationMode,
-    blocker: "Native Browser attachment can only be smoke-tested inside the Tauri desktop shell.",
-    nextActions: ["Run the attach smoke test from the ResonantOS desktop shell."],
-    checkedAt: "browser-attach-smoke:web-preview",
-  };
-};
-
-export const requestNativeBrowserBridgeProbe = async (
-  integrationMode = "in-process-native-library",
-): Promise<NativeBrowserBridgeProbeResult> => {
-  if (hasTauri()) {
-    return (await invoke("browser_native_bridge_probe", {
-      request: { integrationMode },
-    })) as NativeBrowserBridgeProbeResult;
-  }
-  return {
-    status: "missing",
-    integrationMode,
-    bridgeLibraryStatus: "missing",
-    cAbiStatus: "blocked",
-    bridgeLibraryPath: null,
-    exportedSymbols: [],
-    blockers: ["Native Browser bridge probing is available only in the Tauri desktop shell."],
-    nextActions: ["Run the bridge probe from the ResonantOS desktop shell."],
-    checkedAt: "browser-bridge-probe:web-preview",
-  };
+  throw new Error("Chromium Browser engine install is available only through the local bridge.");
 };
 
 export const requestBrowserStartSession = async (url: string, viewport?: BrowserViewportInput): Promise<BrowserOpenUrlResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("browser_start_session", { request: { url, ...viewport } })) as BrowserOpenUrlResult;
   }
-  throw new Error("Chromium Browser engine is available only in the desktop shell.");
+  throw new Error("Chromium Browser engine is available only through the local bridge.");
 };
 
 export const openLiveBrowserWebview = async (url: string, bounds: BrowserLiveWebviewBounds): Promise<void> => {
-  if (!hasTauri()) {
-    throw new Error("Live Browser webview is available only in the desktop shell.");
-  }
-  const safeUrl = assertBrowserHttpUrl(url);
-  const [{ Webview }, { Window }] = await Promise.all([
-    import("@tauri-apps/api/webview"),
-    import("@tauri-apps/api/window"),
-  ]);
-  const existing = await Webview.getByLabel(LIVE_BROWSER_WEBVIEW_LABEL);
-  if (existing) {
-    try {
-      await existing.close();
-    } catch {
-      // Replacing the live Browser surface is best-effort. A stale label can
-      // disappear between lookup and close during rapid tab/workspace changes.
-    }
-    await new Promise((resolve) => window.setTimeout(resolve, 40));
-  }
-  const parent = Window.getCurrent();
-  new Webview(parent, LIVE_BROWSER_WEBVIEW_LABEL, {
-    url: safeUrl,
-    x: bounds.x,
-    y: bounds.y,
-    width: bounds.width,
-    height: bounds.height,
-    focus: true,
-    acceptFirstMouse: true,
-    dragDropEnabled: true,
-  });
+  assertBrowserHttpUrl(url);
+  void bounds;
+  throw new Error("Live Browser webviews are not part of the browser-first Chrome extension alpha.");
 };
 
-export const resizeLiveBrowserWebview = async (bounds: BrowserLiveWebviewBounds): Promise<void> => {
-  if (!hasTauri()) {
-    return;
-  }
-  const { Webview } = await import("@tauri-apps/api/webview");
-  const { LogicalPosition, LogicalSize } = await import("@tauri-apps/api/dpi");
-  const existing = await Webview.getByLabel(LIVE_BROWSER_WEBVIEW_LABEL);
-  if (!existing) {
-    return;
-  }
-  await existing.setPosition(new LogicalPosition(bounds.x, bounds.y));
-  await existing.setSize(new LogicalSize(bounds.width, bounds.height));
+export const resizeLiveBrowserWebview = async (_bounds: BrowserLiveWebviewBounds): Promise<void> => {
+  return;
 };
 
 export const hideLiveBrowserWebview = async (): Promise<void> => {
-  if (!hasTauri()) {
-    return;
-  }
-  const { Webview } = await import("@tauri-apps/api/webview");
-  const existing = await Webview.getByLabel(LIVE_BROWSER_WEBVIEW_LABEL);
-  if (!existing) {
-    return;
-  }
-  await existing.hide();
+  return;
 };
 
 export const requestBrowserSessionOpenUrl = async (sessionId: string, url: string, viewport?: BrowserViewportInput): Promise<BrowserOpenUrlResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("browser_session_open_url", { request: { sessionId, url, ...viewport } })) as BrowserOpenUrlResult;
   }
-  throw new Error("Chromium Browser engine is available only in the desktop shell.");
+  throw new Error("Chromium Browser engine is available only through the local bridge.");
 };
 
 export const requestBrowserSessionScreenshot = async (sessionId: string, viewport?: BrowserViewportInput): Promise<BrowserOpenUrlResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("browser_session_screenshot", { request: { sessionId, ...viewport } })) as BrowserOpenUrlResult;
   }
-  throw new Error("Chromium Browser engine is available only in the desktop shell.");
+  throw new Error("Chromium Browser engine is available only through the local bridge.");
 };
 
 export const requestBrowserSessionReadPage = async (sessionId: string): Promise<BrowserReadPageResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("browser_session_read_page", { request: { sessionId } })) as BrowserReadPageResult;
   }
-  throw new Error("Chromium Browser engine is available only in the desktop shell.");
+  throw new Error("Chromium Browser engine is available only through the local bridge.");
 };
 
 export const requestBrowserSessionClick = async (
@@ -1171,10 +949,10 @@ export const requestBrowserSessionClick = async (
   y: number,
   viewport?: BrowserViewportInput,
 ): Promise<BrowserInteractionResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("browser_session_click", { request: { sessionId, x, y, ...viewport } })) as BrowserInteractionResult;
   }
-  throw new Error("Chromium Browser click control is available only in the desktop shell.");
+  throw new Error("Chromium Browser click control is available only through the local bridge.");
 };
 
 export const requestBrowserSessionScroll = async (
@@ -1183,17 +961,17 @@ export const requestBrowserSessionScroll = async (
   deltaY: number,
   viewport?: BrowserViewportInput,
 ): Promise<BrowserInteractionResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("browser_session_scroll", { request: { sessionId, deltaX, deltaY, ...viewport } })) as BrowserInteractionResult;
   }
-  throw new Error("Chromium Browser scroll control is available only in the desktop shell.");
+  throw new Error("Chromium Browser scroll control is available only through the local bridge.");
 };
 
 export const requestBrowserCloseSession = async (sessionId: string): Promise<BrowserCloseSessionResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("browser_close_session", { request: { sessionId } })) as BrowserCloseSessionResult;
   }
-  throw new Error("Chromium Browser engine is available only in the desktop shell.");
+  throw new Error("Chromium Browser engine is available only through the local bridge.");
 };
 
 const browserCommandTypeToMethod = (type: BrowserToolCommand["type"]): string =>
@@ -1213,18 +991,16 @@ const browserCommandTypeToMethod = (type: BrowserToolCommand["type"]): string =>
                 ? "browser.close_session"
                 : type === "extensions_list"
                   ? "browser.extensions.list"
-                  : type === "extensions_load_unpacked"
-                    ? "browser.extensions.load_unpacked"
-                    : type === "extensions_set_pinned"
-                      ? "browser.extensions.set_pinned"
-                      : type === "extensions_disable"
-                        ? "browser.extensions.disable"
-                        : type === "wallet_host_health"
-                          ? "browser.wallet_host.health"
-                          : type === "wallet_host_start"
-                            ? "browser.wallet_host.start"
-                            : type === "wallet_host_open_url"
-                              ? "browser.wallet_host.open_url"
+                  : type === "extensions_set_pinned"
+                    ? "browser.extensions.set_pinned"
+                    : type === "extensions_disable"
+                      ? "browser.extensions.disable"
+                      : type === "wallet_host_health"
+                        ? "browser.wallet_host.health"
+                        : type === "wallet_host_start"
+                          ? "browser.wallet_host.start"
+                          : type === "wallet_host_open_url"
+                            ? "browser.wallet_host.open_url"
                             : type === "wallet_host_read_page"
                               ? "browser.wallet_host.read_page"
                               : type === "wallet_host_inspect_dapp_gate"
@@ -1234,134 +1010,46 @@ const browserCommandTypeToMethod = (type: BrowserToolCommand["type"]): string =>
                                   : "browser.health";
 
 export const requestBrowserHostCommand = async (command: BrowserToolCommand): Promise<BrowserToolResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     const { type, params, humanApproved } = command;
     const method = browserCommandTypeToMethod(type);
     return (await invoke("browser_host_command", {
       request: { method, params: params ?? {}, humanApproved: Boolean(humanApproved) },
     })) as BrowserToolResult;
   }
-  throw new Error("Governed Browser host commands are available only in the desktop shell.");
+  throw new Error("Governed Browser host commands are available only through the local bridge.");
 };
 
 export const requestBrowserVisibleHostCommand = async (command: BrowserToolCommand): Promise<BrowserToolResult> => {
-  if (hasElectronHost()) {
+  if (hasCommandHost()) {
     const { type, params, humanApproved } = command;
     const method = browserCommandTypeToMethod(type);
-    return electronInvoke<BrowserToolResult>("browser_visible_host_command", {
+    return hostInvoke<BrowserToolResult>("browser_visible_host_command", {
       request: { method, params: params ?? {}, humanApproved: Boolean(humanApproved) },
     });
   }
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     const { type, params, humanApproved } = command;
     const method = browserCommandTypeToMethod(type);
     return (await invoke("browser_visible_host_command", {
       request: { method, params: params ?? {}, humanApproved: Boolean(humanApproved) },
     })) as BrowserToolResult;
   }
-  throw new Error("Visible Browser v2 host commands are available only in the desktop shell.");
-};
-
-export const requestBrowserExtensionFolderSelection = async (): Promise<string | null> => {
-  if (hasElectronHost()) {
-    return electronInvoke<string | null>("browser_extension_folder_select");
-  }
-  if (hasTauri()) {
-    const selected = await open({
-      directory: true,
-      multiple: false,
-      title: "Choose an unpacked Chrome extension folder",
-    });
-    return typeof selected === "string" ? selected : null;
-  }
-  throw new Error("Native extension folder selection is available only in the desktop shell.");
-};
-
-export const createDesktopBrowserToolRunner = (input: {
-  manifest: AddOnManifest | undefined;
-  installation: ResonantShellState["installations"][string] | undefined;
-}) =>
-  createBrowserToolRunner({
-    manifest: input.manifest,
-    installation: input.installation,
-    transport: {
-      call: async (method, params, options) => {
-        const request = { method, params, humanApproved: Boolean(options?.humanApproved) };
-        if (hasElectronHost()) {
-          return electronInvoke<BrowserToolResult>("browser_host_command", { request });
-        }
-        if (hasTauri()) {
-          return (await invoke("browser_host_command", { request })) as BrowserToolResult;
-        }
-        throw new Error("Browser tool commands are available only in the desktop shell.");
-      },
-    },
-  });
-
-export const requestTerminalStatus = async (): Promise<string> => {
-  if (hasTauri()) {
-    return (await invoke("terminal_status")) as string;
-  }
-  throw new Error("Terminal is available only in the desktop shell.");
-};
-
-export const requestTerminalRunCommand = async (input: {
-  command: string;
-  cwd?: string;
-}): Promise<TerminalRunCommandResult> => {
-  if (hasTauri()) {
-    return (await invoke("terminal_run_command", { request: input })) as TerminalRunCommandResult;
-  }
-  throw new Error("Terminal is available only in the desktop shell.");
-};
-
-export const requestTerminalStartPty = async (input: {
-  sessionId: string;
-  cwd?: string;
-  shell?: string;
-  cols?: number;
-  rows?: number;
-}): Promise<TerminalPtySessionResult> => {
-  if (hasTauri()) {
-    return (await invoke("terminal_start_pty", { request: input })) as TerminalPtySessionResult;
-  }
-  throw new Error("Interactive Terminal is available only in the desktop shell.");
-};
-
-export const requestTerminalWritePty = async (input: { sessionId: string; data: string }): Promise<void> => {
-  if (hasTauri()) {
-    await invoke("terminal_write_pty", { request: input });
-    return;
-  }
-  throw new Error("Interactive Terminal is available only in the desktop shell.");
-};
-
-export const requestTerminalResizePty = async (input: { sessionId: string; cols: number; rows: number }): Promise<void> => {
-  if (hasTauri()) {
-    await invoke("terminal_resize_pty", { request: input });
-    return;
-  }
-  throw new Error("Interactive Terminal is available only in the desktop shell.");
-};
-
-export const requestTerminalStopPty = async (sessionId: string): Promise<void> => {
-  if (hasTauri()) {
-    await invoke("terminal_stop_pty", { sessionId });
-  }
+  throw new Error("Visible Browser v2 host commands are available only through the local bridge.");
 };
 
 export const requestArchiveSearch = async (query: string, limit = 12): Promise<ArchiveSearchResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("archive_search", { request: { query, limit } })) as ArchiveSearchResult;
   }
-  throw new Error("Living Archive search is available only in the desktop shell.");
+  throw new Error("Living Archive search is available only through the local bridge.");
 };
 
 export const requestArchiveDocument = async (path: string): Promise<ArchiveDocumentPayload> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("archive_read_document", { request: { path } })) as ArchiveDocumentPayload;
   }
-  throw new Error("Living Archive document reads are available only in the desktop shell.");
+  throw new Error("Living Archive document reads are available only through the local bridge.");
 };
 
 export const requestArchiveIntakeWrite = async (input: {
@@ -1371,10 +1059,10 @@ export const requestArchiveIntakeWrite = async (input: {
   content: string;
   metadata?: Record<string, unknown>;
 }): Promise<ArchiveIntakeWriteResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("archive_write_intake_artifact", { request: input })) as ArchiveIntakeWriteResult;
   }
-  throw new Error("Living Archive intake writes are available only in the desktop shell.");
+  throw new Error("Living Archive intake writes are available only through the local bridge.");
 };
 
 export const requestArchiveIngestRequest = async (input: {
@@ -1385,41 +1073,24 @@ export const requestArchiveIngestRequest = async (input: {
   intent: string;
   provenance?: Record<string, unknown>;
 }): Promise<ArchiveIngestRequestResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("archive_request_ingest", { request: input })) as ArchiveIngestRequestResult;
   }
-  throw new Error("Living Archive ingest requests are available only in the desktop shell.");
+  throw new Error("Living Archive ingest requests are available only through the local bridge.");
 };
 
 export const requestArchiveReviewQueue = async (): Promise<ArchiveQueuedIngestRequest[]> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("archive_review_queue")) as ArchiveQueuedIngestRequest[];
   }
-  throw new Error("Living Archive review queue is available only in the desktop shell.");
+  throw new Error("Living Archive review queue is available only through the local bridge.");
 };
 
 export const requestArchiveReviewArtifacts = async (): Promise<ArchiveReviewArtifact[]> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("archive_review_artifacts")) as ArchiveReviewArtifact[];
   }
-  throw new Error("Living Archive review artifacts are available only in the desktop shell.");
-};
-
-export const requestArchiveTolBundleCandidates = async (): Promise<ArchiveTolBundleCandidate[]> => {
-  if (hasTauri()) {
-    return (await invoke("archive_tol_bundle_candidates")) as ArchiveTolBundleCandidate[];
-  }
-  throw new Error("Audio2TOL bundle detection is available only in the desktop shell.");
-};
-
-export const requestArchiveBuildTolBundle = async (input: {
-  sessionId: string;
-  actorId: string;
-}): Promise<ArchiveTolBundleBuildResult> => {
-  if (hasTauri()) {
-    return (await invoke("archive_build_tol_bundle", { request: input })) as ArchiveTolBundleBuildResult;
-  }
-  throw new Error("Audio2TOL bundle intake is available only in the desktop shell.");
+  throw new Error("Living Archive review artifacts are available only through the local bridge.");
 };
 
 export const requestArchiveProcessIngestRequest = async (input: {
@@ -1441,10 +1112,10 @@ export const requestArchiveProcessIngestRequest = async (input: {
   verifierAuthTier?: string;
   verifierModel?: string;
 }): Promise<ArchiveProcessIngestResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("archive_process_ingest_request", { request: input })) as ArchiveProcessIngestResult;
   }
-  throw new Error("Living Archive ingest processing is available only in the desktop shell.");
+  throw new Error("Living Archive ingest processing is available only through the local bridge.");
 };
 
 export const requestArchiveMaintenanceCycle = async (input: {
@@ -1468,10 +1139,10 @@ export const requestArchiveMaintenanceCycle = async (input: {
   autoPromote?: boolean;
   actorId?: string;
 }): Promise<ArchiveMaintenanceCycleResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("archive_maintenance_cycle", { request: input })) as ArchiveMaintenanceCycleResult;
   }
-  throw new Error("Living Archive maintenance cycles are available only in the desktop shell.");
+  throw new Error("Living Archive maintenance cycles are available only through the local bridge.");
 };
 
 export const requestArchiveAiMemoryBuildJob = async (input: {
@@ -1500,14 +1171,14 @@ export const requestArchiveAiMemoryBuildJob = async (input: {
     actorId?: string;
   };
 }): Promise<ArchiveAiMemoryBuildResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("archive_ai_memory_build_job", { request: input })) as ArchiveAiMemoryBuildResult;
   }
-  throw new Error("Living Archive AI Memory build jobs are available only in the desktop shell.");
+  throw new Error("Living Archive AI Memory build jobs are available only through the local bridge.");
 };
 
 export const requestArchiveAiMemoryBuildJobs = async (): Promise<ArchiveAiMemoryBuildJobSummary[]> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("archive_ai_memory_build_jobs")) as ArchiveAiMemoryBuildJobSummary[];
   }
   return [];
@@ -1535,24 +1206,24 @@ export const requestArchiveBackgroundCycle = async (input: {
   actorId?: string;
   rootPath?: string;
 }): Promise<ArchiveBackgroundCycleResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("archive_background_cycle", { request: input })) as ArchiveBackgroundCycleResult;
   }
-  throw new Error("Living Archive background cycles are available only in the desktop shell.");
+  throw new Error("Living Archive background cycles are available only through the local bridge.");
 };
 
 export const requestArchiveWikiNavigationRefresh = async (): Promise<ArchiveWikiNavigationRefreshResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("archive_refresh_wiki_navigation")) as ArchiveWikiNavigationRefreshResult;
   }
-  throw new Error("Living Archive wiki navigation refresh is available only in the desktop shell.");
+  throw new Error("Living Archive wiki navigation refresh is available only through the local bridge.");
 };
 
 export const requestArchiveLint = async (): Promise<ArchiveLintResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("archive_lint")) as ArchiveLintResult;
   }
-  throw new Error("Living Archive lint is available only in the desktop shell.");
+  throw new Error("Living Archive lint is available only through the local bridge.");
 };
 
 export const requestArchiveSemanticLint = async (input: {
@@ -1566,10 +1237,10 @@ export const requestArchiveSemanticLint = async (input: {
   model: string;
   maxCandidates?: number;
 }): Promise<ArchiveSemanticLintResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("archive_semantic_lint", { request: input })) as ArchiveSemanticLintResult;
   }
-  throw new Error("Living Archive semantic lint is available only in the desktop shell.");
+  throw new Error("Living Archive semantic lint is available only through the local bridge.");
 };
 
 export const requestArchiveReviewDecision = async (input: {
@@ -1578,34 +1249,28 @@ export const requestArchiveReviewDecision = async (input: {
   action: "approve" | "reject" | "escalate";
   notes?: string;
 }): Promise<ArchiveReviewDecisionResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("archive_review_decision", { request: input })) as ArchiveReviewDecisionResult;
   }
-  throw new Error("Living Archive review decisions are available only in the desktop shell.");
+  throw new Error("Living Archive review decisions are available only through the local bridge.");
 };
 
 export const requestArchivePromoteReviewArtifact = async (input: {
   artifactFile: string;
   actorId: string;
 }): Promise<ArchivePromoteReviewArtifactResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("archive_promote_review_artifact", { request: input })) as ArchivePromoteReviewArtifactResult;
   }
-  throw new Error("Trusted Living Archive promotion is available only in the desktop shell.");
+  throw new Error("Trusted Living Archive promotion is available only through the local bridge.");
 };
 
 export const requestProviderDiagnostics = async (providerId?: string): Promise<ProviderDiagnosticReport[]> => {
-  if (hasElectronHost()) {
-    return electronInvoke<ProviderDiagnosticReport[]>("provider_diagnostics", { providerId });
-  }
-  if (hasTauri()) {
-    return (await invoke("provider_diagnostics", { providerId })) as ProviderDiagnosticReport[];
-  }
-  throw new Error("Provider diagnostics are available only in the desktop shell.");
+  return (await invoke("provider_diagnostics", { providerId })) as ProviderDiagnosticReport[];
 };
 
 export const requestProviderRequestAudit = async (limit = 80): Promise<ProviderRequestAuditRecord[]> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("provider_request_audit", { limit })) as ProviderRequestAuditRecord[];
   }
   return [];
@@ -1621,10 +1286,42 @@ export const requestProviderSmokeTest = async (input: {
   authTier?: string;
   model: string;
 }): Promise<ProviderSmokeTestResult> => {
-  if (hasTauri()) {
-    return (await invoke("provider_smoke_test", input)) as ProviderSmokeTestResult;
-  }
-  throw new Error("Provider smoke tests are available only in the desktop shell.");
+  const checkedAt = new Date().toISOString();
+  const reply = await requestProviderServiceChatCompletion({
+    requestId: `provider-smoke:${input.providerId}:${Date.now()}`,
+    threadId: "settings-provider-smoke",
+    agentId: "settings.provider-smoke",
+    channelId: "settings",
+    providerId: input.providerId,
+    providerType: input.providerType,
+    apiBaseUrl: input.apiBaseUrl,
+    runtimeNodeId: input.runtimeNodeId,
+    runtimeNodeKind: input.runtimeNodeKind,
+    runtimeNodeEndpoint: input.runtimeNodeEndpoint,
+    authTier: input.authTier,
+    model: input.model,
+    reasoningEffort: "minimal",
+    systemPrompt: "You are a provider smoke test. Reply briefly and do not ask follow-up questions.",
+    messages: [
+      {
+        id: `provider-smoke:${input.providerId}:user`,
+        threadId: "settings-provider-smoke",
+        channelId: "settings",
+        role: "user",
+        author: "Settings",
+        content: "Reply with one short sentence confirming this provider can answer.",
+        createdAt: checkedAt,
+      },
+    ],
+  });
+  return {
+    providerId: input.providerId,
+    model: input.model,
+    ok: true,
+    replyPreview: reply.slice(0, 500),
+    checkedAt,
+    summary: `Provider smoke test succeeded for ${input.model}.`,
+  };
 };
 
 export const requestProviderSetupProbe = async (input: {
@@ -1635,17 +1332,31 @@ export const requestProviderSetupProbe = async (input: {
   runtimeNodeEndpoint?: string;
   authTier?: string;
 }): Promise<ProviderSetupProbeResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
+    const endpoint = input.runtimeNodeEndpoint ?? input.apiBaseUrl ?? "";
+    return {
+      providerId: input.providerId,
+      ok: false,
+      setupState: "adapter-pending",
+      discoveredModels: [],
+      endpoint,
+      checkedAt: new Date().toISOString(),
+      summary: "Provider setup probing is not exposed in the extension preview. Use Check Health or Test to verify this provider.",
+      detail: "The alpha bridge supports provider diagnostics and smoke tests; setup probing remains a future bridge route.",
+      source: "unsupported-adapter",
+    };
+  }
+  if (hasCommandHost()) {
     return (await invoke("provider_setup_probe", input)) as ProviderSetupProbeResult;
   }
-  throw new Error("Provider setup probes are available only in the desktop shell.");
+  throw new Error("Provider setup probes are available only through the local bridge.");
 };
 
 const readPersistedState = async (): Promise<ResonantShellState | null> => {
-  if (hasElectronHost()) {
-    return (await electronInvoke<ResonantShellState | null>("load_runtime_state")) ?? null;
+  if (hasCommandHost()) {
+    return (await hostInvoke<ResonantShellState | null>("load_runtime_state")) ?? null;
   }
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return ((await invoke("load_runtime_state")) as ResonantShellState | null) ?? null;
   }
   const raw = window.localStorage.getItem(STORAGE_KEY);
@@ -1656,17 +1367,13 @@ const readPersistedState = async (): Promise<ResonantShellState | null> => {
 };
 
 export const persistState = async (state: ResonantShellState): Promise<void> => {
-  // NOTE: The Rust host (`save_runtime_state` in src-tauri/src/lib.rs) applies
-  // a security filter before writing.  Only whitelisted UI/UX fields from this
-  // payload are accepted; security-sensitive fields such as
-  // `installations[*].grantedCapabilities` and `providerProfiles` are always
-  // preserved from the existing on-disk state and can never be overwritten by
-  // the renderer process.  Sending the full state here is intentional and safe.
-  if (hasElectronHost()) {
-    await electronInvoke("save_runtime_state", { state });
+  // The extension preview stores UI state locally. Security-sensitive bridge
+  // state, provider secrets, and capability grants are not written from here.
+  if (hasCommandHost()) {
+    await hostInvoke("save_runtime_state", { state });
     return;
   }
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     await invoke("save_runtime_state", { state });
     return;
   }
@@ -1674,55 +1381,13 @@ export const persistState = async (state: ResonantShellState): Promise<void> => 
 };
 
 export const openFloatingChatWindow = async (): Promise<void> => {
-  if (hasElectronHost()) {
-    const currentUrl = new URL(window.location.href);
-    currentUrl.searchParams.set("surface", "floating-chat");
-    await electronInvoke("open_floating_chat_window", { url: `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}` });
-    return;
-  }
-  if (!hasTauri()) {
-    throw new Error("Floating chat windows are available only in the desktop shell.");
-  }
-  const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
-  const label = "floating-chat";
-  const existing = await WebviewWindow.getByLabel(label);
-  if (existing) {
-    await existing.setFocus();
-    return;
-  }
-
-  const currentUrl = new URL(window.location.href);
-  currentUrl.searchParams.set("surface", "floating-chat");
-
-  const floatingWindow = new WebviewWindow(label, {
-    url: `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`,
-    title: "Augmentor Chat",
-    width: 620,
-    height: 860,
-    minWidth: 420,
-    minHeight: 620,
-    resizable: true,
-    decorations: true,
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    const unlistenCreated = floatingWindow.once("tauri://created", () => {
-      void unlistenCreated.then((unlisten) => unlisten());
-      void unlistenError.then((unlisten) => unlisten());
-      resolve();
-    });
-    const unlistenError = floatingWindow.once<string>("tauri://error", (event) => {
-      void unlistenCreated.then((unlisten) => unlisten());
-      void unlistenError.then((unlisten) => unlisten());
-      reject(new Error(event.payload || "Failed to open floating chat window."));
-    });
-  });
+  throw new Error("Floating chat windows are not part of the browser-first Chrome extension alpha.");
 };
 
 export const subscribeRuntimeStateUpdates = async (
   onState: (state: ResonantShellState) => void,
 ): Promise<() => void> => {
-  if (!hasTauri()) {
+  if (!hasCommandHost()) {
     return () => undefined;
   }
   return listen<ResonantShellState>("runtime-state-updated", (event) => onState(event.payload));
@@ -1738,7 +1403,7 @@ export const requestCreateTaskWorkspace = async (packet: DelegationPacket): Prom
     throw new Error(`Delegation packet is invalid: ${errors}`);
   }
   const taskMarkdown = renderDelegationTaskMarkdown(packet);
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("delegation_create_task_workspace", {
       request: {
         packet,
@@ -1746,25 +1411,25 @@ export const requestCreateTaskWorkspace = async (packet: DelegationPacket): Prom
       },
     })) as TaskWorkspace;
   }
-  throw new Error("Task workspace creation is available only in the desktop shell.");
+  throw new Error("Task workspace creation is available only through the local bridge.");
 };
 
 export const requestListTaskWorkspaces = async (): Promise<TaskWorkspace[]> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("delegation_list_task_workspaces")) as TaskWorkspace[];
   }
-  throw new Error("Task workspace listing is available only in the desktop shell.");
+  throw new Error("Task workspace listing is available only through the local bridge.");
 };
 
 export const requestReadTaskWorkspace = async (workspaceId: string): Promise<TaskWorkspacePayload> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("delegation_read_task_workspace", {
       request: {
         workspaceId,
       },
     })) as TaskWorkspacePayload;
   }
-  throw new Error("Task workspace reads are available only in the desktop shell.");
+  throw new Error("Task workspace reads are available only through the local bridge.");
 };
 
 export const requestFinishTaskWorkspace = async (input: {
@@ -1773,21 +1438,21 @@ export const requestFinishTaskWorkspace = async (input: {
   verification: Record<string, unknown>;
   auditEvent: Record<string, unknown>;
 }): Promise<FinishTaskWorkspaceResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("delegation_finish_task_workspace", { request: input })) as FinishTaskWorkspaceResult;
   }
-  throw new Error("Task workspace finalization is available only in the desktop shell.");
+  throw new Error("Task workspace finalization is available only through the local bridge.");
 };
 
 export const requestExecuteOpenCodeTask = async (workspaceId: string): Promise<ExecuteOpenCodeTaskResult> => {
-  if (hasTauri()) {
+  if (hasCommandHost()) {
     return (await invoke("delegation_execute_opencode_task", {
       request: {
         workspaceId,
       },
     })) as ExecuteOpenCodeTaskResult;
   }
-  throw new Error("OpenCode task execution is available only in the desktop shell.");
+  throw new Error("OpenCode task execution is available only through the local bridge.");
 };
 
 export const hydrateState = async (bundled: AddOnManifest[], sideloaded: AddOnManifest[]): Promise<ResonantShellState> => {

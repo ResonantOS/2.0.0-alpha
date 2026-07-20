@@ -1,8 +1,13 @@
 # ADR-032: ResonantOS Compute Fabric
 
-## Status
+## Decision Metadata
 
-Proposed on 2026-05-10.
+- Decision status: Deferred
+- Alpha applicability: Deferred
+- Superseded by: None
+- Owner: Compute fabric
+- Decision date: 2026-05-10
+- Alpha note: The proposed Compute Fabric is not Alpha scope.
 
 ## Decision
 

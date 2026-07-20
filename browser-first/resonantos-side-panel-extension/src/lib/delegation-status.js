@@ -21,12 +21,13 @@ function delegationLine(delegation) {
   ].filter(Boolean).join("\n");
 }
 
-export async function buildDelegationStatusMessage({ bridgeRequest, filter = "", limit = 6 }) {
+export async function buildDelegationStatusMessage({ bridgeRequest, getBridgeRequest, filter = "", limit = 6 }) {
+  const bridge = () => (typeof getBridgeRequest === "function" ? getBridgeRequest() : bridgeRequest);
   const targets = delegationTargetsForFilter(filter);
   if (!targets.length) {
     return "Use `/delegations` or `/delegations <hermes|opencode|engineer>`.";
   }
-  const responses = await Promise.allSettled(targets.map((target) => bridgeRequest("/addons/delegate/list", {
+  const responses = await Promise.allSettled(targets.map((target) => bridge()("/addons/delegate/list", {
     method: "POST",
     body: { target, limit }
   })));

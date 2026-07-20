@@ -65,24 +65,24 @@ const createHermesManifest = (): AddOnManifest => ({
 
 describe("AddOnsWorkspace Hermes grants", () => {
   it("opens installed add-ons that declare shell navigation", () => {
-    const audioManifest: AddOnManifest = {
-      id: "addon.audio2tol",
-      name: "Audio2TOL",
+    const toolManifest: AddOnManifest = {
+      id: "addon.custom-tool",
+      name: "Custom Tool",
       version: "0.1.0",
       author: "test",
       category: "tool",
-      description: "Audio2TOL manifest",
+      description: "Custom tool manifest",
       runtimeType: "local-service",
       surfaces: [
         {
-          id: "audio2tol-page",
+          id: "custom-tool-page",
           type: "page",
-          label: "Audio2TOL Console",
-          description: "Control Audio2TOL.",
+          label: "Custom Tool Console",
+          description: "Control the custom tool.",
           shellNavigation: {
-            sectionId: "audio2tol",
-            dockIcon: "audio2tol",
-            eyebrow: "TOL",
+            sectionId: "custom-tool",
+            dockIcon: "browser",
+            eyebrow: "tool",
             order: 70,
           },
         },
@@ -107,17 +107,17 @@ describe("AddOnsWorkspace Hermes grants", () => {
         platforms: ["macOS"],
       },
     };
-    const state = buildDefaultState([audioManifest]);
-    state.installations[audioManifest.id].installed = true;
-    state.installations[audioManifest.id].enabled = true;
-    state.installations[audioManifest.id].status = "enabled";
+    const state = buildDefaultState([toolManifest]);
+    state.installations[toolManifest.id].installed = true;
+    state.installations[toolManifest.id].enabled = true;
+    state.installations[toolManifest.id].status = "enabled";
     const onOpenSurface = vi.fn();
 
     render(
       <AddOnsWorkspace
         search=""
         sideloadPath=""
-        filteredManifests={[audioManifest]}
+        filteredManifests={[toolManifest]}
         installations={state.installations}
         selectedManifest={null}
         selectedInstallation={null}
@@ -128,7 +128,6 @@ describe("AddOnsWorkspace Hermes grants", () => {
         onToggleAddonInstall={vi.fn()}
         onToggleGrant={vi.fn()}
         onGrantCapabilities={vi.fn()}
-        onGrantTerminalWorkspaceAccess={vi.fn()}
         onUpdateAddonConfig={vi.fn()}
         onRunLogicianScript={vi.fn()}
         onRunLogicianHook={vi.fn()}
@@ -138,9 +137,9 @@ describe("AddOnsWorkspace Hermes grants", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Open Audio2TOL" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open Custom Tool" }));
 
-    expect(onOpenSurface).toHaveBeenCalledWith("audio2tol");
+    expect(onOpenSurface).toHaveBeenCalledWith("custom-tool");
   });
 
   it("keeps the Hermes quick action scoped to workspace launch capabilities", () => {
@@ -163,7 +162,6 @@ describe("AddOnsWorkspace Hermes grants", () => {
         onToggleAddonInstall={vi.fn()}
         onToggleGrant={vi.fn()}
         onGrantCapabilities={onGrantCapabilities}
-        onGrantTerminalWorkspaceAccess={vi.fn()}
         onUpdateAddonConfig={vi.fn()}
         onRunLogicianScript={vi.fn()}
         onRunLogicianHook={vi.fn()}
@@ -257,7 +255,6 @@ describe("AddOnsWorkspace Hermes grants", () => {
         onToggleAddonInstall={vi.fn()}
         onToggleGrant={vi.fn()}
         onGrantCapabilities={vi.fn()}
-        onGrantTerminalWorkspaceAccess={vi.fn()}
         onUpdateAddonConfig={vi.fn()}
         onRunLogicianScript={vi.fn(async (): Promise<LogicianExecutionArtifact> => ({
           id: "test-artifact",
@@ -386,7 +383,6 @@ describe("AddOnsWorkspace Hermes grants", () => {
         onToggleAddonInstall={vi.fn()}
         onToggleGrant={vi.fn()}
         onGrantCapabilities={vi.fn()}
-        onGrantTerminalWorkspaceAccess={vi.fn()}
         onUpdateAddonConfig={vi.fn()}
         onRunLogicianScript={vi.fn()}
         onRunLogicianHook={vi.fn()}

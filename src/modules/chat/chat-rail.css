@@ -58,7 +58,7 @@
   width: 2px;
   height: 56px;
   border-radius: 999px;
-  background: rgba(255, 248, 236, 0.12);
+  background: var(--surface-tint-lg);
   transform: translateY(-50%);
   opacity: 0;
   transition: opacity 140ms ease;
@@ -96,7 +96,7 @@
 
 .agent-switcher-item.augmentor.active {
   border-color: transparent;
-  background: rgba(16, 185, 129, 0.08);
+  background: var(--accent-surface-sm);
   color: #bbf7d0;
 }
 
@@ -140,7 +140,7 @@
 }
 
 .chat-agent-chip.active {
-  background: rgba(16, 185, 129, 0.08);
+  background: var(--accent-surface-sm);
   color: rgba(187, 247, 208, 0.92);
 }
 
@@ -423,7 +423,7 @@
   display: grid;
   min-width: 92px;
   padding: 0.28rem;
-  border: 1px solid rgba(138, 128, 112, 0.18);
+  border: var(--border-line);
   border-radius: 10px;
   background: rgba(14, 12, 10, 0.98);
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.34);
@@ -551,7 +551,7 @@
   width: 26px;
   height: 26px;
   border-radius: 999px;
-  background: rgba(16, 185, 129, 0.12);
+  background: var(--accent-surface);
   color: var(--accent);
   font-size: 0.7rem;
   font-weight: 900;
@@ -566,7 +566,7 @@
 .thread-tab:hover {
   transform: translateY(-1px);
   border-color: rgba(16, 185, 129, 0.36);
-  background: rgba(16, 185, 129, 0.08);
+  background: var(--accent-surface-sm);
 }
 
 .chat-toolbar {
@@ -678,7 +678,7 @@
   padding: 0.72rem;
   border-radius: 18px;
   background:
-    radial-gradient(circle at 12% 0%, rgba(16, 185, 129, 0.12), transparent 34%),
+    radial-gradient(circle at 12% 0%, var(--accent-surface), transparent 34%),
     rgba(255, 248, 236, 0.035);
   box-shadow: inset 0 0 0 1px rgba(255, 248, 236, 0.055);
 }
@@ -714,7 +714,7 @@
   padding: 0.28rem 0.62rem;
   border: 0;
   border-radius: 999px;
-  background: rgba(16, 185, 129, 0.14);
+  background: var(--accent-surface-md);
   color: rgba(187, 247, 208, 0.95);
   font-size: 0.68rem;
   font-weight: 800;
@@ -749,7 +749,7 @@
   height: 9px;
   overflow: hidden;
   border-radius: 999px;
-  background: rgba(255, 248, 236, 0.08);
+  background: var(--surface-tint-md);
 }
 
 .context-memory-meter-used {
@@ -792,7 +792,7 @@
   place-items: center;
   padding: 0.28rem;
   border-radius: 12px;
-  background: rgba(255, 248, 236, 0.04);
+  background: var(--surface-tint-sm);
   color: rgba(138, 128, 112, 0.92);
   font-size: 0.62rem;
   line-height: 1.15;
@@ -901,7 +901,7 @@
 }
 
 .context-memory-editor-actions button:first-child {
-  background: rgba(16, 185, 129, 0.16);
+  background: var(--accent-surface-lg);
   color: rgba(187, 247, 208, 0.96);
 }
 
@@ -946,7 +946,7 @@
   gap: 0.58rem;
   min-width: 0;
   padding-bottom: 0.62rem;
-  border-bottom: 1px solid rgba(255, 248, 236, 0.12);
+  border-bottom: 1px solid var(--surface-tint-lg);
 }
 
 .chat-run-status-head strong {

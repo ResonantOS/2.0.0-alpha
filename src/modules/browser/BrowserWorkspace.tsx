@@ -8,15 +8,10 @@ import type {
   AddOnManifest,
   BrowserExtensionState,
   BrowserInteractionResult,
-  BrowserNativeWebviewBounds,
-  BrowserNativeWebviewResult,
   BrowserOpenUrlResult,
   BrowserWorkspaceState,
   BrowserWorkspaceTabState,
   CapabilityGrant,
-  NativeBrowserAttachSmokeResult,
-  NativeBrowserBridgeProbeResult,
-  NativeBrowserProbeResult,
 } from "../../core/contracts";
 
 type BrowserWorkspaceProps = {
@@ -26,12 +21,6 @@ type BrowserWorkspaceProps = {
   onWorkspaceStateChange: (state: BrowserWorkspaceState) => void;
   onConfigureAddon: () => void;
   onGrantVisibleAccess?: () => void;
-  onOpenNativeWebview?: (url: string, bounds: BrowserNativeWebviewBounds) => Promise<BrowserNativeWebviewResult | void>;
-  onResizeNativeWebview?: (bounds: BrowserNativeWebviewBounds) => Promise<BrowserNativeWebviewResult | void>;
-  onHideNativeWebview?: () => Promise<void>;
-  onOpenLiveWebview?: (url: string, bounds: BrowserNativeWebviewBounds) => Promise<void>;
-  onResizeLiveWebview?: (bounds: BrowserNativeWebviewBounds) => Promise<void>;
-  onHideLiveWebview?: () => Promise<void>;
   onOpenInternalPreview?: (
     url: string,
     viewport?: { viewportWidth?: number; viewportHeight?: number },
@@ -43,10 +32,6 @@ type BrowserWorkspaceProps = {
     viewport?: { viewportWidth?: number; viewportHeight?: number },
   ) => Promise<BrowserInteractionResult>;
   onReadActivePage?: (url: string) => Promise<string>;
-  onProbeNativeBrowser?: () => Promise<NativeBrowserProbeResult>;
-  onSmokeTestNativeAttach?: () => Promise<NativeBrowserAttachSmokeResult>;
-  onProbeNativeBridge?: () => Promise<NativeBrowserBridgeProbeResult>;
-  onLoadPriorityExtension?: (target: "phantom" | "bitwarden") => Promise<string>;
   onOpenWalletBrowserHost?: (url: string) => Promise<string>;
   onReadWalletBrowserHost?: () => Promise<string>;
   onInspectWalletDappGate?: () => Promise<string>;
@@ -121,19 +106,9 @@ export function BrowserWorkspace({
   onWorkspaceStateChange,
   onConfigureAddon,
   onGrantVisibleAccess,
-  onOpenNativeWebview,
-  onResizeNativeWebview,
-  onHideNativeWebview,
-  onOpenLiveWebview,
-  onResizeLiveWebview,
-  onHideLiveWebview,
   onOpenInternalPreview,
   onScrollInternalPreview,
   onReadActivePage,
-  onProbeNativeBrowser,
-  onSmokeTestNativeAttach,
-  onProbeNativeBridge,
-  onLoadPriorityExtension,
   onOpenWalletBrowserHost,
   onReadWalletBrowserHost,
   onInspectWalletDappGate,
@@ -153,31 +128,7 @@ export function BrowserWorkspace({
   const [controlledActionStatus, setControlledActionStatus] = useState("");
   const [openMenu, setOpenMenu] = useState<BrowserMenuName | null>(null);
   const [extensions, setExtensions] = useState<BrowserExtensionState[]>([]);
-  const [nativeProbe, setNativeProbe] = useState<NativeBrowserProbeResult | null>(null);
-  const [nativeAttachSmoke, setNativeAttachSmoke] = useState<NativeBrowserAttachSmokeResult | null>(null);
-  const [nativeBridgeProbe, setNativeBridgeProbe] = useState<NativeBrowserBridgeProbeResult | null>(null);
   const [preview, setPreview] = useState<BrowserOpenUrlResult | null>(null);
-  const activeSurfaceRef = useRef<"native-chromium" | "tauri-webview" | null>(null);
-  const hostCallbacksRef = useRef({
-    onOpenNativeWebview,
-    onResizeNativeWebview,
-    onHideNativeWebview,
-    onOpenLiveWebview,
-    onResizeLiveWebview,
-    onHideLiveWebview,
-    onListVisibleExtensions,
-    onProbeNativeBrowser,
-  });
-  hostCallbacksRef.current = {
-    onOpenNativeWebview,
-    onResizeNativeWebview,
-    onHideNativeWebview,
-    onOpenLiveWebview,
-    onResizeLiveWebview,
-    onHideLiveWebview,
-    onListVisibleExtensions,
-    onProbeNativeBrowser,
-  };
 
   const networkGranted = hasGrant(installation, "network");
   const embeddingGranted = hasGrant(installation, "ui-embedding");
@@ -187,22 +138,15 @@ export function BrowserWorkspace({
   const canGoBack = Boolean(activeTab && activeTab.historyIndex > 0);
   const canGoForward = Boolean(activeTab && activeTab.historyIndex < activeTab.history.length - 1);
 
-  const measureNativeBounds = (): BrowserNativeWebviewBounds | null => {
+  const measurePreviewViewport = (): { viewportWidth: number; viewportHeight: number } | undefined => {
     const element = viewportRef.current;
     if (!element) {
-      return null;
+      return undefined;
     }
     const rect = element.getBoundingClientRect();
-    // Intent citation: ADR-017. The native child webview is mounted inside this
-    // viewport. Adding browser-chrome padding here creates the false top margin
-    // and oversized page feel the user reported.
-    const safeTop = rect.top;
-    const safeLeft = rect.left + 1;
     return {
-      x: safeLeft,
-      y: safeTop,
-      width: Math.max(1, rect.right - safeLeft - 1),
-      height: Math.max(1, rect.bottom - safeTop - 1),
+      viewportWidth: Math.max(320, Math.round(rect.width)),
+      viewportHeight: Math.max(240, Math.round(rect.height)),
     };
   };
 
@@ -211,163 +155,31 @@ export function BrowserWorkspace({
   }, [activeTab?.url]);
 
   useEffect(() => {
-    if (!browserReady || !hostCallbacksRef.current.onListVisibleExtensions) {
+    if (!browserReady || !onListVisibleExtensions) {
       return;
     }
     let cancelled = false;
-    void hostCallbacksRef.current.onListVisibleExtensions()
+    void onListVisibleExtensions()
       .then((nextExtensions) => {
         if (!cancelled) {
           setExtensions(nextExtensions);
         }
       })
-      .catch((error) => console.warn("[BrowserWorkspace] native webview operation failed:", error));
+      .catch((error) => console.warn("[BrowserWorkspace] browser extension listing failed:", error));
     return () => {
       cancelled = true;
     };
-  }, [browserReady]);
-
-  const viewportFromBounds = (bounds: BrowserNativeWebviewBounds | null) =>
-    bounds
-      ? {
-          viewportWidth: Math.max(320, Math.round(bounds.width)),
-          viewportHeight: Math.max(240, Math.round(bounds.height)),
-        }
-      : undefined;
+  }, [browserReady, onListVisibleExtensions]);
 
   const openInternalPreview = async (url: string) => {
     if (!onOpenInternalPreview) {
       return;
     }
     setControlledActionStatus("Opening internal Chromium preview...");
-    const result = await onOpenInternalPreview(url, viewportFromBounds(measureNativeBounds()));
+    const result = await onOpenInternalPreview(url, measurePreviewViewport());
     setPreview(result);
     setControlledActionStatus(`Internal Browser loaded: ${result.title || result.finalUrl}`);
   };
-
-  useEffect(() => {
-    const callbacks = hostCallbacksRef.current;
-    if (!browserReady || !activeTab || (!callbacks.onOpenNativeWebview && !callbacks.onOpenLiveWebview)) {
-      return;
-    }
-    let cancelled = false;
-    const animationFrame = window.requestAnimationFrame(() => {
-      const bounds = measureNativeBounds();
-      if (!bounds) {
-        return;
-      }
-      setError("");
-      const openSurface = async () => {
-        const latest = hostCallbacksRef.current;
-        if (latest.onOpenNativeWebview) {
-          try {
-            await latest.onOpenNativeWebview(activeTab.url, bounds);
-            activeSurfaceRef.current = "native-chromium";
-            await latest.onHideLiveWebview?.();
-            return `Native Chromium Browser ready: ${activeTab.url}`;
-          } catch (error) {
-            if (!latest.onOpenLiveWebview) {
-              throw error;
-            }
-            console.warn("Native Chromium Browser unavailable, falling back to Tauri WebView.", error);
-          }
-        }
-        if (!latest.onOpenLiveWebview) {
-          throw new Error("No Browser surface is available.");
-        }
-        await latest.onOpenLiveWebview(activeTab.url, bounds);
-        activeSurfaceRef.current = "tauri-webview";
-        await latest.onHideNativeWebview?.();
-        return `Tauri WebView fallback ready: ${activeTab.url}`;
-      };
-      void openSurface()
-        .then(() => {
-          if (!cancelled) {
-            setControlledActionStatus(activeSurfaceRef.current === "native-chromium" ? `Native Chromium Browser ready: ${activeTab.url}` : `Tauri WebView fallback ready: ${activeTab.url}`);
-          }
-        })
-        .catch((error) => {
-          if (!cancelled) {
-            setControlledActionStatus("");
-            setError(error instanceof Error ? error.message : "Live Browser navigation failed.");
-          }
-        });
-    });
-    return () => {
-      cancelled = true;
-      window.cancelAnimationFrame(animationFrame);
-    };
-  }, [activeTab?.id, activeTab?.url, browserReady]);
-
-  useEffect(() => {
-    const callbacks = hostCallbacksRef.current;
-    if (!browserReady || (!callbacks.onResizeNativeWebview && !callbacks.onResizeLiveWebview)) {
-      return;
-    }
-    const element = viewportRef.current;
-    if (!element) {
-      return;
-    }
-    const syncBounds = () => {
-      const bounds = measureNativeBounds();
-      if (bounds) {
-        const latest = hostCallbacksRef.current;
-        const resize =
-          activeSurfaceRef.current === "native-chromium" && latest.onResizeNativeWebview
-            ? latest.onResizeNativeWebview
-            : latest.onResizeLiveWebview;
-        void resize?.(bounds).catch((error) => console.warn("[BrowserWorkspace] native webview operation failed:", error));
-      }
-    };
-    syncBounds();
-    const observer = new ResizeObserver(syncBounds);
-    observer.observe(element);
-    window.addEventListener("resize", syncBounds);
-    return () => {
-      observer.disconnect();
-      window.removeEventListener("resize", syncBounds);
-    };
-  }, [browserReady]);
-
-  useEffect(() => {
-    return () => {
-      void hostCallbacksRef.current.onHideLiveWebview?.().catch((error) => console.warn("[BrowserWorkspace] native webview operation failed:", error));
-    };
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      void hostCallbacksRef.current.onHideNativeWebview?.().catch((error) => console.warn("[BrowserWorkspace] native webview operation failed:", error));
-    };
-  }, []);
-
-  useEffect(() => {
-    if (browserReady || !hostCallbacksRef.current.onHideNativeWebview) {
-      return;
-    }
-    void hostCallbacksRef.current.onHideNativeWebview().catch((error) => console.warn("[BrowserWorkspace] native webview operation failed:", error));
-  }, [browserReady]);
-
-  useEffect(() => {
-    if (!browserReady || !hostCallbacksRef.current.onProbeNativeBrowser) {
-      return;
-    }
-    let cancelled = false;
-    void hostCallbacksRef.current.onProbeNativeBrowser()
-      .then((result) => {
-        if (!cancelled) {
-          setNativeProbe(result);
-        }
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          setError(error instanceof Error ? error.message : "Native Browser probe failed.");
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [browserReady]);
 
   const commitBrowserState = (nextTabs: BrowserWorkspaceTabState[], nextActiveTabId = activeTabId) => {
     onWorkspaceStateChange({
@@ -393,7 +205,7 @@ export function BrowserWorkspace({
     }
   };
 
-  const navigateNativeWebview = (url: string) => {
+  const navigateBrowserHost = (url: string) => {
     void openWalletBrowserHostUrl(url);
   };
 
@@ -424,7 +236,7 @@ export function BrowserWorkspace({
         };
       }),
     );
-    navigateNativeWebview(nextUrl);
+    navigateBrowserHost(nextUrl);
   };
 
   const submitNavigation = (event: FormEvent<HTMLFormElement>) => {
@@ -436,12 +248,12 @@ export function BrowserWorkspace({
     const id = `tab-${Date.now()}`;
     const tab = createBrowserTab(id);
     commitBrowserState([...tabs, tab], id);
-    navigateNativeWebview(tab.url);
+    navigateBrowserHost(tab.url);
   };
 
   const selectTab = (tab: BrowserWorkspaceTabState) => {
     commitBrowserState(tabs, tab.id);
-    navigateNativeWebview(tab.url);
+    navigateBrowserHost(tab.url);
   };
 
   const closeTab = (tabId: string) => {
@@ -460,7 +272,7 @@ export function BrowserWorkspace({
     }
     setError("");
     commitBrowserState(tabs.map((tab) => (tab.id === activeTab.id ? { ...tab, url: targetUrl, historyIndex: targetIndex } : tab)));
-    navigateNativeWebview(targetUrl);
+    navigateBrowserHost(targetUrl);
   };
 
   const readActivePageWithAugmentor = async () => {
@@ -486,7 +298,7 @@ export function BrowserWorkspace({
     scrollInFlightRef.current = true;
     setError("");
     const sessionId = workspaceState.controlledSession.sessionId;
-    const viewport = viewportFromBounds(measureNativeBounds());
+    const viewport = measurePreviewViewport();
     void onScrollInternalPreview(
       sessionId,
       amplifyBrowserScrollDelta(event.deltaX),
@@ -589,87 +401,7 @@ export function BrowserWorkspace({
         openMenuUrl("https://support.google.com/chrome");
         break;
       default:
-        setControlledActionStatus("This command requires the native Chromium host.");
-    }
-  };
-
-  const runNativeProbe = async () => {
-    if (!onProbeNativeBrowser) {
-      return;
-    }
-    setError("");
-    setControlledActionStatus("Checking native embedded Chromium readiness...");
-    try {
-      const result = await onProbeNativeBrowser();
-      setNativeProbe(result);
-      setControlledActionStatus(
-        result.status === "ready"
-          ? "Native embedded Browser host is ready."
-          : result.status === "partial"
-            ? "Native Browser host is present but not verified."
-            : "Native embedded Browser host is blocked.",
-      );
-    } catch (error) {
-      setControlledActionStatus("");
-      setError(error instanceof Error ? error.message : "Native Browser probe failed.");
-    }
-  };
-
-  const runNativeAttachSmoke = async () => {
-    if (!onSmokeTestNativeAttach) {
-      return;
-    }
-    setError("");
-    setControlledActionStatus("Running native Browser attach smoke test...");
-    try {
-      const result = await onSmokeTestNativeAttach();
-      setNativeAttachSmoke(result);
-      setControlledActionStatus(
-        result.status === "attached"
-          ? "Native Browser attach smoke passed."
-          : "Native Browser attach smoke blocked product embedding.",
-      );
-    } catch (error) {
-      setControlledActionStatus("");
-      setError(error instanceof Error ? error.message : "Native Browser attach smoke test failed.");
-    }
-  };
-
-  const runNativeBridgeProbe = async () => {
-    if (!onProbeNativeBridge) {
-      return;
-    }
-    setError("");
-    setControlledActionStatus("Checking in-process native Browser bridge...");
-    try {
-      const result = await onProbeNativeBridge();
-      setNativeBridgeProbe(result);
-      setControlledActionStatus(
-        result.status === "ready"
-          ? "In-process native Browser bridge is ready."
-          : "In-process native Browser bridge is not ready.",
-      );
-    } catch (error) {
-      setControlledActionStatus("");
-      setError(error instanceof Error ? error.message : "Native Browser bridge probe failed.");
-    }
-  };
-
-  const loadPriorityExtension = async (target: "phantom" | "bitwarden") => {
-    if (!onLoadPriorityExtension) {
-      return;
-    }
-    setError("");
-    setControlledActionStatus(`Choose the unpacked ${target === "phantom" ? "Phantom" : "Bitwarden"} extension folder.`);
-    try {
-      const status = await onLoadPriorityExtension(target);
-      setControlledActionStatus(status);
-      if (onListVisibleExtensions) {
-        setExtensions(await onListVisibleExtensions());
-      }
-    } catch (error) {
-      setControlledActionStatus("");
-      setError(error instanceof Error ? error.message : "Extension load failed.");
+        setControlledActionStatus("This browser command is not available in the extension alpha.");
     }
   };
 
@@ -749,8 +481,8 @@ export function BrowserWorkspace({
 
   const phantomExtension = extensions.find((extension) => extension.extensionId === PHANTOM_EXTENSION_ID || /phantom/i.test(extension.name));
   const phantomLoaded = Boolean(phantomExtension);
-  const phantomUnsupported = phantomExtension?.compatibilityState === "unsupported-in-electron";
-  const phantomStatusLabel = phantomUnsupported || !phantomLoaded ? "use wallet host" : "experimental Electron load";
+  const phantomUnsupported = phantomExtension?.compatibilityState === "unsupported";
+  const phantomStatusLabel = phantomLoaded && !phantomUnsupported ? "available" : "use Chrome profile";
   const extensionCompatibility = [
     {
       id: "phantom",
@@ -862,7 +594,7 @@ export function BrowserWorkspace({
                   ) : null}
                   {item === "Profiles" ? (
                     <button type="button" role="menuitem" onClick={() => runBrowserMenuCommand("profiles")}>
-                      Profiles require native Chromium profile support
+                      Profiles are managed by Chrome or Brave
                     </button>
                   ) : null}
                   {item === "Tab" ? (
@@ -993,7 +725,7 @@ export function BrowserWorkspace({
           </span>
           {phantomLoaded && !phantomUnsupported ? (
             <button type="button" className="browser-bookmark-action" onClick={() => openBrowserUrl(PHANTOM_POPUP_URL)}>
-              Open Phantom Experimental
+              Open Phantom
             </button>
           ) : null}
           <button type="button" className="browser-bookmark-action browser-wallet-host-action" onClick={() => void openWalletBrowserHost()}>
@@ -1001,14 +733,14 @@ export function BrowserWorkspace({
           </button>
         </div>
 
-        <div ref={viewportRef} className="browser-v2-host browser-native-webview-mount" aria-label="Native embedded Chromium target">
+        <div ref={viewportRef} className="browser-v2-host browser-extension-preview-mount" aria-label="Browser extension preview">
           <section className="browser-wallet-host-panel" aria-label="Resonant Browser Host control surface">
             <div>
               <span className="eyebrow">Resonant Browser Host</span>
               <h3>Real Chrome/Brave profile for wallet-capable work</h3>
               <p>
                 ResonantOS controls a dedicated external browser profile through CDP. Phantom and other wallets run in
-                that real browser, while Augmentor, memory, add-ons, and task monitoring stay here as the sidecar.
+                that real browser, while Augmentor, memory, add-ons, and task monitoring stay in the alpha extension.
               </p>
             </div>
             <div className="browser-wallet-host-actions">
@@ -1028,125 +760,6 @@ export function BrowserWorkspace({
             </div>
           </section>
 
-          <section className="browser-v2-hero browser-native-placeholder browser-native-diagnostics">
-            <span className="eyebrow">Experimental native bridge</span>
-            <h3>Native embedded CEF is disabled by default</h3>
-            <p>
-              The product Browser now uses the controlled internal Chromium preview path because the in-process CEF
-              bridge has crashed the desktop shell. Keep native CEF behind manual probes until it passes real app
-              stability testing.
-            </p>
-            <div className="browser-v2-actions">
-              <button type="button" className="button-secondary touch-action" onClick={() => void runNativeProbe()}>
-                Run Native Host Probe
-              </button>
-              <button type="button" className="button-secondary touch-action" onClick={() => void runNativeAttachSmoke()}>
-                Run Attach Smoke Test
-              </button>
-              <button type="button" className="button-secondary touch-action" onClick={() => void runNativeBridgeProbe()}>
-                Run Bridge Probe
-              </button>
-            </div>
-          </section>
-
-          {nativeProbe ? (
-            <section className={`browser-native-probe browser-native-probe-${nativeProbe.status}`} aria-label="Native Browser host probe">
-              <div>
-                <span className="eyebrow">Host probe</span>
-                <h4>
-                  Native embedded host{" "}
-                  {nativeProbe.status === "ready" ? "ready" : nativeProbe.status === "partial" ? "partial" : "blocked"}
-                </h4>
-                <p>
-                  Candidate: {nativeProbe.engineCandidate} · source {nativeProbe.sourceScaffoldStatus} · host{" "}
-                  {nativeProbe.hostBinaryStatus} · embedded view {nativeProbe.embeddedViewStatus} · extensions{" "}
-                  {nativeProbe.extensionCompatibilityStatus}
-                </p>
-              </div>
-              <div className="browser-native-probe-grid">
-                <span>Phantom: {nativeProbe.phantomStatus}</span>
-                <span>Bitwarden: {nativeProbe.bitwardenStatus}</span>
-              </div>
-              {nativeProbe.blockers.length ? (
-                <ul>
-                  {nativeProbe.blockers.map((blocker) => (
-                    <li key={blocker}>{blocker}</li>
-                  ))}
-                </ul>
-              ) : null}
-            </section>
-          ) : null}
-
-          {nativeAttachSmoke ? (
-            <section
-              className={`browser-native-probe browser-native-probe-${nativeAttachSmoke.status}`}
-              aria-label="Native Browser attach smoke test"
-            >
-              <div>
-                <span className="eyebrow">Attach smoke</span>
-                <h4>
-                  Native attach{" "}
-                  {nativeAttachSmoke.status === "attached"
-                    ? "passed"
-                    : nativeAttachSmoke.status === "unsupported"
-                      ? "unsupported"
-                      : "blocked"}
-                </h4>
-                <p>
-                  Platform: {nativeAttachSmoke.platform} · parent {nativeAttachSmoke.parentHandleKind}{" "}
-                  {nativeAttachSmoke.parentHandlePresent ? "present" : "missing"} · mode{" "}
-                  {nativeAttachSmoke.hostIntegrationMode}
-                </p>
-              </div>
-              {nativeAttachSmoke.blocker ? <p>{nativeAttachSmoke.blocker}</p> : null}
-              {nativeAttachSmoke.nextActions.length ? (
-                <ul>
-                  {nativeAttachSmoke.nextActions.map((action) => (
-                    <li key={action}>{action}</li>
-                  ))}
-                </ul>
-              ) : null}
-            </section>
-          ) : null}
-
-          {nativeBridgeProbe ? (
-            <section
-              className={`browser-native-probe browser-native-probe-${nativeBridgeProbe.status}`}
-              aria-label="Native Browser in-process bridge probe"
-            >
-              <div>
-                <span className="eyebrow">Bridge probe</span>
-                <h4>
-                  In-process bridge{" "}
-                  {nativeBridgeProbe.status === "ready"
-                    ? "ready"
-                    : nativeBridgeProbe.status === "partial"
-                      ? "partial"
-                      : "missing"}
-                </h4>
-                <p>
-                  Mode: {nativeBridgeProbe.integrationMode} · library {nativeBridgeProbe.bridgeLibraryStatus} · C ABI{" "}
-                  {nativeBridgeProbe.cAbiStatus}
-                </p>
-                {nativeBridgeProbe.bridgeLibraryPath ? <p>{nativeBridgeProbe.bridgeLibraryPath}</p> : null}
-              </div>
-              {nativeBridgeProbe.exportedSymbols.length ? (
-                <div className="browser-native-probe-grid">
-                  {nativeBridgeProbe.exportedSymbols.slice(0, 4).map((symbol) => (
-                    <span key={symbol}>{symbol}</span>
-                  ))}
-                </div>
-              ) : null}
-              {nativeBridgeProbe.blockers.length ? (
-                <ul>
-                  {nativeBridgeProbe.blockers.map((blocker) => (
-                    <li key={blocker}>{blocker}</li>
-                  ))}
-                </ul>
-              ) : null}
-            </section>
-          ) : null}
-
           <section className="browser-extension-manager" aria-label="Browser extension manager">
             <div className="browser-extension-manager-head">
               <div>
@@ -1154,8 +767,8 @@ export function BrowserWorkspace({
                 <h4>Wallet and credential extensions</h4>
               </div>
               <p>
-                Electron extension loading is experimental. Phantom and wallet approvals belong in the dedicated real
-                Chrome/Brave Wallet Browser host so wallet APIs, popups, and human approval flows work as expected.
+                Wallet and credential extensions belong in the user's Chrome or Brave profile. The alpha extension
+                can inspect and summarize browser state, but wallet approvals remain human-only.
               </p>
             </div>
             <div className="browser-extension-priority-grid" aria-label="Priority Browser extension compatibility">
@@ -1171,12 +784,12 @@ export function BrowserWorkspace({
                   <small>{target.source}</small>
                   <span className="browser-extension-target-status">
                     {target.unsupported
-                      ? "Loaded experimentally, but Electron cannot run the Phantom wallet UI. Use a real Chrome/Brave wallet host."
+                      ? "Install and unlock inside Chrome or Brave."
                       : target.installed
-                        ? "Loaded experimentally in Electron"
+                        ? "Available in the current browser profile"
                         : target.id === "phantom"
-                          ? "Install and unlock inside the Wallet Browser host"
-                          : "Experimental Electron extension host available"}
+                          ? "Install and unlock inside Chrome or Brave"
+                          : "Install from the official browser extension source"}
                   </span>
                   {target.id === "phantom" && phantomExtension?.compatibilityNotes?.length ? (
                     <ul className="browser-extension-warning-list">
@@ -1213,10 +826,9 @@ export function BrowserWorkspace({
                       <button
                         type="button"
                         className="button-secondary touch-action"
-                        onClick={() => void loadPriorityExtension(target.id as "phantom" | "bitwarden")}
-                        disabled={!onLoadPriorityExtension}
+                        onClick={() => openBrowserUrl(CHROME_WEB_STORE_URL)}
                       >
-                        Load unpacked experimental
+                        Open extension store
                       </button>
                     ) : null}
                   </div>

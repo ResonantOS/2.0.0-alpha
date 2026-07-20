@@ -160,4 +160,83 @@ describe("memory provider broker", () => {
       }),
     );
   });
+
+  it("forwards the configured bearer token on write operations", async () => {
+    const manifest = httpMemoryManifest();
+    const state = enableMemoryProvider(buildDefaultState([manifest]), manifest);
+    state.installations[manifest.id].config = {
+      memoryServiceToken: "secret-token",
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({ artifactPath: "INTAKE/mcp/default/note.md", metadataPath: "" }),
+    } as Response);
+
+    const broker = resolveMemoryProviderBroker(state, [manifest]);
+    await broker.intakeWrite({
+      actorId: "tester",
+      bucket: "default",
+      fileName: "note.md",
+      content: "hello",
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect((init.headers as Record<string, string>).authorization).toBe("Bearer secret-token");
+  });
+
+  it("falls back to RESONANTOS_MEMORY_SERVICE_TOKEN for writes when config omits a token", async () => {
+    const previous = process.env.RESONANTOS_MEMORY_SERVICE_TOKEN;
+    process.env.RESONANTOS_MEMORY_SERVICE_TOKEN = "env-token";
+    try {
+      const manifest = httpMemoryManifest();
+      const state = enableMemoryProvider(buildDefaultState([manifest]), manifest);
+      const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+        ok: true,
+        json: async () => ({ requestFile: "INTAKE/review-queue/1.json", queuedAt: "" }),
+      } as Response);
+
+      const broker = resolveMemoryProviderBroker(state, [manifest]);
+      await broker.ingestRequest({
+        actorId: "tester",
+        sourcePath: "EXTERNAL_KNOWLEDGE/doc.md",
+        sourceType: "markdown",
+        intent: "ingest",
+      });
+
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect((init.headers as Record<string, string>).authorization).toBe("Bearer env-token");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.RESONANTOS_MEMORY_SERVICE_TOKEN;
+      } else {
+        process.env.RESONANTOS_MEMORY_SERVICE_TOKEN = previous;
+      }
+    }
+  });
+
+  it("does not send an Authorization header on read operations", async () => {
+    const previous = process.env.RESONANTOS_MEMORY_SERVICE_TOKEN;
+    process.env.RESONANTOS_MEMORY_SERVICE_TOKEN = "env-token";
+    try {
+      const manifest = httpMemoryManifest();
+      const state = enableMemoryProvider(buildDefaultState([manifest]), manifest);
+      state.installations[manifest.id].config = { memoryServiceToken: "secret-token" };
+      const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+        ok: true,
+        json: async () => ({ query: "augmentor", pages: [], sources: [] }),
+      } as Response);
+
+      const broker = resolveMemoryProviderBroker(state, [manifest]);
+      await broker.search("augmentor", 3);
+
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect((init.headers as Record<string, string>).authorization).toBeUndefined();
+    } finally {
+      if (previous === undefined) {
+        delete process.env.RESONANTOS_MEMORY_SERVICE_TOKEN;
+      } else {
+        process.env.RESONANTOS_MEMORY_SERVICE_TOKEN = previous;
+      }
+    }
+  });
 });

@@ -25,6 +25,7 @@ export type ProviderRouteResolution = {
 const ROUTABLE_RUNTIME_HEALTH: ProviderRuntimeNode["healthState"][] = ["ready", "degraded", "deployable"];
 const CANONICAL_CHAT_MODEL_ORDER = [
   "MiniMax-M3",
+  "zai/glm-5.2",
   "gpt-5.5",
   "gpt-5.4-mini",
   "batiai/gemma4-e2b:q4",
@@ -85,12 +86,14 @@ export const selectableAgentChatModels = (
     : ["cloud", "local", "remote-user-owned"];
   const models = state.providers.flatMap((provider) =>
     provider.allowedModels.filter((model) =>
-      CANONICAL_CHAT_MODEL_ORDER.includes(model) &&
       state.runtimeNodes.some((node) => routeCanServeModel(state, provider, node, model, allowedRuntimeKinds)),
     ),
   );
   const uniqueModels = uniqueValues(models);
-  return CANONICAL_CHAT_MODEL_ORDER.filter((model) => uniqueModels.includes(model));
+  return [
+    ...CANONICAL_CHAT_MODEL_ORDER.filter((model) => uniqueModels.includes(model)),
+    ...uniqueModels.filter((model) => !CANONICAL_CHAT_MODEL_ORDER.includes(model)),
+  ];
 };
 
 export const resolveAgentChatRoute = (
@@ -275,9 +278,13 @@ const resolveStrategyRoute = (
 ): ProviderRoutingDecision => {
   const activeCostPosture: ProviderCostPosture = state.uiPreferences.activeCostPosture ?? "subscription";
   const strategyRoutes = applyCostPostureOrdering(expandStrategyRoutes(state, strategy), activeCostPosture);
+  const strategyModels = uniqueValues(strategyRoutes.map((route) => route.model));
+  const effectivePreferredModel = options.preferredModel && strategyModels.includes(options.preferredModel)
+    ? options.preferredModel
+    : undefined;
   const preferredModelProviderIds = providerIdsForPreferredModel(
     state,
-    options.preferredModel,
+    effectivePreferredModel,
     options.allowedRuntimeKinds,
   );
   return resolveProviderRoute(state, {
@@ -293,9 +300,9 @@ const resolveStrategyRoute = (
       ...strategyRoutes.map((route) => route.providerProfileId),
     ]),
     preferredRuntimeNodeIds: uniqueValues(strategyRoutes.map((route) => route.runtimeNodeId)),
-    preferredModels: options.preferredModel
-      ? [options.preferredModel, ...uniqueValues(strategyRoutes.map((route) => route.model))]
-      : uniqueValues(strategyRoutes.map((route) => route.model)),
+    preferredModels: effectivePreferredModel
+      ? [effectivePreferredModel, ...strategyModels]
+      : strategyModels,
     allowedRuntimeKinds: options.allowedRuntimeKinds,
     preferredLocalities: options.preferredLocalities,
     fallbackPolicyId: "core-default",

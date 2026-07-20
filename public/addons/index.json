@@ -1,8 +1,6 @@
 [
-  "audio2tol.json",
   "augmentor-chat.json",
   "browser.json",
-  "camofox-browser.json",
   "coherence-gate.json",
   "hermes.json",
   "heuristic-auditor.json",
@@ -15,7 +13,6 @@
   "r-awareness.json",
   "shield.json",
   "telegram-channel.json",
-  "terminal.json",
   "tts-enforcer.json",
   "usage-tracker.json"
 ]

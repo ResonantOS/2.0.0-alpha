@@ -4,6 +4,20 @@
 (() => {
 if (window.__resonantOSContentScriptLoaded) return;
 window.__resonantOSContentScriptLoaded = true;
+function sanitizeBrowserContextUrl(value, base = window.location.href) {
+  if (!String(value ?? "").trim()) return "";
+  try {
+    const url = new URL(String(value || ""), base);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return "";
+    url.username = "";
+    url.password = "";
+    url.search = "";
+    url.hash = "";
+    return url.href;
+  } catch {
+    return "";
+  }
+}
 (function initResonantContextSDK() {
   try {
     if (typeof window.ResonantContext === 'undefined' || typeof window._ResonantContext === 'undefined') {
@@ -11,42 +25,92 @@ window.__resonantOSContentScriptLoaded = true;
       return;
     }
 
-    var _rcCollector = window.ResonantContext.init({
-      plugin: {
-        domain: 'resonantos-browser-layer',
-        viewportThreshold: 0.4,
-        maxTextChars: 600,
-        clickSelectors: 'a, button, [role="button"], input[type="submit"], [onclick]',
-        persistSession: true,
-        pages: {
-          default: {
-            match: function () { return true; },
-            sections: [
-              { selector: 'main',    label: 'Main content', priority: 8 },
-              { selector: 'article', label: 'Article',      priority: 7 },
-              { selector: 'header',  label: 'Header',       priority: 4 },
-              { selector: 'nav',     label: 'Navigation',   priority: 3 },
-              { selector: 'footer',  label: 'Footer',       priority: 1 }
-            ]
-          }
+    if (window.top !== window) {
+      return;
+    }
+
+    var _rcFallbackPlugin = {
+      domain: 'generic-web',
+      viewportThreshold: 0.4,
+      maxTextChars: 600,
+      clickSelectors: 'a, button, [role="button"], input[type="submit"], [onclick]',
+      persistSession: true,
+      pages: {
+        default: {
+          match: function () { return true; },
+          sections: [
+            { selector: 'main',    label: 'Main content', priority: 8 },
+            { selector: 'article', label: 'Article',      priority: 7 },
+            { selector: 'header',  label: 'Header',       priority: 4 },
+            { selector: 'nav',     label: 'Navigation',   priority: 3 },
+            { selector: 'footer',  label: 'Footer',       priority: 1 }
+          ]
         }
       }
-    });
+    };
+    var _rcPlugin = window.ResonantOSContextPlugins?.getPluginForDomain?.(window.location.hostname) || _rcFallbackPlugin;
+    var _rcCollector = window.ResonantContext.init({ plugin: _rcPlugin });
 
     // Broadcast snapshots to the background service worker so the side-panel
     // can access live page context without making a separate read_page round-trip.
     var _rcSnapshotTimer = null;
+    var _rcLastSnapshotAt = 0;
+    function _rcSanitizeText(value, max) {
+      return String(value || '')
+        .replace(/-----BEGIN [^-]+ PRIVATE KEY-----[\s\S]*?-----END [^-]+ PRIVATE KEY-----/g, '[redacted]')
+        .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, '[redacted]')
+        .replace(/\b(?:sk-[A-Za-z0-9_-]{12,}|sk-ant-[A-Za-z0-9_-]{12,}|sk-or-v1-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9_]{12,}|github_pat_[A-Za-z0-9_]{12,}|hf_[A-Za-z0-9_-]{12,}|xox[baprs]-[A-Za-z0-9-]{12,}|xai-[A-Za-z0-9_-]{12,}|gsk_[A-Za-z0-9_-]{12,}|AIza[A-Za-z0-9_-]{12,}|AKIA[A-Z0-9]{12,}|pk_live_[A-Za-z0-9]{12,}|rk_live_[A-Za-z0-9]{12,})\b/gi, '[redacted]')
+        .replace(/\b(?:api[_-]?key|token|password|secret|authorization|bearer|session|cookie)\s*[:=]\s*['"]?[^'"\s]+/gi, '[redacted]')
+        .replace(/\b(?:\d[ -]?){13,19}\b/g, function (candidate) {
+          var digits = candidate.replace(/\D/g, '');
+          return digits.length >= 13 && digits.length <= 19 ? '[redacted]' : candidate;
+        })
+        .replace(/\s{3,}/g, '  ')
+        .trim()
+        .slice(0, max || 1000);
+    }
+    function _rcSanitizeUrl(value) {
+      return sanitizeBrowserContextUrl(value);
+    }
+    function _rcSanitizeStructured(value, depth, keyName) {
+      if (value === null || value === undefined) return value;
+      if (/^(value|password|passwd|pwd|secret|token|access[-_ ]?token|refresh[-_ ]?token|id[-_ ]?token|api[-_ ]?key|apikey|auth|authorization|bearer|cookie|session|credential|credentials|client[-_ ]?secret|private[-_ ]?key|seed|otp|2fa|mfa)$/i.test(String(keyName || ''))) {
+        return value ? '[redacted]' : value;
+      }
+      if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+        return _rcSanitizeText(value, 1000);
+      }
+      if (Array.isArray(value)) {
+        if (depth > 3) return [];
+        return value.slice(0, 30).map(function (entry) { return _rcSanitizeStructured(entry, depth + 1, keyName); });
+      }
+      if (typeof value === 'object') {
+        if (depth > 3) return {};
+        return Object.fromEntries(Object.entries(value).slice(0, 40).map(function (entry) {
+          return [_rcSanitizeText(entry[0], 80), _rcSanitizeStructured(entry[1], depth + 1, entry[0])];
+        }));
+      }
+      return '';
+    }
+    function _rcSanitizeSnapshot(snapshot) {
+      var safe = _rcSanitizeStructured(snapshot, 0, '');
+      safe.url = _rcSanitizeUrl(snapshot?.url || window.location.href);
+      if (safe.page?.path) safe.page.path = String(safe.page.path).split(/[?#]/)[0].slice(0, 300);
+      return safe;
+    }
     function _rcScheduleSnapshot() {
+      if (window.top !== window) return;
       if (_rcSnapshotTimer) return;
       _rcSnapshotTimer = window.setTimeout(function () {
         _rcSnapshotTimer = null;
+        _rcLastSnapshotAt = Date.now();
         try {
-          var snapshot = _rcCollector.getContext();
+          var snapshot = _rcSanitizeSnapshot(_rcCollector.getContext());
           if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
             chrome.runtime.sendMessage({ type: 'resonant-context-snapshot', payload: snapshot });
           }
         } catch (_e) { /* extension may have been reloaded */ }
-      }, 500);
+      }, Math.max(500, 1500 - (Date.now() - _rcLastSnapshotAt)));
     }
 
     // Send an initial snapshot and re-send on navigation or meaningful DOM changes.
@@ -54,6 +118,15 @@ window.__resonantOSContentScriptLoaded = true;
     document.addEventListener('visibilitychange', _rcScheduleSnapshot);
     window.addEventListener('popstate', _rcScheduleSnapshot);
     window.addEventListener('hashchange', _rcScheduleSnapshot);
+    if (typeof MutationObserver !== 'undefined') {
+      var _rcMutationTarget = document.body || document.documentElement;
+      if (_rcMutationTarget) {
+        new MutationObserver(_rcScheduleSnapshot).observe(_rcMutationTarget, {
+          childList: true,
+          subtree: true
+        });
+      }
+    }
 
     // Expose collector on window for debugging / other content-script modules.
     window._resonantContextCollector = _rcCollector;
@@ -69,6 +142,7 @@ const controlBubbleClass = "resonantos-control-bubble";
 const controlToastId = "resonantos-control-toast";
 const controlStatusTextClass = "ros-control-status-text";
 const controlStopButtonClass = "ros-control-stop-button";
+const editableSelector = "input, textarea, select, [contenteditable], [role='textbox']";
 let lastInlineSelectionDetails = null;
 
 const isTopWindow = () => window.top === window;
@@ -118,17 +192,17 @@ const visiblePageText = () => [
 
 const pageSnapshot = () => ({
   title: document.title,
-  url: location.href,
+  url: sanitizeBrowserContextUrl(location.href),
   frame: {
     isTop: window.top === window,
-    referrer: document.referrer || ""
+    referrer: sanitizeBrowserContextUrl(document.referrer)
   },
   text: visiblePageText(),
   iframes: querySelectorAllDeep("iframe")
     .slice(0, 20)
     .map((frame) => ({
       title: frame.getAttribute("title") || frame.getAttribute("aria-label") || "",
-      src: frame.src || "",
+      src: sanitizeBrowserContextUrl(frame.src),
       width: frame.width || frame.getBoundingClientRect().width,
       height: frame.height || frame.getBoundingClientRect().height
     })),
@@ -141,22 +215,23 @@ const pageSnapshot = () => ({
     .slice(0, 80)
     .map((link) => ({
       text: link.textContent?.trim().slice(0, 160) ?? "",
-      href: link.href
+      href: sanitizeBrowserContextUrl(link.href)
     })),
   controls: candidateClickElements()
     .slice(0, 80)
-    .map((element) => ({
+    .map((element, index) => ({
       ref: ensureControlRef(element),
       text: visibleText(element).slice(0, 160),
       tagName: element.tagName.toLowerCase(),
       role: element.getAttribute("role") || "",
       ariaLabel: element.getAttribute("aria-label") || "",
-      approvalRequired: isSubmitLikeElement(element)
+      approvalRequired: isSubmitLikeElement(element),
+      ...elementContextDetails(element, { visibleIndex: index + 1 })
     })),
-  fields: querySelectorAllDeep("input, textarea, select, [contenteditable='true']")
+  fields: querySelectorAllDeep(editableSelector)
     .filter((element) => !isResonantosInternalElement(element))
     .slice(0, 80)
-    .map((element) => describeEditable(element)),
+    .map((element, index) => describeEditable(element, { visibleIndex: index + 1 })),
   walletProviders: {
     phantomSolana: Boolean(globalThis.phantom?.solana?.isPhantom || globalThis.solana?.isPhantom)
   }
@@ -179,18 +254,18 @@ const describeForms = () => ({
       index,
       id: form.id || "",
       name: form.getAttribute("name") || "",
-      action: form.action || "",
+      action: sanitizeBrowserContextUrl(form.action),
       method: form.method || "get",
-      fields: querySelectorAllDeep("input, textarea, select, [contenteditable='true']", { root: form })
+      fields: querySelectorAllDeep(editableSelector, { root: form })
         .filter((field) => !isResonantosInternalElement(field))
         .slice(0, 40)
-        .map((field) => describeEditable(field))
+        .map((field, fieldIndex) => describeEditable(field, { visibleIndex: fieldIndex + 1 }))
     })),
-  looseFields: querySelectorAllDeep("input, textarea, select, [contenteditable='true']")
+  looseFields: querySelectorAllDeep(editableSelector)
     .filter((field) => !isResonantosInternalElement(field))
     .filter((field) => !field.closest("form"))
     .slice(0, 40)
-    .map((field) => describeEditable(field))
+    .map((field, index) => describeEditable(field, { visibleIndex: index + 1 }))
 });
 
 const idReferenceText = (element, attribute) => {
@@ -231,20 +306,96 @@ const uniqueElements = (elements) => Array.from(new Set(elements.filter(Boolean)
 
 const normalizedTargetText = (value) => String(value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
 
+const clippedText = (value, max = 120) => String(value ?? "").replace(/\s+/g, " ").trim().slice(0, max);
+
+const elementBounds = (element) => {
+  const rect = element?.getBoundingClientRect?.();
+  if (!rect) return null;
+  return {
+    height: Math.round(rect.height),
+    left: Math.round(rect.left),
+    top: Math.round(rect.top),
+    width: Math.round(rect.width)
+  };
+};
+
+const nearestContextElement = (element) => {
+  let current = element?.parentElement ?? null;
+  while (current && current !== document.body && current !== document.documentElement) {
+    if (current.matches?.("form, fieldset, section, article, aside, nav, main, header, footer, li, tr, [role='group'], [role='region'], [aria-label], [data-testid]")) {
+      return current;
+    }
+    current = current.parentElement;
+  }
+  return element?.parentElement && element.parentElement !== document.body ? element.parentElement : null;
+};
+
+const contextLabel = (element) => {
+  const containsEditable = Boolean(element?.matches?.(editableSelector) || element?.querySelector?.(editableSelector));
+  const explicitParts = [
+    element?.getAttribute?.("aria-label"),
+    element?.getAttribute?.("data-testid"),
+    element?.id ? `#${element.id}` : "",
+    element?.getAttribute?.("name"),
+    element?.querySelector?.("h1, h2, h3, legend, [role='heading']")?.textContent
+  ].filter(Boolean);
+  return clippedText([
+    ...explicitParts,
+    containsEditable || explicitParts.length ? "" : visibleText(element)
+  ].filter(Boolean).join(" · "), 160);
+};
+
+const formContextDetails = (element) => {
+  const form = element?.closest?.("form") ?? null;
+  if (!form) return null;
+  const forms = querySelectorAllDeep("form");
+  return {
+    action: clippedText(sanitizeBrowserContextUrl(form.action || form.getAttribute("action") || ""), 160),
+    id: form.id || "",
+    index: Math.max(1, forms.indexOf(form) + 1),
+    label: contextLabel(form),
+    method: form.method || form.getAttribute("method") || "get",
+    name: form.getAttribute("name") || ""
+  };
+};
+
+const elementContextDetails = (element, { visibleIndex = 0 } = {}) => {
+  const container = nearestContextElement(element);
+  const section = element?.closest?.("section, article, main, nav, aside, header, footer, [role='region']") ?? null;
+  return {
+    bounds: elementBounds(element),
+    container: container ? {
+      id: container.id || "",
+      label: contextLabel(container),
+      role: container.getAttribute("role") || "",
+      tagName: container.tagName.toLowerCase()
+    } : null,
+    form: formContextDetails(element),
+    section: section ? {
+      id: section.id || "",
+      label: contextLabel(section),
+      role: section.getAttribute("role") || "",
+      tagName: section.tagName.toLowerCase()
+    } : null,
+    visibleIndex
+  };
+};
+
 const clickableCandidateDetails = (elements) => uniqueElements(elements)
   .slice(0, 8)
-  .map((element) => ({
+  .map((element, index) => ({
     ref: ensureControlRef(element),
     text: visibleText(element).slice(0, 160),
     tagName: element.tagName.toLowerCase(),
     role: element.getAttribute("role") || "",
     ariaLabel: element.getAttribute("aria-label") || "",
-    approvalRequired: isSubmitLikeElement(element)
+    approvalRequired: isSubmitLikeElement(element),
+    ...elementContextDetails(element, { visibleIndex: index + 1 })
   }));
 
 const editableCandidateDetails = (elements) => uniqueElements(elements)
   .slice(0, 8)
-  .map((element) => {
+  .map((element, index) => {
     const fieldSafety = classifyEditableField(element);
     return {
       ref: ensureControlRef(element),
@@ -254,8 +405,13 @@ const editableCandidateDetails = (elements) => uniqueElements(elements)
       id: element.id || "",
       role: element.getAttribute("role") || "",
       label: element.getAttribute("aria-label") || element.getAttribute("placeholder") || element.getAttribute("title") || relatedLabelText(element) || "",
+      ariaDescription: idReferenceText(element, "aria-describedby"),
+      autocomplete: element.getAttribute("autocomplete") || "",
+      contentEditable: contentEditableMode(element),
       fieldKind: fieldSafety.kind,
-      hasValue: Boolean(editableRawValue(element))
+      hasValue: Boolean(editableRawValue(element)),
+      placeholder: element.getAttribute("placeholder") || "",
+      ...elementContextDetails(element, { visibleIndex: index + 1 })
     };
   });
 
@@ -266,13 +422,28 @@ const ambiguousTargetResponse = (kind, target, candidates) => ({
   candidates
 });
 
+// #240: public-commit verbs. A control carrying one of these is treated as a
+// public submit even without a <form> (SPA buttons, links, type="button" that
+// wire up JS submit) — it is a human-only handoff, never auto-clicked.
+const PUBLIC_COMMIT_VERBS = /\b(submit|send|post|publish|save|share|buy|pay|confirm|connect|sign|reserve|book|order|checkout|apply|vote|subscribe|register|comment)\b/i;
 const isSubmitLikeElement = (element) => {
   const type = String(element.getAttribute("type") || "").toLowerCase();
   const role = String(element.getAttribute("role") || "").toLowerCase();
-  const text = visibleText(element).toLowerCase();
-  return type === "submit" ||
-    (element instanceof HTMLButtonElement && (!type || type === "submit") && Boolean(element.closest("form"))) ||
-    (role === "button" && Boolean(element.closest("form")) && /\b(submit|send|post|publish|save|share|buy|pay|confirm|connect|sign)\b/i.test(text));
+  const tag = element.tagName ? element.tagName.toLowerCase() : "";
+  const label = `${visibleText(element)} ${element.getAttribute("value") || ""}`.toLowerCase();
+  // Native form-submit controls are always human-only.
+  if (type === "submit" || type === "image") return true;
+  if (element instanceof HTMLButtonElement && (!type || type === "submit") && Boolean(element.closest("form"))) return true;
+  // A control that BEHAVES like a button (incl. input[type=button] and scripted
+  // <a onclick>/<div onclick>) AND carries a public-commit verb is human-only.
+  // Plain navigation links (<a href> without button semantics) stay clickable so
+  // safe reads like "Order History" or "How to apply" are not blocked.
+  const behavesLikeButton =
+    tag === "button" ||
+    role === "button" ||
+    (tag === "input" && ["button", "reset"].includes(type)) ||
+    (typeof element.hasAttribute === "function" && element.hasAttribute("onclick"));
+  return behavesLikeButton && PUBLIC_COMMIT_VERBS.test(label);
 };
 
 const isHardRestrictedElement = (element, fallbackText = "") => {
@@ -297,13 +468,18 @@ const clickElement = (element, { userApproved = false, fallbackText = "" } = {})
       error: `Clicking "${visibleText(element) || fallbackText}" crosses a wallet/payment/login/credential boundary and must be completed by the human.`
     };
   }
-  if (isSubmitLikeElement(element) && !userApproved) {
-    pulseControlOverlay({ state: "blocked", label: "Approval required for public action", phase: "blocked", target: element });
+  // #240: submit-like is UNCONDITIONALLY human-only. Do not add a userApproved
+  // or any other bypass gate here — an in-panel approval must never turn a public
+  // submit into an agent-performed click. The human clicks it on the page.
+  if (isSubmitLikeElement(element)) {
+    element.scrollIntoView({ block: "center", inline: "center", behavior: "auto" });
+    pulseControlOverlay({ state: "blocked", label: "Human-only: click this yourself", phase: "handoff", target: element });
     return {
       ok: false,
       approvalRequired: true,
       deniedToAutomation: true,
-      error: `Clicking "${visibleText(element) || fallbackText}" looks like a submit/public action and requires human approval.`
+      humanHandoff: true,
+      error: `Clicking "${visibleText(element) || fallbackText}" is a public submit/commit action and must be performed by the human on the page.`
     };
   }
   element.scrollIntoView({ block: "center", inline: "center", behavior: "auto" });
@@ -379,7 +555,8 @@ const editableCandidates = () => [
     "input[type='tel']",
     "input[type='number']",
     "input[type='password']",
-    "[contenteditable='true']"
+    "[contenteditable]",
+    "[role='textbox']"
   ].join(", "))
 ].filter((element) => element && !isResonantosInternalElement(element));
 
@@ -391,10 +568,16 @@ const deepActiveElement = () => {
   return active;
 };
 
+const contentEditableMode = (element) => String(element?.getAttribute?.("contenteditable") ?? "").toLowerCase();
+
+const isContentEditableElement = (element) =>
+  Boolean(element?.isContentEditable) ||
+  (element?.hasAttribute?.("contenteditable") && contentEditableMode(element) !== "false");
+
 const isEditable = (element) =>
   ((element instanceof HTMLInputElement && !["button", "checkbox", "file", "hidden", "image", "radio", "range", "reset", "submit"].includes(element.type)) ||
     element instanceof HTMLTextAreaElement ||
-    element?.isContentEditable) &&
+    isContentEditableElement(element)) &&
   !element.disabled &&
   !element.readOnly;
 
@@ -403,6 +586,7 @@ const editableLabel = (element) => [
   element.getAttribute("placeholder"),
   element.getAttribute("title"),
   element.getAttribute("autocomplete"),
+  idReferenceText(element, "aria-describedby"),
   element.getAttribute("name"),
   element.id,
   relatedLabelText(element),
@@ -437,7 +621,7 @@ const editableValuePreview = (element, fieldSafety) => {
   return `[redacted:${fieldSafety.kind}]`;
 };
 
-const describeEditable = (element) => {
+const describeEditable = (element, { visibleIndex = 0 } = {}) => {
   const fieldSafety = classifyEditableField(element);
   const rawValue = editableRawValue(element);
   return {
@@ -448,9 +632,14 @@ const describeEditable = (element) => {
     id: element.id || "",
     role: element.getAttribute("role") || "",
     label: accessibleLabelText(element),
+    ariaDescription: idReferenceText(element, "aria-describedby"),
+    autocomplete: element.getAttribute("autocomplete") || "",
+    contentEditable: contentEditableMode(element),
     fieldKind: fieldSafety.kind,
     hasValue: Boolean(rawValue),
-    valuePreview: editableValuePreview(element, fieldSafety)
+    placeholder: element.getAttribute("placeholder") || "",
+    valuePreview: editableValuePreview(element, fieldSafety),
+    ...elementContextDetails(element, { visibleIndex })
   };
 };
 
@@ -500,11 +689,32 @@ const setNativeValue = (element, value) => {
     const proto = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
     const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
     setter?.call(element, value);
-  } else if (element?.isContentEditable) {
+  } else if (isContentEditableElement(element)) {
     element.textContent = value;
   }
   element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
   element.dispatchEvent(new Event("change", { bubbles: true }));
+};
+
+// #240: a field that is safe to submit on its own (a search box) must NOT submit
+// a form that also carries sensitive or public-commit fields. Only auto-submit a
+// form whose every data field classifies as a search query.
+const formIsSafeToAutoSubmit = (form) => {
+  if (!form) return true; // no enclosing form -> Enter only affects the field itself
+  const fields = form.querySelectorAll("input, textarea, select");
+  for (const candidate of fields) {
+    const candidateType = String(candidate.getAttribute("type") || "").toLowerCase();
+    if (["hidden", "submit", "button", "image", "reset", "search"].includes(candidateType)) continue;
+    if (classifyEditableField(candidate).kind !== "search-query") return false;
+  }
+  // A public-commit control anywhere in the form (e.g. "Place order", "Publish")
+  // makes the whole form human-only, even if every data field is a search box.
+  // A plain search submit ("Go"/"Search") carries no commit verb, so it stays safe.
+  for (const control of form.querySelectorAll("button, input[type=submit], input[type=image], input[type=button], [role=button]")) {
+    const controlLabel = `${visibleText(control)} ${control.getAttribute("value") || ""}`.toLowerCase();
+    if (PUBLIC_COMMIT_VERBS.test(controlLabel)) return false;
+  }
+  return true;
 };
 
 const typeIntoPage = ({ text, field = "", ref = "", submit = false, userApproved = false } = {}) => {
@@ -541,6 +751,18 @@ const typeIntoPage = ({ text, field = "", ref = "", submit = false, userApproved
         deniedToAutomation: true,
         fieldSafety,
         error: "Submitting a non-search field requires human approval."
+      };
+    }
+    if (!formIsSafeToAutoSubmit(element.form)) {
+      element.scrollIntoView({ block: "center", inline: "center", behavior: "auto" });
+      pulseControlOverlay({ state: "blocked", label: "Human-only: submit this form yourself", phase: "handoff", target: element });
+      return {
+        ok: false,
+        approvalRequired: true,
+        deniedToAutomation: true,
+        humanHandoff: true,
+        fieldSafety,
+        error: "This search field is inside a form with sensitive or public-submit fields; the human must submit it on the page."
       };
     }
     element.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true, cancelable: true }));
@@ -663,7 +885,7 @@ const editableRootForSelection = () => {
   if (active && isEditable(active)) return active;
   const node = window.getSelection()?.anchorNode;
   const element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
-  return element?.closest?.("input, textarea, [contenteditable='true']") ?? null;
+  return element?.closest?.("input, textarea, [contenteditable], [role='textbox']") ?? null;
 };
 
 const editableSelectionDetails = (element) => {
@@ -820,7 +1042,7 @@ const runInlineAction = async (action) => {
     await chrome.storage?.local?.set?.({
       augmentorInlineDraft: {
         selection,
-        url: location.href,
+        url: sanitizeBrowserContextUrl(location.href),
         title: document.title,
         createdAt: new Date().toISOString()
       }
@@ -844,7 +1066,7 @@ const runInlineAction = async (action) => {
       active.setRangeText(replacement, rangeStart, rangeEnd, "end");
       active.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertReplacementText", data: replacement }));
       active.dispatchEvent(new Event("change", { bubbles: true }));
-    } else if (active.isContentEditable) {
+    } else if (isContentEditableElement(active)) {
       const selectionObject = window.getSelection();
       if (selectionObject?.rangeCount && active.contains(selectionObject.getRangeAt(0).commonAncestorContainer)) {
         const range = selectionObject.getRangeAt(0);
@@ -879,7 +1101,7 @@ const runInlineAction = async (action) => {
         action,
         prompt,
         selection,
-        pageContext: `${document.title}\n${location.href}\n${document.body?.innerText?.slice(0, 3000) ?? ""}`
+        pageContext: `${document.title}\n${sanitizeBrowserContextUrl(location.href)}\n${document.body?.innerText?.slice(0, 3000) ?? ""}`
       }
       }),
       timeoutAfter(5000, "Inline assistant provider timed out.")
@@ -930,8 +1152,20 @@ chrome.storage?.onChanged?.addListener((changes, area) => {
   });
 });
 
+const subframeActionTypes = new Set([
+  "click_text",
+  "detect_forms",
+  "get_selection",
+  "read_page",
+  "scroll_page",
+  "type_text"
+]);
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || message.channel !== "resonantos.browser_first.content") {
+    return false;
+  }
+  if (!isTopWindow() && !subframeActionTypes.has(message.type)) {
     return false;
   }
 
@@ -947,7 +1181,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === "get_selection") {
-    sendResponse({ ok: true, selection: currentSelectionDetails(), title: document.title, url: location.href });
+    sendResponse({ ok: true, selection: currentSelectionDetails(), title: document.title, url: sanitizeBrowserContextUrl(location.href) });
     return true;
   }
 
@@ -971,6 +1205,32 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     button.style.top = `${Math.min(window.innerHeight - 42, Math.max(8, rect.bottom + 8))}px`;
     button.style.display = "block";
     sendResponse({ ok: true, textLength: text.length });
+    return true;
+  }
+
+  if (message.type === "resonator") {
+    const action = String(message.action ?? "").toLowerCase();
+    const allowedActions = new Set(["arrow", "clear", "highlight", "spotlight", "step"]);
+    if (!allowedActions.has(action)) {
+      sendResponse({ ok: false, error: "Unknown Resonator action." });
+      return true;
+    }
+    const resonator = window.Resonator;
+    if (!resonator || typeof resonator[action] !== "function") {
+      sendResponse({ ok: false, error: "Resonator is not available on this page." });
+      return true;
+    }
+    const payload = message.payload && typeof message.payload === "object" ? message.payload : {};
+    if (action !== "clear") {
+      resonator.clear?.();
+    }
+    const result = resonator[action](payload);
+    sendResponse({
+      ok: action === "clear" ? true : result?.ok !== false,
+      action,
+      result,
+      error: result?.ok === false ? result.error : undefined
+    });
     return true;
   }
 

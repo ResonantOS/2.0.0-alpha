@@ -4,6 +4,7 @@ import { promisify } from "node:util";
 import test from "node:test";
 
 const execFileAsync = promisify(execFile);
+const toPortablePath = (value) => String(value ?? "").replace(/\\/g, "/");
 
 async function runSelfTest(flag) {
   const { stdout } = await execFileAsync(process.execPath, [
@@ -29,7 +30,7 @@ test("add-on execution settings pass in-process deterministic smoke test", async
   assert.equal(result.settings.opencode.localCliExecution, true);
 });
 
-test("Hermes CLI execution bridge routes pass in-process deterministic smoke test", async () => {
+test("Hermes CLI execution bridge routes prompts through the safe local runtime adapter", async () => {
   const result = await runSelfTest("--hermes-cli-execution-inprocess-self-test=true");
   assert.equal(result.ok, true);
   assert.equal(result.mode, "in-process");
@@ -37,7 +38,7 @@ test("Hermes CLI execution bridge routes pass in-process deterministic smoke tes
   assert.equal(result.hermesMode, "local-hermes-cli");
   assert.equal(result.statusAfter, "completed");
   assert.match(result.summary, /Hermes CLI adapter completed/);
-  assert.ok(result.artifactPath.includes("BrowserFirst/DelegationArtifacts/hermes/"));
+  assert.ok(toPortablePath(result.artifactPath).includes("BrowserFirst/DelegationArtifacts/hermes/"));
 });
 
 test("OpenCode CLI execution bridge routes pass in-process deterministic smoke test", async () => {
@@ -48,5 +49,5 @@ test("OpenCode CLI execution bridge routes pass in-process deterministic smoke t
   assert.equal(result.opencodeMode, "local-opencode-cli");
   assert.equal(result.statusAfter, "completed");
   assert.match(result.summary, /OpenCode CLI adapter completed/);
-  assert.ok(result.artifactPath.includes("BrowserFirst/DelegationArtifacts/opencode/"));
+  assert.ok(toPortablePath(result.artifactPath).includes("BrowserFirst/DelegationArtifacts/opencode/"));
 });

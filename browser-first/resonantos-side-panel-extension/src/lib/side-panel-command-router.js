@@ -42,7 +42,11 @@ export function createSidePanelCommandRouter(handlers) {
       if (name === "report") return handlers.reportBrowserJob(body);
       if (name === "cancel") return handlers.cancelBrowserJob(body);
       if (name === "approve-control") return handlers.approveControlPreflight(body);
+      if (name === "allow-control-once") return handlers.allowControlPreflightOnceForTaskClass(body);
       if (name === "deny-control") return handlers.denyControlPreflight(body);
+      if (["arrow", "clear", "highlight", "spotlight", "step"].includes(name)) {
+        return handlers.runResonatorCommand(name, body);
+      }
       if (name === "browser") return handlers.runBrowserCommand(body);
       if (name === "control") return handlers.runControlCommand(body);
       if (name === "save" || name === "archive" || name === "intake") return handlers.saveIntake(body);
@@ -57,7 +61,15 @@ export function createSidePanelCommandRouter(handlers) {
     if (controlIntent) return handlers.runControlCommand(controlIntent.goal);
 
     const delegationIntent = parseNaturalDelegationIntent(value);
-    if (delegationIntent) return handlers.runNaturalDelegationCommand(delegationIntent);
+    if (delegationIntent) {
+      if (typeof handlers.runNaturalDelegationCommand === "function") {
+        return handlers.runNaturalDelegationCommand(delegationIntent);
+      }
+      if (!delegationIntent.missingTarget && delegationIntent.target && typeof handlers.runDelegateCommand === "function") {
+        const mission = delegationIntent.mission ? ` ${delegationIntent.mission}` : "";
+        return handlers.runDelegateCommand(`${delegationIntent.target}${mission}`.trim());
+      }
+    }
 
     const typeIntent = parseTypeIntent(value);
     if (typeIntent) return handlers.typeIntoActivePage(typeIntent);

@@ -1,3 +1,11 @@
+import {
+  bridgeAuthMessage,
+  bridgeSetupMessage,
+  isBridgeAuthError,
+  isBridgeNetworkError,
+  redactSensitiveErrorMessage,
+} from "../runtime-error-messages.js";
+
 export function setStatus(node, message, tone = "") {
   node.textContent = message;
   node.dataset.tone = tone;
@@ -48,11 +56,7 @@ export function safeCount(list) {
 }
 
 export function safeErrorMessage(error) {
-  const raw = error instanceof Error ? error.message : String(error);
-  return raw
-    .replace(/sk-[a-z0-9_-]+/gi, "[redacted-key]")
-    .replace(/bearer\s+[a-z0-9._-]+/gi, "Bearer [redacted-token]")
-    .replace(/api[_-]?key\s*[:=]\s*[^\s]+/gi, "api_key=[redacted]")
-    .replace(/token\s*[:=]\s*[^\s]+/gi, "token=[redacted]")
-    .replace(/secret\s*[:=]\s*[^\s]+/gi, "secret=[redacted]");
+  if (isBridgeNetworkError(error)) return bridgeSetupMessage();
+  if (isBridgeAuthError(error)) return bridgeAuthMessage();
+  return redactSensitiveErrorMessage(error);
 }

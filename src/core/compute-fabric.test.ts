@@ -348,7 +348,7 @@ describe("compute job validation", () => {
       command: {
         command: ["printenv"],
         env: {
-          OPENAI_API_KEY: "sk-testsecretvalue123456789",
+          OPENAI_API_KEY: "sk-EXAMPLEEXAMPLEEXAMPLE",
         },
       },
     });

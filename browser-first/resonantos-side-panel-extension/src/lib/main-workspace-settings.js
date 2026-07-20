@@ -1,6 +1,7 @@
 import { renderAddonsSection } from "./settings/addons-section.js";
 import { renderAboutSection } from "./settings/about-section.js";
 import { renderAppearanceSection } from "./settings/appearance-section.js";
+import { renderBridgeTargetSection } from "./settings/bridge-target-section.js";
 import { renderBrowserControlSection } from "./settings/browser-control-section.js";
 import { renderDiagnosticsSection } from "./settings/diagnostics-section.js";
 import { renderMemorySection } from "./settings/memory-section.js";
@@ -83,6 +84,13 @@ const sections = [
     render: renderDiagnosticsSection
   },
   {
+    id: "bridge-target",
+    label: "Bridge Target",
+    hint: "Cross-machine bridge URL",
+    group: "Advanced",
+    render: renderBridgeTargetSection
+  },
+  {
     id: "appearance",
     label: "Appearance",
     hint: "Density and motion",
@@ -132,6 +140,7 @@ function sectionButton(section, activeId, onSelect) {
 export function renderSettingsWorkspace({
   container,
   bridgeRequest,
+  getBridgeRequest,
   chatSessionStore = null,
   onOpenSession = null,
   onOpenWorkspace = null,
@@ -142,8 +151,10 @@ export function renderSettingsWorkspace({
   taskConsentStore = null,
   storage = null,
   storageKeys = {},
+  prefsSync = null,
   initialSection = "overview"
 }) {
+  const bridge = () => (typeof getBridgeRequest === "function" ? getBridgeRequest() : bridgeRequest);
   let activeId = sections.some((section) => section.id === initialSection) ? initialSection : "overview";
   const shell = document.createElement("section");
   shell.className = "settings-workspace";
@@ -155,6 +166,7 @@ export function renderSettingsWorkspace({
 
   const context = {
     bridgeRequest,
+    getBridgeRequest: typeof getBridgeRequest === "function" ? getBridgeRequest : () => bridgeRequest,
     chromeApi,
     chatSessionStore,
     onSelectSection: (nextId) => {
@@ -169,7 +181,8 @@ export function renderSettingsWorkspace({
     sitePermissionStore,
     storage,
     storageKeys,
-    taskConsentStore
+    taskConsentStore,
+    prefsSync
   };
 
   const renderActive = () => {

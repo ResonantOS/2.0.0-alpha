@@ -25,12 +25,9 @@ import type {
   ArchiveMemoryDomain,
   ArchiveSourceFolderScanResult,
   ArchiveSourceWatchRecord,
-  ArchiveTolBundleBuildResult,
-  ArchiveTolBundleCandidate,
   ArchiveIngestProbeResult,
   ArchiveRuntimeStatus,
   BrowserExtensionListResult,
-  BrowserExtensionLoadResult,
   BrowserExtensionState,
   BrowserOpenUrlResult,
   ArchiveSearchResult,
@@ -49,25 +46,15 @@ import type {
 import { resolveMemoryProviderBroker } from "./core/memory-provider";
 import { routedProviderLabel } from "./core/provider-service";
 import {
-  hideLiveBrowserWebview,
-  openLiveBrowserWebview,
   openFloatingChatWindow,
   persistState,
-  resizeLiveBrowserWebview,
-  requestBrowserNativeWebviewHide,
-  requestBrowserNativeWebviewResize,
-  requestBrowserNativeWebviewShow,
   requestBrowserSessionReadPage,
   requestBrowserSessionOpenUrl,
   requestBrowserSessionScroll,
   requestBrowserStartSession,
   requestBrowserVisibleHostCommand,
-  requestBrowserExtensionFolderSelection,
   requestComputeLocalPassiveDiagnostics,
   requestComputeLocalSafeCommand,
-  requestNativeBrowserAttachSmoke,
-  requestNativeBrowserBridgeProbe,
-  requestNativeBrowserProbe,
   requestObsidianVaultFolderSelection,
   subscribeRuntimeStateUpdates,
 } from "./core/runtime";
@@ -83,14 +70,12 @@ import {
 import {
   executeArchiveIngestProbe,
   executeArchiveSearch,
-  buildArchiveTolBundle,
   decideArchiveReviewArtifact,
   generateArchiveLibraryReorganisationPlan,
   importArchiveLibrary,
   loadArchiveAiMemoryBuildJobs,
   loadArchiveLibraryClassificationReview,
   loadArchiveImportedLibraries,
-  loadArchiveTolBundles,
   loadArchiveDocument,
   loadArchiveReviewQueue,
   loadArchiveRuntimeStatus,
@@ -229,14 +214,8 @@ const RecoveryWorkspace = lazy(() =>
 const StrategistWorkspace = lazy(() =>
   import("./modules/strategist/StrategistWorkspace").then((module) => ({ default: module.StrategistWorkspace })),
 );
-const TerminalWorkspace = lazy(() =>
-  import("./modules/terminal/TerminalWorkspace").then((module) => ({ default: module.TerminalWorkspace })),
-);
 const ObsidianWorkspace = lazy(() =>
   import("./modules/obsidian/ObsidianWorkspace").then((module) => ({ default: module.ObsidianWorkspace })),
-);
-const Audio2TolWorkspace = lazy(() =>
-  import("./modules/audio2tol/Audio2TolWorkspace").then((module) => ({ default: module.Audio2TolWorkspace })),
 );
 
 type LoadState =
@@ -256,8 +235,6 @@ type DockIconId =
   | "opencode"
   | "paperclip"
   | "hermes"
-  | "terminal"
-  | "audio2tol"
   | "agent"
   | "settings";
 type VendorIconId =
@@ -273,7 +250,7 @@ type VendorIconId =
   | "settings"
   | "world";
 
-const dockIconMap: Record<Exclude<DockIconId, "obsidian" | "opencode" | "paperclip" | "hermes" | "terminal" | "audio2tol">, VendorIconId> = {
+const dockIconMap: Record<Exclude<DockIconId, "obsidian" | "opencode" | "paperclip" | "hermes">, VendorIconId> = {
   home: "home",
   archive: "database",
   delegation: "route-alt-left",
@@ -331,7 +308,7 @@ export function App() {
   const [chatNotice, setChatNotice] = useState<string | null>(null);
   const [providerDrafts, setProviderDrafts] = useState<Record<string, string>>({});
   const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
-  const [settingsSection, setSettingsSection] = useState<SettingsSection>("providers");
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("profile");
   const [providerDiagnostics, setProviderDiagnostics] = useState<ProviderDiagnosticReport[]>([]);
   const [providerDiagnosticsBusy, setProviderDiagnosticsBusy] = useState(false);
   const [activeProviderProbeId, setActiveProviderProbeId] = useState<string | null>(null);
@@ -355,7 +332,6 @@ export function App() {
       month: "short",
     }),
   );
-  const nativeBrowserNavigationRef = useRef<{ tabId: string; url: string } | null>(null);
   const [recoveryRuntimeStatus, setRecoveryRuntimeStatus] = useState<LocalRuntimeStatus | null>(null);
   const [recoveryCandidates, setRecoveryCandidates] = useState<RecoveryRouteCandidate[]>([]);
   const [archiveStatusBusy, setArchiveStatusBusy] = useState(false);
@@ -376,8 +352,6 @@ export function App() {
   const [archiveBackgroundResult, setArchiveBackgroundResult] = useState<ArchiveBackgroundCycleResult | null>(null);
   const [archiveLintResult, setArchiveLintResult] = useState<ArchiveLintResult | null>(null);
   const [archiveSemanticLintResult, setArchiveSemanticLintResult] = useState<ArchiveSemanticLintResult | null>(null);
-  const [archiveTolBundles, setArchiveTolBundles] = useState<ArchiveTolBundleCandidate[]>([]);
-  const [archiveTolBundleResult, setArchiveTolBundleResult] = useState<ArchiveTolBundleBuildResult | null>(null);
   const [archiveSourceScanBusy, setArchiveSourceScanBusy] = useState(false);
   const [archiveSourceScanResult, setArchiveSourceScanResult] = useState<ArchiveSourceFolderScanResult | null>(null);
   const [archiveImportedLibraries, setArchiveImportedLibraries] = useState<ArchiveImportedLibrarySummary[]>([]);
@@ -437,12 +411,14 @@ export function App() {
       if (cancelled) {
         return;
       }
-      currentReadyStateRef.current = nextState;
-      setLoadState((current) =>
-        current.phase === "ready"
-          ? { ...current, state: nextState }
-          : current,
-      );
+      setLoadState((current) => {
+        if (current.phase !== "ready") {
+          return current;
+        }
+        const mergedState = { ...current.state, ...nextState };
+        currentReadyStateRef.current = mergedState;
+        return { ...current, state: mergedState };
+      });
     }).then((cleanup) => {
       if (cancelled) {
         cleanup();
@@ -508,7 +484,7 @@ export function App() {
   }, [loadState]);
 
   useEffect(() => {
-    if (loadState.phase !== "ready" || settingsSection !== "providers" || providerDiagnostics.length) {
+    if (loadState.phase !== "ready" || settingsSection !== "advanced" || providerDiagnostics.length) {
       return;
     }
     void refreshProviderDiagnostics();
@@ -819,6 +795,11 @@ export function App() {
 
   const toggleWorkspaceLayout = () => {
     updateRuntimeState((draft) => {
+      if (currentSection === "archive" && !isFloatingChatSurface) {
+        draft.uiPreferences.activeSection = "overview";
+        draft.uiPreferences.chatSidebarOpen = true;
+        return draft;
+      }
       draft.uiPreferences.workspaceLayout = draft.uiPreferences.workspaceLayout === "chat-main" ? "main-chat" : "chat-main";
       draft.uiPreferences.chatSidebarOpen = true;
       return draft;
@@ -1309,28 +1290,6 @@ export function App() {
     await refreshArchiveRuntime();
   };
 
-  const refreshArchiveTolBundles = async () => {
-    await loadArchiveTolBundles({
-      setChatNotice,
-      setArchiveQueueBusy,
-      setArchiveTolBundles,
-      errorMessageOf,
-    });
-  };
-
-  const runArchiveTolBundleBuild = async (sessionId: string) => {
-    await buildArchiveTolBundle({
-      sessionId,
-      setChatNotice,
-      setArchiveQueueBusy,
-      setArchiveTolBundles,
-      setArchiveQueue,
-      setArchiveReviewArtifacts,
-      setArchiveTolBundleResult,
-      errorMessageOf,
-    });
-  };
-
   const openArchiveDocument = async (path: string) => {
     await loadArchiveDocument({
       path,
@@ -1373,30 +1332,33 @@ export function App() {
       setChatNotice("Stop the current response before sending a follow-up correction.");
       return;
     }
-    await executeChatTurn({
-      snapshot: { state, bundled, sideloaded },
-      activeThread,
-      composer,
-      attachments,
-      activeChatModel,
-      thinkingDepth,
-      overrideMessage,
-      commitReadyState,
-      setComposer,
-      setAttachments,
-      setChatNotice,
-      setChatBusy,
-      setChatRunPhase,
-      setChatRunEvents,
-      setAgentActivityLabel,
-      setProviderDiagnostics,
-      setRecoveryRuntimeStatus,
-      runToken,
-      isRunCurrent: (token) => activeChatRunTokenRef.current === token,
-      errorMessageOf,
-    });
-    if (releaseChatRun(activeChatRunTokenRef, runToken)) {
-      setChatRunPhase("idle");
+    try {
+      await executeChatTurn({
+        snapshot: { state, bundled, sideloaded },
+        activeThread,
+        composer,
+        attachments,
+        activeChatModel,
+        thinkingDepth,
+        overrideMessage,
+        commitReadyState,
+        setComposer,
+        setAttachments,
+        setChatNotice,
+        setChatBusy,
+        setChatRunPhase,
+        setChatRunEvents,
+        setAgentActivityLabel,
+        setProviderDiagnostics,
+        setRecoveryRuntimeStatus,
+        runToken,
+        isRunCurrent: (token) => activeChatRunTokenRef.current === token,
+        errorMessageOf,
+      });
+    } finally {
+      if (releaseChatRun(activeChatRunTokenRef, runToken)) {
+        setChatRunPhase("idle");
+      }
     }
   };
 
@@ -1459,31 +1421,34 @@ export function App() {
       return;
     }
 
-    await executeChatTurn({
-      snapshot: { state: stateWithThread, bundled, sideloaded },
-      activeThread: thread,
-      composer: "",
-      attachments: [],
-      activeChatModel,
-      thinkingDepth,
-      overrideMessage: message,
-      overrideContextPrompt: contextPrompt,
-      commitReadyState,
-      setComposer,
-      setAttachments,
-      setChatNotice,
-      setChatBusy,
-      setChatRunPhase,
-      setChatRunEvents,
-      setAgentActivityLabel,
-      setProviderDiagnostics,
-      setRecoveryRuntimeStatus,
-      runToken,
-      isRunCurrent: (token) => activeChatRunTokenRef.current === token,
-      errorMessageOf,
-    });
-    if (releaseChatRun(activeChatRunTokenRef, runToken)) {
-      setChatRunPhase("idle");
+    try {
+      await executeChatTurn({
+        snapshot: { state: stateWithThread, bundled, sideloaded },
+        activeThread: thread,
+        composer: "",
+        attachments: [],
+        activeChatModel,
+        thinkingDepth,
+        overrideMessage: message,
+        overrideContextPrompt: contextPrompt,
+        commitReadyState,
+        setComposer,
+        setAttachments,
+        setChatNotice,
+        setChatBusy,
+        setChatRunPhase,
+        setChatRunEvents,
+        setAgentActivityLabel,
+        setProviderDiagnostics,
+        setRecoveryRuntimeStatus,
+        runToken,
+        isRunCurrent: (token) => activeChatRunTokenRef.current === token,
+        errorMessageOf,
+      });
+    } finally {
+      if (releaseChatRun(activeChatRunTokenRef, runToken)) {
+        setChatRunPhase("idle");
+      }
     }
   };
 
@@ -1545,30 +1510,33 @@ export function App() {
       setChatNotice("Hermes is already working on a response. Please wait.");
       return;
     }
-    await executeChatTurn({
-      snapshot: { state: nextState, bundled, sideloaded },
-      activeThread: thread,
-      composer: "",
-      attachments: [],
-      activeChatModel,
-      thinkingDepth,
-      overrideMessage: buildArchivePreflightAugmentorPrompt(report),
-      commitReadyState,
-      setComposer,
-      setAttachments,
-      setChatNotice,
-      setChatBusy,
-      setChatRunPhase,
-      setChatRunEvents,
-      setAgentActivityLabel,
-      setProviderDiagnostics,
-      setRecoveryRuntimeStatus,
-      runToken,
-      isRunCurrent: (token) => activeChatRunTokenRef.current === token,
-      errorMessageOf,
-    });
-    if (releaseChatRun(activeChatRunTokenRef, runToken)) {
-      setChatRunPhase("idle");
+    try {
+      await executeChatTurn({
+        snapshot: { state: nextState, bundled, sideloaded },
+        activeThread: thread,
+        composer: "",
+        attachments: [],
+        activeChatModel,
+        thinkingDepth,
+        overrideMessage: buildArchivePreflightAugmentorPrompt(report),
+        commitReadyState,
+        setComposer,
+        setAttachments,
+        setChatNotice,
+        setChatBusy,
+        setChatRunPhase,
+        setChatRunEvents,
+        setAgentActivityLabel,
+        setProviderDiagnostics,
+        setRecoveryRuntimeStatus,
+        runToken,
+        isRunCurrent: (token) => activeChatRunTokenRef.current === token,
+        errorMessageOf,
+      });
+    } finally {
+      if (releaseChatRun(activeChatRunTokenRef, runToken)) {
+        setChatRunPhase("idle");
+      }
     }
   };
 
@@ -1628,10 +1596,6 @@ export function App() {
   const paperclipInstallation = state.installations["addon.paperclip"];
   const hermesManifest = allManifests.find((manifest) => manifest.id === "addon.hermes");
   const hermesInstallation = state.installations["addon.hermes"];
-  const terminalManifest = allManifests.find((manifest) => manifest.id === "addon.terminal");
-  const terminalInstallation = state.installations["addon.terminal"];
-  const audio2TolManifest = allManifests.find((manifest) => manifest.id === "addon.audio2tol");
-  const audio2TolInstallation = state.installations["addon.audio2tol"];
   const grantBrowserVisibleAccess = () => {
     if (!browserManifest) {
       return;
@@ -1716,71 +1680,9 @@ export function App() {
       throw new Error(message);
     }
   };
-  const hideNativeBrowserWebview = async (): Promise<void> => {
-    await requestBrowserNativeWebviewHide();
-  };
-  const openNativeBrowserSurface = async (
-    url: string,
-    bounds: { x: number; y: number; width: number; height: number },
-  ): Promise<void> => {
-    const activeTabId = state.uiPreferences.browserWorkspace.activeTabId;
-    const lastNavigation = nativeBrowserNavigationRef.current;
-    const shouldNavigate = !lastNavigation || lastNavigation.tabId !== activeTabId || lastNavigation.url !== url;
-    const result = await requestBrowserNativeWebviewShow({ url, bounds, navigate: shouldNavigate });
-    nativeBrowserNavigationRef.current = { tabId: activeTabId, url };
-    patchControlledBrowserSession({
-      status: "ready",
-      url: result.url ?? url,
-      title: "Native Chromium Browser",
-      error: null,
-      lastSyncedAt: new Date().toISOString(),
-    });
-  };
-  const resizeNativeBrowserSurface = async (bounds: { x: number; y: number; width: number; height: number }): Promise<void> => {
-    await requestBrowserNativeWebviewResize(bounds);
-  };
-  const openLiveBrowserSurface = async (
-    url: string,
-    bounds: { x: number; y: number; width: number; height: number },
-  ): Promise<void> => {
-    await openLiveBrowserWebview(url, bounds);
-  };
-  const resizeLiveBrowserSurface = async (bounds: { x: number; y: number; width: number; height: number }): Promise<void> => {
-    await resizeLiveBrowserWebview(bounds);
-  };
-  const hideLiveBrowserSurface = async (): Promise<void> => {
-    await hideLiveBrowserWebview();
-  };
-  const probeNativeBrowserHost = async () => requestNativeBrowserProbe("cef-chrome-runtime");
-  const smokeTestNativeBrowserAttach = async () => requestNativeBrowserAttachSmoke("external-process");
-  const probeNativeBrowserBridge = async () => requestNativeBrowserBridgeProbe("in-process-native-library");
   const listVisibleBrowserExtensions = async (): Promise<BrowserExtensionState[]> => {
     const result = (await requestBrowserVisibleHostCommand({ type: "extensions_list" })) as BrowserExtensionListResult;
     return result.extensions;
-  };
-  const loadPriorityBrowserExtension = async (target: "phantom" | "bitwarden"): Promise<string> => {
-    if (target === "phantom") {
-      try {
-        const result = (await requestBrowserVisibleHostCommand({
-          type: "extensions_load_unpacked",
-          params: { pinned: true, expectedTarget: "phantom" },
-          humanApproved: true,
-        })) as BrowserExtensionLoadResult;
-        return `${result.extension.name} loaded in the guarded extension host. Wallet signing remains human-approved only.`;
-      } catch {
-        // Fall through to manual folder selection when Phantom is not present in a known browser profile.
-      }
-    }
-    const selectedPath = await requestBrowserExtensionFolderSelection();
-    if (!selectedPath) {
-      return `${target === "phantom" ? "Phantom" : "Bitwarden"} extension loading cancelled.`;
-    }
-    const result = (await requestBrowserVisibleHostCommand({
-      type: "extensions_load_unpacked",
-      params: { path: selectedPath, pinned: target === "phantom", expectedTarget: target },
-      humanApproved: true,
-    })) as BrowserExtensionLoadResult;
-    return `${result.extension.name} loaded in the guarded extension host. Wallet signing remains human-approved only.`;
   };
   const setVisibleBrowserExtensionPinned = async (extensionId: string, pinned: boolean): Promise<BrowserExtensionState[]> => {
     const result = (await requestBrowserVisibleHostCommand({
@@ -2071,42 +1973,11 @@ export function App() {
       updateHermesModelMetadata(model, selectableChatModels);
     }
   };
-  const grantTerminalWorkspaceAccess = () => {
-    if (!terminalManifest) {
-      return;
-    }
-    grantAddonCapabilities(
-      terminalManifest.id,
-      ["shell", "ui-embedding"],
-      terminalManifest.requestedCapabilities,
-      updateRuntimeState,
-    );
-  };
-  const grantAndOpenTerminalWorkspace = (manifest: AddOnManifest) => {
-    updateRuntimeState((draft) => {
-      const installation = draft.installations[manifest.id];
-      if (!installation) {
-        return draft;
-      }
-      installation.installed = true;
-      installation.enabled = true;
-      installation.status = "enabled";
-      const existingGrants = new Map(installation.grantedCapabilities.map((grant) => [grant.capability, grant]));
-      const missingRequestedGrants = manifest.requestedCapabilities.filter((grant) => !existingGrants.has(grant.capability));
-      installation.grantedCapabilities = [...installation.grantedCapabilities, ...missingRequestedGrants].map((grant) =>
-        grant.capability === "shell" || grant.capability === "ui-embedding" ? { ...grant, granted: true } : grant,
-      );
-      installation.notes = ["Installed, enabled, and opened as a center-column Terminal workspace."];
-      draft.uiPreferences.activeSection = "terminal";
-      return draft;
-    });
-  };
   const browserDockEnabled = Boolean(browserManifest && browserInstallation?.installed && browserInstallation.enabled);
   const obsidianDockEnabled = Boolean(obsidianManifest && obsidianInstallation?.installed && obsidianInstallation.enabled);
   const opencodeDockEnabled = Boolean(opencodeManifest && opencodeInstallation?.installed && opencodeInstallation.enabled);
   const paperclipDockEnabled = Boolean(paperclipManifest && paperclipInstallation?.installed && paperclipInstallation.enabled);
   const hermesDockEnabled = Boolean(hermesManifest && hermesInstallation?.installed && hermesInstallation.enabled);
-  const terminalDockEnabled = Boolean(terminalManifest && terminalInstallation?.installed && terminalInstallation.enabled);
   const manifestSurfaceDockItems = createAddOnSurfaceDockRoutes(allManifests, state.installations).map((route) => ({
     id: route.sectionId as Section,
     label: route.label,
@@ -2130,17 +2001,6 @@ export function App() {
     ...(hermesDockEnabled
       ? [{ id: "hermes" as Section, label: hermesManifest?.name ?? "Hermes", eyebrow: "agent", icon: "hermes" as DockIconId, pinned: true }]
       : []),
-    ...(terminalDockEnabled
-      ? [
-          {
-            id: "terminal" as Section,
-            label: terminalManifest?.name ?? "Terminal",
-            eyebrow: "shell",
-            icon: "terminal" as DockIconId,
-            pinned: true,
-          },
-        ]
-      : []),
     ...manifestSurfaceDockItems,
   ];
   const visibleNavItems = addOnNavItems.length
@@ -2155,7 +2015,7 @@ export function App() {
     <div className="app-zoom-viewport" style={zoomStyle}>
       <div className="app-zoom-stage">
         <div
-          className={`shell ${effectiveChatOpen ? "chat-open" : "chat-closed"} ${chatInterfaceAvailable ? "" : "chat-unavailable"} ${isFloatingChatSurface ? "floating-chat-surface" : ""} ${homeChatSurface ? "home-chat-surface" : ""} layout-${state.uiPreferences.workspaceLayout}`}
+          className={`shell ${effectiveChatOpen ? "chat-open" : "chat-closed"} ${chatInterfaceAvailable ? "" : "chat-unavailable"} ${isFloatingChatSurface ? "floating-chat-surface" : ""} ${homeChatSurface ? "home-chat-surface" : ""} ${centerWorkspaceOwnsAgentChat ? "center-chat-owner" : ""} layout-${state.uiPreferences.workspaceLayout}`}
           style={shellStyle}
         >
       <header className="system-topbar" aria-label="ResonantOS system bar">
@@ -2172,12 +2032,16 @@ export function App() {
             type="button"
             className="system-icon-button"
             title={
-              state.uiPreferences.workspaceLayout === "chat-main"
+              centerWorkspaceOwnsAgentChat
+                ? "Open main chat"
+                : state.uiPreferences.workspaceLayout === "chat-main"
                 ? "Move chat back to the right"
                 : "Move chat beside the launcher"
             }
             aria-label={
-              state.uiPreferences.workspaceLayout === "chat-main"
+              centerWorkspaceOwnsAgentChat
+                ? "Open main chat"
+                : state.uiPreferences.workspaceLayout === "chat-main"
                 ? "Move chat back to the right"
                 : "Move chat beside the launcher"
             }
@@ -2186,7 +2050,9 @@ export function App() {
           >
             <VendorIcon
               icon={
-                state.uiPreferences.workspaceLayout === "chat-main"
+                centerWorkspaceOwnsAgentChat
+                  ? "layout-sidebar-left-expand"
+                  : state.uiPreferences.workspaceLayout === "chat-main"
                   ? "layout-sidebar-right-collapse"
                   : "layout-sidebar-left-expand"
               }
@@ -2251,13 +2117,9 @@ export function App() {
           </div>
         )}
 
-        <section
-          className={`content-grid ${recoveryModeActive ? "recovery-active" : ""} ${
-            !recoveryModeActive && currentSection === "browser" ? "browser-active" : ""
-          } ${
-            !recoveryModeActive && currentSection === "terminal" ? "terminal-active" : ""
-          } ${
-            !recoveryModeActive && currentSection === "audio2tol" ? "audio2tol-active" : ""
+          <section
+            className={`content-grid ${recoveryModeActive ? "recovery-active" : ""} ${
+              !recoveryModeActive && currentSection === "browser" ? "browser-active" : ""
           } ${
             !recoveryModeActive && currentSection === "opencode" ? "opencode-active" : ""
           } ${
@@ -2440,8 +2302,6 @@ export function App() {
                 archiveAiMemoryBuildJobs={archiveAiMemoryBuildJobs}
                 archiveLintResult={archiveLintResult}
                 archiveSemanticLintResult={archiveSemanticLintResult}
-                archiveTolBundles={archiveTolBundles}
-                archiveTolBundleResult={archiveTolBundleResult}
                 archiveSourceScanBusy={archiveSourceScanBusy}
                 archiveSourceScanResult={archiveSourceScanResult}
                 archiveImportedLibraries={archiveImportedLibraries}
@@ -2477,8 +2337,6 @@ export function App() {
                 onRunArchiveMaintenance={runArchiveMaintenance}
                 onRunArchiveLint={() => void runArchiveHealthLint()}
                 onRunArchiveSemanticLint={() => void runArchiveSemanticHealthLint()}
-                onRefreshTolBundles={() => void refreshArchiveTolBundles()}
-                onBuildTolBundle={(sessionId) => void runArchiveTolBundleBuild(sessionId)}
                 onRunIngestProbe={() => void runArchiveIngestProbe()}
                 onAskAugmentor={sendLivingArchiveAgentMessage}
                 onInspectImportedLibraryCoverage={inspectImportedLibraryCoverage}
@@ -2563,10 +2421,6 @@ export function App() {
                 onOpenInternalPreview={openInternalBrowserPreview}
                 onScrollInternalPreview={scrollInternalBrowserPreview}
                 onReadActivePage={readActiveBrowserPage}
-                onProbeNativeBrowser={probeNativeBrowserHost}
-                onSmokeTestNativeAttach={smokeTestNativeBrowserAttach}
-                onProbeNativeBridge={probeNativeBrowserBridge}
-                onLoadPriorityExtension={loadPriorityBrowserExtension}
                 onOpenWalletBrowserHost={openWalletBrowserHost}
                 onReadWalletBrowserHost={readWalletBrowserHost}
                 onInspectWalletDappGate={inspectWalletDappGate}
@@ -2624,26 +2478,6 @@ export function App() {
             />
           )}
 
-          {!recoveryModeActive && currentSection === "terminal" && (
-            <Suspense
-              fallback={
-                <Panel title="Loading Terminal" subtitle="Local shell add-on">
-                  <p className="muted-copy">Preparing terminal controls...</p>
-                </Panel>
-              }
-            >
-              <TerminalWorkspace
-                manifest={terminalManifest}
-                installation={terminalInstallation}
-                onConfigureAddon={() => {
-                  setSelectedAddonId("addon.terminal");
-                  setSection("addons");
-                }}
-                onGrantWorkspaceAccess={grantTerminalWorkspaceAccess}
-              />
-            </Suspense>
-          )}
-
           {!recoveryModeActive && currentSection === "obsidian" && (
             <div className="full-pane-route notes-pane-route">
               <Suspense
@@ -2664,34 +2498,6 @@ export function App() {
                 />
               </Suspense>
             </div>
-          )}
-
-          {!recoveryModeActive && currentSection === "audio2tol" && (
-            <Suspense
-              fallback={
-                <Panel title="Loading Audio2TOL" subtitle="TOL audio intake add-on">
-                  <p className="muted-copy">Preparing TOL intake controls...</p>
-                </Panel>
-              }
-            >
-              <Audio2TolWorkspace
-                manifest={audio2TolManifest}
-                installation={audio2TolInstallation}
-                archiveQueueBusy={archiveQueueBusy}
-                archiveTolBundles={archiveTolBundles}
-                archiveTolBundleResult={archiveTolBundleResult}
-                onConfigureAddon={() => {
-                  setSelectedAddonId("addon.audio2tol");
-                  setSection("addons");
-                }}
-                onRefreshTolBundles={() => void refreshArchiveTolBundles()}
-                onBuildTolBundle={(sessionId) => void runArchiveTolBundleBuild(sessionId)}
-                onOpenArchiveDocument={(path) => void openArchiveDocument(path)}
-                onUpdateAddonConfig={(config) => updateAddonConfig("addon.audio2tol", config, updateRuntimeState)}
-                providerProfiles={state.providers}
-                runtimeNodes={state.runtimeNodes}
-              />
-            </Suspense>
           )}
 
           {!recoveryModeActive && currentSection === "addons" && (
@@ -2722,7 +2528,6 @@ export function App() {
                 onGrantCapabilities={(manifestId, capabilities, requestedCapabilities) =>
                   grantAddonCapabilities(manifestId, capabilities, requestedCapabilities, updateRuntimeState)
                 }
-                onGrantTerminalWorkspaceAccess={grantAndOpenTerminalWorkspace}
                 onUpdateAddonConfig={(manifestId, config) => updateAddonConfig(manifestId, config, updateRuntimeState)}
                 onRunLogicianScript={(manifest, installation, script) =>
                   runAddonLogicianScript(manifest, installation, script, updateRuntimeState)
@@ -2802,6 +2607,7 @@ export function App() {
       {chatInterfaceAvailable && (
       <StrategistChatRail
         isOpen={effectiveChatOpen}
+        showCollapsedToggle={!centerWorkspaceOwnsAgentChat}
         mode={recoveryModeActive ? "emergency" : "strategist"}
         title={activeChatAgentName}
         eyebrow={
@@ -3066,6 +2872,10 @@ export function App() {
               ResonantOS can start as a minimal shell, or you can enable the recommended replaceable defaults now.
               You can disable or replace them later from Add-ons.
             </p>
+            <p>
+              For memory, the recommended Living Archive default means: Human Knowledge is preserved; AI Memory is the
+              maintained wiki. Obsidian-compatible vaults are optional and can manage the same memory files later.
+            </p>
             <div className="first-run-choice-list">
               {recommendedAddOns.map((manifest) => (
                 <label key={manifest.id} className="first-run-choice">
@@ -3137,22 +2947,6 @@ function DockIcon(props: { icon: DockIconId }) {
     );
   }
 
-  if (props.icon === "terminal") {
-    return (
-      <svg
-        viewBox="0 0 24 24"
-        aria-hidden="true"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      >
-        <use href="/icons/resonant.svg#ros-terminal" />
-      </svg>
-    );
-  }
-
   if (props.icon === "paperclip") {
     return (
       <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -3181,28 +2975,6 @@ function DockIcon(props: { icon: DockIconId }) {
         strokeLinejoin="round"
       >
         <use href="/icons/resonant.svg#ros-resonant-notes" />
-      </svg>
-    );
-  }
-
-  if (props.icon === "audio2tol") {
-    return (
-      <svg
-        viewBox="0 0 64 64"
-        aria-hidden="true"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="3.4"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      >
-        <path d="M13 36V26" />
-        <path d="M21 45V17" />
-        <path d="M29 52V12" />
-        <path d="M37 45V19" />
-        <path d="M45 38V26" />
-        <path d="M51 32h-6" />
-        <path d="m47 28 4 4-4 4" />
       </svg>
     );
   }

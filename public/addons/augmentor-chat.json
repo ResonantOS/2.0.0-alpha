@@ -57,6 +57,12 @@
       "granted": false,
       "scope": "shared",
       "revocationBehavior": "degrade"
+    },
+    {
+      "capability": "agent-delegation",
+      "granted": false,
+      "scope": "system",
+      "revocationBehavior": "hard-stop"
     }
   ],
   "provenance": {

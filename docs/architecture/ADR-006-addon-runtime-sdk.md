@@ -1,7 +1,14 @@
 # ADR-006: Add-on Runtime & SDK
 
-Status: Accepted  
-Date: 2026-04-23
+## Decision Metadata
+
+- Decision status: Accepted
+- Alpha applicability: Applies
+- Superseded by: None
+- Owner: Add-on SDK
+- Decision date: 2026-04-23
+- Alpha note: Manifest validation, provenance, explicit capabilities, and host
+  mediation apply to Alpha add-on surfaces.
 
 Implementation note: ADR-018 defines the concrete Add-on SDK V0 package and validation rules under `src/sdk/addons`.
 

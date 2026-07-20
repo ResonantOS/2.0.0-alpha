@@ -122,6 +122,30 @@ export const providerProfiles: ProviderProfile[] = [
     credentialStatus: "missing",
   },
   {
+    id: "shared-zai-glm",
+    label: "Shared Z.AI GLM",
+    providerType: "openai-compatible",
+    authSource: "shared-vault",
+    authMethod: "api-key",
+    authTier: "supported",
+    apiBaseUrl: "http://127.0.0.1:18789/v1",
+    allowedModels: ["zai/glm-5.2"],
+    primaryModel: "zai/glm-5.2",
+    fallbackModel: undefined,
+    modelContext: [
+      {
+        model: "zai/glm-5.2",
+        maxContextTokens: 195_000,
+        tokenEstimateMethod: "provider-metadata",
+        source: "provider-default",
+      },
+    ],
+    consumerScopes: ["strategist", "setup", "archive-ingest", "telegram-channel"],
+    shared: true,
+    status: "fallback",
+    credentialStatus: "missing",
+  },
+  {
     id: "shared-local",
     label: "Shared Local Runtime",
     providerType: "local",
@@ -139,7 +163,7 @@ export const providerProfiles: ProviderProfile[] = [
         source: "runtime-node",
       },
     ],
-    consumerScopes: ["audio2tol", "obsidian", "setup", "recovery"],
+    consumerScopes: ["obsidian", "setup", "recovery"],
     shared: true,
     status: "fallback",
     credentialStatus: "configured",
@@ -163,7 +187,7 @@ export const providerProfiles: ProviderProfile[] = [
         source: "runtime-node",
       },
     ],
-    consumerScopes: ["strategist", "setup", "archive-ingest", "audio2tol", "recovery"],
+    consumerScopes: ["strategist", "setup", "archive-ingest", "recovery"],
     shared: true,
     status: "ready",
     credentialStatus: "configured",
@@ -195,6 +219,19 @@ export const runtimeNodes: ProviderRuntimeNode[] = [
     healthState: "ready",
     deployableOnDemand: false,
     notes: ["Cloud route available when the provider profile is configured and healthy."],
+  },
+  {
+    id: "node-zai-glm-cloud",
+    label: "Z.AI GLM Gateway Runtime",
+    providerProfileId: "shared-zai-glm",
+    kind: "cloud",
+    locality: "desktop-local",
+    endpoint: "http://127.0.0.1:18789/v1",
+    supportedModels: ["zai/glm-5.2"],
+    authTier: "supported",
+    healthState: "ready",
+    deployableOnDemand: false,
+    notes: ["OpenClaw/Z.AI GLM fallback route using the configured zai/glm-5.2 model id."],
   },
   {
     id: "node-local-resurrect",
@@ -274,8 +311,8 @@ export const providerRouting: ProviderRoutingState = {
     {
       id: "core-default",
       label: "Core Default Fallback",
-      orderedProviderProfileIds: ["shared-minimax", "gx10-local-llama", "shared-openai", "shared-local"],
-      orderedRuntimeNodeIds: ["node-minimax-cloud", "node-gx10-qwen", "node-openai-cloud", "node-local-resurrect"],
+      orderedProviderProfileIds: ["shared-minimax", "shared-zai-glm", "shared-openai", "gx10-local-llama", "shared-local"],
+      orderedRuntimeNodeIds: ["node-minimax-cloud", "node-zai-glm-cloud", "node-openai-cloud", "node-gx10-qwen", "node-local-resurrect"],
       allowExperimentalAuth: true,
       allowResurrection: true,
       onFailure: "degrade",
@@ -391,9 +428,10 @@ export const modelStrategy: ModelStrategyState = {
     {
       id: "chain-core-fast",
       label: "Core Fast Chain",
-      rule: "Try the main fast route first, then premium cloud, then remote or local fallback.",
+      rule: "Try the main fast route first, then Z.AI GLM, premium cloud, then remote or local fallback.",
       orderedRoutes: [
         { providerProfileId: "shared-minimax", runtimeNodeId: "node-minimax-cloud", model: "MiniMax-M3", costPosture: "subscription", note: "Default fast route for Augmentor and the Engineer Agent." },
+        { providerProfileId: "shared-zai-glm", runtimeNodeId: "node-zai-glm-cloud", model: "zai/glm-5.2", costPosture: "paid-api", note: "OpenClaw/Z.AI GLM fallback when the primary subscription route is unavailable." },
         { providerProfileId: "shared-openai", runtimeNodeId: "node-openai-cloud", model: "gpt-5.5", costPosture: "subscription", note: "Premium fallback for demanding moments." },
         { providerProfileId: "gx10-local-llama", runtimeNodeId: "node-gx10-qwen", model: "Qwen3.6-35B-A3B-Q4_K_M.gguf", costPosture: "free-local", note: "Verified local-owned GX10 route for private LAN inference." },
       ],
@@ -408,9 +446,10 @@ export const modelStrategy: ModelStrategyState = {
     {
       id: "chain-routine-economical",
       label: "Routine Economical Chain",
-      rule: "Prefer economical or sunk-cost routes for routine work before escalating.",
+      rule: "Prefer the subscription route for routine work, then Z.AI GLM, then the local floor.",
       orderedRoutes: [
         { providerProfileId: "shared-minimax", runtimeNodeId: "node-minimax-cloud", model: "MiniMax-M3", costPosture: "subscription", note: "Routine and cron-style work." },
+        { providerProfileId: "shared-zai-glm", runtimeNodeId: "node-zai-glm-cloud", model: "zai/glm-5.2", costPosture: "paid-api", note: "Z.AI GLM fallback for routine work when the subscription route is unavailable." },
       ],
       lastResortRoute: {
         providerProfileId: "shared-local",
@@ -426,6 +465,7 @@ export const modelStrategy: ModelStrategyState = {
       rule: "Archive interpretation should stay premium-first and hard-stop before dropping below acceptable quality.",
       orderedRoutes: [
         { providerProfileId: "shared-openai", runtimeNodeId: "node-openai-cloud", model: "gpt-5.5", costPosture: "subscription", note: "Preferred ingest quality route." },
+        { providerProfileId: "shared-zai-glm", runtimeNodeId: "node-zai-glm-cloud", model: "zai/glm-5.2", costPosture: "paid-api", note: "Z.AI GLM premium fallback when the preferred ingest route is unavailable." },
         { providerProfileId: "shared-minimax", runtimeNodeId: "node-minimax-cloud", model: "MiniMax-M3", costPosture: "subscription", note: "Temporary fallback if premium route is unavailable." },
         { providerProfileId: "gx10-local-llama", runtimeNodeId: "node-gx10-qwen", model: "Qwen3.6-35B-A3B-Q4_K_M.gguf", costPosture: "free-local", note: "Local inference last resort before hard-stop." },
       ],
@@ -481,6 +521,7 @@ export const modelStrategy: ModelStrategyState = {
     preferBestAvailable: true,
     orderedPromotionTargets: [
       { providerProfileId: "shared-minimax", runtimeNodeId: "node-minimax-cloud", model: "MiniMax-M3", costPosture: "subscription", note: "Promote to the MiniMax M3 cloud route first." },
+      { providerProfileId: "shared-zai-glm", runtimeNodeId: "node-zai-glm-cloud", model: "zai/glm-5.2", costPosture: "paid-api", note: "Promote to Z.AI GLM when MiniMax is unavailable." },
       { providerProfileId: "shared-openai", runtimeNodeId: "node-openai-cloud", model: "gpt-5.5", costPosture: "subscription", note: "Premium fallback when the fast route is unavailable." },
     ],
     hardFloorRoute: {
@@ -772,7 +813,6 @@ export const archivePolicy: ArchivePolicy = {
   ingestServiceId: "archive-ingest.core",
   intakeRoots: [
     "_LivingArchive/INTAKE/transcripts",
-    "_LivingArchive/INTAKE/audio2tol",
     "_LivingArchive/INTAKE/external-agents",
   ],
   knowledgeRoots: [
@@ -818,14 +858,6 @@ export const archivePolicy: ArchivePolicy = {
       canWriteKnowledgePages: false,
       canRequestIngest: true,
     },
-    {
-      actorId: "addon.audio2tol",
-      actorType: "addon",
-      readScopes: ["constitution", "protocols", "living-archive/context"],
-      intakeWriteScopes: ["_LivingArchive/INTAKE/audio2tol"],
-      canWriteKnowledgePages: false,
-      canRequestIngest: true,
-    },
   ],
   notes: [
     "Add-ons can read scoped archive views and deposit raw artifacts into intake roots.",
@@ -838,14 +870,17 @@ export const archiveAutomationPolicy: ArchiveAutomationPolicy = {
   aiMemoryBuilds: "off",
 };
 
+// P1-e: do not trust by omission. A bundled manifest with NO provenance is
+// marked dev/internal/unreviewed (sideloaded-unverified / unverified) rather than
+// silently defaulting to curated-signed / verified.
 const defaultProvenanceTier = (manifest: AddOnManifest, source: AddOnInstallation["source"]): AddOnInstallation["provenanceTier"] =>
-  source === "sideload" ? "sideloaded-unverified" : (manifest.provenance?.tier ?? "curated-signed");
+  source === "sideload" || !manifest.provenance ? "sideloaded-unverified" : (manifest.provenance.tier ?? "curated-signed");
 
 const defaultVerificationState = (
   manifest: AddOnManifest,
   source: AddOnInstallation["source"],
 ): AddOnInstallation["verificationState"] =>
-  source === "sideload" ? "unverified" : (manifest.provenance?.verificationState ?? "verified");
+  source === "sideload" || !manifest.provenance ? "unverified" : (manifest.provenance.verificationState ?? "verified");
 
 export const createDefaultInstallation = (manifest: AddOnManifest, source: AddOnInstallation["source"]): AddOnInstallation => ({
   addonId: manifest.id,

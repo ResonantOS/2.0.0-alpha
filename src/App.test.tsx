@@ -21,7 +21,6 @@ const manifests: AddOnManifest[] = [
   createBrowserManifest(),
   createOpenCodeManifest(),
   createPaperclipManifest(),
-  createManifest("addon.audio2tol", "Audio2TOL", "tool"),
   createManifest("addon.openclaw", "OpenClaw", "agent"),
 ];
 
@@ -52,8 +51,6 @@ const {
   requestArchiveLintMock,
   requestArchiveSemanticLintMock,
   requestArchiveBackgroundCycleMock,
-  requestArchiveTolBundleCandidatesMock,
-  requestArchiveBuildTolBundleMock,
   requestArchiveSourceFolderScanMock,
   requestArchiveLibraryImportMock,
   requestArchiveLibraryPreflightMock,
@@ -95,20 +92,20 @@ const {
   requestBrowserSessionClickMock,
   requestBrowserSessionScrollMock,
   requestBrowserCloseSessionMock,
-  openLiveBrowserWebviewMock,
-  resizeLiveBrowserWebviewMock,
-  hideLiveBrowserWebviewMock,
-  requestBrowserNativeWebviewShowMock,
-  requestBrowserNativeWebviewResizeMock,
-  requestBrowserNativeWebviewHideMock,
-  requestNativeBrowserProbeMock,
-  requestNativeBrowserAttachSmokeMock,
-  requestNativeBrowserBridgeProbeMock,
+  removedLiveBrowserShowMock,
+  removedLiveBrowserResizeMock,
+  removedLiveBrowserHideMock,
+  removedBrowserHostShowMock,
+  removedBrowserHostResizeMock,
+  removedBrowserHostHideMock,
+  removedBrowserProbeMock,
+  removedBrowserAttachSmokeMock,
+  removedBrowserBridgeProbeMock,
   requestBrowserHostCommandMock,
   requestBrowserVisibleHostCommandMock,
-  requestBrowserExtensionFolderSelectionMock,
-  createDesktopBrowserToolRunnerMock,
-  browserToolRunMock,
+  removedExtensionFolderSelectionMock,
+  removedBrowserToolRunnerMock,
+  removedBrowserToolRunMock,
   requestLocalRuntimeStatusMock,
   requestComputeLocalPassiveDiagnosticsMock,
   requestEngineerRecoveryTurnMock,
@@ -122,7 +119,7 @@ const {
   openFloatingChatWindowMock,
   persistStateMock,
 } = vi.hoisted(() => {
-  const browserToolRunMock = vi.fn();
+  const removedBrowserToolRunMock = vi.fn();
   return {
   hydrateStateMock: vi.fn(),
   requestProviderServiceChatCompletionMock: vi.fn(async (_input?: unknown) => "This is a live Strategist test reply from MiniMax-M3."),
@@ -530,16 +527,6 @@ const {
     findings: [],
     summary: "No contradiction candidates were identified.",
     repairRequestFiles: [],
-  })),
-  requestArchiveTolBundleCandidatesMock: vi.fn(async () => [] as Array<Record<string, unknown>>),
-  requestArchiveBuildTolBundleMock: vi.fn(async () => ({
-    sessionId: "2026-04-21-1003",
-    intakeArtifactPath: "/tmp/tol-bundles/2026-04-21-1003-tol-bundle.json",
-    requestFile: "/tmp/review-request.json",
-    queuedAt: "unix:8",
-    rawAudioPath: "03_TOL/RAW Audio/260421_1003.mp3",
-    transcriptPath: "03_TOL/TOL Transcripts/2026-04-21-1003_TOL_Transcript.md",
-    analysisPath: "03_TOL/TOL Analysis/2026-04-21-1003_TOL_Analysis.md",
   })),
   requestArchiveSourceFolderScanMock: vi.fn(async () => ({
     scannedAt: "unix:9",
@@ -1064,28 +1051,28 @@ const {
     closed: true,
     audit: [{ action: "session.closed", detail: sessionId, timestamp: "unix-ms:7" }],
   })),
-  openLiveBrowserWebviewMock: vi.fn(async () => undefined),
-  resizeLiveBrowserWebviewMock: vi.fn(async () => undefined),
-  hideLiveBrowserWebviewMock: vi.fn(async () => undefined),
-  requestBrowserNativeWebviewShowMock: vi.fn(async (input: { url: string }) => ({
-    label: "resonant-browser-native",
+  removedLiveBrowserShowMock: vi.fn(async () => undefined),
+  removedLiveBrowserResizeMock: vi.fn(async () => undefined),
+  removedLiveBrowserHideMock: vi.fn(async () => undefined),
+  removedBrowserHostShowMock: vi.fn(async (input: { url: string }) => ({
+    label: "removed-browser-host",
     url: input.url,
     visible: true,
     status: "created",
   })),
-  requestBrowserNativeWebviewResizeMock: vi.fn(async () => ({
-    label: "resonant-browser-native",
+  removedBrowserHostResizeMock: vi.fn(async () => ({
+    label: "removed-browser-host",
     url: null,
     visible: true,
     status: "resized",
   })),
-  requestBrowserNativeWebviewHideMock: vi.fn(async () => ({
-    label: "resonant-browser-native",
+  removedBrowserHostHideMock: vi.fn(async () => ({
+    label: "removed-browser-host",
     url: null,
     visible: false,
     status: "hidden",
   })),
-  requestNativeBrowserProbeMock: vi.fn(async () => ({
+  removedBrowserProbeMock: vi.fn(async () => ({
     status: "blocked",
     engineCandidate: "cef-chrome-runtime",
     hostBinaryStatus: "missing",
@@ -1101,29 +1088,29 @@ const {
     nextActions: ["Build the native Browser host binary behind the ADR-025 IPC contract."],
     checkedAt: "unix-ms:1",
   })),
-  requestNativeBrowserAttachSmokeMock: vi.fn(async () => ({
+  removedBrowserAttachSmokeMock: vi.fn(async () => ({
     status: "blocked",
     platform: "macos",
     parentHandleKind: "macos-ns-view",
     parentHandlePresent: true,
     hostIntegrationMode: "external-process",
     blocker:
-      "External CEF executables cannot safely attach to a process-local macOS NSView. Product Browser embedding requires in-process CEF/native library integration owned by the Tauri process.",
-    nextActions: ["Move the CEF host from an external executable into an in-process Rust-owned native integration."],
+      "External browser executables cannot safely attach to a process-local macOS NSView. Product Browser embedding requires in-process browser/native library integration owned by the alpha bridge.",
+    nextActions: ["Move the browser host from an external executable into an in-process bridge-owned integration."],
     checkedAt: "unix-ms:2",
   })),
-  requestNativeBrowserBridgeProbeMock: vi.fn(async () => ({
+  removedBrowserBridgeProbeMock: vi.fn(async () => ({
     status: "ready",
-    integrationMode: "in-process-native-library",
+    integrationMode: "bridge-service",
     bridgeLibraryStatus: "ready",
     cAbiStatus: "ready",
-    bridgeLibraryPath: "addons/resonant-browser-native/build/libResonantBrowserNativeBridge.a",
+    bridgeLibraryPath: "addons/removed-browser-host/build/libResonantBrowserNativeBridge.a",
     exportedSymbols: [
-      "_resonant_browser_native_contract_json",
-      "_resonant_browser_native_in_process_status_json",
+      "_resonant_browser_bridge_contract_json",
+      "_resonant_browser_bridge_in_process_status_json",
     ],
     blockers: [],
-    nextActions: ["Wire CEF lifecycle calls behind this ABI."],
+    nextActions: ["Wire browser lifecycle calls behind this ABI."],
     checkedAt: "unix-ms:3",
   })),
   requestBrowserHostCommandMock: vi.fn(async (command: { type: string; params?: Record<string, unknown> }) =>
@@ -1155,22 +1142,7 @@ const {
   ),
   requestBrowserVisibleHostCommandMock: vi.fn(async (command: { type: string; params?: Record<string, unknown> }) =>
     command.type === "extensions_list"
-      ? { sessionId: "electron-browser-test", extensions: [], audit: [] }
-      : command.type === "extensions_load_unpacked"
-        ? {
-            sessionId: "electron-browser-test",
-            extension: {
-              extensionId: "priority-extension",
-              name: "Priority Extension",
-              version: "0.1.0",
-              installed: true,
-              pinned: true,
-              enabled: true,
-              source: "local-unpacked",
-              requestedCapabilities: [],
-            },
-            audit: [],
-          }
+      ? { sessionId: "browser-profile-test", extensions: [], audit: [] }
         : command.type === "wallet_host_start" || command.type === "wallet_host_open_url"
           ? {
               ready: true,
@@ -1205,11 +1177,11 @@ const {
                   audit: [],
                 }
         : command.type === "close"
-          ? { sessionId: "electron-browser-test", closed: true, audit: [] }
+          ? { sessionId: "browser-profile-test", closed: true, audit: [] }
           : {
               ready: true,
-              sessionId: "electron-browser-test",
-              engine: "electron-chromium",
+              sessionId: "browser-profile-test",
+              engine: "chromium",
               url: "https://resonantos.com/",
               title: "ResonantOS",
               menuLabels: ["File", "Edit", "View", "History", "Bookmarks", "Profiles", "Tab", "Window", "Help"],
@@ -1217,9 +1189,9 @@ const {
               audit: [],
             },
   ),
-  requestBrowserExtensionFolderSelectionMock: vi.fn(async () => "/Users/augmentor/Extensions/Phantom"),
-  browserToolRunMock,
-  createDesktopBrowserToolRunnerMock: vi.fn(() => ({ run: browserToolRunMock })),
+  removedExtensionFolderSelectionMock: vi.fn(async () => "/Users/augmentor/Extensions/Phantom"),
+  removedBrowserToolRunMock,
+  removedBrowserToolRunnerMock: vi.fn(() => ({ run: removedBrowserToolRunMock })),
   requestLocalRuntimeStatusMock: vi.fn(async () => ({
     available: true,
     targetModel: "batiai/gemma4-e2b:q4",
@@ -1425,8 +1397,6 @@ vi.mock("./core/runtime", () => ({
   requestArchiveBackgroundCycle: requestArchiveBackgroundCycleMock,
   requestArchiveLint: requestArchiveLintMock,
   requestArchiveSemanticLint: requestArchiveSemanticLintMock,
-  requestArchiveTolBundleCandidates: requestArchiveTolBundleCandidatesMock,
-  requestArchiveBuildTolBundle: requestArchiveBuildTolBundleMock,
   requestArchiveSourceFolderScan: requestArchiveSourceFolderScanMock,
   requestArchiveLibraryImport: requestArchiveLibraryImportMock,
   requestArchiveLibraryPreflight: requestArchiveLibraryPreflightMock,
@@ -1468,19 +1438,8 @@ vi.mock("./core/runtime", () => ({
   requestBrowserSessionClick: requestBrowserSessionClickMock,
   requestBrowserSessionScroll: requestBrowserSessionScrollMock,
   requestBrowserCloseSession: requestBrowserCloseSessionMock,
-  openLiveBrowserWebview: openLiveBrowserWebviewMock,
-  resizeLiveBrowserWebview: resizeLiveBrowserWebviewMock,
-  hideLiveBrowserWebview: hideLiveBrowserWebviewMock,
-  requestBrowserNativeWebviewShow: requestBrowserNativeWebviewShowMock,
-  requestBrowserNativeWebviewResize: requestBrowserNativeWebviewResizeMock,
-  requestBrowserNativeWebviewHide: requestBrowserNativeWebviewHideMock,
-  requestNativeBrowserProbe: requestNativeBrowserProbeMock,
-  requestNativeBrowserAttachSmoke: requestNativeBrowserAttachSmokeMock,
-  requestNativeBrowserBridgeProbe: requestNativeBrowserBridgeProbeMock,
   requestBrowserHostCommand: requestBrowserHostCommandMock,
   requestBrowserVisibleHostCommand: requestBrowserVisibleHostCommandMock,
-  requestBrowserExtensionFolderSelection: requestBrowserExtensionFolderSelectionMock,
-  createDesktopBrowserToolRunner: createDesktopBrowserToolRunnerMock,
   requestRecoveryRouteCandidates: requestRecoveryRouteCandidatesMock,
   requestProviderServiceChatCompletion: requestProviderServiceChatCompletionMock,
   requestProviderServiceChatCompletionStream: requestProviderServiceChatCompletionStreamMock,
@@ -1491,6 +1450,7 @@ vi.mock("./core/runtime", () => ({
 }));
 
 import { App } from "./App";
+import { subscribeRuntimeStateUpdates } from "./core/runtime";
 
 const deferred = <T,>() => {
   let resolve!: (value: T) => void;
@@ -1555,6 +1515,8 @@ describe("App boot flow", () => {
     });
     hydrateStateMock.mockReset();
     hydrateStateMock.mockResolvedValue(buildDefaultState(manifests));
+    vi.mocked(subscribeRuntimeStateUpdates).mockReset();
+    vi.mocked(subscribeRuntimeStateUpdates).mockResolvedValue(() => undefined);
     requestProviderServiceChatCompletionMock.mockReset();
     requestProviderServiceChatCompletionMock.mockResolvedValue("This is a live Strategist test reply from MiniMax-M3.");
     requestProviderServiceChatCompletionStreamMock.mockReset();
@@ -1985,18 +1947,6 @@ describe("App boot flow", () => {
       findings: [],
       summary: "No contradiction candidates were identified.",
       repairRequestFiles: [],
-    });
-    requestArchiveTolBundleCandidatesMock.mockReset();
-    requestArchiveTolBundleCandidatesMock.mockResolvedValue([]);
-    requestArchiveBuildTolBundleMock.mockReset();
-    requestArchiveBuildTolBundleMock.mockResolvedValue({
-      sessionId: "2026-04-21-1003",
-      intakeArtifactPath: "/tmp/tol-bundles/2026-04-21-1003-tol-bundle.json",
-      requestFile: "/tmp/review-request.json",
-      queuedAt: "unix:8",
-      rawAudioPath: "03_TOL/RAW Audio/260421_1003.mp3",
-      transcriptPath: "03_TOL/TOL Transcripts/2026-04-21-1003_TOL_Transcript.md",
-      analysisPath: "03_TOL/TOL Analysis/2026-04-21-1003_TOL_Analysis.md",
     });
     requestArchiveSourceFolderScanMock.mockReset();
     requestArchiveSourceFolderScanMock.mockResolvedValue({
@@ -2563,35 +2513,35 @@ describe("App boot flow", () => {
       closed: true,
       audit: [{ action: "session.closed", detail: "browser-test-session", timestamp: "unix-ms:7" }],
     });
-    openLiveBrowserWebviewMock.mockReset();
-    openLiveBrowserWebviewMock.mockResolvedValue(undefined);
-    resizeLiveBrowserWebviewMock.mockReset();
-    resizeLiveBrowserWebviewMock.mockResolvedValue(undefined);
-    hideLiveBrowserWebviewMock.mockReset();
-    hideLiveBrowserWebviewMock.mockResolvedValue(undefined);
-    requestBrowserNativeWebviewShowMock.mockReset();
-    requestBrowserNativeWebviewShowMock.mockImplementation(async (input: { url: string }) => ({
-      label: "resonant-browser-native",
+    removedLiveBrowserShowMock.mockReset();
+    removedLiveBrowserShowMock.mockResolvedValue(undefined);
+    removedLiveBrowserResizeMock.mockReset();
+    removedLiveBrowserResizeMock.mockResolvedValue(undefined);
+    removedLiveBrowserHideMock.mockReset();
+    removedLiveBrowserHideMock.mockResolvedValue(undefined);
+    removedBrowserHostShowMock.mockReset();
+    removedBrowserHostShowMock.mockImplementation(async (input: { url: string }) => ({
+      label: "removed-browser-host",
       url: input.url,
       visible: true,
       status: "created",
     }));
-    requestBrowserNativeWebviewResizeMock.mockReset();
-    requestBrowserNativeWebviewResizeMock.mockResolvedValue({
-      label: "resonant-browser-native",
+    removedBrowserHostResizeMock.mockReset();
+    removedBrowserHostResizeMock.mockResolvedValue({
+      label: "removed-browser-host",
       url: null,
       visible: true,
       status: "resized",
     });
-    requestBrowserNativeWebviewHideMock.mockReset();
-    requestBrowserNativeWebviewHideMock.mockResolvedValue({
-      label: "resonant-browser-native",
+    removedBrowserHostHideMock.mockReset();
+    removedBrowserHostHideMock.mockResolvedValue({
+      label: "removed-browser-host",
       url: null,
       visible: false,
       status: "hidden",
     });
-    requestNativeBrowserProbeMock.mockReset();
-    requestNativeBrowserProbeMock.mockResolvedValue({
+    removedBrowserProbeMock.mockReset();
+    removedBrowserProbeMock.mockResolvedValue({
       status: "blocked",
       engineCandidate: "cef-chrome-runtime",
       hostBinaryStatus: "missing",
@@ -2607,31 +2557,31 @@ describe("App boot flow", () => {
       nextActions: ["Build the native Browser host binary behind the ADR-025 IPC contract."],
       checkedAt: "unix-ms:1",
     });
-    requestNativeBrowserAttachSmokeMock.mockReset();
-    requestNativeBrowserAttachSmokeMock.mockResolvedValue({
+    removedBrowserAttachSmokeMock.mockReset();
+    removedBrowserAttachSmokeMock.mockResolvedValue({
       status: "blocked",
       platform: "macos",
       parentHandleKind: "macos-ns-view",
       parentHandlePresent: true,
       hostIntegrationMode: "external-process",
       blocker:
-        "External CEF executables cannot safely attach to a process-local macOS NSView. Product Browser embedding requires in-process CEF/native library integration owned by the Tauri process.",
-      nextActions: ["Move the CEF host from an external executable into an in-process Rust-owned native integration."],
+        "External browser executables cannot safely attach to a process-local macOS NSView. Product Browser embedding requires in-process browser/native library integration owned by the alpha bridge.",
+      nextActions: ["Move the browser host from an external executable into an in-process bridge-owned integration."],
       checkedAt: "unix-ms:2",
     });
-    requestNativeBrowserBridgeProbeMock.mockReset();
-    requestNativeBrowserBridgeProbeMock.mockResolvedValue({
+    removedBrowserBridgeProbeMock.mockReset();
+    removedBrowserBridgeProbeMock.mockResolvedValue({
       status: "ready",
-      integrationMode: "in-process-native-library",
+      integrationMode: "bridge-service",
       bridgeLibraryStatus: "ready",
       cAbiStatus: "ready",
-      bridgeLibraryPath: "addons/resonant-browser-native/build/libResonantBrowserNativeBridge.a",
+      bridgeLibraryPath: "addons/removed-browser-host/build/libResonantBrowserNativeBridge.a",
       exportedSymbols: [
-        "_resonant_browser_native_contract_json",
-        "_resonant_browser_native_in_process_status_json",
+        "_resonant_browser_bridge_contract_json",
+        "_resonant_browser_bridge_in_process_status_json",
       ],
       blockers: [],
-      nextActions: ["Wire CEF lifecycle calls behind this ABI."],
+      nextActions: ["Wire browser lifecycle calls behind this ABI."],
       checkedAt: "unix-ms:3",
     });
     requestBrowserHostCommandMock.mockReset();
@@ -2665,22 +2615,7 @@ describe("App boot flow", () => {
     requestBrowserVisibleHostCommandMock.mockReset();
     requestBrowserVisibleHostCommandMock.mockImplementation(async (command: { type: string; params?: Record<string, unknown> }) =>
       command.type === "extensions_list"
-        ? { sessionId: "electron-browser-test", extensions: [], audit: [] }
-        : command.type === "extensions_load_unpacked"
-          ? {
-              sessionId: "electron-browser-test",
-              extension: {
-                extensionId: "priority-extension",
-                name: "Priority Extension",
-                version: "0.1.0",
-                installed: true,
-                pinned: true,
-                enabled: true,
-                source: "local-unpacked",
-                requestedCapabilities: [],
-              },
-              audit: [],
-            }
+        ? { sessionId: "browser-profile-test", extensions: [], audit: [] }
           : command.type === "wallet_host_start" || command.type === "wallet_host_open_url"
             ? {
                 ready: true,
@@ -2715,11 +2650,11 @@ describe("App boot flow", () => {
                     audit: [],
                   }
           : command.type === "close"
-            ? { sessionId: "electron-browser-test", closed: true, audit: [] }
+            ? { sessionId: "browser-profile-test", closed: true, audit: [] }
             : {
                 ready: true,
-                sessionId: "electron-browser-test",
-                engine: "electron-chromium",
+                sessionId: "browser-profile-test",
+                engine: "chromium",
                 url: "https://resonantos.com/",
                 title: "ResonantOS",
                 menuLabels: ["File", "Edit", "View", "History", "Bookmarks", "Profiles", "Tab", "Window", "Help"],
@@ -2727,11 +2662,11 @@ describe("App boot flow", () => {
                 audit: [],
               },
     );
-    requestBrowserExtensionFolderSelectionMock.mockReset();
-    requestBrowserExtensionFolderSelectionMock.mockResolvedValue("/Users/augmentor/Extensions/Phantom");
-    createDesktopBrowserToolRunnerMock.mockReset();
-    browserToolRunMock.mockReset();
-    browserToolRunMock.mockImplementation(async (command: { type: string; params?: Record<string, unknown> }) =>
+    removedExtensionFolderSelectionMock.mockReset();
+    removedExtensionFolderSelectionMock.mockResolvedValue("/Users/augmentor/Extensions/Phantom");
+    removedBrowserToolRunnerMock.mockReset();
+    removedBrowserToolRunMock.mockReset();
+    removedBrowserToolRunMock.mockImplementation(async (command: { type: string; params?: Record<string, unknown> }) =>
       command.type === "read_page"
         ? {
             sessionId: "browser-host-session",
@@ -2758,8 +2693,8 @@ describe("App boot flow", () => {
               audit: [],
             },
     );
-    createDesktopBrowserToolRunnerMock.mockReturnValue({
-      run: browserToolRunMock,
+    removedBrowserToolRunnerMock.mockReturnValue({
+      run: removedBrowserToolRunMock,
     });
     requestLocalRuntimeStatusMock.mockReset();
     requestLocalRuntimeStatusMock.mockResolvedValue({
@@ -2936,6 +2871,31 @@ describe("App boot flow", () => {
 
     expect(screen.getByText("What model are you using?")).toBeTruthy();
     expect(await screen.findByText("This is a live Strategist test reply from MiniMax-M3.")).toBeTruthy();
+  }, 15_000);
+
+  it("preserves host-owned runtime state fields when a runtime update is security-filtered", async () => {
+    let onRuntimeStateUpdate: ((state: ResonantShellState) => void) | null = null;
+    vi.mocked(subscribeRuntimeStateUpdates).mockImplementation(async (listener) => {
+      onRuntimeStateUpdate = listener;
+      return () => undefined;
+    });
+
+    const { container } = render(<App />);
+
+    expect((await screen.findAllByText("Launch your AI tools from one workbench.")).length).toBeGreaterThan(0);
+    expect(onRuntimeStateUpdate).toBeTruthy();
+
+    const partialState = buildDefaultState(manifests);
+    partialState.uiPreferences.activeSection = "addons";
+    delete (partialState as Partial<ResonantShellState>).installations;
+
+    act(() => {
+      onRuntimeStateUpdate?.(partialState as ResonantShellState);
+    });
+
+    await waitFor(() => expect(container.querySelector(".system-active-app")?.textContent).toBe("Add-ons"));
+    expect(container.querySelector(".shell")).toBeTruthy();
+    expect(screen.getByText("OpenCode")).toBeTruthy();
   });
 
   it("swaps the main workspace and chat rail while keeping the app dock fixed", async () => {
@@ -2948,6 +2908,23 @@ describe("App boot flow", () => {
 
     expect(container.querySelector(".shell.layout-chat-main")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Move chat back to the right" })).toBeTruthy();
+  });
+
+  it("opens the main chat rail from Living Archive instead of toggling hidden archive chat layout", async () => {
+    const { container } = render(<App />);
+
+    expect((await screen.findAllByText("Launch your AI tools from one workbench.")).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getAllByRole("button", { name: /Archive/i })[0]);
+    expect(await screen.findByText("Current memory configuration")).toBeTruthy();
+    expect(container.querySelector(".shell.chat-closed")).toBeTruthy();
+    expect(container.querySelector(".shell.center-chat-owner")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Chat" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open main chat" }));
+
+    await waitFor(() => expect(screen.getByText("Launch your AI tools from one workbench.")).toBeTruthy());
+    expect(container.querySelector(".shell.chat-open")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Move chat beside the launcher" })).toBeTruthy();
   });
 
   it("detaches chat by opening the floating window and hiding the dashboard rail/history", async () => {
@@ -3007,7 +2984,7 @@ describe("App boot flow", () => {
       toJSON: () => ({}),
     });
     const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-      if (this.classList.contains("browser-native-webview-mount")) {
+      if (this.classList.contains("browser-extension-preview-mount")) {
         return rect(80, 90, 1080, 700);
       }
       if (this.classList.contains("browser-toolbar")) {
@@ -3029,7 +3006,7 @@ describe("App boot flow", () => {
         : grant,
     );
     hydrateStateMock.mockResolvedValueOnce(state);
-    browserToolRunMock.mockImplementation(async (command: { type: string; params?: Record<string, unknown> }) =>
+    removedBrowserToolRunMock.mockImplementation(async (command: { type: string; params?: Record<string, unknown> }) =>
       command.type === "health"
         ? {
             ready: false,
@@ -3083,33 +3060,19 @@ describe("App boot flow", () => {
     expect(await screen.findByLabelText("Browser URL")).toBeTruthy();
     expect(screen.getByLabelText("Resonant Browser Host control surface")).toBeTruthy();
     expect(screen.getByText("Real Chrome/Brave profile for wallet-capable work")).toBeTruthy();
-    expect(requestBrowserNativeWebviewShowMock).not.toHaveBeenCalled();
-    expect(openLiveBrowserWebviewMock).not.toHaveBeenCalled();
+    expect(removedBrowserHostShowMock).not.toHaveBeenCalled();
+    expect(removedLiveBrowserShowMock).not.toHaveBeenCalled();
     expect(requestBrowserStartSessionMock).not.toHaveBeenCalled();
     expect(requestBrowserSessionScrollMock).not.toHaveBeenCalled();
-    expect(screen.getByText("Native embedded CEF is disabled by default")).toBeTruthy();
-    expect(await screen.findByLabelText("Native Browser host probe")).toBeTruthy();
-    expect(screen.getByText("Native embedded host blocked")).toBeTruthy();
-    expect(screen.getByText("Phantom Wallet and Bitwarden extension compatibility has not been proven in the embedded host.")).toBeTruthy();
-    expect(screen.getByText("Install and unlock inside the Wallet Browser host")).toBeTruthy();
-    expect(screen.getByText("Experimental Electron extension host available")).toBeTruthy();
+    expect(screen.getByLabelText("Browser extension preview")).toBeTruthy();
+    expect(screen.getByText("Install and unlock inside Chrome or Brave")).toBeTruthy();
+    expect(screen.getByText("Install from the official browser extension source")).toBeTruthy();
     expect(screen.getAllByRole("button", { name: "Open wallet-capable Chrome/Brave host" }).length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: "Load unpacked experimental" })).toBeTruthy();
-    expect(requestBrowserVisibleHostCommandMock).not.toHaveBeenCalledWith(expect.objectContaining({ type: "extensions_load_unpacked" }));
-    expect(requestBrowserExtensionFolderSelectionMock).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Run Attach Smoke Test" }));
-    expect(await screen.findByLabelText("Native Browser attach smoke test")).toBeTruthy();
-    expect(screen.getByText("Native attach blocked")).toBeTruthy();
-    expect(screen.getByText(/External CEF executables cannot safely attach/i)).toBeTruthy();
-    expect(requestNativeBrowserAttachSmokeMock).toHaveBeenCalledWith("external-process");
-    fireEvent.click(screen.getByRole("button", { name: "Run Bridge Probe" }));
-    expect(await screen.findByLabelText("Native Browser in-process bridge probe")).toBeTruthy();
-    expect(screen.getByText("In-process bridge ready")).toBeTruthy();
-    expect(screen.getByText(/resonant_browser_native_contract_json/i)).toBeTruthy();
-    expect(requestNativeBrowserBridgeProbeMock).toHaveBeenCalledWith("in-process-native-library");
+    expect(screen.getByRole("button", { name: "Open extension store" })).toBeTruthy();
+    expect(removedExtensionFolderSelectionMock).not.toHaveBeenCalled();
     rectSpy.mockRestore();
     expect(requestBrowserEngineStatusMock).not.toHaveBeenCalled();
-    expect(requestNativeBrowserProbeMock).toHaveBeenCalledWith("cef-chrome-runtime");
+    expect(removedBrowserProbeMock).not.toHaveBeenCalled();
   });
 
   it("opens the live Browser webview even when a persisted AI evidence session is stale", async () => {
@@ -3138,8 +3101,8 @@ describe("App boot flow", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open Workspace" }));
 
     expect(await screen.findByLabelText("Resonant Browser Host control surface")).toBeTruthy();
-    expect(requestBrowserNativeWebviewShowMock).not.toHaveBeenCalled();
-    expect(openLiveBrowserWebviewMock).not.toHaveBeenCalled();
+    expect(removedBrowserHostShowMock).not.toHaveBeenCalled();
+    expect(removedLiveBrowserShowMock).not.toHaveBeenCalled();
     expect(requestBrowserSessionOpenUrlMock).not.toHaveBeenCalled();
     expect(requestBrowserStartSessionMock).not.toHaveBeenCalled();
     expect(await screen.findByLabelText("Resonant Browser Host control surface")).toBeTruthy();
@@ -3160,7 +3123,7 @@ describe("App boot flow", () => {
         : grant,
     );
     hydrateStateMock.mockResolvedValueOnce(state);
-    browserToolRunMock.mockImplementation(async (command: { type: string; params?: Record<string, unknown> }) =>
+    removedBrowserToolRunMock.mockImplementation(async (command: { type: string; params?: Record<string, unknown> }) =>
       command.type === "health"
         ? {
             ready: false,
@@ -3214,8 +3177,8 @@ describe("App boot flow", () => {
         humanApproved: true,
       }),
     );
-    expect(openLiveBrowserWebviewMock).not.toHaveBeenCalled();
-    expect(browserToolRunMock).not.toHaveBeenCalledWith({ type: "start", params: expect.objectContaining({ headless: false }) });
+    expect(removedLiveBrowserShowMock).not.toHaveBeenCalled();
+    expect(removedBrowserToolRunMock).not.toHaveBeenCalledWith({ type: "start", params: expect.objectContaining({ headless: false }) });
     expect((await screen.findAllByLabelText("Resonant Browser Host control surface")).length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByRole("button", { name: "New tab" }));
@@ -3265,11 +3228,11 @@ describe("App boot flow", () => {
     });
     expect(requestBrowserStartSessionMock).not.toHaveBeenCalled();
     expect(requestBrowserSessionReadPageMock).not.toHaveBeenCalled();
-    expect(createDesktopBrowserToolRunnerMock).not.toHaveBeenCalled();
-    expect(browserToolRunMock).not.toHaveBeenCalled();
+    expect(removedBrowserToolRunnerMock).not.toHaveBeenCalled();
+    expect(removedBrowserToolRunMock).not.toHaveBeenCalled();
   });
 
-  it("does not launch the rejected Electron sidecar from the Browser workspace", async () => {
+  it("does not launch removed desktop browser hosts from the Browser workspace", async () => {
     const state = buildDefaultState(manifests);
     const browserInstallation = state.installations["addon.browser"];
     browserInstallation.installed = true;
@@ -3290,15 +3253,15 @@ describe("App boot flow", () => {
     expect((await screen.findAllByText("Launch your AI tools from one workbench.")).length).toBeGreaterThan(0);
     fireEvent.click(screen.getAllByRole("button", { name: /Resonant Browser.*Embedded app/i })[0]);
     fireEvent.click(screen.getByRole("button", { name: "Open Workspace" }));
-    expect(await screen.findByLabelText("Native embedded Chromium target")).toBeTruthy();
+    expect(await screen.findByLabelText("Browser extension preview")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Open Chromium Host" })).toBeNull();
     expect(screen.getAllByRole("button", { name: "Open wallet-capable Chrome/Brave host" }).length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: "Load unpacked experimental" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open extension store" })).toBeTruthy();
     expect(requestBrowserVisibleHostCommandMock).toHaveBeenCalledWith({ type: "extensions_list" });
     expect(requestBrowserVisibleHostCommandMock).not.toHaveBeenCalledWith(expect.objectContaining({ type: "start" }));
     expect(requestBrowserVisibleHostCommandMock).not.toHaveBeenCalledWith(expect.objectContaining({ type: "open_url" }));
-    expect(requestBrowserExtensionFolderSelectionMock).not.toHaveBeenCalled();
-    expect(requestNativeBrowserProbeMock).toHaveBeenCalledWith("cef-chrome-runtime");
+    expect(removedExtensionFolderSelectionMock).not.toHaveBeenCalled();
+    expect(removedBrowserProbeMock).not.toHaveBeenCalled();
   });
 
   it("grants the Browser controlled access preset from the Add-ons workspace", async () => {
@@ -3354,7 +3317,7 @@ describe("App boot flow", () => {
     fireEvent.click(screen.getByRole("button", { name: "Install and grant browser access" }));
 
     expect(await screen.findByLabelText("Browser URL")).toBeTruthy();
-    expect(screen.getByLabelText("Native embedded Chromium target")).toBeTruthy();
+    expect(screen.getByLabelText("Browser extension preview")).toBeTruthy();
   });
 
   it("shows Paperclip in the Add-ons catalog before installation", async () => {
@@ -3740,7 +3703,7 @@ describe("App boot flow", () => {
 
   it("intercepts natural Browser navigation from the visible Augmentor chat before the LLM can hallucinate tool execution", async () => {
     const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-      if (this.classList.contains("browser-native-webview-mount")) {
+      if (this.classList.contains("browser-extension-preview-mount")) {
         return {
           left: 80,
           top: 90,
@@ -3799,8 +3762,8 @@ describe("App boot flow", () => {
         humanApproved: true,
       }),
     );
-    expect(requestBrowserNativeWebviewShowMock).not.toHaveBeenCalled();
-    expect(openLiveBrowserWebviewMock).not.toHaveBeenCalled();
+    expect(removedBrowserHostShowMock).not.toHaveBeenCalled();
+    expect(removedLiveBrowserShowMock).not.toHaveBeenCalled();
     expect(requestBrowserStartSessionMock).not.toHaveBeenCalled();
     expect(requestBrowserHostCommandMock).not.toHaveBeenCalled();
     expect(requestProviderServiceChatCompletionMock).not.toHaveBeenCalled();
@@ -3952,7 +3915,10 @@ describe("App boot flow", () => {
   });
 
   it("shows string backend errors instead of collapsing them into a generic message", async () => {
-    requestProviderServiceChatCompletionMock.mockRejectedValue("You exceeded your current quota.");
+    requestProviderServiceChatCompletionMock
+      .mockRejectedValueOnce("You exceeded your current quota.")
+      .mockRejectedValueOnce("You exceeded your current quota.")
+      .mockResolvedValueOnce("Recovered after provider failure.");
 
     render(<App />);
 
@@ -3964,6 +3930,14 @@ describe("App boot flow", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "Send message" })[0]);
 
     expect((await screen.findAllByText("You exceeded your current quota.")).length).toBeGreaterThan(0);
+
+    fireEvent.change(screen.getAllByPlaceholderText("Message Augmentor")[0], {
+      target: { value: "try again" },
+    });
+    fireEvent.click(screen.getAllByRole("button", { name: "Send message" })[0]);
+
+    expect(await screen.findByText("Recovered after provider failure.")).toBeTruthy();
+    expect(requestProviderServiceChatCompletionMock).toHaveBeenCalledTimes(3);
   });
 
   it("injects Living Archive context into Strategist chat turns", async () => {
@@ -4382,15 +4356,20 @@ describe("App boot flow", () => {
     expect((await screen.findAllByText("Launch your AI tools from one workbench.")).length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getAllByRole("button", { name: /Settings/i })[0]);
+    const settingsNav = await screen.findByRole("navigation", { name: "Settings sections" });
+    fireEvent.click(within(settingsNav).getByRole("button", { name: /Providers/i }));
 
     expect(await screen.findByText("AI Providers")).toBeTruthy();
     expect(screen.getByRole("button", { name: /Add AI Provider/i })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /Shared MiniMax/i }));
-    expect(await screen.findByText("Diagnostics")).toBeTruthy();
+    expect(screen.queryByText("Diagnostics")).toBeNull();
+
+    fireEvent.click(within(settingsNav).getByRole("button", { name: /Advanced/i }));
+    expect((await screen.findAllByText("Diagnostics")).length).toBeGreaterThan(0);
     expect((await screen.findAllByText("MiniMax Cloud Runtime")).length).toBeGreaterThan(0);
     expect(requestProviderDiagnosticsMock).toHaveBeenCalled();
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Test" })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Smoke Test" })[0]);
 
     expect((await screen.findAllByText("Provider smoke test passed.")).length).toBeGreaterThan(0);
     expect(screen.getByText(/MiniMax-M3 · 50 tokens/i)).toBeTruthy();
@@ -4403,12 +4382,31 @@ describe("App boot flow", () => {
     );
   });
 
+  it("explains the recommended Living Archive default in human-first terms during first-run", async () => {
+    const livingArchiveManifest = createLivingArchiveManifest();
+    manifests.push(livingArchiveManifest);
+
+    try {
+      hydrateStateMock.mockResolvedValueOnce(buildDefaultState(manifests));
+
+      render(<App />);
+
+      expect(await screen.findByRole("dialog", { name: "Choose recommended ResonantOS add-ons" })).toBeTruthy();
+      expect(screen.getAllByText(/Human Knowledge is preserved; AI Memory is the maintained wiki\./i).length).toBeGreaterThan(0);
+      expect(screen.getByText(/Obsidian-compatible vaults are optional and can manage the same memory files later/i)).toBeTruthy();
+    } finally {
+      manifests.pop();
+    }
+  });
+
   it("adds a provider profile through the compact settings modal", async () => {
     render(<App />);
 
     expect((await screen.findAllByText("Launch your AI tools from one workbench.")).length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getAllByRole("button", { name: /Settings/i })[0]);
+    const settingsNav = await screen.findByRole("navigation", { name: "Settings sections" });
+    fireEvent.click(within(settingsNav).getByRole("button", { name: /Providers/i }));
     fireEvent.click(await screen.findByRole("button", { name: /Add AI Provider/i }));
     fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "ollama" } });
     fireEvent.change(screen.getByLabelText("Name in ResonantOS"), { target: { value: "Studio Local Runtime" } });
@@ -4430,10 +4428,12 @@ describe("App boot flow", () => {
     expect((await screen.findAllByText("Launch your AI tools from one workbench.")).length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getAllByRole("button", { name: /Settings/i })[0]);
-    fireEvent.click(await screen.findByRole("button", { name: /Memory Bridge/i }));
+    const settingsNav = await screen.findByRole("navigation", { name: "Settings sections" });
+    fireEvent.click(within(settingsNav).getByRole("button", { name: /Memory/i }));
 
-    expect(await screen.findByText("Living Archive Memory Bridge")).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Memory" })).toBeTruthy();
     expect(await screen.findByText("Bridge stopped")).toBeTruthy();
+    expect(screen.getByText(/Human Knowledge is preserved; AI Memory is the maintained wiki\./i)).toBeTruthy();
     expect(requestLivingArchiveMemoryServiceStatusMock).toHaveBeenCalled();
 
     requestLivingArchiveMemoryServiceStatusMock.mockResolvedValueOnce({
@@ -4453,6 +4453,23 @@ describe("App boot flow", () => {
     expect(await screen.findByText("Bridge running")).toBeTruthy();
     expect(screen.getByText(/pid 4242/i)).toBeTruthy();
     expect(requestLivingArchiveMemoryServiceStartMock).toHaveBeenCalled();
+  });
+
+  it("keeps Living Archive start and help copy human-first", async () => {
+    render(<App />);
+
+    expect((await screen.findAllByText("Launch your AI tools from one workbench.")).length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getAllByRole("button", { name: /Archive/i })[0]);
+
+    expect(await screen.findByText(/Human Knowledge is preserved; AI Memory is the maintained wiki\./i)).toBeTruthy();
+    expect(screen.getByText(/Obsidian-compatible vaults are optional; they are just one way/i)).toBeTruthy();
+
+    fireEvent.click(await screen.findByText("Advanced tools"));
+    fireEvent.click(await screen.findByRole("button", { name: "Open Help section" }));
+
+    expect(await screen.findByText(/Human Knowledge is preserved; AI Memory is the maintained wiki\./i)).toBeTruthy();
+    expect(screen.getByText(/Obsidian is optional/i)).toBeTruthy();
   });
 
   it("runs the archive ingest probe through the archive workload route", async () => {
@@ -4557,7 +4574,7 @@ describe("App boot flow", () => {
     const request = requestProviderServiceChatCompletionStreamMock.mock.calls.at(-1)?.[0];
     expect(request?.messages.at(-1)?.content).toContain("Help me understand this Living Archive import preflight");
     expect(request?.messages.at(-1)?.content).toContain("Wordpress Post Backup");
-    expect(request?.messages.at(-1)?.content).toContain("Audio2TOL add-on");
+    expect(request?.messages.at(-1)?.content).toContain("Specialist media extraction belongs to reviewed add-ons");
     const showHistory = screen.queryByRole("button", { name: "Show chat history" });
     if (showHistory) {
       fireEvent.click(showHistory);
@@ -5717,51 +5734,6 @@ describe("App boot flow", () => {
     );
   });
 
-  it("detects Audio2TOL bundles and queues a structured TOL bundle for review", async () => {
-    const state = buildDefaultState(manifests);
-    state.installations["addon.audio2tol"] = {
-      ...state.installations["addon.audio2tol"],
-      installed: true,
-      enabled: true,
-      status: "enabled",
-    };
-    hydrateStateMock.mockResolvedValueOnce(state);
-    requestArchiveTolBundleCandidatesMock.mockResolvedValue([
-      {
-        sessionId: "2026-04-21-1003",
-        rawAudioPath: "03_TOL/RAW Audio/260421_1003.mp3",
-        transcriptPath: "03_TOL/TOL Transcripts/2026-04-21-1003_TOL_Transcript.md",
-        analysisPath: "03_TOL/TOL Analysis/2026-04-21-1003_TOL_Analysis.md",
-        date: "2026-04-21",
-        time: "1003",
-        summary: "Taste is navigation through resonance.",
-        status: "bundle-ready",
-        strategicActionsCount: 3,
-        explicitDirectivesCount: 4,
-      },
-    ] as Array<Record<string, unknown>>);
-
-    render(<App />);
-
-    expect((await screen.findAllByText("Launch your AI tools from one workbench.")).length).toBeGreaterThan(0);
-
-    fireEvent.click(screen.getAllByRole("button", { name: /Archive/i })[0]);
-    fireEvent.click(await screen.findByText("Advanced tools"));
-    fireEvent.click(await screen.findByRole("button", { name: "Open Sources section" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Detect TOL Bundles" }));
-
-    expect(await screen.findByText("2026-04-21-1003")).toBeTruthy();
-    expect(await screen.findByText("Taste is navigation through resonance.")).toBeTruthy();
-    expect(await screen.findByText("4 human directive(s) · 3 AI-proposed strategic action(s).")).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: "Queue TOL Bundle" }));
-
-    expect(requestArchiveBuildTolBundleMock).toHaveBeenCalledWith({
-      sessionId: "2026-04-21-1003",
-      actorId: "strategist.core",
-    });
-  });
-
   it("promotes only approved archive review artifacts into the trusted wiki path", async () => {
     const artifact: ArchiveReviewArtifact = {
       artifactFile: "/tmp/artifacts/review-output.json",
@@ -6100,6 +6072,39 @@ function createManifest(id: string, name: string, category: AddOnCategory): AddO
       shellVersion: "^0.1.0",
       platforms: ["macOS"],
     },
+  };
+}
+
+function createLivingArchiveManifest(): AddOnManifest {
+  const memoryProviderGrant = {
+    capability: "memory-provider" as const,
+    granted: false,
+    scope: "system" as const,
+    revocationBehavior: "hard-stop" as const,
+  };
+
+  return {
+    ...createManifest("addon.living-archive", "Living Archive", "memory"),
+    description:
+      "Human Knowledge is preserved; AI Memory is the maintained wiki. Living Archive is the recommended default memory add-on and can be disabled or replaced later.",
+    requestedCapabilities: [memoryProviderGrant],
+    grantPresets: [
+      {
+        id: "recommended-memory-system",
+        label: "Recommended memory system",
+        description: "Enable Living Archive as the default memory provider.",
+        grants: [{ ...memoryProviderGrant, granted: true }],
+      },
+    ],
+    systemSlots: [
+      {
+        id: "memory-system",
+        role: "default-provider",
+        replaceable: true,
+        requiredForFirstRun: false,
+        recommended: true,
+      },
+    ],
   };
 }
 

@@ -1,7 +1,14 @@
 # ADR-012: Living Archive Approval Policy
 
-Status: Accepted  
-Date: 2026-04-23
+## Decision Metadata
+
+- Decision status: Accepted
+- Alpha applicability: Applies
+- Superseded by: None
+- Owner: Living Archive
+- Decision date: 2026-04-23
+- Alpha note: Tiered review, verification, and trusted promotion policy applies
+  to Alpha archive routes.
 
 ## Decision
 

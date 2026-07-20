@@ -57,7 +57,7 @@ export function ArchiveLibraryImporter({
     <Panel
       className="library-importer-panel"
       title="Add Knowledge"
-      subtitle="Choose a folder or Obsidian vault. The AI handles the rest."
+      subtitle="Choose any folder. Obsidian-compatible vaults are optional."
     >
       <form
         className="library-import-form"
@@ -86,7 +86,7 @@ export function ArchiveLibraryImporter({
             aria-label="Choose folder or vault path"
             onClick={() => void chooseLibraryFolder()}
           >
-            <span>{libraryPath || "Click to choose a folder or Obsidian vault"}</span>
+            <span>{libraryPath || "Click to choose a knowledge folder"}</span>
             <strong>Browse...</strong>
           </button>
           {libraryPath ? (
@@ -210,7 +210,7 @@ export function ArchiveLibraryImporter({
             <span>{archiveLibraryImportResult.importMode} mode</span>
             <span>{archiveLibraryImportResult.classificationStatus}</span>
             <span>{archiveLibraryImportResult.metadataStandard}</span>
-            {archiveLibraryImportResult.recommendedAddon ? <span>Obsidian add-on recommended</span> : null}
+            {archiveLibraryImportResult.recommendedAddon ? <span>Resonant Notes add-on optional</span> : null}
           </div>
           {archiveLibraryImportResult.classificationManifestPath ? (
             <div className="inline-notice">

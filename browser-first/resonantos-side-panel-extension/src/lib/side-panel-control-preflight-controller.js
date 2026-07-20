@@ -88,6 +88,37 @@ export function createSidePanelControlPreflightController({
     await runControlCommand(preflight.goal, { preflightApproved: true });
   };
 
+  const allowControlPreflightOnceForTaskClass = async (body) => {
+    const preflight = resolvePreflightFromCommand(body);
+    if (!preflight) {
+      await addMessage("system", "No matching Agent Control preflight is waiting. Start a browser-control task first, or use the exact preflight id.");
+      return;
+    }
+    const consent = await taskConsentStore.setTaskConsent({
+      siteKey: preflight.siteKey,
+      taskClass: preflight.taskClass,
+      mode: "allow-once",
+      reason: `Allowed once from Agent Control preflight: ${preflight.goal}`,
+      source: "control-preflight"
+    });
+    setNextControlPreflightDecision(preflightDecisionFromPreflight(preflight, {
+      mode: "allowed-task-class-once",
+      reason: `Human allowed safe ${preflight.taskClass} actions once for ${preflight.siteKey}.`
+    }));
+    await clearControlPreflight();
+    await taskConsentStore.consumeTaskConsent?.({
+      siteKey: consent.siteKey,
+      taskClass: consent.taskClass,
+      reason: `Consumed by Agent Control preflight: ${preflight.goal}`,
+      source: "control-preflight"
+    });
+    await renderTaskConsentPanel();
+    await renderPermissionManager();
+    await addMessage("system", `Allowed safe ${consent.taskClass} actions on ${consent.siteKey} for this execution only. Hard wallet, login, payment, credential, signing, transfer, destructive, and public-submit boundaries remain human-gated.`);
+    setStatus("Taking control");
+    await runControlCommand(preflight.goal, { preflightApproved: true });
+  };
+
   const denyControlPreflight = async (body) => {
     const preflight = resolvePreflightFromCommand(body);
     if (!preflight) {
@@ -125,6 +156,7 @@ export function createSidePanelControlPreflightController({
   };
 
   return {
+    allowControlPreflightOnceForTaskClass,
     approveControlPreflight,
     clearControlPreflight,
     denyControlPreflight,

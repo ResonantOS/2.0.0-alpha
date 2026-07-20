@@ -30,13 +30,10 @@ import type {
   ArchiveSemanticLintResult,
   ArchiveSourceFolderScanResult,
   ArchiveSourceWatchRecord,
-  ArchiveTolBundleBuildResult,
-  ArchiveTolBundleCandidate,
   ProviderCostPosture,
   ResonantShellState,
 } from "../../core/contracts";
 import { Panel } from "../../components/Panel";
-import { ArchiveAudio2TolIntake } from "./ArchiveAudio2TolIntake";
 import { ArchiveClassificationReviewPanel } from "./ArchiveClassificationReviewPanel";
 import { ArchiveDiagnostics } from "./ArchiveDiagnostics";
 import { ArchiveDocumentReader } from "./ArchiveDocumentReader";
@@ -71,8 +68,6 @@ type ArchiveWorkspaceProps = {
   archiveAiMemoryBuildJobs: ArchiveAiMemoryBuildJobSummary[];
   archiveLintResult: ArchiveLintResult | null;
   archiveSemanticLintResult: ArchiveSemanticLintResult | null;
-  archiveTolBundles: ArchiveTolBundleCandidate[];
-  archiveTolBundleResult: ArchiveTolBundleBuildResult | null;
   archiveSourceScanBusy: boolean;
   archiveSourceScanResult: ArchiveSourceFolderScanResult | null;
   archiveImportedLibraries: ArchiveImportedLibrarySummary[];
@@ -119,8 +114,6 @@ type ArchiveWorkspaceProps = {
   onRunArchiveMaintenance: () => Promise<void>;
   onRunArchiveLint: () => void;
   onRunArchiveSemanticLint: () => void;
-  onRefreshTolBundles: () => void;
-  onBuildTolBundle: (sessionId: string) => void;
   onRunIngestProbe: () => void;
   onUpdateArchiveAutomationPolicy: (policy: ArchiveAutomationPolicy) => void;
   onAskAugmentor: (message: string, contextPrompt?: string) => Promise<void>;
@@ -151,8 +144,6 @@ export function ArchiveWorkspace({
   archiveAiMemoryBuildJobs,
   archiveLintResult,
   archiveSemanticLintResult,
-  archiveTolBundles,
-  archiveTolBundleResult,
   archiveSourceScanBusy,
   archiveSourceScanResult,
   archiveImportedLibraries,
@@ -188,8 +179,6 @@ export function ArchiveWorkspace({
   onRunArchiveMaintenance,
   onRunArchiveLint,
   onRunArchiveSemanticLint,
-  onRefreshTolBundles,
-  onBuildTolBundle,
   onRunIngestProbe,
   onUpdateArchiveAutomationPolicy,
   onAskAugmentor,
@@ -219,8 +208,6 @@ export function ArchiveWorkspace({
   const pagesTotal = archiveStatus?.stats?.pagesTotal ?? 0;
   const unprocessedSources = archiveStatus?.stats?.sourcesUnprocessed ?? 0;
   const pendingArtifacts = archiveReviewArtifacts.filter((artifact) => artifact.decision.status === "pending").length;
-  const audio2TolInstallation = state.installations["addon.audio2tol"];
-  const audio2TolEnabled = Boolean(audio2TolInstallation?.installed && audio2TolInstallation.enabled);
   const needsWork = archiveQueue.length + pendingArtifacts + unprocessedSources;
   const hasImportedLibraries = archiveImportedLibraries.length > 0;
   const archiveRouteCostPosture = archiveIngestRouteCostPosture(state);
@@ -409,16 +396,6 @@ export function ArchiveWorkspace({
 
       {activeTab === "sources" ? (
         <>
-          {audio2TolEnabled ? (
-            <ArchiveAudio2TolIntake
-              archiveQueueBusy={archiveQueueBusy}
-              archiveTolBundles={archiveTolBundles}
-              archiveTolBundleResult={archiveTolBundleResult}
-              onRefreshTolBundles={onRefreshTolBundles}
-              onBuildTolBundle={onBuildTolBundle}
-              onOpenArchiveDocument={onOpenArchiveDocument}
-            />
-          ) : null}
           <ArchiveSourceRegistry
             archiveStatus={archiveStatus}
             archiveSourceScanBusy={archiveSourceScanBusy}
@@ -503,17 +480,17 @@ function ArchiveHelpPanel() {
         <section>
           <h3>What it is</h3>
           <p>
-            The Living Archive is ResonantOS memory. It keeps your original material safe, then helps Augmentor turn reviewed
-            material into organised AI-readable knowledge.
+            Human Knowledge is preserved; AI Memory is the maintained wiki. The Living Archive keeps your original material
+            safe, then helps Augmentor maintain organised AI-readable knowledge after review.
           </p>
         </section>
         <section>
           <h3>How to use it</h3>
           <ol>
-            <li>Start with a folder or Obsidian vault.</li>
+            <li>Start with any folder. Obsidian-compatible vaults are optional.</li>
             <li>Let ResonantOS analyse what can be imported and what should stay out.</li>
             <li>Ask Augmentor to review the plan if anything is unclear.</li>
-            <li>Import the recommended plan, then review proposed knowledge before it becomes trusted memory.</li>
+            <li>Import the recommended plan, then review proposed knowledge before it becomes AI Memory.</li>
           </ol>
         </section>
         <section>
@@ -526,8 +503,8 @@ function ArchiveHelpPanel() {
         <section>
           <h3>Add-ons</h3>
           <p>
-            Obsidian can manage markdown/vault workflows when the Obsidian add-on is installed. Audio2TOL and TOL-specific
-            processing are add-on capabilities, not required base Living Archive behavior.
+            Obsidian is optional. When the Resonant Notes add-on is installed, it can manage markdown and vault workflows
+            over the same memory files; the base Living Archive still works with ordinary folders.
           </p>
         </section>
       </div>

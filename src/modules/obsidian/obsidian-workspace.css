@@ -24,7 +24,7 @@
 .obsidian-workspace-header,
 .obsidian-workspace-alert {
   padding: 0.9rem 1rem;
-  border: 1px solid rgba(138, 128, 112, 0.12);
+  border: var(--border-line-sm);
   border-radius: 16px;
   background: rgba(255, 248, 236, 0.028);
 }
@@ -633,7 +633,7 @@
   width: 100%;
   min-height: 2.15rem;
   padding: 0.45rem 0.55rem;
-  border: 1px solid rgba(138, 128, 112, 0.12);
+  border: var(--border-line-sm);
   border-radius: 9px;
   background: rgba(255, 248, 236, 0.035);
   color: var(--text-primary);

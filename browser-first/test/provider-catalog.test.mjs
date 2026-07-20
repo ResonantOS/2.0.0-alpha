@@ -15,6 +15,7 @@ import {
 test("provider catalog exposes comprehensive direct, gateway, local, and custom templates", () => {
   assert.equal(providerTypePresets.minimax.label, "MiniMax");
   assert.equal(providerTypePresets.openai.providerType, "openai");
+  assert.equal(providerTypePresets.zai.models[0], "zai/glm-5.2");
   assert.equal(providerTypePresets.ollama.category, "Local software");
   assert.equal(providerTypePresets["asus-gx10"].category, "User-owned machines");
   assert.equal(providerTypePresets["openai-compatible"].category, "Custom");
@@ -44,11 +45,13 @@ test("provider catalog parses model text and preserves canonical provider orderi
   const providers = [
     { id: "z-provider", label: "Zed" },
     { id: "shared-openai", label: "OpenAI" },
+    { id: "shared-zai-glm", label: "Z.AI GLM" },
     { id: "shared-minimax", label: "MiniMax" },
     { id: "a-provider", label: "Alpha" },
   ].sort(providerSort);
   assert.deepEqual(providers.map((provider) => provider.id), [
     "shared-minimax",
+    "shared-zai-glm",
     "shared-openai",
     "a-provider",
     "z-provider",

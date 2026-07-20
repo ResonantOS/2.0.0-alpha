@@ -4,6 +4,8 @@ import test from "node:test";
 import { normalizeBrowserUrl } from "../resonantos-side-panel-extension/src/lib/browser-command-parser.js";
 import { createBrowserPageActions } from "../resonantos-side-panel-extension/src/lib/browser-page-actions.js";
 
+const openAiLikeUrlSecret = ["sk", "live", "URL", "SECRET"].join("-");
+
 function createHarness(overrides = {}) {
   const events = [];
   let controlledTabId = overrides.controlledTabId ?? 1;
@@ -30,6 +32,12 @@ function createHarness(overrides = {}) {
         return { id: tabId, ...payload };
       }
     },
+    runtime: overrides.activeTabContext ? {
+      sendMessage: async (message) => {
+        events.push(["runtime.sendMessage", message]);
+        return overrides.activeTabContext(message);
+      }
+    } : undefined,
     scripting: overrides.scripting ?? {
       executeScript: async (payload) => events.push(["inject", payload])
     },
@@ -162,6 +170,101 @@ test("browser page actions merge frame snapshots when reading the active page", 
   assert.equal(harness.getLastSnapshot().title, "Top");
 });
 
+test("browser page actions hydrates cached active-tab context from background snapshot store", async () => {
+  const harness = createHarness({
+    activeTabContext: () => ({
+      ok: true,
+      snapshot: {
+        tabId: 1,
+        title: "Cached Active Tab",
+        url: "https://example.test/",
+        text: "cached page context"
+      }
+    })
+  });
+
+  await harness.actions.readActivePage({ announce: false });
+
+  assert.ok(harness.events.some((event) => event[0] === "runtime.sendMessage" && event[1].type === "active_tab_context"));
+  assert.ok(harness.events.some((event) => event[0] === "snapshot" && event[1] === "Cached Active Tab"));
+  assert.ok(harness.events.some((event) => event[0] === "context" && event[1] === "Cached Active Tab"));
+});
+
+test("browser page actions clears stale page context when active tab changes", async () => {
+  const harness = createHarness({
+    lastSnapshot: {
+      tabId: 9,
+      title: "Old Tab",
+      url: "https://old.example/",
+      text: "stale"
+    },
+    activeTabContext: () => ({
+      ok: true,
+      snapshot: {
+        tabId: 9,
+        title: "Old Tab",
+        url: "https://old.example/",
+        text: "stale"
+      }
+    })
+  });
+
+  await harness.actions.readActivePage({ announce: false });
+
+  assert.ok(harness.events.some((event) => event[0] === "snapshot" && event[1] === null));
+  assert.ok(harness.events.some((event) => event[0] === "context" && event[1] === null));
+});
+
+test("browser page actions rejects cached tab context without tab identity or URL", async () => {
+  const harness = createHarness({
+    lastSnapshot: {
+      title: "Malformed Cached Snapshot",
+      text: "no tab or URL identity"
+    },
+    activeTabContext: () => ({
+      ok: true,
+      snapshot: {
+        title: "Malformed Cached Snapshot",
+        text: "no tab or URL identity"
+      }
+    })
+  });
+
+  await harness.actions.readActivePage({ announce: false });
+
+  assert.ok(harness.events.some((event) => event[0] === "snapshot" && event[1] === null));
+  assert.ok(harness.events.some((event) => event[0] === "context" && event[1] === null));
+});
+
+test("browser page actions never announce raw query or hash secrets from page URLs", async () => {
+  const harness = createHarness({
+    sendMessage: () => ({
+      ok: true,
+      snapshot: {
+        title: "Leaky Page",
+        url: `https://example.test/path?token=${openAiLikeUrlSecret}#card-4111222233334444`,
+        text: "safe visible text",
+        links: [{ text: "checkout", href: "https://example.test/pay?session=secret#card-4111222233334444" }],
+        frame: { isTop: true, referrer: "https://referrer.test/?token=secret#frag" }
+      }
+    })
+  });
+
+  const result = await harness.actions.readActivePage();
+
+  assert.equal(result.ok, true);
+  assert.equal(result.snapshot.url, "https://example.test/path");
+  assert.equal(result.snapshot.links[0].href, "https://example.test/pay");
+  assert.equal(result.snapshot.frame.referrer, "https://referrer.test/");
+  const transcript = harness.events
+    .filter((event) => event[0] === "message")
+    .map((event) => event[2])
+    .join("\n");
+  assert.match(transcript, /https:\/\/example\.test\/path/);
+  assert.equal(transcript.includes(openAiLikeUrlSecret), false);
+  assert.doesNotMatch(transcript, /token=|4111222233334444|#card/);
+});
+
 test("browser page actions inject content script after missing receiver failure", async () => {
   const harness = createHarness({
     sendMessage: (call) => call === 1
@@ -176,6 +279,25 @@ test("browser page actions inject content script after missing receiver failure"
   assert.ok(harness.events.some((event) => event[0] === "message" && /Clicked "Continue"/.test(event[2])));
 });
 
+test("browser page actions route Resonator commands to the active page", async () => {
+  let sent = null;
+  const harness = createHarness({
+    permission: "read-only",
+    sendMessage: (_call, message) => {
+      sent = message;
+      return { ok: true, action: message.action, result: { ok: true } };
+    }
+  });
+
+  const result = await harness.actions.runResonatorCommand("highlight", "#target");
+
+  assert.equal(result.ok, true);
+  assert.equal(sent.type, "resonator");
+  assert.equal(sent.action, "highlight");
+  assert.deepEqual(sent.payload, { selector: "#target", label: "" });
+  assert.ok(harness.events.some((event) => event[0] === "message" && /Resonator highlight displayed/.test(event[2])));
+});
+
 test("browser page actions respect read-only site permission for mutations", async () => {
   const harness = createHarness({ permission: "read-only" });
 
@@ -184,6 +306,22 @@ test("browser page actions respect read-only site permission for mutations", asy
   assert.equal(result.ok, false);
   assert.match(result.error, /read-only/);
   assert.ok(harness.events.some((event) => event[0] === "status" && event[1] === "Page action failed"));
+});
+
+test("browser page actions still send control overlay updates under read-only permission", async () => {
+  const harness = createHarness({
+    permission: "read-only",
+    frames: [{ frameId: 0 }, { frameId: 7 }],
+  });
+
+  const result = await harness.actions.setPageControlOverlay(true, "reading", "reading");
+
+  assert.equal(result.ok, true);
+  assert.ok(harness.events.some((event) => event[0] === "sendMessage" && event[1] === "control_overlay"));
+  assert.deepEqual(
+    harness.events.filter((event) => event[0] === "sendMessage" && event[1] === "control_overlay").map((event) => event[2]),
+    [0],
+  );
 });
 
 test("browser page actions summarize existing snapshots without rereading", async () => {

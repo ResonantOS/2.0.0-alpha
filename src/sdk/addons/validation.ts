@@ -10,6 +10,7 @@ import type {
   DelegationArtifactType,
   RevocationBehavior,
   RuntimeIsolationBoundary,
+  SystemSlotId,
 } from "../../core/contracts";
 import {
   ADDON_CAPABILITIES,
@@ -91,6 +92,20 @@ const hookEvents = [
   "after-archive-intake",
 ] as const;
 const hookFailurePolicies = ["block", "degrade", "warn"] as const;
+
+// systemSlots coverage (P1-b). A manifest that declares a systemSlot becomes the
+// active provider for that slot (activeSystemSlotProvider), replacing a built-in
+// surface. Each known SystemSlotId maps to a backing capability that MUST be
+// declared in requestedCapabilities so the runtime grant gate
+// (system-slots.ts capabilityForSlot / activeSystemSlotProvider) can apply.
+// This map mirrors capabilityForSlot in src/modules/shell/system-slots.ts.
+const systemSlotIds: readonly SystemSlotId[] = ["primary-agent", "chat-interface", "memory-system", "communication-channel"];
+const slotBackingCapability: Record<SystemSlotId, Capability> = {
+  "primary-agent": "agent-delegation",
+  "chat-interface": "chat-interface",
+  "memory-system": "memory-provider",
+  "communication-channel": "notifications",
+};
 
 const addonIdPattern = /^addon\.[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)*$/;
 const semanticVersionPattern = /^\d+\.\d+\.\d+(?:[-+][a-z0-9.-]+)?$/i;
@@ -1088,6 +1103,47 @@ export const validateAddOnManifest = (
         "Smoke tests may only require capabilities requested by the manifest.",
       );
     });
+  }
+
+  // systemSlots coverage (P1-b). systemSlots is inside the manifest type but was
+  // never validated, so a manifest could claim an active-provider slot (e.g.
+  // primary-agent) that bypassed manifest capability validation. A slot claim is
+  // only accepted when it uses a known SystemSlotId AND declares the slot's
+  // backing capability in requestedCapabilities (so the runtime grant gate can
+  // apply). Mirrors the block rule in
+  // .craft/.../checks/containment/addon-provenance.mjs.
+  if (candidate.systemSlots !== undefined) {
+    if (!Array.isArray(candidate.systemSlots)) {
+      pushIssue(issues, "error", "system-slots-array", "systemSlots", "systemSlots must be an array when present.");
+    } else {
+      candidate.systemSlots.forEach((slot, index) => {
+        const path = `systemSlots[${index}]`;
+        if (!isRecord(slot)) {
+          pushIssue(issues, "error", "system-slot-object", path, "Each systemSlots entry must be an object.");
+          return;
+        }
+        if (!isString(slot.id) || !systemSlotIds.includes(slot.id as SystemSlotId)) {
+          pushIssue(
+            issues,
+            "error",
+            "system-slot-unknown",
+            `${path}.id`,
+            `systemSlots id must be a known SystemSlotId (${systemSlotIds.join(", ")}).`,
+          );
+          return;
+        }
+        const backingCapability = slotBackingCapability[slot.id as SystemSlotId];
+        if (!requestedCapabilitySet.has(backingCapability)) {
+          pushIssue(
+            issues,
+            "error",
+            "system-slot-undeclared-capability",
+            `${path}.id`,
+            `System slot "${slot.id}" requires capability "${backingCapability}" to be declared in requestedCapabilities so the runtime grant gate can apply; without it the slot claim bypasses manifest capability validation.`,
+          );
+        }
+      });
+    }
   }
 
   if (source === "sideload" && isRecord(candidate.provenance) && candidate.provenance.tier !== "sideloaded-unverified") {

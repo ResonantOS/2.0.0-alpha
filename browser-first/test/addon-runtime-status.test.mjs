@@ -58,3 +58,16 @@ test("Hermes runtime status degrades safely when bridge fails", async () => {
   assert.match(message, /bridge unavailable/);
   assert.match(message, /Settings > Add-ons/);
 });
+
+test("Hermes runtime status replaces raw fetch failures with bridge setup guidance", async () => {
+  const message = await buildHermesRuntimeStatusMessage({
+    bridgeRequest: async () => {
+      throw new TypeError("Failed to fetch");
+    }
+  });
+
+  assert.match(message, /Hermes runtime status/);
+  assert.match(message, /ResonantOS bridge is unreachable/);
+  assert.match(message, /Settings > Bridge Target/);
+  assert.doesNotMatch(message, /Failed to fetch/);
+});

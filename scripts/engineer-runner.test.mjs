@@ -69,11 +69,12 @@ test("evaluateScope fails when changed files include files outside allowed set",
 test("parseGitStatusPorcelain includes modified, renamed, and untracked files", () => {
   const files = parseGitStatusPorcelain([
     " M scripts/allowed.txt",
+    " M scripts\\windows.txt",
     "?? scripts/new-file.mjs",
     "R  docs/old.md -> docs/new.md",
     "",
   ].join("\n"));
-  assert.deepEqual(files, ["docs/new.md", "docs/old.md", "scripts/allowed.txt", "scripts/new-file.mjs"]);
+  assert.deepEqual(files, ["docs/new.md", "docs/old.md", "scripts/allowed.txt", "scripts/new-file.mjs", "scripts/windows.txt"]);
 });
 
 test("verifyTaskContract verifies scoped changes and required commands", () => {

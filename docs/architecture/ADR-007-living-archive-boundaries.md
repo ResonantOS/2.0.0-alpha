@@ -1,7 +1,14 @@
 # ADR-007: Living Archive Boundaries
 
-Status: Accepted  
-Date: 2026-04-23
+## Decision Metadata
+
+- Decision status: Accepted
+- Alpha applicability: Partial
+- Superseded by: None
+- Owner: Living Archive
+- Decision date: 2026-04-23
+- Alpha note: Intake, review, and trusted-write boundaries apply through Node
+  bridge services. Desktop/Tauri ownership statements do not apply to Alpha.
 
 ## Decision
 

@@ -1,54 +1,85 @@
-# Browser-First Host
+# Browser-First Local Bridge
 
-Intent citation: `docs/architecture/ADR-037-browser-first-chromium-resonantos.md`
+This directory implements the authenticated local Node.js bridge used by the
+Chrome Manifest V3 extension. It owns host-mediated provider routing, Living
+Archive services, add-on delegation, extension preferences, diagnostics, and
+browser-control routes for the Alpha.
 
-This is the first runnable browser-first ResonantOS host. It launches the native CEF Chrome Runtime app in visible browser mode, loads the ResonantOS browser-layer extension, and loads Phantom from a local Chrome/Brave profile when available.
+The bridge is the only active Alpha host. It does not launch a desktop shell or
+native browser bundle.
 
-Run:
+## Run The Bridge
 
-```bash
-npm run browser-first:dev
-```
-
-Install and verify the desktop app:
-
-```bash
-npm run browser-first:install
-npm run browser-first:prove-desktop
-```
-
-The installer defaults to `~/Applications/ResonantOS Browser.app`. Set `RESONANTOS_BROWSER_INSTALL_ROOT=/Applications` only when intentionally doing a system-wide install with the required permissions.
-
-After building and signing the launcher bundle, the installer clears generated `com.apple.quarantine` and `com.apple.provenance` metadata and best-effort registers the app with Launch Services. If `lsregister` reports a Spotlight scan error from inside Codex, rerun the install or verification command from a normal macOS Terminal; sandboxed Codex sessions cannot reliably prove Launch Services registration.
-
-`browser-first:verify-installed` clears the previous launch log, opens the installed macOS app through Launch Services, and waits until the diagnostics prove the native AppKit menu, CEF/Chromium, main workspace, local bridge, Phantom, and pinned extensions are all ready. It must be run from a normal desktop session, not from the Codex sandbox, because the sandbox blocks local bridge sockets and AppKit observation. If Launch Services reports `kLSNoExecutableErr` in a sandbox even though the bundle preflight is valid, the verifier falls back to the validated launcher executable and reports the real runtime blocker, usually the local bridge `EPERM` boundary. When the bridge fails with `listen EPERM 127.0.0.1`, the report marks `environmentBoundary.type` as `sandbox-localhost-bind`; do not treat missing menus, Phantom, or workspace readiness as product failures from that run because Chromium never had a chance to start.
-
-`browser-native:verify-live` is the strict native Chromium gate. It fails if any native CEF smoke test is skipped, so it must also be run from a normal desktop session. This is the gate that proves native page load, embedded NSView rendering, same-session click/type/scroll, extension entrypoints, downloads, permission denial, context menus, standard browser menu commands, local Manifest V3 execution, and Phantom provider injection.
-
-`browser-first:verify-desktop` runs both gates in sequence and writes durable evidence to `logs/browser-first-desktop-verification.json`. Use this command for final readiness checks because it preserves stdout, stderr, parsed verifier JSON, and the exact failed step if macOS or CEF still blocks launch.
-
-`browser-first:audit-desktop` reads that report and returns `ready` only when the report proves the installed app, native CEF host, AppKit menus, main workspace, local bridge, pinned ResonantOS/Phantom extensions, and strict native smoke coverage all passed.
-
-`browser-first:prove-desktop` is the final one-command gate. It runs `browser-first:verify-desktop`, then `browser-first:audit-desktop`, and returns `ready` only when both pass.
-
-The macOS menu bar is owned by the native CEF/AppKit host, not by the HTML extension UI. A ready launch must expose the standard browser menus:
-
-```text
-ResonantOS Browser · File · Edit · View · Assistant · History · Bookmarks · Profiles · Tab · Window · Help
-```
-
-The host installs that menu before CEF starts and reasserts it after `CefInitialize()`. Launch diagnostics require the `browser.native.appkit_menu.installed` event with `phase: "post-cef"` before the browser is considered ready. If a desktop launch only shows `ResonantOS Browser`, rerun `npm run browser-first:verify-installed` from a normal Terminal and inspect the reported AppKit menu issue before shipping.
-
-Optional:
+From the repository root:
 
 ```bash
-npm run browser-first:dev -- --url=https://resonantos.com/dao/
+npm run browser-first:bridge
 ```
 
-Profile state is stored under:
+The root launcher delegates to `browser-first/host/run-bridge-minimal.mjs`.
+The bridge binds to `127.0.0.1` by default, generates a bridge token and scoped
+capability credentials, and writes the active connection config to
+`browser-first/resonantos-side-panel-extension/src/bridge-config.generated.js`
+with user-only permissions.
 
-```text
-~/ResonantOS_User/BrowserFirst/Profiles/main
+Keep the generated config, `ResonantOS_User/`, provider secrets, browser state,
+and diagnostics containing local paths out of Git.
+
+## Process Environment
+
+The launcher reads `process.env`; it does not load dotenv files. Export optional
+values in the terminal that starts the bridge. For example:
+
+```bash
+export OPENAI_API_KEY="replace-with-your-key"
+npm run browser-first:bridge
 ```
 
-This is now the product-direction prototype. Electron/Tauri browser surfaces and external Chrome sidecars are research paths only.
+Common bridge settings include `RESONANTOS_BROWSER_FIRST_BRIDGE_PORT` for the
+requested port and `RESONANTOS_BROWSER_FIRST_USER_ROOT` for local user state.
+Keep the default loopback host for normal Alpha development. Network exposure
+changes the security boundary and requires explicit allowlists, threat review,
+and dedicated validation.
+
+## Security Contract
+
+- Every protected route requires the generated bridge token.
+- Capability-protected routes also require a scoped capability token.
+- Raw route capability tokens are not written to generated extension config.
+- Provider credentials remain in session-only host memory or the bridge process
+  environment; the Alpha host does not persist credentials entered in Settings.
+- Generated config is local credential material, not a distributable asset.
+- Wallet approvals, signatures, transactions, payments, credential entry, and
+  other privileged browser actions remain human-only.
+- Diagnostics must redact provider values, credentials, and full private paths.
+
+Read [Module Ownership](../../docs/architecture/MODULE-OWNERSHIP.md) and the
+[Alpha runtime boundary](../../docs/architecture/ALPHA_RUNTIME_BOUNDARY.md)
+before adding a route or moving responsibility across services.
+
+## Validate Changes
+
+```bash
+npm run test:browser-first
+```
+
+Run the security pipeline for authentication, capability, secret, path, or
+subprocess changes:
+
+```bash
+node scripts/security-pipeline/run-check.mjs
+```
+
+Use the root [installation guide](../../INSTALL.md) for end-to-end setup and
+[CONTRIBUTING.md](../../CONTRIBUTING.md) for pull requests into `dev`. Current
+delivery state and Project 2 rules live in [Status](../../docs/STATUS.md) and
+[Project Governance](../../docs/PROJECT_GOVERNANCE.md).
+
+## First-time bridge deployment
+
+Deploying the bridge on a host and pointing a remote Chrome at it crosses
+several independent failure modes (proxy `/auth` mirror, Caddy TLS ALPN,
+capability-token map coverage, WebSocket upgrades). Follow the
+[bridge first-time-setup runbook](../../docs/browser-first-bridge-setup-runbook.md),
+and use the checked-in [`caddy-bridge-h1.json`](caddy-bridge-h1.json) to pin
+Caddy's TLS ALPN to `http/1.1` (required for the dashboard WebSockets).

@@ -63,7 +63,13 @@ export function HermesWorkspace({
   const embeddingGranted = hasGrant(installation, "ui-embedding");
   const archiveReadGranted = hasGrant(installation, "archive-read");
   const grantsReady = Boolean(installation?.enabled && shellGranted && embeddingGranted);
-  const dashboardUrl = dashboard?.url || configuredDashboardUrl(installation) || snapshot?.dashboard.url || "http://127.0.0.1:9119";
+  const dashboardUrl =
+    dashboard?.dashboardProxyUrl ||
+    snapshot?.dashboard.dashboardProxyUrl ||
+    dashboard?.url ||
+    configuredDashboardUrl(installation) ||
+    snapshot?.dashboard.url ||
+    "http://127.0.0.1:9119";
   const dashboardKey = profileHome || "default";
   const configuredHermesModel = typeof installation?.config?.hermesModel === "string" ? installation.config.hermesModel : "";
   const installedHermesModels = configuredHermesModels(installation);

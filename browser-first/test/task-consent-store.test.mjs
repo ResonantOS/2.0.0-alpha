@@ -71,6 +71,34 @@ test("task consent store expires and revokes consent by site and task class", as
   assert.equal((await harness.store.taskConsentAudit())["example.com::research"][0].reason, "test revoke");
 });
 
+test("task consent store keeps allow-once consent session-only and consumes it", async () => {
+  const harness = createHarness();
+  const consent = await harness.store.setTaskConsent({
+    siteKey: "example.com",
+    goal: "find current AI news",
+    mode: "allow-once",
+    reason: "one run only",
+    source: "test"
+  });
+
+  assert.equal(consent.mode, "allow-once");
+  assert.equal(consent.sessionOnly, true);
+  assert.equal(consent.usesRemaining, 1);
+  assert.equal(harness.state.augmentorTaskConsents, undefined);
+  assert.equal((await harness.store.consentFor({ siteKey: "example.com", goal: "find current AI news" })).mode, "allow-once");
+
+  const consumed = await harness.store.consumeTaskConsent({
+    siteKey: "example.com",
+    goal: "find current AI news",
+    reason: "used by test"
+  });
+
+  assert.equal(consumed.usesRemaining, 0);
+  assert.equal(await harness.store.consentFor({ siteKey: "example.com", goal: "find current AI news" }), null);
+  const audit = await harness.store.taskConsentAudit();
+  assert.deepEqual(audit["example.com::research"].map((entry) => entry.action), ["consume-once", "set-once"]);
+});
+
 test("task consent keys are explicit and portable", () => {
   assert.equal(taskConsentKey({ siteKey: "example.com", taskClass: "booking" }), "example.com::booking");
 });

@@ -4,6 +4,7 @@ import { promisify } from "node:util";
 import test from "node:test";
 
 const execFileAsync = promisify(execFile);
+const toPortablePath = (value) => String(value ?? "").replace(/\\/g, "/");
 
 async function runSelfTest(flag) {
   const { stdout } = await execFileAsync(process.execPath, [
@@ -24,7 +25,7 @@ test("Hermes delegation bridge routes pass in-process deterministic smoke test",
   assert.equal(result.gatedStatus, "blocked");
   assert.equal(result.statusAfter, "completed");
   assert.equal(result.hermesMode, "local-hermes-cli-disabled");
-  assert.ok(result.artifactPath.includes("BrowserFirst/DelegationArtifacts/hermes/"));
+  assert.ok(toPortablePath(result.artifactPath).includes("BrowserFirst/DelegationArtifacts/hermes/"));
   assert.equal(result.listed >= 1, true);
 });
 
@@ -34,6 +35,6 @@ test("OpenCode delegation bridge routes pass in-process deterministic smoke test
   assert.equal(result.mode, "in-process");
   assert.equal(result.gatedStatus, "blocked");
   assert.equal(result.statusAfter, "completed");
-  assert.ok(result.artifactPath.includes("BrowserFirst/DelegationArtifacts/opencode/"));
+  assert.ok(toPortablePath(result.artifactPath).includes("BrowserFirst/DelegationArtifacts/opencode/"));
   assert.equal(result.listed >= 1, true);
 });

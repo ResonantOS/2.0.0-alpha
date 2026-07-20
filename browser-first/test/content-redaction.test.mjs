@@ -4,6 +4,10 @@ import path from "node:path";
 import test from "node:test";
 import { JSDOM } from "jsdom";
 
+const openAiLikeLinkSecret = ["sk", "live", "URL", "SECRET"].join("-");
+const openAiLikeFormSecret = ["sk", "live", "FORM", "SECRET"].join("-");
+const openAiLikePageSecret = ["sk", "live", "PAGE", "SECRET"].join("-");
+
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
 const contentScriptPath = path.join(
   repoRoot,
@@ -44,21 +48,57 @@ const controlRefsScriptPath = path.join(
   "lib",
   "content-control-refs.js",
 );
+const resonantContextScriptPath = path.join(
+  repoRoot,
+  "browser-first",
+  "resonantos-side-panel-extension",
+  "src",
+  "lib",
+  "resonant-context.js",
+);
+const contextPluginsScriptPath = path.join(
+  repoRoot,
+  "browser-first",
+  "resonantos-side-panel-extension",
+  "src",
+  "lib",
+  "context-plugins.js",
+);
+const resonatorScriptPath = path.join(
+  repoRoot,
+  "browser-first",
+  "resonantos-side-panel-extension",
+  "src",
+  "lib",
+  "resonator.js",
+);
 
-async function loadContentScript(html) {
-  const dom = new JSDOM(html, {
+async function loadContentScript(html, { asChildFrame = false, loadSdk = false, url = "https://example.test/login" } = {}) {
+  const dom = new JSDOM(asChildFrame ? '<!doctype html><iframe id="child"></iframe>' : html, {
     runScripts: "outside-only",
-    url: "https://example.test/login",
+    url,
   });
+  const targetWindow = asChildFrame
+    ? dom.window.document.querySelector("#child").contentWindow
+    : dom.window;
+  if (asChildFrame) {
+    targetWindow.document.open();
+    targetWindow.document.write(html);
+    targetWindow.document.close();
+  }
   let listener = null;
-  dom.window.chrome = {
+  const sentMessages = [];
+  targetWindow.chrome = {
     runtime: {
       onMessage: {
         addListener(callback) {
           listener = callback;
         },
       },
-      sendMessage: () => Promise.resolve(),
+      sendMessage: (message) => {
+        sentMessages.push(message);
+        return Promise.resolve();
+      },
     },
     storage: {
       onChanged: {
@@ -66,14 +106,19 @@ async function loadContentScript(html) {
       },
     },
   };
-  dom.window.HTMLElement.prototype.scrollIntoView = function scrollIntoView() {};
-  dom.window.eval(await readFile(controlOverlayScriptPath, "utf8"));
-  dom.window.eval(await readFile(fieldSafetyScriptPath, "utf8"));
-  dom.window.eval(await readFile(inlineActionsScriptPath, "utf8"));
-  dom.window.eval(await readFile(controlRefsScriptPath, "utf8"));
-  dom.window.eval(await readFile(contentScriptPath, "utf8"));
+  targetWindow.HTMLElement.prototype.scrollIntoView = function scrollIntoView() {};
+  if (loadSdk) {
+    targetWindow.eval(await readFile(resonantContextScriptPath, "utf8"));
+    targetWindow.eval(await readFile(contextPluginsScriptPath, "utf8"));
+    targetWindow.eval(await readFile(resonatorScriptPath, "utf8"));
+  }
+  targetWindow.eval(await readFile(controlOverlayScriptPath, "utf8"));
+  targetWindow.eval(await readFile(fieldSafetyScriptPath, "utf8"));
+  targetWindow.eval(await readFile(inlineActionsScriptPath, "utf8"));
+  targetWindow.eval(await readFile(controlRefsScriptPath, "utf8"));
+  targetWindow.eval(await readFile(contentScriptPath, "utf8"));
   assert.equal(typeof listener, "function");
-  return { dom, listener };
+  return { dom, listener, sentMessages, window: targetWindow };
 }
 
 test("content inline actions expose stable shortcuts and button markup", async () => {
@@ -173,11 +218,154 @@ test("content page snapshots redact sensitive and ambiguous editable values", as
   assert.ok(response.snapshot.fields.every((field) => typeof field.fieldKind === "string"));
 });
 
+test("content page snapshots strip query and hash secrets from URLs", async () => {
+  const { listener } = await loadContentScript(`
+    <!doctype html>
+    <main>Visible page</main>
+    <a href="/next?token=${openAiLikeLinkSecret}#card-4111222233334444">Next</a>
+    <form action="/submit?token=${openAiLikeFormSecret}#card-4111222233334444"></form>
+  `, {
+    url: `https://example.test/login?token=${openAiLikePageSecret}#card-4111222233334444`
+  });
+  let response = null;
+  listener({
+    channel: "resonantos.browser_first.content",
+    type: "read_page",
+  }, {}, (payload) => {
+    response = payload;
+  });
+
+  assert.equal(response?.ok, true);
+  assert.equal(response.snapshot.url, "https://example.test/login");
+  assert.equal(response.snapshot.links[0].href, "https://example.test/next");
+  assert.equal(response.snapshot.frame.referrer, "");
+  assert.equal(response.snapshot.controls.length, 1);
+  assert.equal(JSON.stringify(response.snapshot).includes(openAiLikeLinkSecret), false);
+  assert.equal(JSON.stringify(response.snapshot).includes(openAiLikeFormSecret), false);
+  assert.equal(JSON.stringify(response.snapshot).includes(openAiLikePageSecret), false);
+  assert.doesNotMatch(JSON.stringify(response.snapshot), /token=|4111222233334444|#card/);
+
+  let forms = null;
+  listener({
+    channel: "resonantos.browser_first.content",
+    type: "detect_forms",
+  }, {}, (payload) => {
+    forms = payload;
+  });
+  assert.equal(forms.forms[0].action, "https://example.test/submit");
+  assert.equal(JSON.stringify(forms).includes(openAiLikeFormSecret), false);
+  assert.doesNotMatch(JSON.stringify(forms), /token=|4111222233334444|#card/);
+});
+
+test("content SDK snapshots use domain plugins and redact raw form values before background send", async () => {
+  const { sentMessages } = await loadContentScript(`
+    <!doctype html>
+    <main>Visible page</main>
+    <form>
+      <input type="password" name="password" value="hunter2-secret">
+      <input type="text" name="card-number" value="4111 2222 3333 4444">
+      <input type="search" name="q" value="resonantos browser">
+    </form>
+  `, { loadSdk: true });
+
+  await new Promise((resolve) => setTimeout(resolve, 1700));
+
+  const snapshotMessage = sentMessages.find((message) => message.type === "resonant-context-snapshot");
+  assert.ok(snapshotMessage, "expected autonomous ResonantContext snapshot message");
+  assert.equal(snapshotMessage.payload.domain, "generic-web");
+  assert.equal(snapshotMessage.payload.url, "https://example.test/login");
+
+  const serialized = JSON.stringify(snapshotMessage.payload);
+  assert.doesNotMatch(serialized, /hunter2-secret|4111 2222 3333 4444/);
+  assert.match(serialized, /\[redacted/);
+});
+
+test("content Resonator commands call the visual guide layer", async () => {
+  const { dom, listener } = await loadContentScript(`
+    <!doctype html>
+    <main><button id="target">Continue</button></main>
+  `, { loadSdk: true });
+
+  let response = null;
+  listener({
+    channel: "resonantos.browser_first.content",
+    type: "resonator",
+    action: "highlight",
+    payload: { selector: "#target", duration: 20 },
+  }, {}, (payload) => {
+    response = payload;
+  });
+
+  assert.equal(response?.ok, true);
+  assert.equal(response.action, "highlight");
+  assert.equal(dom.window.document.querySelector("#target")?.getAttribute("data-resonator"), "highlight");
+});
+
+test("visual-only content commands are ignored outside the top frame", async () => {
+  const { listener, window: frameWindow } = await loadContentScript(`
+    <!doctype html>
+    <main><button id="target">Continue</button></main>
+  `, { asChildFrame: true, loadSdk: true });
+
+  let response = null;
+  const handled = listener({
+    channel: "resonantos.browser_first.content",
+    type: "resonator",
+    action: "highlight",
+    payload: { selector: "#target", duration: 20 },
+  }, {}, (payload) => {
+    response = payload;
+  });
+
+  assert.equal(handled, false);
+  assert.equal(response, null);
+  assert.equal(frameWindow.document.querySelector("#target")?.getAttribute("data-resonator"), null);
+});
+
+test("page reads and governed actions are available inside child frames", async () => {
+  const { listener, window: frameWindow } = await loadContentScript(`
+    <!doctype html>
+    <main><h2>Booking calendar frame</h2><button id="target">Tuesday 10:00</button></main>
+  `, { asChildFrame: true });
+
+  let readResponse = null;
+  const readHandled = listener({
+    channel: "resonantos.browser_first.content",
+    type: "read_page",
+  }, {}, (payload) => {
+    readResponse = payload;
+  });
+  assert.equal(readHandled, true);
+  assert.equal(readResponse?.ok, true);
+  assert.equal(readResponse.snapshot.frame.isTop, false);
+  assert.match(readResponse.snapshot.text, /Booking calendar frame/);
+
+  let clicked = false;
+  frameWindow.document.querySelector("#target").addEventListener("click", () => {
+    clicked = true;
+  });
+  let clickResponse = null;
+  const clickHandled = listener({
+    channel: "resonantos.browser_first.content",
+    type: "click_text",
+    text: "Tuesday 10:00",
+  }, {}, (payload) => {
+    clickResponse = payload;
+  });
+  assert.equal(clickHandled, true);
+  assert.equal(clickResponse?.ok, true);
+  assert.equal(clicked, true);
+});
+
 test("content click actions reject repeated text unless a control ref is supplied", async () => {
   const { listener } = await loadContentScript(`
     <!doctype html>
-    <button id="primary">Add</button>
-    <button id="secondary">Add</button>
+    <section aria-label="Starter plan">
+      <button id="primary">Add</button>
+    </section>
+    <section aria-label="Pro plan">
+      <button id="secondary">Add</button>
+    </section>
   `);
   let snapshot = null;
   listener({
@@ -201,16 +389,25 @@ test("content click actions reject repeated text unless a control ref is supplie
   assert.match(response.error, /matched 2 visible candidates/i);
   assert.deepEqual(Array.from(response.candidates, (candidate) => candidate.text), ["Add", "Add"]);
   assert.ok(response.candidates.every((candidate) => /^r\d+$/.test(candidate.ref)));
+  assert.deepEqual(Array.from(response.candidates, (candidate) => candidate.visibleIndex), [1, 2]);
+  assert.deepEqual(Array.from(response.candidates, (candidate) => candidate.section.label), ["Starter plan", "Pro plan"]);
   assert.equal(snapshot.controls.length, 2);
+  assert.equal(snapshot.controls[0].visibleIndex, 1);
+  assert.equal(snapshot.controls[0].section.label, "Starter plan");
 });
 
 test("content typing actions reject ambiguous fields and preserve existing values", async () => {
   const { dom, listener } = await loadContentScript(`
     <!doctype html>
-    <label for="first-search">Search</label>
-    <input id="first-search" type="search" value="">
-    <label for="second-search">Search</label>
-    <input id="second-search" type="search" value="">
+    <form id="header-search" aria-label="Header search">
+      <label for="first-search">Search</label>
+      <input id="first-search" type="search" value="" aria-describedby="first-help">
+      <small id="first-help">Search the catalog</small>
+    </form>
+    <form id="footer-search" aria-label="Footer search">
+      <label for="second-search">Search</label>
+      <input id="second-search" type="search" value="">
+    </form>
   `);
 
   let response = null;
@@ -227,6 +424,9 @@ test("content typing actions reject ambiguous fields and preserve existing value
   assert.equal(response.ambiguousTarget, true);
   assert.match(response.error, /matched 2 visible candidates/i);
   assert.deepEqual(Array.from(response.candidates, (candidate) => candidate.label), ["search", "search"]);
+  assert.deepEqual(Array.from(response.candidates, (candidate) => candidate.visibleIndex), [1, 2]);
+  assert.deepEqual(Array.from(response.candidates, (candidate) => candidate.form.id), ["header-search", "footer-search"]);
+  assert.equal(response.candidates[0].ariaDescription, "Search the catalog");
   assert.equal(dom.window.document.querySelector("#first-search").value, "");
   assert.equal(dom.window.document.querySelector("#second-search").value, "");
 });
@@ -262,6 +462,39 @@ test("content typing actions use exact editable refs when repeated labels exist"
   assert.equal(response.ref, secondRef);
   assert.equal(dom.window.document.querySelector("#first-search").value, "");
   assert.equal(dom.window.document.querySelector("#second-search").value, "resonantos");
+});
+
+test("content typing actions support plaintext-only contenteditable regions", async () => {
+  const { dom, listener } = await loadContentScript(`
+    <!doctype html>
+    <section aria-label="Draft editor">
+      <div id="draft" role="textbox" contenteditable="plaintext-only" aria-label="Draft body"></div>
+    </section>
+  `);
+
+  let snapshot = null;
+  listener({
+    channel: "resonantos.browser_first.content",
+    type: "read_page",
+  }, {}, (payload) => {
+    snapshot = payload.snapshot;
+  });
+  const draft = snapshot.fields.find((field) => field.id === "draft");
+  assert.equal(draft?.contentEditable, "plaintext-only");
+  assert.equal(draft?.section.label, "Draft editor");
+
+  let response = null;
+  listener({
+    channel: "resonantos.browser_first.content",
+    type: "type_text",
+    ref: draft.ref,
+    text: "ResonantOS draft",
+  }, {}, (payload) => {
+    response = payload;
+  });
+
+  assert.equal(response?.ok, true);
+  assert.equal(dom.window.document.querySelector("#draft").textContent, "ResonantOS draft");
 });
 
 test("content page snapshots and typing include open shadow DOM controls safely", async () => {

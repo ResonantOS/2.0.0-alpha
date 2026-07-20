@@ -52,6 +52,10 @@ function createHarness({ initialPreflight = null } = {}) {
     setStatus: (status) => events.push(["status", status]),
     storage,
     taskConsentStore: {
+      async consumeTaskConsent(consent) {
+        events.push(["consume-consent", consent]);
+        return consent;
+      },
       async setTaskConsent(consent) {
         events.push(["consent", consent]);
         return {
@@ -123,6 +127,24 @@ test("side panel control preflight controller approves and trusts through explic
   assert.equal(harness.getPending(), null);
   assert.equal(harness.getNextDecision().mode, "trusted-safe-actions");
   assert.ok(harness.events.some((event) => event[0] === "consent" && event[1].mode === "allow-safe"));
+  assert.ok(harness.events.some((event) => event[0] === "run-control" && event[2].preflightApproved === true));
+});
+
+test("side panel control preflight controller allows a task class once without durable trust", async () => {
+  const harness = createHarness();
+  await harness.controller.requestControlPreflight({
+    goal: "research current AI browser news and compare sources",
+    mode: "ask-before-action",
+    siteKey: "news.example"
+  });
+
+  await harness.controller.allowControlPreflightOnceForTaskClass(harness.getPending().id);
+
+  assert.equal(harness.getPending(), null);
+  assert.equal(harness.getNextDecision().mode, "allowed-task-class-once");
+  assert.ok(harness.events.some((event) => event[0] === "consent" && event[1].mode === "allow-once"));
+  assert.ok(harness.events.some((event) => event[0] === "consume-consent"));
+  assert.ok(harness.events.some((event) => event[0] === "message" && /for this execution only/.test(event[2])));
   assert.ok(harness.events.some((event) => event[0] === "run-control" && event[2].preflightApproved === true));
 });
 

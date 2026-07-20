@@ -66,9 +66,26 @@ test("memory host service owns Living Archive bridge routes and capability gates
   assert.equal(routes.get("POST /memory/source/intake")?.requiredCapability, "memory-source-intake");
   assert.equal(routes.get("POST /memory/source/file-intake")?.requiredCapability, "memory-source-file-intake");
   assert.equal(routes.get("POST /memory/source/sync")?.requiredCapability, "memory-source-file-intake");
+  assert.equal(routes.get("POST /memory/search")?.requiredCapability, "archive-read");
+  assert.equal(routes.get("POST /memory/wiki/page/read")?.requiredCapability, "archive-read");
   assert.equal(routes.get("POST /memory/wiki/lint")?.requiredCapability, "memory-source-review");
+  assert.equal(routes.get("POST /memory/source/versions")?.requiredCapability, "memory-source-review");
   assert.equal(routes.get("POST /memory/source/versions/repair")?.requiredCapability, "memory-source-manage");
   assert.equal(routes.get("POST /memory/source/diff")?.requiredCapability, "memory-source-review");
+  assert.equal(routes.get("POST /archive/intake")?.requiredCapability, "archive-write");
+  assert.equal(routes.get("POST /archive/intake/list")?.requiredCapability, "archive-read");
+  assert.equal(routes.get("POST /archive/intake/read")?.requiredCapability, "archive-read");
+  assert.equal(routes.get("POST /archive/review/request")?.requiredCapability, "archive-write");
+  assert.equal(routes.get("POST /archive/review/list")?.requiredCapability, "archive-read");
+  assert.equal(routes.get("POST /archive/review/transition")?.requiredCapability, "archive-write");
+  assert.equal(routes.get("POST /archive/review/draft")?.requiredCapability, "archive-write");
+  assert.equal(routes.get("POST /archive/review/artifact/read")?.requiredCapability, "archive-read");
+  assert.equal(routes.get("POST /archive/review/artifact/verify")?.requiredCapability, "archive-write");
+  assert.equal(routes.get("POST /archive/review/verification/read")?.requiredCapability, "archive-read");
+  assert.equal(routes.get("POST /archive/review/artifact/revise")?.requiredCapability, "archive-write");
+  assert.equal(routes.get("POST /archive/review/artifact/promote")?.requiredCapability, "archive-write");
+  assert.equal(routes.get("POST /archive/review/promotions/list")?.requiredCapability, "archive-read");
+  assert.equal(routes.get("POST /archive/review/promotions/restore")?.requiredCapability, "archive-write");
 });
 
 test("memory host service fails fast when a route handler is missing", () => {

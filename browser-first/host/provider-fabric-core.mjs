@@ -8,6 +8,16 @@ export const providerProfiles = [
     role: "Default Augmentor and agent-control provider",
   },
   {
+    id: "shared-zai-glm",
+    label: "Z.AI GLM",
+    providerType: "openai-compatible",
+    templateId: "zai",
+    authType: "api-key",
+    apiBaseUrl: "http://127.0.0.1:18789/v1",
+    models: ["zai/glm-5.2"],
+    role: "OpenClaw/Z.AI GLM fallback provider",
+  },
+  {
     id: "shared-openai",
     label: "OpenAI",
     providerType: "openai",
@@ -26,6 +36,15 @@ export const modelCatalog = [
     runtime: "cloud",
     costTier: "subscription",
     qualityTier: "daily strategic and agentic work",
+  },
+  {
+    model: "zai/glm-5.2",
+    label: "Z.AI GLM 5.2",
+    providerId: "shared-zai-glm",
+    providerLabel: "Z.AI GLM",
+    runtime: "cloud",
+    costTier: "paid-per-call",
+    qualityTier: "general coding fallback",
   },
   {
     model: "gpt-5.5",
@@ -62,7 +81,7 @@ export const defaultRoutingStrategies = [
     label: "Augmentor Chat",
     workload: "trusted_conversation",
     primaryModel: "MiniMax-M3",
-    fallbackModels: ["gpt-5.5", "gpt-5.4-mini", "batiai/gemma4-e2b:q4"],
+    fallbackModels: ["zai/glm-5.2", "gpt-5.5", "gpt-5.4-mini", "batiai/gemma4-e2b:q4"],
     costPosture: "subscription-first",
     hardStop: false,
     notes: "Use fast subscription capacity first, then higher reasoning only when subscription routes fail.",
@@ -72,7 +91,7 @@ export const defaultRoutingStrategies = [
     label: "Agent Control",
     workload: "browser_execution",
     primaryModel: "MiniMax-M3",
-    fallbackModels: ["gpt-5.4-mini", "gpt-5.5"],
+    fallbackModels: ["zai/glm-5.2", "gpt-5.4-mini", "gpt-5.5"],
     costPosture: "responsive-subscription",
     hardStop: false,
     notes: "Browser control needs a responsive model, but high-cost escalation should remain visible.",
@@ -82,7 +101,7 @@ export const defaultRoutingStrategies = [
     label: "Archive Ingest",
     workload: "knowledge_promotion",
     primaryModel: "gpt-5.5",
-    fallbackModels: ["gpt-5.4-mini", "MiniMax-M3"],
+    fallbackModels: ["zai/glm-5.2", "gpt-5.4-mini", "MiniMax-M3"],
     costPosture: "quality-first",
     hardStop: true,
     notes: "Knowledge writes should prefer the strongest verifier route and stop if no trusted model is available.",
@@ -92,17 +111,17 @@ export const defaultRoutingStrategies = [
     label: "Routine Delegation",
     workload: "delegated_routine_work",
     primaryModel: "MiniMax-M3",
-    fallbackModels: ["batiai/gemma4-e2b:q4"],
+    fallbackModels: ["zai/glm-5.2", "batiai/gemma4-e2b:q4"],
     costPosture: "low-cost-first",
     hardStop: false,
-    notes: "Routine background work should avoid expensive routes unless explicitly escalated.",
+    notes: "Routine background work uses subscription capacity first, then Z.AI GLM before the local floor.",
   },
   {
     id: "recovery-engineer",
     label: "Recovery Engineer",
     workload: "resurrect_mode",
     primaryModel: "MiniMax-M3",
-    fallbackModels: ["gpt-5.5", "batiai/gemma4-e2b:q4"],
+    fallbackModels: ["zai/glm-5.2", "gpt-5.5", "batiai/gemma4-e2b:q4"],
     costPosture: "best-available-in-emergency",
     hardStop: false,
     notes: "Emergency recovery should find the best reachable brain, with Gemma 4 2B as the final local fallback.",
@@ -119,6 +138,7 @@ export function modelById(model) {
 
 export function inferProviderType(providerId) {
   if (providerId === "shared-openai" || String(providerId ?? "").includes("openai")) return "openai";
+  if (providerId === "shared-zai-glm" || String(providerId ?? "").toLowerCase().includes("zai")) return "openai-compatible";
   if (providerId === "desktop-local" || String(providerId ?? "").includes("local")) return "openai-compatible";
   return "minimax";
 }
@@ -147,8 +167,8 @@ export function modelCatalogEntriesForProvider(profile) {
     .filter(Boolean);
 }
 
-export function allowedModelsForProvider(providerId, preferences = {}) {
-  const declaredModels = modelCatalog
+export function allowedModelsForProvider(providerId, preferences = {}, catalog = modelCatalog) {
+  const declaredModels = catalog
     .filter((entry) => entry.providerId === providerId)
     .map((entry) => entry.model);
   const configured = Array.isArray(preferences.allowedModels?.[providerId])
@@ -157,40 +177,41 @@ export function allowedModelsForProvider(providerId, preferences = {}) {
   return new Set(configured.length ? configured : declaredModels);
 }
 
-export function isModelAllowed(model, preferences = {}) {
-  const catalogEntry = modelById(model);
+export function isModelAllowed(model, preferences = {}, catalog = modelCatalog) {
+  const catalogEntry = catalog.find((entry) => entry.model === model) ?? null;
   if (!catalogEntry) {
     return false;
   }
-  return allowedModelsForProvider(catalogEntry.providerId, preferences).has(model);
+  return allowedModelsForProvider(catalogEntry.providerId, preferences, catalog).has(model);
 }
 
-export function normalizeFallbackModels(value) {
-  const allowed = new Set(modelCatalog.map((entry) => entry.model));
+export function normalizeFallbackModels(value, catalog = modelCatalog) {
+  const allowed = new Set(catalog.map((entry) => entry.model));
   return [...new Set((Array.isArray(value) ? value : String(value ?? "").split(","))
     .map((model) => String(model ?? "").trim())
     .filter((model) => allowed.has(model)))]
     .slice(0, 6);
 }
 
-export function normalizeRoutingStrategy(base, override = {}) {
-  const primaryModel = modelById(override.primaryModel) ? override.primaryModel : base.primaryModel;
+export function normalizeRoutingStrategy(base, override = {}, catalog = modelCatalog) {
+  const known = new Set(catalog.map((entry) => entry.model));
+  const primaryModel = known.has(override.primaryModel) ? override.primaryModel : base.primaryModel;
   return {
     ...base,
     primaryModel,
-    fallbackModels: normalizeFallbackModels(override.fallbackModels ?? base.fallbackModels)
+    fallbackModels: normalizeFallbackModels(override.fallbackModels ?? base.fallbackModels, catalog)
       .filter((model) => model !== primaryModel),
     costPosture: String(override.costPosture ?? base.costPosture).trim().slice(0, 80) || base.costPosture,
     hardStop: typeof override.hardStop === "boolean" ? override.hardStop : base.hardStop,
   };
 }
 
-export function modelRuntimeState(model, { secrets = {}, preferences = {}, localRuntimeUrl = "" } = {}) {
-  const catalogEntry = modelById(model);
+export function modelRuntimeState(model, { secrets = {}, preferences = {}, localRuntimeUrl = "", catalog = modelCatalog } = {}) {
+  const catalogEntry = catalog.find((entry) => entry.model === model) ?? null;
   if (!catalogEntry) {
     return null;
   }
-  const allowed = isModelAllowed(model, preferences);
+  const allowed = isModelAllowed(model, preferences, catalog);
   const configured = catalogEntry.providerId === "desktop-local"
     ? Boolean(localRuntimeUrl)
     : Boolean(secrets[catalogEntry.providerId]);
@@ -207,11 +228,12 @@ export function resolveRoutingStrategies({
   overrides = {},
   preferences = {},
   localRuntimeUrl = "",
+  catalog = modelCatalog,
 } = {}) {
   return defaultRoutingStrategies.map((base) => {
-    const strategy = normalizeRoutingStrategy(base, overrides[base.id]);
+    const strategy = normalizeRoutingStrategy(base, overrides[base.id], catalog);
     const chain = [strategy.primaryModel, ...strategy.fallbackModels]
-      .map((model) => modelRuntimeState(model, { secrets, preferences, localRuntimeUrl }))
+      .map((model) => modelRuntimeState(model, { secrets, preferences, localRuntimeUrl, catalog }))
       .filter(Boolean);
     return {
       ...strategy,
@@ -222,9 +244,26 @@ export function resolveRoutingStrategies({
   });
 }
 
-export function providerRouteForModel(model, { localRuntimeUrl = "" } = {}) {
+export function providerRouteForModel(model, { localRuntimeUrl = "", catalog = modelCatalog, profiles = providerProfiles } = {}) {
   if (model === "__auto__" || model === "auto") {
     return null;
+  }
+  // A model contributed by a custom (non-built-in) provider account routes to
+  // that provider's own endpoint. Checked before the built-in prefix rules so a
+  // custom model whose name resembles a built-in (e.g. "gpt-*") is not hijacked
+  // to a shared endpoint. Built-in providers fall through to the rules below.
+  const dynamicEntry = catalog.find((candidate) => candidate.model === model);
+  if (dynamicEntry && !providerProfiles.some((builtIn) => builtIn.id === dynamicEntry.providerId)) {
+    const profile = profiles.find((candidate) => candidate.id === dynamicEntry.providerId);
+    if (profile?.apiBaseUrl) {
+      return {
+        providerId: dynamicEntry.providerId,
+        providerType: dynamicEntry.providerType ?? profile.providerType ?? "openai-compatible",
+        apiBaseUrl: profile.apiBaseUrl,
+        wireModel: dynamicEntry.wireModel ?? model,
+        label: profile.label ?? dynamicEntry.providerLabel ?? "Provider",
+      };
+    }
   }
   if (model?.startsWith("batiai/")) {
     return {
@@ -242,6 +281,15 @@ export function providerRouteForModel(model, { localRuntimeUrl = "" } = {}) {
       apiBaseUrl: "https://api.openai.com/v1",
       wireModel: model,
       label: "Shared OpenAI",
+    };
+  }
+  if (model === "zai/glm-5.2" || model?.toLowerCase().startsWith("zai/glm")) {
+    return {
+      providerId: "shared-zai-glm",
+      providerType: "openai-compatible",
+      apiBaseUrl: "http://127.0.0.1:18789/v1",
+      wireModel: model || "zai/glm-5.2",
+      label: "Shared Z.AI GLM",
     };
   }
   return {
@@ -270,6 +318,14 @@ export function providerConnectivityTarget(providerId, { localRuntimeUrl = "" } 
       sendsCredential: true,
     };
   }
+  if (providerId === "shared-zai-glm") {
+    return {
+      providerId,
+      url: "http://127.0.0.1:18789/v1/models",
+      label: "Shared Z.AI GLM",
+      sendsCredential: true,
+    };
+  }
   if (providerId === "shared-minimax") {
     return {
       providerId,
@@ -288,10 +344,12 @@ export function providerRouteForWorkload({
   preferences = {},
   strategies = [],
   localRuntimeUrl = "",
+  catalog = modelCatalog,
+  profiles = providerProfiles,
 } = {}) {
   const explicitModel = String(requestedModel ?? "").trim();
   if (explicitModel && !["__auto__", "auto", "strategy"].includes(explicitModel)) {
-    if (!isModelAllowed(explicitModel, preferences)) {
+    if (!isModelAllowed(explicitModel, preferences, catalog)) {
       return {
         route: null,
         source: "manual",
@@ -300,7 +358,7 @@ export function providerRouteForWorkload({
         reason: "model-disabled",
       };
     }
-    const explicitRoute = providerRouteForModel(explicitModel, { localRuntimeUrl });
+    const explicitRoute = providerRouteForModel(explicitModel, { localRuntimeUrl, catalog, profiles });
     return {
       route: explicitRoute,
       source: "manual",
@@ -322,7 +380,7 @@ export function providerRouteForWorkload({
     };
   }
   return {
-    route: providerRouteForModel(available.model, { localRuntimeUrl }),
+    route: providerRouteForModel(available.model, { localRuntimeUrl, catalog, profiles }),
     source: "strategy",
     strategy,
     requestedModel: explicitModel || "__auto__",

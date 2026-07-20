@@ -327,7 +327,7 @@ test("add-ons workspace reports bridge failures without exposing secrets", async
   renderAddOnsWorkspace({
     container,
     bridgeRequest: async () => {
-      throw new Error("host unavailable");
+      throw new Error("host unavailable token=abc123 sk-settings-secret");
     }
   });
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -336,5 +336,25 @@ test("add-ons workspace reports bridge failures without exposing secrets", async
   assert.match(container.textContent, /Delegation review unavailable: host unavailable/);
   assert.match(container.textContent, /Draft review unavailable: host unavailable/);
   assert.equal(container.querySelector(".addons-status").dataset.tone, "error");
-  assert.doesNotMatch(container.textContent, /token|secret/i);
+  assert.doesNotMatch(container.textContent, /abc123|sk-settings-secret/i);
+});
+
+test("add-ons workspace replaces raw bridge fetch failures with setup guidance", async () => {
+  const dom = new JSDOM(`<main id="root"></main>`, { url: "https://example.test/" });
+  globalThis.document = dom.window.document;
+  const container = dom.window.document.querySelector("#root");
+
+  renderAddOnsWorkspace({
+    container,
+    bridgeRequest: async () => {
+      throw new TypeError("Failed to fetch");
+    }
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.match(container.textContent, /Add-on registry unavailable: ResonantOS bridge is unreachable/);
+  assert.match(container.textContent, /Delegation review unavailable: ResonantOS bridge is unreachable/);
+  assert.match(container.textContent, /Draft review unavailable: ResonantOS bridge is unreachable/);
+  assert.match(container.textContent, /Settings > Bridge Target/);
+  assert.doesNotMatch(container.textContent, /Failed to fetch/);
 });

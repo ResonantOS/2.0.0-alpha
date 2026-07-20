@@ -1,7 +1,13 @@
 # ADR-024: Add-on Store And Commerce Model
 
-Status: Accepted  
-Date: 2026-04-28
+## Decision Metadata
+
+- Decision status: Accepted
+- Alpha applicability: Deferred
+- Superseded by: None
+- Owner: Add-on store
+- Decision date: 2026-04-28
+- Alpha note: Store and commerce behavior is not Alpha scope.
 
 ## Decision
 
@@ -186,4 +192,4 @@ Related documents:
 - `ADR-008: Wallet / Web3 Security`
 - `ADR-018: Add-on SDK V0`
 - `ADR-023: Add-on Repository And Registry Model`
-- `UX-002: Glocal Discovery Interface`
+- `docs/product/PRODUCT_GUIDE.md` and the issue-linked `docs/ROADMAP.md`

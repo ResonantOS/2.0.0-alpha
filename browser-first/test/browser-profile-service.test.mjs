@@ -89,8 +89,8 @@ test("browser profile roots are platform specific and portable", () => {
     "/home/user/.config/chromium",
   ]);
   assert.deepEqual(chromeProfileRoots({ home: "C:\\Users\\User", platform: "win32", env: { LOCALAPPDATA: "C:\\Users\\User\\AppData\\Local" } }), [
-    path.join("C:\\Users\\User\\AppData\\Local", "Google", "Chrome", "User Data"),
-    path.join("C:\\Users\\User\\AppData\\Local", "BraveSoftware", "Brave-Browser", "User Data"),
-    path.join("C:\\Users\\User\\AppData\\Local", "Chromium", "User Data"),
+    path.win32.join("C:\\Users\\User\\AppData\\Local", "Google", "Chrome", "User Data"),
+    path.win32.join("C:\\Users\\User\\AppData\\Local", "BraveSoftware", "Brave-Browser", "User Data"),
+    path.win32.join("C:\\Users\\User\\AppData\\Local", "Chromium", "User Data"),
   ]);
 });

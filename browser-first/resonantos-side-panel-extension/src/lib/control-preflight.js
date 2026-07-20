@@ -41,7 +41,7 @@ export function shouldRequireControlPreflight({
 } = {}) {
   if (alreadyApproved || resumedFromJob) return false;
   if (mode === "blocked") return false;
-  if (existingConsent?.mode === "allow-safe") return false;
+  if (["allow-safe", "allow-once"].includes(existingConsent?.mode)) return false;
   return isLongAutonomousControlGoal(goal);
 }
 
@@ -59,6 +59,7 @@ export function formatControlPreflightMessage(preflight) {
     "Still human-only: wallet, login, credential, payment, checkout, signing, transfer, destructive actions, and public submit unless a separate approval card appears.",
     "",
     `Approve: /approve-control ${item.id}`,
+    `Allow class once: /allow-control-once ${item.id}`,
     `Deny: /deny-control ${item.id}`
   ].join("\n");
 }

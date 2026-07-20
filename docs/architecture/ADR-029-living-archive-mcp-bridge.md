@@ -1,7 +1,13 @@
 # ADR-029: Living Archive MCP Bridge
 
-Status: Accepted
-Date: 2026-05-03
+## Decision Metadata
+
+- Decision status: Accepted
+- Alpha applicability: Deferred
+- Superseded by: None
+- Owner: Living Archive MCP
+- Decision date: 2026-05-03
+- Alpha note: Optional external MCP services are not required Alpha runtime.
 
 ## Decision
 

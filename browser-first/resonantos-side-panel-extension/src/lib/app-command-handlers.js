@@ -161,6 +161,7 @@ export function createAppCommandHandlers({
   activeTab,
   addMessage,
   bridgeRequest,
+  getBridgeRequest,
   browserJobStore,
   chrome,
   detectWalletState,
@@ -179,11 +180,12 @@ export function createAppCommandHandlers({
   tickBrowserJobScheduler,
   updateBrowserJob
 }) {
+  const bridge = () => (typeof getBridgeRequest === "function" ? getBridgeRequest() : bridgeRequest);
   async function runGoalCommand(body) {
     const sections = parseCommandSections(body);
     const mission = sections[0] ?? "";
     setActivity("tool-running", "Creating goal workspace", mission);
-    const result = await bridgeRequest("/goals", {
+    const result = await bridge()("/goals", {
       method: "POST",
       body: {
         mission,
@@ -195,7 +197,7 @@ export function createAppCommandHandlers({
   }
 
   async function startDelegationIfPossible(result) {
-    return startDelegationLifecycle(result, { bridgeRequest });
+    return startDelegationLifecycle(result, { bridgeRequest, getBridgeRequest: () => bridgeRequest });
   }
 
   async function runDelegateCommand(body) {
@@ -211,7 +213,7 @@ export function createAppCommandHandlers({
       return;
     }
     setActivity("tool-running", `Creating ${target} delegation`, mission);
-    const result = await bridgeRequest("/addons/delegate", {
+    const result = await bridge()("/addons/delegate", {
       method: "POST",
       body: { target, mission }
     });
@@ -221,13 +223,13 @@ export function createAppCommandHandlers({
 
   async function runDelegationsCommand(body = "") {
     setActivity("retrieving", "Checking delegated work", body || "recent Hermes/OpenCode/Engineer packets");
-    const message = await buildDelegationStatusMessage({ bridgeRequest, filter: body, limit: 6 });
+    const message = await buildDelegationStatusMessage({ bridgeRequest, getBridgeRequest: () => bridgeRequest, filter: body, limit: 6 });
     await addMessage("system", message);
   }
 
   async function runHermesStatusCommand() {
     setActivity("retrieving", "Checking Hermes runtime", "CLI, execution grant, dashboard, and delegation task counts");
-    const message = await buildHermesRuntimeStatusMessage({ bridgeRequest });
+    const message = await buildHermesRuntimeStatusMessage({ bridgeRequest, getBridgeRequest: () => bridgeRequest });
     await addMessage("system", message);
   }
 
@@ -245,7 +247,7 @@ export function createAppCommandHandlers({
       return;
     }
     setActivity("tool-running", `Creating ${delegationTargetLabel(intent.target)} delegation`, mission);
-    const result = await bridgeRequest("/addons/delegate", {
+    const result = await bridge()("/addons/delegate", {
       method: "POST",
       body: { target: intent.target, mission }
     });
@@ -268,7 +270,7 @@ export function createAppCommandHandlers({
       return;
     }
     setActivity("tool-running", `Creating ${target} draft packet`, draft.intent);
-    const result = await bridgeRequest("/addons/draft", {
+    const result = await bridge()("/addons/draft", {
       method: "POST",
       body: draft
     });
@@ -284,13 +286,14 @@ export function createAppCommandHandlers({
 
   async function runStatusCommand() {
     setActivity("retrieving", "Checking ResonantOS status", "Providers, Living Archive, add-ons, goals");
-    const result = await bridgeRequest("/status");
+    const result = await bridge()("/status");
     const addonLines = result.addons.map((addon) => `- ${addon.name}: ${addon.available ? "available" : "missing"} · ${addon.mode}`).join("\n");
     await addMessage(
       "system",
       [
         "ResonantOS Browser status",
         `MiniMax credential: ${result.providers["shared-minimax"] ? "ready" : "missing"}`,
+        `Z.AI GLM credential: ${result.providers["shared-zai-glm"] ? "ready" : "missing"}`,
         `OpenAI credential: ${result.providers["shared-openai"] ? "ready" : "missing"}`,
         `Living Archive wiki pages: ${result.memory.wiki.pages}`,
         `Intake artifacts: ${result.memory.intake.artifacts}`,
@@ -321,7 +324,7 @@ export function createAppCommandHandlers({
   async function runMemorySearchCommand(body) {
     const query = String(body ?? "").trim();
     setActivity("retrieving", "Searching Living Archive", query);
-    const result = await bridgeRequest("/memory/search", {
+    const result = await bridge()("/memory/search", {
       method: "POST",
       body: { query, limit: 5 }
     });
@@ -384,7 +387,7 @@ export function createAppCommandHandlers({
     );
     if (options.saveToIntake) {
       const content = formatHistorySearchMarkdown({ options, results, readableTabs });
-      const intake = await bridgeRequest("/archive/intake", {
+      const intake = await bridge()("/archive/intake", {
         method: "POST",
         body: {
           title: `Browser activity search: ${options.query || options.site || "recent tabs"}`,
@@ -401,7 +404,7 @@ export function createAppCommandHandlers({
           }
         }
       });
-      const review = await bridgeRequest("/archive/review/request", {
+      const review = await bridge()("/archive/review/request", {
         method: "POST",
         body: {
           path: intake.path,

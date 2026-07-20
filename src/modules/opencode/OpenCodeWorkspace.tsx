@@ -32,6 +32,33 @@ const hasGrant = (installation: AddOnInstallation | undefined, capability: Capab
 const configuredWorkspacePath = (installation: AddOnInstallation | undefined): string =>
   typeof installation?.config?.workspacePath === "string" ? installation.config.workspacePath : "";
 
+const openCodeRuntimeGuidance = (status: OpenCodeStatus | null): string => {
+  const lines = [
+    status?.installHint || "Install OpenCode with `curl -fsSL https://opencode.ai/install | bash` or `npm install -g opencode-ai`.",
+  ];
+  if (status?.installCommand) {
+    lines.push(`Primary command: ${status.installCommand}`);
+  }
+  if (status?.alternativeInstallCommands?.length) {
+    lines.push(`Alternatives: ${status.alternativeInstallCommands.join(" | ")}`);
+  }
+  if (status?.configureCommand) {
+    lines.push(`Existing install override: ${status.configureCommand}`);
+  }
+  if (status?.overrideConfigured && !status.overrideFound) {
+    lines.push(`Configured override was not found: ${status.overridePath || "OPENCODE_COMMAND"}`);
+  }
+  if (status?.searchedCommands?.length) {
+    lines.push(`Command names checked: ${status.searchedCommands.join(", ")}`);
+  }
+  if (status?.searchedPaths?.length) {
+    const suffix = status.searchedPathOmitted ? ` (+${status.searchedPathOmitted} more)` : "";
+    lines.push(`Searched paths${suffix}:`);
+    lines.push(...status.searchedPaths.slice(0, 12).map((candidate) => `- ${candidate}`));
+  }
+  return lines.join("\n");
+};
+
 export function OpenCodeWorkspace({
   active,
   manifest,
@@ -256,7 +283,7 @@ export function OpenCodeWorkspace({
     }
 
     if (!nextStatus.installed) {
-      setError("OpenCode is not installed or not detectable. Install the OpenCode desktop app, then press Set up and launch again.");
+      setError(`OpenCode is not installed or not detectable.\n${openCodeRuntimeGuidance(nextStatus)}`);
       setBusyLabel("");
       return;
     }
@@ -337,6 +364,7 @@ export function OpenCodeWorkspace({
             <span className="eyebrow">Runtime</span>
             <strong>{status?.installed ? `OpenCode ${status.version ?? "detected"}` : "OpenCode not detected"}</strong>
             <p>{status?.binaryPath ?? status?.installHint ?? "Checking OpenCode runtime..."}</p>
+            {status && !status.installed ? <pre className="opencode-runtime-guidance">{openCodeRuntimeGuidance(status)}</pre> : null}
             <button type="button" className="button-secondary touch-action" onClick={() => void refreshStatus()} disabled={Boolean(busyLabel)}>
               Check OpenCode
             </button>

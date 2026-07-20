@@ -51,7 +51,8 @@ function setupCard({ label, title, body, action, onClick }) {
   return card;
 }
 
-export function renderOverviewSection(container, { bridgeRequest, onSelectSection }) {
+export function renderOverviewSection(container, { bridgeRequest, getBridgeRequest, onSelectSection }) {
+  const bridge = () => (typeof getBridgeRequest === "function" ? getBridgeRequest() : bridgeRequest);
   const statusNode = document.createElement("p");
   statusNode.className = "settings-status";
   statusNode.textContent = "Checking ResonantOS health...";
@@ -135,7 +136,7 @@ export function renderOverviewSection(container, { bridgeRequest, onSelectSectio
     exportReport.disabled = true;
     setStatus(actionStatus, "Exporting redacted diagnostics report...");
     try {
-      const result = await bridgeRequest("/diagnostics/report", {
+      const result = await bridge()("/diagnostics/report", {
         method: "POST",
         capability: "diagnostics-report-export",
         body: { scope: "overview" }
@@ -152,7 +153,7 @@ export function renderOverviewSection(container, { bridgeRequest, onSelectSectio
     startRecovery.disabled = true;
     setStatus(actionStatus, "Creating Resonant Engineer recovery handoff...");
     try {
-      const result = await bridgeRequest("/addons/delegate", {
+      const result = await bridge()("/addons/delegate", {
         method: "POST",
         body: {
           target: "engineer",
@@ -169,8 +170,8 @@ export function renderOverviewSection(container, { bridgeRequest, onSelectSectio
 
   const load = async () => {
     const [providerResult, statusResult] = await Promise.allSettled([
-      bridgeRequest("/providers/status", { method: "GET" }),
-      bridgeRequest("/status", { method: "GET" })
+      bridge()("/providers/status", { method: "GET" }),
+      bridge()("/status", { method: "GET" })
     ]);
     const providers = providerResult.status === "fulfilled" ? providerResult.value.providers ?? [] : [];
     const status = statusResult.status === "fulfilled" ? statusResult.value : null;

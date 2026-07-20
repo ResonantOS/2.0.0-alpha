@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import type {
   AddOnManifest,
-  DictationSettings,
   LivingArchiveMemoryServiceResult,
   LivingArchiveMemoryServiceStatus,
   ProviderDiagnosticReport,
@@ -12,7 +11,6 @@ import type {
   ProviderSmokeTestResult,
   ResonantShellState,
 } from "../../core/contracts";
-import { getEngineDevice, getEngineKind } from "../../dictation";
 import { requestProviderRequestAudit } from "../../core/runtime";
 import {
   buildStrategyRouteOptions,
@@ -32,15 +30,25 @@ import {
   type ProviderTemplateId,
 } from "./provider-templates";
 
-export type SettingsSection = "providers" | "strategy" | "memory" | "logician" | "defaults" | "dictation" | "shell";
+export type SettingsSection = "profile" | "providers" | "memory" | "browser-control" | "addons" | "privacy" | "advanced";
+
+type AdvancedSettingsSection = "diagnostics" | "routing" | "logician" | "defaults" | "shell";
 
 export const settingsItems: Array<{ id: SettingsSection; label: string; eyebrow: string }> = [
+  { id: "profile", label: "Profile", eyebrow: "identity + trust" },
   { id: "providers", label: "Providers", eyebrow: "models + secrets" },
-  { id: "strategy", label: "Strategy", eyebrow: "roles + fallbacks" },
-  { id: "memory", label: "Memory Bridge", eyebrow: "MCP + local service" },
+  { id: "memory", label: "Memory", eyebrow: "MCP + archive" },
+  { id: "browser-control", label: "Browser Control", eyebrow: "tabs + session" },
+  { id: "addons", label: "Add-ons", eyebrow: "capabilities" },
+  { id: "privacy", label: "Privacy", eyebrow: "boundaries" },
+  { id: "advanced", label: "Advanced", eyebrow: "diagnostics + internals" },
+];
+
+const advancedSettingsItems: Array<{ id: AdvancedSettingsSection; label: string; eyebrow: string }> = [
+  { id: "diagnostics", label: "Diagnostics", eyebrow: "health + logs" },
+  { id: "routing", label: "Routing", eyebrow: "strategy" },
   { id: "logician", label: "Logician", eyebrow: "trust kernel" },
   { id: "defaults", label: "Defaults", eyebrow: "core behavior" },
-  { id: "dictation", label: "Dictation", eyebrow: "engine + language" },
   { id: "shell", label: "Shell", eyebrow: "layout + app" },
 ];
 
@@ -73,7 +81,6 @@ type SettingsWorkspaceProps = {
   onStartMemoryService: () => void;
   onStopMemoryService: () => void;
   onOpenLogicianAddOn: () => void;
-  onUpdateDictation: (patch: Partial<DictationSettings>) => void;
 };
 
 type LogicianFlowNodeType = "decision" | "action" | "delegation" | "gate";
@@ -566,6 +573,7 @@ export function SettingsWorkspace(props: SettingsWorkspaceProps) {
   const [expandedProviderIds, setExpandedProviderIds] = useState<Set<string>>(new Set());
   const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
   const [addProviderOpen, setAddProviderOpen] = useState(false);
+  const [advancedSection, setAdvancedSection] = useState<AdvancedSettingsSection>("diagnostics");
   const [providerAuditRecords, setProviderAuditRecords] = useState<ProviderRequestAuditRecord[]>([]);
   const [providerAuditBusy, setProviderAuditBusy] = useState(false);
   const [providerAuditError, setProviderAuditError] = useState<string | null>(null);
@@ -584,6 +592,12 @@ export function SettingsWorkspace(props: SettingsWorkspaceProps) {
   const protectedManifests = props.manifests.filter((manifest) =>
     ["addon.hermes", "addon.opencode", "addon.openclaw", "addon.paperclip", "addon.logician"].includes(manifest.id),
   );
+  const installations = Object.values(props.state.installations);
+  const enabledInstallations = installations.filter((installation) => installation.enabled);
+  const protectedCapabilityCount = props.manifests.reduce(
+    (count, manifest) => count + manifest.requestedCapabilities.filter((capability) => capability.revocationBehavior === "hard-stop").length,
+    0,
+  );
 
   const refreshProviderAudit = async () => {
     setProviderAuditBusy(true);
@@ -598,10 +612,10 @@ export function SettingsWorkspace(props: SettingsWorkspaceProps) {
   };
 
   useEffect(() => {
-    if (props.settingsSection === "providers") {
+    if (props.settingsSection === "advanced" && advancedSection === "diagnostics") {
       void refreshProviderAudit();
     }
-  }, [props.settingsSection]);
+  }, [props.settingsSection, advancedSection]);
 
   const toggleProviderExpanded = (profileId: string) => {
     setExpandedProviderIds((current) => {
@@ -644,7 +658,7 @@ export function SettingsWorkspace(props: SettingsWorkspaceProps) {
           <p className="eyebrow">Settings</p>
           <h2>System configuration</h2>
         </div>
-        <nav className="settings-nav">
+        <nav className="settings-nav" aria-label="Settings sections">
           {settingsItems.map((item) => (
             <button
               key={item.id}
@@ -660,6 +674,41 @@ export function SettingsWorkspace(props: SettingsWorkspaceProps) {
       </aside>
 
       <div className="settings-content">
+        {props.settingsSection === "advanced" && (
+          <nav className="settings-secondary-nav" aria-label="Advanced settings sections">
+            {advancedSettingsItems.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                className={`settings-secondary-nav-item ${advancedSection === item.id ? "active" : ""}`}
+                onClick={() => setAdvancedSection(item.id)}
+              >
+                <span>{item.label}</span>
+                <small>{item.eyebrow}</small>
+              </button>
+            ))}
+          </nav>
+        )}
+
+        {props.settingsSection === "profile" && (
+          <Panel title="Profile" subtitle="Manage the trusted identity people meet first in ResonantOS.">
+            <div className="settings-action-hero">
+              <div>
+                <p className="eyebrow">Primary identity</p>
+                <h3>Review the Strategist identity.</h3>
+                <p>{props.state.strategistIdentity.trustNote}</p>
+              </div>
+              <span className="tone tone-active">trusted</span>
+            </div>
+            <div className="settings-grid">
+              <SettingNote label="Default name" value={props.state.strategistIdentity.customName ?? props.state.strategistIdentity.defaultName} />
+              <SettingNote label="Identity id" value={props.state.strategistIdentity.id} />
+              <SettingNote label="Distribution" value={props.state.distributionModel} />
+              <SettingNote label="Delegation posture" value="add-on agents are delegated" />
+            </div>
+          </Panel>
+        )}
+
         {props.settingsSection === "providers" && (
           <Panel title="AI Providers" subtitle="Configure the model routes ResonantOS can use for agents, archive work, and recovery.">
             {props.settingsNotice && <div className="inline-notice">{props.settingsNotice}</div>}
@@ -789,82 +838,11 @@ export function SettingsWorkspace(props: SettingsWorkspaceProps) {
                           <p>{profile.allowedModels.join(", ")}</p>
                         </div>
                       </div>
-
-                      {renderProviderDiagnostics(
-                        props.providerDiagnostics.find((report) => report.providerId === profile.id),
-                        props.providerDiagnosticsBusy && props.activeProviderProbeId === profile.id,
-                        () => props.onProbeProvider(profile.id),
-                        props.providerSmokeResults[profile.id],
-                        props.providerSmokeBusyId === profile.id,
-                        () => props.onSmokeTestProvider(profile.id),
-                      )}
-
-                      <div className="provider-runtime-list">
-                        <span className="eyebrow">Runtime nodes</span>
-                        <ul>
-                          {props.state.runtimeNodes
-                            .filter((node) => node.providerProfileId === profile.id)
-                            .map((node) => (
-                              <li key={node.id}>
-                                <strong>{node.label}</strong>
-                                <span>
-                                  {node.kind} · {node.locality} · {node.healthState}
-                                </span>
-                              </li>
-                            ))}
-                        </ul>
-                      </div>
                     </div>
                   )}
                 </article>
               ))}
             </div>
-
-            <section className="provider-activity-panel" aria-label="Recent provider activity">
-              <div className="provider-activity-head">
-                <div>
-                  <p className="eyebrow">Provider activity</p>
-                  <h3>Recent routed calls</h3>
-                  <p>Host-side audit records. Prompts, replies, and secrets are not stored here.</p>
-                </div>
-                <button type="button" className="button-secondary touch-action" onClick={refreshProviderAudit} disabled={providerAuditBusy}>
-                  {providerAuditBusy ? "Refreshing..." : "Refresh Activity"}
-                </button>
-              </div>
-              {providerAuditError ? <div className="inline-notice warning">{providerAuditError}</div> : null}
-              {providerAuditRecords.length ? (
-                <div className="provider-activity-list">
-                  {providerAuditRecords.slice(0, 12).map((record, index) => {
-                    const provider = props.state.providers.find((item) => item.id === record.providerId);
-                    const runtime = props.state.runtimeNodes.find((item) => item.id === record.runtimeNodeId);
-                    return (
-                      <article key={`${record.recordedAt}-${record.requestId ?? index}`} className="provider-activity-row">
-                        <div>
-                          <strong>{provider?.label ?? record.providerId}</strong>
-                          <small>
-                            {record.model} · {runtime?.label ?? record.runtimeNodeKind ?? "runtime unknown"}
-                          </small>
-                        </div>
-                        <div>
-                          <span className={`tone tone-${record.status === "ok" ? "active" : "warning"}`}>{record.status}</span>
-                          <small>{record.endpointHost ?? "managed endpoint"}</small>
-                        </div>
-                        <div>
-                          <span>{formatAuditUsage(record)}</span>
-                          <small>{record.durationMs.toLocaleString()} ms</small>
-                        </div>
-                        <time dateTime={record.recordedAt}>{formatAuditTime(record.recordedAt)}</time>
-                      </article>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div className="provider-empty-state">
-                  <strong>No provider calls recorded yet.</strong>
-                  <p>Send a chat message or run a provider smoke test, then refresh this panel.</p>
-                </div>
-              )}
-            </section>
 
             {addProviderOpen && selectedProviderTemplate && (
               <div className="provider-dialog-backdrop" role="presentation" onClick={() => setAddProviderOpen(false)}>
@@ -940,7 +918,187 @@ export function SettingsWorkspace(props: SettingsWorkspaceProps) {
           </Panel>
         )}
 
-        {props.settingsSection === "defaults" && (
+        {props.settingsSection === "browser-control" && (
+          <Panel title="Browser Control" subtitle="Review the browser workspace and controlled browsing session.">
+            <div className="settings-action-hero">
+              <div>
+                <p className="eyebrow">Most likely action</p>
+                <h3>Check whether a browser session is under control.</h3>
+                <p>Use this section to see the user-facing browsing state before opening lower-level session diagnostics.</p>
+              </div>
+              <span className={`tone tone-${props.state.uiPreferences.browserWorkspace.controlledSession.status === "ready" ? "active" : "neutral"}`}>
+                {props.state.uiPreferences.browserWorkspace.controlledSession.status}
+              </span>
+            </div>
+            <div className="settings-grid">
+              <SettingNote label="Open tabs" value={String(props.state.uiPreferences.browserWorkspace.tabs.length)} />
+              <SettingNote label="Active tab" value={props.state.uiPreferences.browserWorkspace.activeTabId} />
+              <SettingNote label="Controlled URL" value={props.state.uiPreferences.browserWorkspace.controlledSession.url ?? "none"} />
+              <SettingNote label="Last sync" value={props.state.uiPreferences.browserWorkspace.controlledSession.lastSyncedAt ?? "not synced"} />
+            </div>
+          </Panel>
+        )}
+
+        {props.settingsSection === "addons" && (
+          <Panel title="Add-ons" subtitle="Review installed add-ons and the capabilities they can request.">
+            <div className="settings-action-hero">
+              <div>
+                <p className="eyebrow">Most likely action</p>
+                <h3>Review capability grants before enabling add-ons.</h3>
+                <p>Protected add-ons stay visible here; their hooks and internal policy details live under Advanced.</p>
+              </div>
+              <span className="tone tone-active">{enabledInstallations.length} enabled</span>
+            </div>
+            <div className="settings-grid">
+              <SettingNote label="Available manifests" value={String(props.manifests.length)} />
+              <SettingNote label="Installed add-ons" value={String(installations.length)} />
+              <SettingNote label="Enabled add-ons" value={String(enabledInstallations.length)} />
+              <SettingNote label="Hard-stop grants" value={String(protectedCapabilityCount)} />
+            </div>
+            <div className="settings-summary-list" aria-label="Installed add-ons">
+              {props.manifests.slice(0, 8).map((manifest) => {
+                const installation = props.state.installations[manifest.id];
+                return (
+                  <article key={manifest.id}>
+                    <div>
+                      <strong>{manifest.name}</strong>
+                      <p>{manifest.description}</p>
+                    </div>
+                    <span className={`tone tone-${installation?.enabled ? "active" : "neutral"}`}>
+                      {installation?.status ?? "available"}
+                    </span>
+                  </article>
+                );
+              })}
+            </div>
+          </Panel>
+        )}
+
+        {props.settingsSection === "privacy" && (
+          <Panel title="Privacy" subtitle="Review data, credential, and memory boundaries before work leaves the shell.">
+            <div className="settings-action-hero">
+              <div>
+                <p className="eyebrow">Most likely action</p>
+                <h3>Confirm which boundaries protect credentials and memory writes.</h3>
+                <p>Secrets stay host-owned; external memory clients can write intake artifacts but not trusted archive pages.</p>
+              </div>
+              <span className="tone tone-warning">boundary review</span>
+            </div>
+            <div className="settings-grid">
+              <SettingNote label="Configured credentials" value={String(props.state.providers.filter((profile) => profile.credentialStatus === "configured").length)} />
+              <SettingNote label="Archive ingest service" value={props.state.archivePolicy.ingestServiceId} />
+              <SettingNote label="Archive owner" value={props.state.archivePolicy.strategistIdentityId} />
+              <SettingNote label="Private provider links" value={String(installations.flatMap((installation) => installation.privateProviderProfileIds).length)} />
+            </div>
+            <div className="settings-callout">
+              <p>Technical logs, raw provider metadata, route internals, and diagnostics are available from Advanced so they do not compete with everyday privacy choices.</p>
+            </div>
+          </Panel>
+        )}
+
+        {props.settingsSection === "advanced" && advancedSection === "diagnostics" && (
+          <Panel title="Diagnostics" subtitle="Inspect provider health, runtime nodes, and host-side activity logs.">
+            <div className="provider-activity-head">
+              <div>
+                <p className="eyebrow">Most likely action</p>
+                <h3>Run health checks and inspect recent routed calls.</h3>
+                <p>Prompts, replies, and secrets are not stored in the provider activity log.</p>
+              </div>
+              <div className="provider-hero-actions">
+                <button type="button" className="button-secondary touch-action" onClick={props.onProbeAllProviders} disabled={props.providerDiagnosticsBusy}>
+                  {props.providerDiagnosticsBusy && !props.activeProviderProbeId ? "Checking..." : "Check Health"}
+                </button>
+                <button type="button" className="button-secondary touch-action" onClick={refreshProviderAudit} disabled={providerAuditBusy}>
+                  {providerAuditBusy ? "Refreshing..." : "Refresh Activity"}
+                </button>
+              </div>
+            </div>
+
+            <div className="advanced-diagnostics-list" aria-label="Provider diagnostics">
+              {props.state.providers.map((profile) => (
+                <article key={profile.id} className="provider-card">
+                  <div className="provider-head">
+                    <div>
+                      <strong>{profile.label}</strong>
+                      <p>
+                        {profile.providerType} · {profile.authTier} · {profile.primaryModel}
+                      </p>
+                    </div>
+                    <span className={`tone tone-${profile.status === "ready" ? "active" : "warning"}`}>{profile.status}</span>
+                  </div>
+                  {renderProviderDiagnostics(
+                    props.providerDiagnostics.find((report) => report.providerId === profile.id),
+                    props.providerDiagnosticsBusy && props.activeProviderProbeId === profile.id,
+                    () => props.onProbeProvider(profile.id),
+                    props.providerSmokeResults[profile.id],
+                    props.providerSmokeBusyId === profile.id,
+                    () => props.onSmokeTestProvider(profile.id),
+                  )}
+                  <div className="provider-runtime-list">
+                    <span className="eyebrow">Runtime nodes</span>
+                    <ul>
+                      {props.state.runtimeNodes
+                        .filter((node) => node.providerProfileId === profile.id)
+                        .map((node) => (
+                          <li key={node.id}>
+                            <strong>{node.label}</strong>
+                            <span>
+                              {node.kind} · {node.locality} · {node.healthState}
+                            </span>
+                          </li>
+                        ))}
+                    </ul>
+                  </div>
+                </article>
+              ))}
+            </div>
+
+            <section className="provider-activity-panel" aria-label="Recent provider activity">
+              <div className="provider-activity-head">
+                <div>
+                  <p className="eyebrow">Provider activity</p>
+                  <h3>Recent routed calls</h3>
+                  <p>Host-side audit records for routed provider calls.</p>
+                </div>
+              </div>
+              {providerAuditError ? <div className="inline-notice warning">{providerAuditError}</div> : null}
+              {providerAuditRecords.length ? (
+                <div className="provider-activity-list">
+                  {providerAuditRecords.slice(0, 12).map((record, index) => {
+                    const provider = props.state.providers.find((item) => item.id === record.providerId);
+                    const runtime = props.state.runtimeNodes.find((item) => item.id === record.runtimeNodeId);
+                    return (
+                      <article key={`${record.recordedAt}-${record.requestId ?? index}`} className="provider-activity-row">
+                        <div>
+                          <strong>{provider?.label ?? record.providerId}</strong>
+                          <small>
+                            {record.model} · {runtime?.label ?? record.runtimeNodeKind ?? "runtime unknown"}
+                          </small>
+                        </div>
+                        <div>
+                          <span className={`tone tone-${record.status === "ok" ? "active" : "warning"}`}>{record.status}</span>
+                          <small>{record.endpointHost ?? "managed endpoint"}</small>
+                        </div>
+                        <div>
+                          <span>{formatAuditUsage(record)}</span>
+                          <small>{record.durationMs.toLocaleString()} ms</small>
+                        </div>
+                        <time dateTime={record.recordedAt}>{formatAuditTime(record.recordedAt)}</time>
+                      </article>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="provider-empty-state">
+                  <strong>No provider calls recorded yet.</strong>
+                  <p>Send a chat message or run a provider smoke test, then refresh this panel.</p>
+                </div>
+              )}
+            </section>
+          </Panel>
+        )}
+
+        {props.settingsSection === "advanced" && advancedSection === "defaults" && (
           <Panel title="Core Defaults" subtitle="Default system behavior for the shell, archive, and Strategist.">
             <div className="settings-grid">
               <SettingNote label="Distribution model" value={props.state.distributionModel} />
@@ -951,117 +1109,10 @@ export function SettingsWorkspace(props: SettingsWorkspaceProps) {
           </Panel>
         )}
 
-        {props.settingsSection === "dictation" && (
-          <Panel title="Dictation" subtitle="Choose the local speech-to-text engine, language, and Whisper task.">
-            <div className="settings-grid">
-              <SettingNote
-                label="Loaded engine"
-                value={(() => {
-                  const engineKind = getEngineKind();
-                  const device = getEngineDevice();
-                  if (engineKind === "whisper" && device === "webgpu") return "Whisper (WebGPU)";
-                  if (engineKind === "whisper" && device === "wasm") return "Whisper (CPU)";
-                  if (engineKind === "parakeet" && (props.state.dictation?.engineSelection ?? "auto") === "auto") {
-                    return "Parakeet (Whisper unavailable)";
-                  }
-                  if (engineKind === "parakeet") return "Parakeet";
-                  return "Loading…";
-                })()}
-              />
-            </div>
-
-            <div className="setting-row">
-              <span className="setting-label">Engine</span>
-              <div className="setting-radio-group" role="radiogroup" aria-label="Dictation engine">
-                <label>
-                  <input
-                    type="radio"
-                    name="dictation-engine"
-                    checked={(props.state.dictation?.engineSelection ?? "auto") === "auto"}
-                    onChange={() => props.onUpdateDictation({ engineSelection: "auto" })}
-                  />
-                  Auto (default) — Whisper preferred, Parakeet fallback
-                </label>
-                <label>
-                  <input
-                    type="radio"
-                    name="dictation-engine"
-                    checked={(props.state.dictation?.engineSelection ?? "auto") === "whisper"}
-                    onChange={() => props.onUpdateDictation({ engineSelection: "whisper" })}
-                  />
-                  Whisper — faster, may fail on some setups
-                </label>
-                <label>
-                  <input
-                    type="radio"
-                    name="dictation-engine"
-                    checked={(props.state.dictation?.engineSelection ?? "auto") === "parakeet"}
-                    onChange={() => props.onUpdateDictation({ engineSelection: "parakeet" })}
-                  />
-                  Parakeet — slower, always works
-                </label>
-              </div>
-              <div className="setting-note">
-                <span>Changes to the engine take effect after a page reload.</span>
-              </div>
-            </div>
-
-            <div className="setting-row">
-              <label className="setting-label" htmlFor="dictation-language">Language</label>
-              <select
-                id="dictation-language"
-                disabled={(props.state.dictation?.engineSelection ?? "auto") === "parakeet"}
-                value={props.state.dictation?.language ?? "auto"}
-                onChange={(e) => props.onUpdateDictation({ language: e.target.value })}
-              >
-                <option value="auto">Auto-detect</option>
-                <option value="en">English</option>
-                <option value="es">Spanish</option>
-                <option value="fr">French</option>
-                <option value="de">German</option>
-                <option value="it">Italian</option>
-                <option value="pt">Portuguese</option>
-                <option value="ja">Japanese</option>
-                <option value="zh">Chinese</option>
-                <option value="ko">Korean</option>
-                <option value="ru">Russian</option>
-                <option value="hi">Hindi</option>
-                <option value="ar">Arabic</option>
-              </select>
-            </div>
-
-            <div className="setting-row">
-              <span className="setting-label">Task</span>
-              <div className="setting-radio-group" role="radiogroup" aria-label="Whisper task">
-                <label>
-                  <input
-                    type="radio"
-                    name="dictation-task"
-                    disabled={(props.state.dictation?.engineSelection ?? "auto") === "parakeet"}
-                    checked={(props.state.dictation?.task ?? "transcribe") === "transcribe"}
-                    onChange={() => props.onUpdateDictation({ task: "transcribe" })}
-                  />
-                  Transcribe (keep original language)
-                </label>
-                <label>
-                  <input
-                    type="radio"
-                    name="dictation-task"
-                    disabled={(props.state.dictation?.engineSelection ?? "auto") === "parakeet"}
-                    checked={(props.state.dictation?.task ?? "transcribe") === "translate"}
-                    onChange={() => props.onUpdateDictation({ task: "translate" })}
-                  />
-                  Translate (output English)
-                </label>
-              </div>
-            </div>
-          </Panel>
-        )}
-
         {props.settingsSection === "memory" && (
           <Panel
-            title="Living Archive Memory Bridge"
-            subtitle="Expose scoped memory to external MCP clients without giving them direct trusted wiki write authority."
+            title="Memory"
+            subtitle="Share scoped memory with external MCP clients while keeping trusted wiki writes inside ResonantOS."
           >
             {props.settingsNotice && <div className="inline-notice">{props.settingsNotice}</div>}
             <div className="memory-service-hero">
@@ -1069,8 +1120,8 @@ export function SettingsWorkspace(props: SettingsWorkspaceProps) {
                 <p className="eyebrow">Local endpoint</p>
                 <h3>{props.memoryServiceStatus?.running ? "Bridge running" : "Bridge stopped"}</h3>
                 <p>
-                  Start this service when Codex, Claude Desktop, OpenCode, or another MCP-capable client needs scoped access to
-                  the Living Archive.
+                  Human Knowledge is preserved; AI Memory is the maintained wiki. Start this service when Codex, Claude
+                  Desktop, OpenCode, or another MCP-capable client needs scoped access to the same memory files.
                 </p>
               </div>
               <span className={`tone tone-${props.memoryServiceStatus?.running ? "active" : "neutral"}`}>
@@ -1131,9 +1182,9 @@ export function SettingsWorkspace(props: SettingsWorkspaceProps) {
                 <span className="tone tone-warning">intake-only writes</span>
               </div>
               <ul>
-                <li>External clients can search/read scoped memory and write raw artifacts to intake.</li>
-                <li>Trusted AI Memory wiki pages are still written only by the Strategist-owned ingest/review flow.</li>
-                <li>Provider-backed promotion and semantic repair stay inside the desktop host boundary.</li>
+                <li>External clients can search/read scoped memory and add raw intake notes.</li>
+                <li>Trusted AI Memory wiki pages are still written only after ResonantOS review.</li>
+                <li>Technical repair steps stay inside the desktop host boundary.</li>
               </ul>
               {props.memoryServiceLastResult ? (
                 <p className="mono-inline">
@@ -1144,7 +1195,7 @@ export function SettingsWorkspace(props: SettingsWorkspaceProps) {
           </Panel>
         )}
 
-        {props.settingsSection === "strategy" && (
+        {props.settingsSection === "advanced" && advancedSection === "routing" && (
           <Panel title="Model Strategy Profile" subtitle="User-agreed routing strategy for roles, workloads, and fallback behavior.">
             <div className="strategy-header">
               <div>
@@ -1277,7 +1328,7 @@ export function SettingsWorkspace(props: SettingsWorkspaceProps) {
           </Panel>
         )}
 
-        {props.settingsSection === "shell" && (
+        {props.settingsSection === "advanced" && advancedSection === "shell" && (
           <Panel title="Shell Preferences" subtitle="Current layout and operating posture for ResonantOS vNext.">
             <div className="settings-grid">
               <SettingNote label="Theme" value={props.state.uiPreferences.theme} />
@@ -1288,7 +1339,7 @@ export function SettingsWorkspace(props: SettingsWorkspaceProps) {
           </Panel>
         )}
 
-        {props.settingsSection === "logician" && (
+        {props.settingsSection === "advanced" && advancedSection === "logician" && (
           <Panel title="Logician Trust Kernel" subtitle="Protocol gates, add-on verification, and deterministic counterweight to probabilistic agents.">
             <div className="settings-grid">
               <SettingNote label="Logician add-on" value={logicianInstallation?.status ?? "not installed"} />

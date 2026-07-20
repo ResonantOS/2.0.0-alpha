@@ -1,10 +1,15 @@
 # ADR-035: Electron Host + Rust Core Runtime
 
-## Status
+## Decision Metadata
 
-Superseded by ADR-037 on 2026-05-25.
-
-Electron remains acceptable only for diagnostic harnesses and temporary shell experiments. It is not the product Browser architecture. The product direction is now browser-first Chromium ResonantOS: one Chromium-family browser app containing ResonantOS functionality.
+- Decision status: Superseded
+- Alpha applicability: Not applicable
+- Superseded by: ADR-037
+- Owner: Browser architecture
+- Decision date: Not recorded
+- Status date: 2026-05-25
+- Alpha note: This Electron/Rust host direction is historical. Electron, Rust,
+  and native desktop packaging are not Alpha runtime or validation requirements.
 
 ## Decision
 

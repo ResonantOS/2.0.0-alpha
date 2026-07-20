@@ -1,7 +1,14 @@
 # ADR-027: Living Archive LLM Wiki Compliance
 
-Status: Accepted  
-Date: 2026-04-30
+## Decision Metadata
+
+- Decision status: Accepted
+- Alpha applicability: Applies
+- Superseded by: None
+- Owner: Living Archive
+- Decision date: 2026-04-30
+- Alpha note: Source preservation, review, verification, and governed promotion
+  apply to Alpha memory and archive routes.
 
 ## Decision
 

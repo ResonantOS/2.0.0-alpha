@@ -17,6 +17,7 @@ build/native-browser/*
 # Local runtime state and generated memory
 Memory/
 Living_Archive/
+ResonantOS_User/
 .resonantos/
 
 # Development-only add-on manifests excluded from the current public catalog
@@ -44,10 +45,31 @@ yarn-error.log*
 coverage/
 tmp/
 
+# Local evidence and browser profiles
+output/
+runs/
+*.zip
+
+# Repository-local agent and analysis state
+.abacusai/
+.codex/
+.understand-anything/
+
+# Browser profile databases and report environments
+**/Cookies
+**/Login Data
+**/History
+**/Web Data
+**/Local State
+**/.venv/
+**/venv/
+
 # Browser-first generated session material
 browser-first/resonantos-side-panel-extension/src/bridge-config.generated.js
+browser-first/certs/
 
 # IDE/editor local state
 .idea/
 .vscode/
 *.swp
+docs/code-forge-architecture/

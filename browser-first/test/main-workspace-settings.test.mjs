@@ -52,6 +52,17 @@ function setupDom() {
   };
 }
 
+async function waitForCondition(predicate, { timeout = 2_000, interval = 20 } = {}) {
+  const started = Date.now();
+  let lastValue;
+  while (Date.now() - started < timeout) {
+    lastValue = await predicate();
+    if (lastValue) return lastValue;
+    await new Promise((resolve) => setTimeout(resolve, interval));
+  }
+  return lastValue;
+}
+
 test("settings workspace renders provider status without exposing credentials", async () => {
   const { container, cleanup } = setupDom();
   const calls = [];
@@ -198,7 +209,7 @@ test("settings workspace renders provider status without exposing credentials", 
     assert.match(container.textContent, /Provider Profiles/);
     assert.match(container.textContent, /MiniMax/);
     assert.match(container.textContent, /OpenAI/);
-    assert.match(container.textContent, /Vault/);
+    assert.match(container.textContent, /Credential store/);
     assert.match(container.textContent, /Created/);
     assert.equal(container.querySelector(".settings-provider-advanced").open, false);
     const initialMiniMaxCard = [...container.querySelectorAll(".settings-provider-card")].find((card) => /MiniMax/.test(card.textContent));
@@ -1273,7 +1284,7 @@ test("settings memory section completes real move-on-import and rollback against
     confirmationInput.value = `MOVE ${path.basename(source)}`;
     confirmationInput.dispatchEvent(new Event("input", { bubbles: true }));
     executeMoveButton.click();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForCondition(() => sources.length === 1 && !existsSync(source));
 
     assert.equal(existsSync(source), false);
     assert.equal(sources.length, 1);
@@ -1286,7 +1297,7 @@ test("settings memory section completes real move-on-import and rollback against
     assert.match(container.textContent, /Rollback/);
 
     [...container.querySelectorAll("button")].find((button) => button.textContent === "Rollback").click();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForCondition(() => sources.length === 0 && existsSync(path.join(source, "note.md")));
 
     assert.equal(sources.length, 0);
     assert.equal(existsSync(path.join(source, "note.md")), true);
@@ -2207,6 +2218,182 @@ test("settings add-ons section reports bridge failures without exposing secrets"
   }
 });
 
+test("settings sections replace bridge authorization failures with recovery guidance", async () => {
+  const sections = [
+    ["providers", /Provider status unavailable/],
+    ["memory", /Memory settings unavailable/],
+    ["addons", /Add-on registry unavailable/],
+    ["routing", /Routing strategies unavailable/],
+    ["diagnostics", /Diagnostics loaded with 5 unavailable endpoints/],
+  ];
+
+  for (const [initialSection, heading] of sections) {
+    const { container, cleanup } = setupDom();
+    try {
+      renderSettingsWorkspace({
+        container,
+        bridgeRequest: async () => {
+          throw new Error("Unauthorized browser-first bridge request.");
+        },
+        initialSection,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      assert.match(container.textContent, heading);
+      assert.match(container.textContent, /ResonantOS bridge rejected this browser profile token/);
+      assert.match(container.textContent, /Settings > Bridge Target/);
+      assert.doesNotMatch(container.textContent, /Unauthorized browser-first bridge request/);
+      assert.doesNotMatch(container.textContent, /requires provider-diagnostics-read capability/);
+    } finally {
+      cleanup();
+    }
+  }
+});
+
+test("settings sections replace bridge capability failures with recovery guidance", async () => {
+  const { container, cleanup } = setupDom();
+
+  try {
+    renderSettingsWorkspace({
+      container,
+      bridgeRequest: async () => {
+        throw new Error("Bridge route requires provider-diagnostics-read capability.");
+      },
+      initialSection: "providers",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.match(container.textContent, /Provider status unavailable/);
+    assert.match(container.textContent, /ResonantOS bridge rejected this browser profile token/);
+    assert.match(container.textContent, /Settings > Bridge Target/);
+    assert.doesNotMatch(container.textContent, /requires provider-diagnostics-read capability/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("settings bridge target reports 401 token mismatch with recovery guidance", async () => {
+  const { container, cleanup } = setupDom();
+  const previousFetch = globalThis.fetch;
+  const previousBridgeConfig = globalThis.__RESONANTOS_BRIDGE_CONFIG__;
+  globalThis.__RESONANTOS_BRIDGE_CONFIG__ = {
+    bridgeUrl: "http://127.0.0.1:47773",
+    bridgeToken: "stale-token",
+    capabilityBootstrapToken: "stale-bootstrap",
+  };
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    ok: false,
+    error: "Unauthorized browser-first bridge request.",
+  }), {
+    status: 401,
+    headers: { "Content-Type": "application/json" },
+  });
+
+  try {
+    renderSettingsWorkspace({
+      container,
+      bridgeRequest: async () => ({}),
+      initialSection: "bridge-target",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.match(container.textContent, /Bridge Target/);
+    assert.match(container.textContent, /Bridge http:\/\/127\.0\.0\.1:47773 replied 401/);
+    assert.match(container.textContent, /ResonantOS bridge rejected this browser profile token/);
+    assert.match(container.textContent, /reload the extension/);
+    assert.doesNotMatch(container.textContent, /Check the token/);
+    assert.doesNotMatch(container.textContent, /Unauthorized browser-first bridge request/);
+  } finally {
+    if (previousFetch === undefined) {
+      delete globalThis.fetch;
+    } else {
+      globalThis.fetch = previousFetch;
+    }
+    if (previousBridgeConfig === undefined) {
+      delete globalThis.__RESONANTOS_BRIDGE_CONFIG__;
+    } else {
+      globalThis.__RESONANTOS_BRIDGE_CONFIG__ = previousBridgeConfig;
+    }
+    cleanup();
+  }
+});
+
+test("settings bridge target uses loopback-detected URL when tokenless override is stale", async () => {
+  const { container, cleanup } = setupDom();
+  const previousFetch = globalThis.fetch;
+  const previousBridgeConfig = globalThis.__RESONANTOS_BRIDGE_CONFIG__;
+  const previousChrome = globalThis.chrome;
+  globalThis.__RESONANTOS_BRIDGE_CONFIG__ = {
+    bridgeUrl: "http://127.0.0.1:47773",
+    bridgeToken: "generated-token",
+    capabilityBootstrapToken: "generated-bootstrap",
+  };
+  globalThis.chrome = {
+    storage: {
+      local: memoryStorage({
+        bridgeTargetOverride: {
+          bridgeUrl: "http://127.0.0.1:48773",
+          bridgeToken: "",
+          capabilityBootstrapToken: "",
+        },
+      }),
+    },
+  };
+  globalThis.fetch = async (url) => {
+    const value = String(url);
+    if (value === "http://127.0.0.1:48773/status") {
+      throw new Error("connection refused");
+    }
+    if (value === "https://localhost:19443/status") {
+      throw new Error("certificate unavailable");
+    }
+    if (value === "http://localhost:47773/status") {
+      return new Response(JSON.stringify({
+        ok: true,
+        bridge: "resonantos-bridge",
+        providers: { "shared-minimax": false },
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    throw new Error(`Unexpected bridge target probe: ${value}`);
+  };
+
+  try {
+    renderSettingsWorkspace({
+      container,
+      bridgeRequest: async () => ({}),
+      initialSection: "bridge-target",
+    });
+    await waitForCondition(() => /Bridge http:\/\/localhost:47773 responded OK/.test(container.textContent));
+
+    assert.match(container.textContent, /Bridge Target/);
+    assert.match(container.textContent, /http:\/\/localhost:47773/);
+    assert.match(container.textContent, /Loopback/);
+    assert.match(container.textContent, /local loopback bridge detected from override config/);
+    assert.match(container.textContent, /Bridge http:\/\/localhost:47773 responded OK/);
+    assert.doesNotMatch(container.textContent, /Could not reach http:\/\/127\.0\.0\.1:48773/);
+  } finally {
+    if (previousFetch === undefined) {
+      delete globalThis.fetch;
+    } else {
+      globalThis.fetch = previousFetch;
+    }
+    if (previousBridgeConfig === undefined) {
+      delete globalThis.__RESONANTOS_BRIDGE_CONFIG__;
+    } else {
+      globalThis.__RESONANTOS_BRIDGE_CONFIG__ = previousBridgeConfig;
+    }
+    if (previousChrome === undefined) {
+      delete globalThis.chrome;
+    } else {
+      globalThis.chrome = previousChrome;
+    }
+    cleanup();
+  }
+});
+
 test("settings workspace exposes privacy boundaries and about metadata", async () => {
   const { container, cleanup } = setupDom();
   const bridgeRequest = async (route) => {
@@ -2433,7 +2620,7 @@ test("settings browser control section manages scoped grants and browser jobs", 
     assert.match(container.textContent, /Agent Control Permissions/);
     assert.match(container.textContent, /The default is ask-before-action/);
     assert.match(container.textContent, /Agent permissions/);
-    assert.match(container.textContent, /Native browser tools/);
+    assert.match(container.textContent, /Browser management pages/);
     assert.match(container.textContent, /Recent downloads/);
     assert.match(container.textContent, /Browser job history/);
     assert.match(container.textContent, /example\.com · Trusted safe actions/);

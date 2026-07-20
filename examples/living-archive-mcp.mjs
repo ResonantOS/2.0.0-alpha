@@ -81,13 +81,19 @@ const parseArgs = (argv = process.argv.slice(2), env = process.env) => {
   };
 };
 
-const postMemoryJson = async (endpoint, operation, input = {}) => {
+const postMemoryJson = async (endpoint, operation, input = {}, token = "") => {
+  const headers = {
+    "content-type": "application/json",
+    accept: "application/json",
+  };
+  // DD-3 (F6): forward the bearer token so write operations authenticate against
+  // the hardened memory service. Reads ignore it server-side.
+  if (token) {
+    headers.authorization = `Bearer ${token}`;
+  }
   const response = await fetch(`${endpoint}/memory/${operation}`, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      accept: "application/json",
-    },
+    headers,
     body: JSON.stringify(input),
   });
   if (!response.ok) {
@@ -379,6 +385,10 @@ export const livingArchiveTools = [
 export const createLivingArchiveBridge = (config = parseArgs()) => {
   const memoryRoot = config.memoryRoot;
   const memoryServiceUrl = config.memoryServiceUrl;
+  const memoryServiceToken =
+    typeof config.memoryServiceToken === "string"
+      ? config.memoryServiceToken
+      : process.env.RESONANTOS_MEMORY_SERVICE_TOKEN ?? "";
   const memoryServiceTransport = typeof config.memoryServiceTransport === "function" ? config.memoryServiceTransport : null;
   const maxSearchBytes = config.maxSearchBytes;
   const readonly = config.readonly;
@@ -391,7 +401,7 @@ export const createLivingArchiveBridge = (config = parseArgs()) => {
     if (memoryServiceTransport) {
       return memoryServiceTransport(operation, input);
     }
-    return postMemoryJson(memoryServiceUrl, operation, input);
+    return postMemoryJson(memoryServiceUrl, operation, input, memoryServiceToken);
   };
 
   const status = async () => {

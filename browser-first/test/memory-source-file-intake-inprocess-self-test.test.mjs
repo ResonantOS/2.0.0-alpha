@@ -4,6 +4,7 @@ import { promisify } from "node:util";
 import test from "node:test";
 
 const execFileAsync = promisify(execFile);
+const toPortablePath = (value) => String(value ?? "").replace(/\\/g, "/");
 
 test("source-file intake bridge routes pass in-process deterministic smoke test", async () => {
   const { stdout } = await execFileAsync(process.execPath, [
@@ -45,19 +46,19 @@ test("source-file intake bridge routes pass in-process deterministic smoke test"
   assert.equal(result.syncHistoryBounded, true);
   assert.ok(result.boundedSyncHistoryCount <= 50);
   assert.equal(result.syncHistoryEligibleFileSample, "manual.md");
-  assert.match(result.syncHistoryCreatedArtifactSample, /^INTAKE\/sources\//);
-  assert.match(result.syncHistorySourcePathSample, /^\[path\]\//);
+  assert.match(toPortablePath(result.syncHistoryCreatedArtifactSample), /^INTAKE\/sources\//);
+  assert.match(toPortablePath(result.syncHistorySourcePathSample), /^\[path\]\//);
   assert.equal(result.corruptReviewStatus, 200);
   assert.equal(result.corruptCandidateStatus, "version-manifest-unavailable");
   assert.equal(result.unauthorizedRepairStatus, 403);
   assert.equal(result.missingConfirmationRepairStatus, 500);
   assert.equal(result.repairStatus, 200);
   assert.equal(result.repairPayloadStatus, "repaired");
-  assert.match(result.repairBackupPath, /^CONFIG\/source-file-history\/repairs\//);
+  assert.match(toPortablePath(result.repairBackupPath), /^CONFIG\/source-file-history\/repairs\//);
   assert.ok(result.repairHistoryCount >= 1);
   assert.equal(result.repairHistoryLatestStatus, "repaired");
-  assert.match(result.repairHistorySourcePathSample, /^\[path\]\//);
-  assert.match(result.repairHistoryBackupPath, /^CONFIG\/source-file-history\/repairs\//);
+  assert.match(toPortablePath(result.repairHistorySourcePathSample), /^\[path\]\//);
+  assert.match(toPortablePath(result.repairHistoryBackupPath), /^CONFIG\/source-file-history\/repairs\//);
   assert.equal(result.repairHistoryRedactsSourcePaths, true);
   assert.equal(result.repairedCandidateStatus, "new");
   assert.equal(result.sourceIdCollisionAvoided, true);

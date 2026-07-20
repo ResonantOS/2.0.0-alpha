@@ -237,17 +237,39 @@ const endpointFromInstallation = (
   return raw.replace(/\/+$/, "");
 };
 
+const tokenFromInstallation = (installation: AddOnInstallation): string => {
+  const configured =
+    typeof installation.config?.memoryServiceToken === "string"
+      ? installation.config.memoryServiceToken
+      : typeof installation.config?.token === "string"
+        ? installation.config.token
+        : undefined;
+  // Fall back to the operator-supplied env token used by the hardened memory service.
+  const envToken =
+    typeof process !== "undefined" && typeof process.env?.RESONANTOS_MEMORY_SERVICE_TOKEN === "string"
+      ? process.env.RESONANTOS_MEMORY_SERVICE_TOKEN
+      : "";
+  return (configured ?? envToken).trim();
+};
+
 const postMemoryJson = async <Result>(
   endpoint: string,
   operation: string,
   input?: Record<string, unknown>,
+  token?: string,
 ): Promise<Result> => {
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    accept: "application/json",
+  };
+  // DD-3 (F6): forward the bearer token so write operations authenticate against the
+  // hardened memory service. Reads pass no token and stay unauth on loopback.
+  if (token) {
+    headers.authorization = `Bearer ${token}`;
+  }
   const response = await fetch(`${endpoint}/memory/${operation}`, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      accept: "application/json",
-    },
+    headers,
     body: JSON.stringify(input ?? {}),
   });
   if (!response.ok) {
@@ -267,6 +289,8 @@ export const httpJsonMemoryProvider = (
       `${manifest.name} is missing a valid http-json memoryServiceUrl or service entrypoint`,
     );
   }
+  // Writes require a bearer token against the hardened memory service; reads stay unauth.
+  const writeToken = tokenFromInstallation(installation);
 
   return {
     providerId: manifest.id,
@@ -283,17 +307,17 @@ export const httpJsonMemoryProvider = (
     status: () => postMemoryJson<ArchiveRuntimeStatus>(endpoint, "status"),
     search: (query, limit = 12) => postMemoryJson<ArchiveSearchResult>(endpoint, "search", { query, limit }),
     read: (path) => postMemoryJson<ArchiveDocumentPayload>(endpoint, "read", { path }),
-    intakeWrite: (input) => postMemoryJson<ArchiveIntakeWriteResult>(endpoint, "intake-write", input),
-    ingestRequest: (input) => postMemoryJson<ArchiveIngestRequestResult>(endpoint, "ingest-request", input),
+    intakeWrite: (input) => postMemoryJson<ArchiveIntakeWriteResult>(endpoint, "intake-write", input, writeToken),
+    ingestRequest: (input) => postMemoryJson<ArchiveIngestRequestResult>(endpoint, "ingest-request", input, writeToken),
     reviewQueue: () => postMemoryJson<ArchiveQueuedIngestRequest[]>(endpoint, "review-queue"),
     reviewArtifacts: () => postMemoryJson<ArchiveReviewArtifact[]>(endpoint, "review-artifacts"),
-    processIngestRequest: (input) => postMemoryJson<ArchiveProcessIngestResult>(endpoint, "process-ingest-request", input),
-    maintenanceCycle: (input) => postMemoryJson<ArchiveMaintenanceCycleResult>(endpoint, "maintenance-cycle", input),
-    backgroundCycle: (input) => postMemoryJson<ArchiveBackgroundCycleResult>(endpoint, "background-cycle", input),
+    processIngestRequest: (input) => postMemoryJson<ArchiveProcessIngestResult>(endpoint, "process-ingest-request", input, writeToken),
+    maintenanceCycle: (input) => postMemoryJson<ArchiveMaintenanceCycleResult>(endpoint, "maintenance-cycle", input, writeToken),
+    backgroundCycle: (input) => postMemoryJson<ArchiveBackgroundCycleResult>(endpoint, "background-cycle", input, writeToken),
     lint: () => postMemoryJson<ArchiveLintResult>(endpoint, "lint"),
     semanticLint: (input) => postMemoryJson<ArchiveSemanticLintResult>(endpoint, "semantic-lint", input),
-    decideReview: (input) => postMemoryJson<ArchiveReviewDecisionResult>(endpoint, "decide-review", input),
-    promoteReviewArtifact: (input) => postMemoryJson<ArchivePromoteReviewArtifactResult>(endpoint, "promote-review-artifact", input),
+    decideReview: (input) => postMemoryJson<ArchiveReviewDecisionResult>(endpoint, "decide-review", input, writeToken),
+    promoteReviewArtifact: (input) => postMemoryJson<ArchivePromoteReviewArtifactResult>(endpoint, "promote-review-artifact", input, writeToken),
   };
 };
 

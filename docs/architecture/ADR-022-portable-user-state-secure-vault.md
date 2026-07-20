@@ -1,7 +1,15 @@
 # ADR-022: Portable User State & Secure Vault Boundary
 
-Status: Accepted  
-Date: 2026-04-28
+## Decision Metadata
+
+- Decision status: Accepted
+- Alpha applicability: Partial
+- Superseded by: None
+- Owner: Local state
+- Decision date: 2026-04-28
+- Alpha note: The external user-state root applies. Encrypted vault persistence
+  is deferred; Alpha provider credentials remain session-only or process
+  environment inputs.
 
 ## Decision
 

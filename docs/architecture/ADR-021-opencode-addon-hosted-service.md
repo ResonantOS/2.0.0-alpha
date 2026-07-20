@@ -1,6 +1,14 @@
 # ADR-021: OpenCode Add-on Hosted Service
 
-Date: 2026-04-28
+## Decision Metadata
+
+- Decision status: Accepted
+- Alpha applicability: Partial
+- Superseded by: None
+- Owner: OpenCode add-on
+- Decision date: 2026-04-28
+- Alpha note: Optional bridge-mediated status and delegation routes exist.
+  OpenCode is not a required Alpha runtime component.
 
 ## Decision
 

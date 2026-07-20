@@ -29,6 +29,12 @@ function createHarness(overrides = {}) {
       events.push(["fork", id]);
       return { id: "fork-a" };
     },
+    prepareRegenerationFromMessage: async (id, options) => {
+      events.push(["prepareRegeneration", id, options?.mode]);
+      return overrides.noPreviousUser
+        ? null
+        : { mode: options?.mode, userMessage: messages[0] };
+    },
     trimToPreviousUserMessage: async (id) => {
       events.push(["trim", id]);
       return overrides.noPreviousUser ? null : messages[0];
@@ -57,6 +63,7 @@ function createHarness(overrides = {}) {
     fileInput,
     flashCopied: (id) => events.push(["flash", id]),
     getLastSnapshot: () => ({ url: "https://example.com/" }),
+    getRegenerationMode: () => overrides.regenerationMode ?? "branch",
     getRespondToCommand: () => async (value) => events.push(["respond", value]),
     navigator: {
       clipboard: {
@@ -151,11 +158,18 @@ test("message action controller saves messages to archive and reports stats", as
   assert.ok(harness.events.some((event) => event[0] === "message" && /No generation telemetry/.test(event[2])));
 });
 
-test("message action controller regenerates from previous user and handles missing history", async () => {
-  const harness = createHarness();
+test("message action controller prepares regenerate with the selected mode", async () => {
+  const harness = createHarness({ regenerationMode: "branch" });
   await harness.controller.regenerateFromMessage("a1");
+  assert.ok(harness.events.some((event) => event[0] === "prepareRegeneration" && event[1] === "a1" && event[2] === "branch"));
   assert.ok(harness.events.some((event) => event[0] === "respond" && event[1] === "hello"));
 
+  const overwrite = createHarness({ regenerationMode: "overwrite" });
+  await overwrite.controller.regenerateFromMessage("a1");
+  assert.ok(overwrite.events.some((event) => event[0] === "prepareRegeneration" && event[2] === "overwrite"));
+});
+
+test("message action controller handles missing regeneration history", async () => {
   const missing = createHarness({ noPreviousUser: true });
   await missing.controller.regenerateFromMessage("a1");
   assert.ok(missing.events.some((event) => event[0] === "message" && /No previous user message/.test(event[2])));

@@ -1,8 +1,14 @@
 # ADR-015: Delegation Fabric, Add-on Catalog, and Native Tool Fabric
 
-## Status
+## Decision Metadata
 
-Accepted.
+- Decision status: Accepted
+- Alpha applicability: Partial
+- Superseded by: None
+- Owner: Delegation
+- Decision date: Not recorded
+- Alpha note: Governed delegation packets, bounded add-on handoff, and
+  reviewable artifacts apply. Native desktop tool fabric does not apply.
 
 ## Decision
 

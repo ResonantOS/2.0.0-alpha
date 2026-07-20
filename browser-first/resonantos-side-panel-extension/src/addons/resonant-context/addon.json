@@ -1,0 +1,16 @@
+{
+  "id": "addon.resonant-context",
+  "name": "Resonant Context SDK",
+  "version": "1.0.0",
+  "description": "Page context awareness engine: viewport observer, dwell time, domain plugins, and fail-closed form state tracking.",
+  "author": "Tom Pennington",
+  "mode": "awareness-engine",
+  "trust": "page-observer",
+  "entry": null,
+  "contentScripts": ["resonant-context.js", "context-plugins.js"],
+  "commands": [],
+  "messageChannel": "resonantos.context",
+  "capabilities": ["viewport-observer", "dwell-tracking", "form-state", "domain-plugins", "top-frame-ownership", "safe-context-sanitization"],
+  "requires": [],
+  "boundary": "Read-only page observation. Form values default to redacted context. Top-frame snapshots only."
+}

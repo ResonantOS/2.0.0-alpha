@@ -52,7 +52,8 @@ export function markdownTitle(content, fallback) {
 export function artifactKind(content, filePath) {
   if (content.includes("# Browser Job Report")) return "browser-job-report";
   if (content.includes("# Browser Agent Control Report")) return "browser-control-report";
-  if (filePath.includes(`${path.sep}browser${path.sep}`)) return "browser-intake";
+  const portablePath = String(filePath ?? "").replace(/\\/g, "/");
+  if (portablePath.includes("/browser/")) return "browser-intake";
   return "intake";
 }
 

@@ -1,4 +1,4 @@
-// Intent citation: browser-first/COMET_PARITY_BACKLOG.md
+// Intent citation: docs/reference/CAPABILITY_MATRIX.md
 // Owns the bounded supervisor for running multiple non-conflicting browser jobs.
 
 const DEFAULT_MAX_CONCURRENT = 2;

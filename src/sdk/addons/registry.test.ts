@@ -39,6 +39,8 @@ const manifest = (id: string, overrides: Partial<AddOnManifest> = {}): AddOnMani
 describe("add-on registry snapshot", () => {
   it("keeps bundled catalog entries separate from installed add-ons", () => {
     const addon = manifest("addon.obsidian", {
+      // P1-e: this manifest carries no provenance, so it must NOT be trusted by
+      // omission. It resolves to dev/internal/unreviewed instead of curated-signed.
       grantPresets: [
         {
           id: "obsidian-basic",
@@ -54,13 +56,37 @@ describe("add-on registry snapshot", () => {
     });
 
     expect(entry.registrySource).toBe("bundled-catalog");
-    expect(entry.provenanceTier).toBe("curated-signed");
-    expect(entry.verificationState).toBe("verified");
-    expect(entry.reviewState).toBe("reviewed");
+    expect(entry.provenanceTier).toBe("sideloaded-unverified");
+    expect(entry.verificationState).toBe("unverified");
     expect(entry.installState).toBe("available");
     expect(entry.installed).toBe(false);
     expect(entry.enabled).toBe(false);
     expect(entry.recommendedGrantPresetIds).toContain("obsidian-basic");
+  });
+
+  it("marks a bundled manifest with NO provenance as dev/internal/unreviewed (P1-e, no trust by omission)", () => {
+    const addon = manifest("addon.no-provenance");
+    const entry = createAddOnRegistryEntry(addon, { registrySource: "bundled-catalog" });
+
+    expect(entry.provenanceTier).toBe("sideloaded-unverified");
+    expect(entry.verificationState).toBe("unverified");
+    expect(entry.reviewState).toBe("unreviewed");
+  });
+
+  it("keeps a signed bundled manifest verified (P1-e)", () => {
+    const addon = manifest("addon.signed", {
+      provenance: {
+        tier: "curated-signed",
+        verificationState: "verified",
+        signed: true,
+        signer: "ResonantOS bundled catalog",
+      },
+    });
+    const entry = createAddOnRegistryEntry(addon, { registrySource: "bundled-catalog" });
+
+    expect(entry.provenanceTier).toBe("curated-signed");
+    expect(entry.verificationState).toBe("verified");
+    expect(entry.reviewState).toBe("reviewed");
   });
 
   it("marks sideloaded add-ons as untrusted registry entries by default", () => {

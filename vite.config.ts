@@ -53,8 +53,6 @@ export default defineConfig({
     },
     watch: {
       ignored: [
-        "**/addons/resonant-browser-native/build/**",
-        "**/src-tauri/target/**",
         "**/dist/**",
         "**/node_modules/**",
       ],

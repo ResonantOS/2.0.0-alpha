@@ -1,0 +1,132 @@
+name: Feature request
+description: Propose bounded work for the browser-first product roadmap.
+title: "feat: "
+labels:
+  - feat
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the user need and boundary, not private account details. Never include credentials, tokens, cookies, wallet secrets, private prompts, provider payloads, browser profiles, or personal data. Requested scope is advisory; Project 2 is the release-planning source of truth.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user problem should be solved, and who experiences it?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed outcome
+      description: Describe observable behavior and keep implementation details optional.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Primary area
+      description: Choose the Project 2 area that should own the acceptance criteria.
+      options:
+        - Extension
+        - Bridge
+        - Chat
+        - Settings
+        - Hermes
+        - OpenCode
+        - Living Archive
+        - Blackboard
+        - Build
+        - Security
+        - Docs
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: requested_scope
+    attributes:
+      label: Requested release scope
+      description: Community Test is the tester-ready beta validation horizon. Maintainers approve final scope in Project 2.
+      options:
+        - Alpha MVP
+        - Community Test
+        - Deferred / Waived
+        - Experimental
+        - Native Future
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: List testable outcomes and any required live-browser proof.
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: handoff
+    attributes:
+      label: Contributor handoff (code entry-point)
+      description: |
+        So a contributor can start without chat-history archaeology. If you know the codebase, name the module a contributor would begin from and a focused test; a triager can fill this in later otherwise. Note that `npm run test:browser-first` runs the FULL suite and ignores path arguments — target a file with `node --test <path>` instead. Mark whether the work is in the browser-first Alpha runtime or deferred/native.
+      placeholder: |
+        - Entry-point: browser-first/resonantos-side-panel-extension/src/lib/<module>.js
+        - Focused test: node --test browser-first/test/<file>.test.mjs
+        - Runtime: browser-first Alpha (per AGENTS.md) | deferred | native-future
+    validations:
+      required: false
+
+  - type: dropdown
+    id: sensitive_actions
+    attributes:
+      label: Sensitive or consequential actions
+      description: Could this touch login, credentials, permissions, personal data, payments, wallets, messages, publishing, public submission, or destructive actions?
+      options:
+        - "No"
+        - "Yes"
+        - "Not sure"
+    validations:
+      required: true
+
+  - type: textarea
+    id: human_boundary
+    attributes:
+      label: Required human-only boundary
+      description: State what the system may prepare and what a person must review, approve, or perform. Write "None identified" when appropriate.
+    validations:
+      required: true
+
+  - type: textarea
+    id: privacy
+    attributes:
+      label: Safety and privacy considerations
+      description: Identify data categories, permissions, failure modes, and safe defaults without including real private data or secrets.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What smaller change, existing workflow, or deferral could address the need?
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Public-request confirmation
+      options:
+        - label: I searched existing issues and this is not an obvious duplicate.
+          required: true
+        - label: I included no secrets, credentials, private user data, browser profiles, or unredacted sensitive logs.
+          required: true
+        - label: I understand that requested scope is not a release commitment.
+          required: true

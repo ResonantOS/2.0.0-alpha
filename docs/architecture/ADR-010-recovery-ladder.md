@@ -1,7 +1,13 @@
 # ADR-010: Recovery Ladder & Engineer Promotion Flow
 
-Status: Accepted  
-Date: 2026-04-23
+## Decision Metadata
+
+- Decision status: Accepted
+- Alpha applicability: Deferred
+- Superseded by: None
+- Owner: Recovery
+- Decision date: 2026-04-23
+- Alpha note: The recovery product workflow is not required for Alpha.
 
 ## Decision
 

@@ -54,7 +54,7 @@ function createHarness(overrides = {}) {
     },
     "/addons/draft": { id: "email-draft-a", target: "email", path: "AddOnDrafts/email/email-draft-a.md", status: "draft-created", approvalRequired: true },
     "/status": {
-      providers: { "shared-minimax": true, "shared-openai": false },
+      providers: { "shared-minimax": true, "shared-zai-glm": false, "shared-openai": false },
       memory: { wiki: { pages: 3 }, intake: { artifacts: 2 }, review: { requests: 1, artifacts: 1 } },
       addons: [{ name: "OpenCode", available: true, mode: "addon" }],
       records: { goals: 1, delegations: 2 }

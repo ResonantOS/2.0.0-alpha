@@ -1,4 +1,4 @@
-// Intent citation: docs/architecture/SUPER_AI_APP_IMPLEMENTATION_PLAN.md
+// Intent citation: docs/architecture/ADR-015-delegation-fabric-addon-catalog-native-tools.md
 
 import type {
   GoalArtifact,

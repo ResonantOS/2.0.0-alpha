@@ -325,15 +325,70 @@
     return el.id || el.name || (el.getAttribute('data-rc-name')) || null;
   }
 
+  function _fieldSafety(el) {
+    try {
+      if (typeof window !== 'undefined' && window.ResonantOSContentFieldSafety?.classifyEditableField) {
+        return window.ResonantOSContentFieldSafety.classifyEditableField(el);
+      }
+    } catch (e) { /* fall back to local heuristic */ }
+    var type = String(el?.getAttribute?.('type') || el?.type || '').toLowerCase();
+    var haystack = [
+      type,
+      el?.name,
+      el?.id,
+      el?.getAttribute?.('aria-label'),
+      el?.getAttribute?.('placeholder'),
+      el?.getAttribute?.('autocomplete')
+    ].filter(Boolean).join(' ').toLowerCase();
+    if (type === 'password' || /\b(password|passcode|secret|token|api[-_\s]?key|otp|2fa|mfa|seed|private\s*key)\b/.test(haystack)) {
+      return { kind: 'credential' };
+    }
+    if (/\b(card|credit|debit|cvc|cvv|iban|routing|account\s*number|payment|wallet|billing|checkout)\b/.test(haystack)) {
+      return { kind: 'payment' };
+    }
+    if (/\b(email|phone|address|name|username|login|signin|sign[-\s]?in)\b/.test(haystack)) {
+      return { kind: 'personal-contact' };
+    }
+    if (type === 'search' || /\b(search|query|find|filter|lookup)\b/.test(haystack)) {
+      return { kind: 'search-query' };
+    }
+    return { kind: 'generic-text' };
+  }
+
+  function _sanitizeFreeText(value, max) {
+    var text = String(value || '')
+      .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    text = text
+      .replace(/-----BEGIN [^-]+ PRIVATE KEY-----[\s\S]*?-----END [^-]+ PRIVATE KEY-----/g, '[redacted]')
+      .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, '[redacted]')
+      .replace(/\b(?:sk|sk-ant|sk-or-v1|xai|gsk|AIza|AKIA|gh[pousr]_|github_pat_|hf_|xox[baprs]-|pk_live_|rk_live_|SG\.)[A-Za-z0-9._\-+/=]{10,}\b/gi, '[redacted]')
+      .replace(/\b(?:api[_-]?key|token|password|secret|authorization|bearer)\s*[:=]\s*['"]?[^'"\s]+/gi, '[redacted]')
+      .replace(/\b(?:\d[ -]?){13,19}\b/g, function (candidate) {
+        var digits = candidate.replace(/\D/g, '');
+        return digits.length >= 13 && digits.length <= 19 ? '[redacted]' : candidate;
+      });
+    return text.slice(0, max || 180);
+  }
+
   function _getFieldValue(el) {
+    var raw = '';
     if (el.tagName === 'SELECT') {
       var opt = el.options[el.selectedIndex];
-      return opt ? opt.text : '';
-    }
-    if (el.type === 'checkbox' || el.type === 'radio') {
+      raw = opt ? opt.text : '';
+    } else if (el.type === 'checkbox' || el.type === 'radio') {
       return el.checked ? 'checked' : '';
+    } else {
+      raw = (el.value || '').trim();
     }
-    return (el.value || '').trim();
+    if (!raw) return '';
+    var safety = _fieldSafety(el);
+    var kind = safety?.kind || 'field';
+    if (kind !== 'search-query') {
+      return '[redacted:' + kind + ']';
+    }
+    return _sanitizeFreeText(raw, 180);
   }
 
   exports.FormsTracker = FormsTracker;
@@ -437,7 +492,7 @@
 
   SessionTracker.prototype._recordCurrentPage = function () {
     var current = {
-      path: window.location.pathname + window.location.search,
+      path: _safePath(window.location.pathname + window.location.search),
       title: document.title || '',
       enteredAt: Date.now(),
       dwellMs: 0
@@ -500,7 +555,7 @@
    */
   SessionTracker.prototype.getCurrentPage = function () {
     return {
-      path: window.location.pathname + window.location.search,
+      path: _safePath(window.location.pathname + window.location.search),
       title: document.title || '',
       timeOnPageMs: Date.now() - this._pageEnteredAt
     };
@@ -530,6 +585,10 @@
     var tag = el.tagName.toLowerCase();
     var cls = el.className ? '.' + el.className.split(/\s+/).slice(0, 2).join('.') : '';
     return tag + cls;
+  }
+
+  function _safePath(value) {
+    return (String(value || '').split(/[?#]/)[0] || '/').slice(0, 300);
   }
 
   exports.SessionTracker = SessionTracker;

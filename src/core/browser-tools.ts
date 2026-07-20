@@ -11,7 +11,6 @@ import type {
   BrowserHostOpenUrlResult,
   BrowserHostReadPageResult,
   BrowserExtensionListResult,
-  BrowserExtensionLoadResult,
   BrowserToolCommand,
   Capability,
 } from "./contracts";
@@ -23,8 +22,7 @@ export type BrowserToolResult =
   | BrowserHostReadPageResult
   | BrowserHostActionResult
   | BrowserHostEvidenceResult
-  | BrowserExtensionListResult
-  | BrowserExtensionLoadResult;
+  | BrowserExtensionListResult;
 
 export type BrowserToolTransport = {
   call: (
@@ -50,7 +48,6 @@ const commandToToolName: Record<BrowserToolCommand["type"], string> = {
   close: "browser.close_session",
   health: "browser.health",
   extensions_list: "browser.extensions.list",
-  extensions_load_unpacked: "browser.extensions.load_unpacked",
   extensions_set_pinned: "browser.extensions.set_pinned",
   extensions_disable: "browser.extensions.disable",
   wallet_host_health: "browser.wallet_host.health",
@@ -100,9 +97,6 @@ function assertRequiredCapabilities(installation: AddOnInstallation | undefined,
 function assertHumanApproval(command: BrowserToolCommand): void {
   if (command.type === "type" && command.params?.sensitive === true && !command.humanApproved) {
     throw new Error(privilegedTypingMessage);
-  }
-  if (command.type === "extensions_load_unpacked" && !command.humanApproved) {
-    throw new Error("Loading a Browser extension requires explicit human approval.");
   }
 }
 

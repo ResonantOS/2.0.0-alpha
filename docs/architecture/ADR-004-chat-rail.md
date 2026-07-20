@@ -1,7 +1,14 @@
 # ADR-004: Strategist Chat Rail
 
-Status: Accepted  
-Date: 2026-04-23
+## Decision Metadata
+
+- Decision status: Accepted
+- Alpha applicability: Partial
+- Superseded by: None
+- Owner: Extension experience
+- Decision date: 2026-04-23
+- Alpha note: Conversation and composer rules apply. Desktop-shell rail and
+  window placement do not; Alpha uses the MV3 side panel and new-tab workspace.
 
 ## Decision
 

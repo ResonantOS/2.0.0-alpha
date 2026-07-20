@@ -19,23 +19,23 @@ function latestManifestDirectory(root) {
 export function chromeProfileRoots({ home = os.homedir(), platform = process.platform, env = process.env } = {}) {
   if (platform === "darwin") {
     return [
-      path.join(home, "Library", "Application Support", "Google", "Chrome"),
-      path.join(home, "Library", "Application Support", "BraveSoftware", "Brave-Browser"),
-      path.join(home, "Library", "Application Support", "Chromium"),
+      path.posix.join(home, "Library", "Application Support", "Google", "Chrome"),
+      path.posix.join(home, "Library", "Application Support", "BraveSoftware", "Brave-Browser"),
+      path.posix.join(home, "Library", "Application Support", "Chromium"),
     ];
   }
   if (platform === "win32") {
-    const local = env.LOCALAPPDATA ?? path.join(home, "AppData", "Local");
+    const local = env.LOCALAPPDATA ?? path.win32.join(home, "AppData", "Local");
     return [
-      path.join(local, "Google", "Chrome", "User Data"),
-      path.join(local, "BraveSoftware", "Brave-Browser", "User Data"),
-      path.join(local, "Chromium", "User Data"),
+      path.win32.join(local, "Google", "Chrome", "User Data"),
+      path.win32.join(local, "BraveSoftware", "Brave-Browser", "User Data"),
+      path.win32.join(local, "Chromium", "User Data"),
     ];
   }
   return [
-    path.join(home, ".config", "google-chrome"),
-    path.join(home, ".config", "BraveSoftware", "Brave-Browser"),
-    path.join(home, ".config", "chromium"),
+    path.posix.join(home, ".config", "google-chrome"),
+    path.posix.join(home, ".config", "BraveSoftware", "Brave-Browser"),
+    path.posix.join(home, ".config", "chromium"),
   ];
 }
 

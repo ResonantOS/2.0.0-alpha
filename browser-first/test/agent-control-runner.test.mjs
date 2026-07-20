@@ -149,8 +149,15 @@ test("agent control runner completes an observe-act-verify loop", async () => {
   assert.equal(harness.getControlRun().steps[0].details.uncertainty, null);
   assert.equal(harness.nextActionRequests[1].history[0].result.verificationChanged, true);
   assert.deepEqual(
-    harness.events.filter((event) => event[0] === "overlay").map((event) => event[3]),
-    ["reading", "working", "clicking", "verifying", "reading", "working"]
+    harness.events.filter((event) => event[0] === "overlay").map((event) => [event[2], event[3]]),
+    [
+      ["reading", "reading"],
+      ["reading", "reading"],
+      ["clicking", "clicking"],
+      ["verifying", "verifying"],
+      ["reading", "reading"],
+      ["reading", "reading"]
+    ]
   );
   assert.ok(harness.events.some((event) => event[0] === "message" && /Agent Control Mode completed/.test(event[2])));
 });
@@ -346,7 +353,8 @@ test("agent control runner stores pending approval when a step requires human re
   assert.equal(harness.getPendingApproval().step.text, "Submit");
   assert.equal(harness.getControlRun().steps[0].details.confidence, "low");
   assert.match(harness.getControlRun().steps[0].details.uncertainty, /Public submit requires approval/);
-  assert.match(harness.getControlRun().steps[0].details.nextHumanAction, /approve once, deny, or delegate/);
+  assert.equal(harness.getControlRun().steps[0].details.humanInterventionState, "public-submit");
+  assert.match(harness.getControlRun().steps[0].details.nextHumanAction, /approve once/);
   assert.ok(harness.events.some((event) => event[0] === "pending" && event[1] === "click"));
 });
 
@@ -433,8 +441,8 @@ test("agent control runner preserves ambiguous target candidates for retargeting
       ambiguousTarget: true,
       error: "Click target \"Add\" matched 2 visible candidates.",
       candidates: [
-        { ref: "r1", text: "Add", tagName: "button" },
-        { ref: "r2", text: "Add", tagName: "button" }
+        { ref: "r1", text: "Add", tagName: "button", visibleIndex: 1, section: { label: "Starter plan" } },
+        { ref: "r2", text: "Add", tagName: "button", visibleIndex: 2, section: { label: "Pro plan" } }
       ]
     }]
   });
@@ -448,6 +456,8 @@ test("agent control runner preserves ambiguous target candidates for retargeting
   assert.equal(step.state, "failed");
   assert.equal(step.details.ambiguousTarget, true);
   assert.deepEqual(step.details.targetCandidates.map((candidate) => candidate.ref), ["r1", "r2"]);
+  assert.deepEqual(step.details.targetCandidates.map((candidate) => candidate.visibleIndex), [1, 2]);
+  assert.deepEqual(step.details.targetCandidates.map((candidate) => candidate.context), ["Starter plan", "Pro plan"]);
   assert.ok(step.details.recoveryOptions.some((option) => /Ambiguous target candidates/.test(option)));
   assert.equal(harness.getSavedReports().at(-1).results[0].result.ambiguousTarget, true);
 });
@@ -480,6 +490,8 @@ test("agent control runner blocks hard human-only boundaries without pending app
   assert.equal(result.approvalRequired, true);
   assert.equal(harness.getControlRun().status, "blocked");
   assert.equal(harness.getPendingApproval(), null);
+  assert.equal(harness.getControlRun().steps[0].details.humanInterventionState, "checkout");
+  assert.match(harness.getControlRun().steps[0].details.nextHumanAction, /payment/);
 });
 
 test("agent control runner can approve or deny a pending step through injected state", async () => {

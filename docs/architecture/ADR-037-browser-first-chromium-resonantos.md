@@ -1,10 +1,15 @@
 # ADR-037: Browser-First Chromium ResonantOS
 
-## Status
+## Decision Metadata
 
-Accepted.
-
-Supersedes the product direction of ADR-035 and ADR-036. Those ADRs remain as research records only.
+- Decision status: Accepted
+- Alpha applicability: Partial
+- Superseded by: None
+- Owner: Browser architecture
+- Decision date: Not recorded
+- Alpha note: Browser-contained product direction applies, but Alpha is an
+  unpacked Chrome MV3 extension plus authenticated local Node bridge, not a
+  custom Chromium distribution. This ADR supersedes ADR-035 and ADR-036.
 
 ## Decision
 

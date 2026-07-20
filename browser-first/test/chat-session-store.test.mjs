@@ -276,6 +276,102 @@ test("chat session store forks whole sessions while preserving project context",
   assert.match(harness.store.getActiveSession().title, /^Fork:/);
 });
 
+test("chat session store branches preserve compact memory and source references", async () => {
+  const compactState = {
+    threadId: "source-session",
+    compactedAt: "2026-06-22T10:00:00.000Z",
+    sourceRange: {
+      fromMessageId: "message-a",
+      toMessageId: "message-c"
+    },
+    userIntent: {
+      goal: "Keep branch work aligned with the original compacted objective.",
+      why: "The parent context was compacted before branching.",
+      successCriteria: ["branch keeps compact context"],
+      prioritySignals: ["avoid regression"],
+      sourceMessageIds: ["message-a"]
+    },
+    workingSummary: "The user wants compact context copied into chat branches.",
+    decisions: [{
+      decisionId: "decision-1",
+      decision: "Copy compact memory metadata at branch time.",
+      reason: "Visible messages may no longer contain the original intent.",
+      scope: "browser-first-session",
+      status: "accepted",
+      sourceMessageIds: ["message-b"],
+      relatedDocPaths: ["docs/architecture/ADR-016-context-memory-compaction.md"]
+    }],
+    facts: [],
+    preferences: [],
+    openTasks: [{
+      taskId: "task-1",
+      description: "Add a deterministic branch regression test.",
+      owner: "agent",
+      status: "open",
+      verificationRequired: ["browser-first store test"],
+      sourceMessageIds: ["message-c"]
+    }],
+    artifacts: [{
+      artifactId: "artifact-1",
+      ref: "browser-first/test/chat-session-store.test.mjs",
+      kind: "file",
+      sourceMessageIds: ["message-c"]
+    }],
+    sourceReferences: [{
+      messageId: "message-a",
+      ref: "transcript:source-session:message-a"
+    }],
+    risks: [],
+    unresolvedQuestions: [],
+    preservedRecentMessageIds: ["message-b", "message-c"],
+    checksum: "fnv32:test-compact-state"
+  };
+  const sourceReferences = [{
+    messageId: "message-a",
+    ref: "transcript:source-session:message-a"
+  }];
+  const harness = createHarness({
+    sessions: [{
+      id: "source-session",
+      title: "Compacted parent",
+      messages: [
+        { id: "message-a", role: "user", content: "original intent", createdAt: "2026-06-22T09:00:00.000Z" },
+        { id: "message-b", role: "assistant", content: "decision recorded", createdAt: "2026-06-22T09:01:00.000Z" },
+        { id: "message-c", role: "user", content: "branch this", createdAt: "2026-06-22T09:02:00.000Z" }
+      ],
+      compactState,
+      sourceReferences
+    }],
+    activeSessionId: "source-session"
+  });
+
+  await harness.store.hydrate();
+
+  const wholeFork = await harness.store.forkSession("source-session");
+  const wholeForkSession = harness.store.getActiveSession();
+
+  assert.equal(wholeFork.sourceSessionId, "source-session");
+  assert.deepEqual(wholeForkSession.compactState, compactState);
+  assert.deepEqual(wholeForkSession.sourceReferences, sourceReferences);
+  assert.notStrictEqual(wholeForkSession.compactState, compactState);
+  assert.deepEqual(
+    harness.writes.at(-1).sessions.find((session) => session.id === wholeFork.id).compactState,
+    compactState
+  );
+
+  await harness.store.switchSession("source-session");
+  const messageFork = await harness.store.forkFromMessage("message-c");
+  const messageForkSession = harness.store.getActiveSession();
+
+  assert.equal(messageFork.sourceMessageId, "message-c");
+  assert.deepEqual(messageForkSession.compactState.userIntent, compactState.userIntent);
+  assert.deepEqual(messageForkSession.compactState.decisions, compactState.decisions);
+  assert.deepEqual(messageForkSession.compactState.openTasks, compactState.openTasks);
+  assert.deepEqual(messageForkSession.compactState.artifacts, compactState.artifacts);
+  assert.deepEqual(messageForkSession.compactState.sourceReferences, compactState.sourceReferences);
+  assert.deepEqual(messageForkSession.sourceReferences, sourceReferences);
+});
+
 test("chat session store trims to previous user message for regeneration", async () => {
   const harness = createHarness();
 
@@ -286,6 +382,69 @@ test("chat session store trims to previous user message for regeneration", async
 
   assert.equal(regeneratedFrom.id, user.id);
   assert.deepEqual(harness.store.getMessages().map((message) => message.id), [user.id]);
+});
+
+test("chat session store prepares overwrite regeneration without creating a branch", async () => {
+  const harness = createHarness();
+
+  const user = await harness.store.addMessage("user", "first");
+  const assistant = await harness.store.addMessage("assistant", "answer");
+
+  const prepared = await harness.store.prepareRegenerationFromMessage(assistant.id, { mode: "overwrite" });
+
+  assert.equal(prepared.mode, "overwrite");
+  assert.equal(prepared.userMessage.id, user.id);
+  assert.deepEqual(harness.store.getMessages().map((message) => message.id), [user.id]);
+  assert.equal(harness.store.getForks().length, 0);
+});
+
+test("chat session store prepares branch regeneration with compact state scoped to retained messages", async () => {
+  const harness = createHarness({
+    sessions: [{
+      id: "session-source",
+      title: "Source conversation",
+      workspaceId: "answer",
+      projectId: "project-a",
+      createdAt: "2026-05-25T00:00:00.000Z",
+      updatedAt: "2026-05-25T00:10:00.000Z",
+      messages: [
+        { id: "u1", role: "user", content: "first", createdAt: "2026-05-25T00:01:00.000Z" },
+        { id: "a1", role: "assistant", content: "answer", createdAt: "2026-05-25T00:02:00.000Z" },
+        { id: "u2", role: "user", content: "second", createdAt: "2026-05-25T00:03:00.000Z" },
+        { id: "a2", role: "assistant", content: "second answer", createdAt: "2026-05-25T00:04:00.000Z" }
+      ],
+      compactState: {
+        summary: "first turn retained as summary",
+        preservedRecentMessageIds: ["u1", "a1", "u2", "a2"],
+        sourceRange: {
+          fromMessageId: "u1",
+          toMessageId: "a2"
+        }
+      }
+    }],
+    projects: [{ id: "project-a", name: "Project A" }],
+    activeSessionId: "session-source"
+  });
+
+  await harness.store.hydrate();
+  const prepared = await harness.store.prepareRegenerationFromMessage("a2", { mode: "branch" });
+
+  assert.equal(prepared.mode, "branch");
+  assert.equal(prepared.userMessage.id, "u2");
+  assert.equal(prepared.fork.sourceSessionId, "session-source");
+  assert.equal(prepared.fork.sourceMessageId, "a2");
+  assert.deepEqual(harness.store.getMessages().map((message) => message.id), ["u1", "a1", "u2"]);
+
+  const active = harness.store.getActiveSession();
+  assert.notEqual(active.id, "session-source");
+  assert.equal(active.projectId, "project-a");
+  assert.match(active.title, /^Regenerate:/);
+  assert.equal(active.compactState.summary, "first turn retained as summary");
+  assert.deepEqual(active.compactState.preservedRecentMessageIds, ["u1", "a1", "u2"]);
+  assert.deepEqual(active.compactState.sourceRange, {
+    fromMessageId: "u1",
+    toMessageId: "u2"
+  });
 });
 
 test("chat session store manages attachments and persists selected provider settings", async () => {

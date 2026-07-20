@@ -20,6 +20,7 @@
 const DEFAULT_MODEL_LABELS = {
   "__auto__": "Auto route",
   "MiniMax-M3": "MiniMax M3",
+  "zai/glm-5.2": "Z.AI GLM 5.2",
   "gpt-5.5": "GPT 5.5",
   "gpt-5.4-mini": "GPT 5.4 Mini",
   "batiai/gemma4-e2b:q4": "Gemma 4 2B"
@@ -27,6 +28,7 @@ const DEFAULT_MODEL_LABELS = {
 
 const MODEL_CONTEXT_WINDOWS = {
   "MiniMax-M3": 1_000_000,
+  "zai/glm-5.2": 195_000,
   "gpt-5.5": 128_000,
   "gpt-5.4-mini": 128_000,
   "batiai/gemma4-e2b:q4": 8_000,
@@ -58,14 +60,15 @@ function providerModelEntries(providerStatus) {
     .filter((entry) => entry.model);
 }
 
-export async function hydrateProviderModelOptions({ bridgeRequest, modelSelect, getPreferredModel = () => "__auto__", setStatus = () => undefined }) {
+export async function hydrateProviderModelOptions({ bridgeRequest, getBridgeRequest, modelSelect, getPreferredModel = () => "__auto__", setStatus = () => undefined }) {
+  const bridge = () => (typeof getBridgeRequest === "function" ? getBridgeRequest() : bridgeRequest);
   const preferred = getPreferredModel() || modelSelect.value || "__auto__";
   const fallbackOptions = [...modelSelect.options].map((option) => ({
     model: option.value,
     label: option.textContent || option.value
   }));
   try {
-    const status = await bridgeRequest("/providers/status", { method: "GET" });
+    const status = await bridge()("/providers/status", { method: "GET" });
     const entries = providerModelEntries(status);
     const byModel = new Map();
     for (const entry of entries) {

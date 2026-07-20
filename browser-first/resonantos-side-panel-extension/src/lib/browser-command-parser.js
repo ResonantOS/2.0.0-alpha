@@ -39,6 +39,17 @@ export const parseQuotedTexts = (message) =>
     .map((match) => match[1]?.trim())
     .filter(Boolean);
 
+function cleanUnquotedClickTarget(value) {
+  const text = String(value ?? "")
+    .replace(/\b(?:then|and\s+(?:then\s+)?(?:read|type|write|enter|scroll|open|go|search|find|summari[sz]e|inspect|click|press|tap|select|choose))\b[\s\S]*$/i, "")
+    .replace(/[.,;:!?]+$/g, "")
+    .replace(/^\s*(?:on|the|a|an)\s+/i, "")
+    .replace(/\s+(?:button|link|tab|menu\s+item|menu|screen|page|section)$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text || "";
+}
+
 export function parseTypeIntent(message) {
   const normalized = String(message ?? "").trim();
   if (/^\//.test(normalized) || !/\b(type|write|enter|put|insert)\b/i.test(normalized)) {
@@ -55,12 +66,22 @@ export function parseTypeIntent(message) {
 
 export function parseClickIntent(message) {
   const normalized = String(message ?? "").trim();
-  if (/^\//.test(normalized) || !/\b(click|press|tap|select|open)\b/i.test(normalized)) {
+  if (/^\//.test(normalized) || !/\b(click|press|tap|select|choose|open)\b/i.test(normalized)) {
     return null;
   }
   const quotedTexts = parseQuotedTexts(normalized);
   const text = quotedTexts[0] ?? "";
   if (!text) {
+    const directClick = /\b(?:click|press|tap|select|choose)\b\s+([\s\S]{1,280})/i.exec(normalized);
+    if (directClick) {
+      const target = cleanUnquotedClickTarget(directClick[1]);
+      return target ? { text: target } : null;
+    }
+    const openPageTarget = /\bopen\b\s+([\s\S]{1,280})/i.exec(normalized);
+    if (openPageTarget && !browserTargetPattern.test(normalized)) {
+      const target = cleanUnquotedClickTarget(openPageTarget[1]);
+      return target ? { text: target } : null;
+    }
     return null;
   }
   return { text };

@@ -1,7 +1,13 @@
 # ADR-020: Resonant Notes Clean-Room Workspace
 
-Status: Accepted  
-Date: 2026-04-27
+## Decision Metadata
+
+- Decision status: Accepted
+- Alpha applicability: Deferred
+- Superseded by: None
+- Owner: Notes add-on
+- Decision date: 2026-04-27
+- Alpha note: Resonant Notes is future work and is not required for Alpha.
 
 ## Decision
 

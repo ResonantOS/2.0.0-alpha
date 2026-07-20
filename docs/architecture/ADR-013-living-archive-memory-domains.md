@@ -1,7 +1,14 @@
 # ADR-013: Living Archive Memory Domains
 
-Status: Accepted  
-Date: 2026-04-24
+## Decision Metadata
+
+- Decision status: Accepted
+- Alpha applicability: Applies
+- Superseded by: None
+- Owner: Living Archive
+- Decision date: 2026-04-24
+- Alpha note: Memory domains, source intake, explicit move approval, and
+  governed promotion apply through Alpha bridge services.
 
 ## Decision
 

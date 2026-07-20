@@ -8,7 +8,7 @@
 .delegation-list-panel,
 .delegation-detail-panel {
   min-width: 0;
-  border: 1px solid rgba(138, 128, 112, 0.16);
+  border: var(--border-line-lg);
   border-radius: 24px;
   background:
     radial-gradient(circle at top right, rgba(16, 185, 129, 0.1), transparent 14rem),
@@ -28,7 +28,7 @@
   margin: 0.25rem 0 0;
   font-size: clamp(1.45rem, 3vw, 2.5rem);
   line-height: 0.98;
-  letter-spacing: -0.06em;
+  letter-spacing: -0.02em;
 }
 
 .delegation-hero-panel p {
@@ -39,7 +39,7 @@
 }
 
 .delegation-notice {
-  border: 1px solid rgba(16, 185, 129, 0.2);
+  border: 1px solid var(--accent-border-sm);
   border-radius: 18px;
   background: rgba(16, 185, 129, 0.07);
 }
@@ -55,7 +55,7 @@
 .goal-monitor-panel,
 .goal-monitor-card {
   min-width: 0;
-  border: 1px solid rgba(138, 128, 112, 0.16);
+  border: var(--border-line-lg);
   background: rgba(9, 11, 12, 0.22);
 }
 
@@ -96,7 +96,7 @@
   padding: 1rem;
   border-radius: 24px;
   background:
-    radial-gradient(circle at top left, rgba(16, 185, 129, 0.08), transparent 12rem),
+    radial-gradient(circle at top left, var(--accent-surface-sm), transparent 12rem),
     rgba(19, 16, 13, 0.62);
 }
 
@@ -140,7 +140,7 @@
 
 .goal-monitor-meta span,
 .goal-monitor-blockers span {
-  border: 1px solid rgba(138, 128, 112, 0.16);
+  border: var(--border-line-lg);
   border-radius: 999px;
   padding: 0.28rem 0.48rem;
   color: var(--text-secondary);
@@ -188,8 +188,8 @@
 .delegation-task-card:hover {
   border-color: rgba(16, 185, 129, 0.42);
   background:
-    radial-gradient(circle at top right, rgba(16, 185, 129, 0.14), transparent 10rem),
-    rgba(16, 185, 129, 0.06);
+    radial-gradient(circle at top right, var(--accent-surface-md), transparent 10rem),
+    var(--accent-surface-xs);
 }
 
 .delegation-task-orb {
@@ -267,7 +267,7 @@
   gap: 0.85rem;
   min-width: 0;
   padding: 0.85rem;
-  border: 1px solid rgba(138, 128, 112, 0.16);
+  border: var(--border-line-lg);
   border-radius: 20px;
   background: rgba(9, 11, 12, 0.18);
 }
@@ -284,14 +284,14 @@
   max-height: 420px;
   overflow: auto;
   padding: 0.85rem;
-  border: 1px solid rgba(138, 128, 112, 0.14);
+  border: var(--border-line-md);
   border-radius: 18px;
   background: rgba(7, 9, 10, 0.28);
 }
 
 .delegation-review-card.result {
   background:
-    radial-gradient(circle at top left, rgba(16, 185, 129, 0.08), transparent 11rem),
+    radial-gradient(circle at top left, var(--accent-surface-sm), transparent 11rem),
     rgba(7, 9, 10, 0.28);
 }
 
@@ -317,7 +317,7 @@
 .delegation-path-card {
   min-width: 0;
   padding: 0.75rem;
-  border: 1px solid rgba(138, 128, 112, 0.16);
+  border: var(--border-line-lg);
   border-radius: 18px;
   background: rgba(9, 11, 12, 0.22);
 }

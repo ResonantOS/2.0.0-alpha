@@ -25,8 +25,14 @@ test("provider host service owns provider and Augmentor bridge routes", () => {
   assert.equal(typeof routes.get("POST /augmentor/chat")?.handler, "function");
   assert.equal(typeof routes.get("POST /augmentor/inline")?.handler, "function");
 
+  assert.equal(routes.get("POST /providers/health")?.requiredCapability, "provider-diagnostics-read");
+  assert.equal(routes.get("POST /providers/connectivity-test")?.requiredCapability, "provider-diagnostics-read");
+  assert.equal(routes.get("GET /providers/diagnostics-history")?.requiredCapability, "provider-diagnostics-read");
+  assert.equal(routes.get("GET /providers/routing-strategies")?.requiredCapability, "provider-diagnostics-read");
   assert.equal(routes.get("POST /providers/credentials")?.requiredCapability, "provider-credential-write");
   assert.equal(routes.get("POST /providers/accounts")?.requiredCapability, "provider-credential-write");
   assert.equal(routes.get("POST /providers/routing-strategies")?.requiredCapability, "provider-routing-write");
   assert.equal(routes.get("POST /providers/model-preferences")?.requiredCapability, "provider-routing-write");
+  assert.equal(routes.get("POST /augmentor/chat")?.requiredCapability, "provider-model-invoke");
+  assert.equal(routes.get("POST /augmentor/inline")?.requiredCapability, "provider-model-invoke");
 });

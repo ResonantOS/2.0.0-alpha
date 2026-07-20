@@ -33,6 +33,13 @@
   grid-template-columns: 76px minmax(0, 1fr) 60px;
 }
 
+.shell.center-chat-owner {
+  grid-template-columns: 76px minmax(0, 1fr);
+  grid-template-areas:
+    "topbar topbar"
+    "dock main";
+}
+
 .shell.chat-unavailable {
   grid-template-columns: 76px minmax(0, 1fr);
   grid-template-areas:
@@ -49,6 +56,13 @@
 
 .shell.layout-chat-main.chat-closed {
   grid-template-columns: 76px 60px minmax(0, 1fr);
+}
+
+.shell.layout-chat-main.center-chat-owner {
+  grid-template-columns: 76px minmax(0, 1fr);
+  grid-template-areas:
+    "topbar topbar"
+    "dock main";
 }
 
 .shell.layout-chat-main.chat-unavailable {
@@ -95,7 +109,7 @@
   border: 0;
   padding: 0.7rem;
   background:
-    radial-gradient(circle at 18% 4%, rgba(16, 185, 129, 0.14), transparent 20rem),
+    radial-gradient(circle at 18% 4%, var(--accent-surface-md), transparent 20rem),
     rgba(14, 12, 10, 0.94);
 }
 
@@ -203,7 +217,7 @@
 
 .system-icon-button:hover {
   color: var(--text-primary);
-  background: rgba(255, 248, 236, 0.04);
+  background: var(--surface-tint-sm);
 }
 
 .system-health {
@@ -249,7 +263,7 @@
   border: 1px solid var(--border);
   border-radius: 28px;
   padding: 2rem;
-  background: rgba(255, 248, 236, 0.04);
+  background: var(--surface-tint-sm);
   box-shadow: var(--shadow);
 }
 
@@ -295,7 +309,7 @@
 }
 
 .rail-toggle:hover {
-  border-color: rgba(16, 185, 129, 0.4);
+  border-color: var(--accent-border-xl);
   color: var(--accent);
 }
 
@@ -319,7 +333,7 @@
 .status-badge {
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: rgba(255, 248, 236, 0.04);
+  background: var(--surface-tint-sm);
   min-width: 0;
 }
 
@@ -525,7 +539,7 @@
   padding: 0.58rem 0.72rem;
   border-radius: 14px;
   border: 1px solid var(--border);
-  background: rgba(255, 248, 236, 0.04);
+  background: var(--surface-tint-sm);
 }
 
 .topbar-pill span {
@@ -606,7 +620,7 @@
 .overview-workspace .service-card,
 .overview-workspace .workspace-card,
 .overview-workspace .addon-card {
-  border-color: rgba(138, 128, 112, 0.12);
+  border-color: var(--border-sm);
   background: rgba(255, 248, 236, 0.025);
 }
 
@@ -663,7 +677,7 @@
   padding: 0.78rem 0.85rem;
   border-radius: 14px;
   border: 1px solid var(--border);
-  background: rgba(255, 248, 236, 0.03);
+  background: var(--surface-tint-xs);
 }
 
 .workspace-snapshot span {
@@ -768,7 +782,7 @@
 
 .tone-active {
   color: var(--accent);
-  border-color: rgba(16, 185, 129, 0.4);
+  border-color: var(--accent-border-xl);
   background: var(--accent-muted);
 }
 
@@ -819,7 +833,7 @@
   overflow: hidden;
   border-radius: 999px;
   border: 1px solid var(--border);
-  background: rgba(255, 248, 236, 0.03);
+  background: var(--surface-tint-xs);
 }
 
 .progress-fill {
@@ -848,7 +862,7 @@
   min-width: 0;
   border: 1px solid var(--border);
   border-radius: 24px;
-  background: rgba(255, 248, 236, 0.04);
+  background: var(--surface-tint-sm);
   box-shadow: var(--shadow);
 }
 
@@ -859,9 +873,9 @@
   align-items: center;
   padding: 1rem;
   background:
-    radial-gradient(circle at top left, rgba(16, 185, 129, 0.16), transparent 30rem),
+    radial-gradient(circle at top left, var(--accent-surface-lg), transparent 30rem),
     radial-gradient(circle at top right, rgba(217, 119, 6, 0.1), transparent 24rem),
-    rgba(255, 248, 236, 0.04);
+    var(--surface-tint-sm);
 }
 
 .home-hero-copy h2 {
@@ -970,7 +984,7 @@
   text-align: left;
   border-radius: 20px;
   background:
-    radial-gradient(circle at top right, rgba(255, 248, 236, 0.06), transparent 9rem),
+    radial-gradient(circle at top right, var(--surface-tint), transparent 9rem),
     rgba(9, 11, 12, 0.24);
 }
 
@@ -978,7 +992,7 @@
 .app-tile:hover {
   border-color: rgba(16, 185, 129, 0.42);
   background:
-    radial-gradient(circle at top right, rgba(16, 185, 129, 0.14), transparent 10rem),
+    radial-gradient(circle at top right, var(--accent-surface-md), transparent 10rem),
     rgba(16, 185, 129, 0.055);
 }
 
@@ -1031,13 +1045,13 @@
   max-width: 100%;
   padding: 0.25rem 0.44rem;
   border-radius: 999px;
-  border: 1px solid rgba(138, 128, 112, 0.16);
+  border: var(--border-line-lg);
   background: rgba(255, 248, 236, 0.035);
 }
 
 .app-status-active {
   color: var(--accent);
-  border-color: rgba(16, 185, 129, 0.32);
+  border-color: var(--accent-border-lg);
   background: rgba(16, 185, 129, 0.09);
 }
 
@@ -1056,7 +1070,7 @@
 .workspace-preview {
   min-height: clamp(320px, 43vh, 560px);
   border-radius: 22px;
-  border: 1px solid rgba(138, 128, 112, 0.16);
+  border: var(--border-line-lg);
   overflow: hidden;
 }
 
@@ -1072,7 +1086,7 @@
 
 .workspace-preview.system {
   background:
-    radial-gradient(circle at top left, rgba(16, 185, 129, 0.12), transparent 18rem),
+    radial-gradient(circle at top left, var(--accent-surface), transparent 18rem),
     rgba(9, 11, 12, 0.24);
 }
 
@@ -1142,7 +1156,7 @@
   background: rgba(9, 11, 12, 0.22);
 }
 
-/* UX citation: docs/product/UX-001-resonantos-app-shell.md */
+/* UX citation: docs/product/PRODUCT_GUIDE.md */
 .home-hero-panel,
 .app-launcher-panel,
 .active-app-panel,
@@ -1160,11 +1174,11 @@
 .home-health-pill,
 .workspace-preview,
 .running-app-card {
-  border-color: rgba(138, 128, 112, 0.12);
+  border-color: var(--border-sm);
   background-color: rgba(255, 248, 236, 0.025);
 }
 
 .app-tile {
-  border-color: rgba(138, 128, 112, 0.1);
+  border-color: var(--border-sm);
   background: rgba(9, 11, 12, 0.18);
 }

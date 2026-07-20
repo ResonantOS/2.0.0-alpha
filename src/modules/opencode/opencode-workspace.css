@@ -39,7 +39,7 @@
 .opencode-warning,
 .opencode-error,
 .opencode-embed-shell {
-  border: 1px solid rgba(138, 128, 112, 0.12);
+  border: var(--border-line-sm);
   border-radius: 18px;
   background: rgba(255, 248, 236, 0.028);
 }
@@ -90,7 +90,7 @@
   place-items: center;
   width: 1.62rem;
   height: 1.62rem;
-  border: 1px solid rgba(138, 128, 112, 0.14);
+  border: var(--border-line-md);
   border-radius: 999px;
   background: rgba(255, 248, 236, 0.035);
   color: var(--text-secondary);
@@ -123,7 +123,7 @@
 }
 
 .opencode-runtime-pill.ready {
-  background: rgba(16, 185, 129, 0.12);
+  background: var(--accent-surface);
   color: var(--accent);
 }
 
@@ -162,6 +162,15 @@
 .opencode-error {
   border-color: rgba(248, 113, 113, 0.26);
   color: #fda4af;
+  white-space: pre-wrap;
+}
+
+.opencode-runtime-guidance {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  color: var(--warning);
+  font: 700 0.72rem/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 .opencode-actions {
@@ -234,7 +243,7 @@
   gap: 0.45rem;
   min-width: 0;
   padding: 0.32rem 0.55rem;
-  border-bottom: 1px solid rgba(138, 128, 112, 0.12);
+  border-bottom: var(--border-line-sm);
   font-size: 0.68rem;
 }
 
@@ -252,7 +261,7 @@
 }
 
 .opencode-trust-kernel.ready {
-  background: rgba(16, 185, 129, 0.06);
+  background: var(--accent-surface-xs);
 }
 
 .opencode-trust-kernel.attention {

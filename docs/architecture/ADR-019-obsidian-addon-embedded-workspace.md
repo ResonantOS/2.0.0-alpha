@@ -1,7 +1,14 @@
 # ADR-019: Obsidian Add-on Embedded Workspace
 
-Status: Accepted  
-Date: 2026-04-27
+## Decision Metadata
+
+- Decision status: Accepted
+- Alpha applicability: Deferred
+- Superseded by: None
+- Owner: Notes add-on
+- Decision date: 2026-04-27
+- Alpha note: The hosted Obsidian-compatible workspace is future work and is
+  not required for Alpha.
 
 ## Decision
 

@@ -106,7 +106,7 @@ export function createSidePanelUiController(dependencies) {
     }
     controlPreflightCard.hidden = false;
     controlPreflightTitle.textContent = `${pendingControlPreflight.taskClass} control on ${pendingControlPreflight.siteKey}`;
-    controlPreflightBody.textContent = `${pendingControlPreflight.goal} · ${pendingControlPreflight.mode}. Augmentor may read, scroll, click safe controls, and type into editable fields. Wallet, login, credential, payment, signing, transfer, destructive, and public-submit boundaries remain human-gated.`;
+    controlPreflightBody.textContent = `${pendingControlPreflight.goal} · ${pendingControlPreflight.mode}. Approve once, allow this task class for one execution, or trust safe actions for this site. Augmentor may read, scroll, click safe controls, and type into editable fields. Wallet, login, credential, payment, signing, transfer, destructive, and public-submit boundaries remain human-gated.`;
     updateContextDockVisibility();
   };
 

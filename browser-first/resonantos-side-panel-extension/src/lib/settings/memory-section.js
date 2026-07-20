@@ -245,7 +245,8 @@ function option(value, text, selected) {
   return node;
 }
 
-export function renderMemorySection(container, { bridgeRequest, onOpenWorkspace = null }) {
+export function renderMemorySection(container, { bridgeRequest, getBridgeRequest, onOpenWorkspace = null }) {
+  const bridge = () => (typeof getBridgeRequest === "function" ? getBridgeRequest() : bridgeRequest);
   const statusNode = document.createElement("p");
   statusNode.className = "settings-status";
   statusNode.textContent = "Loading memory settings...";
@@ -376,7 +377,7 @@ export function renderMemorySection(container, { bridgeRequest, onOpenWorkspace 
   );
 
   const load = async () => {
-    const result = await bridgeRequest("/memory/settings", { method: "GET" });
+    const result = await bridge()("/memory/settings", { method: "GET" });
     const settings = result.settings ?? {};
     const memoryStatus = result.status ?? {};
     const addons = result.memoryAddons ?? [];
@@ -427,7 +428,7 @@ export function renderMemorySection(container, { bridgeRequest, onOpenWorkspace 
     }
     setStatus(statusNode, `${action === "remove" ? "Removing" : action === "enable" ? "Enabling" : "Disabling"} memory source...`);
     try {
-      await bridgeRequest("/memory/source/action", {
+      await bridge()("/memory/source/action", {
         method: "POST",
         capability: "memory-source-manage",
         body: {
@@ -447,7 +448,7 @@ export function renderMemorySection(container, { bridgeRequest, onOpenWorkspace 
     runSync.disabled = true;
     setStatus(statusNode, "Running governed memory source sync...");
     try {
-      const result = await bridgeRequest("/memory/source/sync", {
+      const result = await bridge()("/memory/source/sync", {
         method: "POST",
         capability: "memory-source-file-intake",
         body: { limit: 2_000 }
@@ -485,7 +486,7 @@ export function renderMemorySection(container, { bridgeRequest, onOpenWorkspace 
     }
     setStatus(statusNode, "Rolling back moved source...");
     try {
-      const result = await bridgeRequest("/memory/source/move-rollback", {
+      const result = await bridge()("/memory/source/move-rollback", {
         method: "POST",
         capability: "memory-source-move",
         body: {
@@ -509,7 +510,7 @@ export function renderMemorySection(container, { bridgeRequest, onOpenWorkspace 
     }
     scanPanel.replaceChildren();
     setStatus(statusNode, "Running move import preflight...");
-    const preflight = await bridgeRequest("/memory/source/move-preflight", {
+    const preflight = await bridge()("/memory/source/move-preflight", {
       method: "POST",
       capability: "memory-source-move",
       body: {
@@ -529,7 +530,7 @@ export function renderMemorySection(container, { bridgeRequest, onOpenWorkspace 
     executeButton.disabled = true;
     setStatus(statusNode, "Executing move import...");
     try {
-      const result = await bridgeRequest("/memory/source/move-execute", {
+      const result = await bridge()("/memory/source/move-execute", {
         method: "POST",
         capability: "memory-source-move",
         body: {
@@ -573,7 +574,7 @@ export function renderMemorySection(container, { bridgeRequest, onOpenWorkspace 
     browse.disabled = true;
     setStatus(statusNode, "Opening folder picker...");
     try {
-      const result = await bridgeRequest("/memory/source/browse", {
+      const result = await bridge()("/memory/source/browse", {
         method: "POST",
         capability: "memory-source-browse",
         body: {
@@ -607,7 +608,7 @@ export function renderMemorySection(container, { bridgeRequest, onOpenWorkspace 
     scanPanel.replaceChildren();
     setStatus(statusNode, "Scanning source folder...");
     try {
-      const result = await bridgeRequest("/memory/source/scan", {
+      const result = await bridge()("/memory/source/scan", {
         method: "POST",
         capability: "memory-source-scan",
         body: {
@@ -640,7 +641,7 @@ export function renderMemorySection(container, { bridgeRequest, onOpenWorkspace 
     save.disabled = true;
     setStatus(statusNode, "Saving memory settings...");
     try {
-      await bridgeRequest("/memory/settings", {
+      await bridge()("/memory/settings", {
         method: "POST",
         capability: "memory-settings-write",
         body: {

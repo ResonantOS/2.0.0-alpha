@@ -146,9 +146,10 @@ test("browser job store normalizes job shape and status classes", () => {
       uncertainty: "Repeated label on page.",
       ambiguousTarget: true,
       targetCandidates: [
-        { approvalRequired: false, fieldKind: "", label: "Add", ref: "r1", tagName: "button" },
-        { approvalRequired: true, fieldKind: "search-query", label: "Add", ref: "r2", tagName: "button" }
+        { approvalRequired: false, context: "", fieldKind: "", form: null, label: "Add", ref: "r1", tagName: "button", visibleIndex: null },
+        { approvalRequired: true, context: "", fieldKind: "search-query", form: null, label: "Add", ref: "r2", tagName: "button", visibleIndex: null }
       ],
+      humanInterventionState: null,
       verificationChanged: true,
       verificationRetry: "settle-reread",
       actionRetry: "precise-ref-retry",
@@ -271,6 +272,7 @@ test("browser job store normalizes preflight decisions conservatively", () => {
     source: "human",
     reason: "r".repeat(240)
   });
+  assert.equal(normalizePreflightDecision({ goal: "x", mode: "allowed-task-class-once" }).mode, "allowed-task-class-once");
 });
 
 test("browser job store hydrates, compacts, and persists browser jobs", async () => {

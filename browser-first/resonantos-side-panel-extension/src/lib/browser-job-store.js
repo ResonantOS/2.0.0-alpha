@@ -8,6 +8,7 @@ const defaultNow = () => new Date().toISOString();
 const defaultId = () => `job-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 const VALID_PREFLIGHT_DECISION_MODES = [
   "approved-once",
+  "allowed-task-class-once",
   "trusted-safe-actions",
   "skipped-by-consent",
   "resumed",
@@ -27,10 +28,20 @@ function normalizeStepDetails(details) {
     ? details.targetCandidates
       .map((candidate) => ({
         approvalRequired: Boolean(candidate?.approvalRequired),
+        context: candidate?.context ? String(candidate.context).slice(0, 160) : "",
         fieldKind: candidate?.fieldKind ? String(candidate.fieldKind).slice(0, 80) : "",
+        form: candidate?.form && typeof candidate.form === "object"
+          ? {
+            id: candidate.form.id ? String(candidate.form.id).slice(0, 80) : "",
+            index: Number.isFinite(Number(candidate.form.index)) ? Number(candidate.form.index) : null,
+            label: candidate.form.label ? String(candidate.form.label).slice(0, 160) : "",
+            name: candidate.form.name ? String(candidate.form.name).slice(0, 80) : ""
+          }
+          : null,
         label: candidate?.label ? String(candidate.label).slice(0, 160) : "",
         ref: candidate?.ref ? String(candidate.ref).slice(0, 80) : "",
-        tagName: candidate?.tagName ? String(candidate.tagName).slice(0, 40) : ""
+        tagName: candidate?.tagName ? String(candidate.tagName).slice(0, 40) : "",
+        visibleIndex: Number.isFinite(Number(candidate?.visibleIndex)) ? Number(candidate.visibleIndex) : null
       }))
       .filter((candidate) => candidate.ref || candidate.label)
       .slice(0, 8)
@@ -56,6 +67,7 @@ function normalizeStepDetails(details) {
     successSignals: normalizeList(details.successSignals),
     stopConditions: normalizeList(details.stopConditions),
     confidence: ["high", "medium", "low"].includes(confidence) ? confidence : null,
+    humanInterventionState: details.humanInterventionState ? String(details.humanInterventionState).slice(0, 80) : null,
     uncertainty: details.uncertainty ? String(details.uncertainty).slice(0, 500) : null,
     ambiguousTarget: Boolean(details.ambiguousTarget),
     targetCandidates,

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AddOnManifest, CapabilityGrant } from "../../core/contracts";
 import { buildDefaultState } from "../../core/defaults";
 import { SettingsWorkspace } from "./SettingsWorkspace";
@@ -58,7 +58,61 @@ const logicianManifest = (): AddOnManifest => ({
   compatibility: { shellVersion: "^0.1.0", platforms: ["macOS"] },
 });
 
+afterEach(() => {
+  cleanup();
+});
+
 describe("SettingsWorkspace strategy planner", () => {
+  it("keeps user-facing sections at the top level and internals behind Advanced", () => {
+    const state = buildDefaultState([]);
+
+    render(
+      <SettingsWorkspace
+        state={state}
+        manifests={[]}
+        settingsSection="profile"
+        settingsNotice={null}
+        providerDiagnostics={[]}
+        providerDiagnosticsBusy={false}
+        activeProviderProbeId={null}
+        providerSmokeResults={{}}
+        providerSmokeBusyId={null}
+        providerDrafts={{}}
+        memoryServiceStatus={null}
+        memoryServiceBusy={false}
+        memoryServiceLastResult={null}
+        onSettingsSectionChange={vi.fn()}
+        onUpdateProvider={vi.fn()}
+        onCreateProvider={vi.fn()}
+        onUpdateWorkloadStrategy={vi.fn()}
+        onUpdateWorkloadStrategyRoute={vi.fn()}
+        onProviderDraftChange={vi.fn()}
+        onSaveProviderSecret={vi.fn()}
+        onProbeProvider={vi.fn()}
+        onProbeAllProviders={vi.fn()}
+        onSetupProvider={vi.fn()}
+        onSmokeTestProvider={vi.fn()}
+        onRefreshMemoryServiceStatus={vi.fn()}
+        onStartMemoryService={vi.fn()}
+        onStopMemoryService={vi.fn()}
+        onOpenLogicianAddOn={vi.fn()}
+      />,
+    );
+
+    const primaryNav = screen.getByRole("navigation", { name: "Settings sections" });
+    expect(within(primaryNav).getByRole("button", { name: /Profile/i })).toBeTruthy();
+    expect(within(primaryNav).getByRole("button", { name: /Providers/i })).toBeTruthy();
+    expect(within(primaryNav).getByRole("button", { name: /Memory/i })).toBeTruthy();
+    expect(within(primaryNav).getByRole("button", { name: /Browser Control/i })).toBeTruthy();
+    expect(within(primaryNav).getByRole("button", { name: /Add-ons/i })).toBeTruthy();
+    expect(within(primaryNav).getByRole("button", { name: /Privacy/i })).toBeTruthy();
+    expect(within(primaryNav).getByRole("button", { name: /Advanced/i })).toBeTruthy();
+    expect(within(primaryNav).queryByRole("button", { name: /Strategy/i })).toBeNull();
+    expect(within(primaryNav).queryByRole("button", { name: /Logician/i })).toBeNull();
+    expect(within(primaryNav).queryByRole("button", { name: /Defaults/i })).toBeNull();
+    expect(within(primaryNav).queryByRole("button", { name: /Shell/i })).toBeNull();
+  });
+
   it("lets the user change the workload primary route and failure behavior", () => {
     const onUpdateWorkloadStrategy = vi.fn();
     const onUpdateWorkloadStrategyRoute = vi.fn();
@@ -68,7 +122,7 @@ describe("SettingsWorkspace strategy planner", () => {
       <SettingsWorkspace
         state={state}
         manifests={[]}
-        settingsSection="strategy"
+        settingsSection="advanced"
         settingsNotice={null}
         providerDiagnostics={[]}
         providerDiagnosticsBusy={false}
@@ -94,9 +148,11 @@ describe("SettingsWorkspace strategy planner", () => {
         onStartMemoryService={vi.fn()}
         onStopMemoryService={vi.fn()}
         onOpenLogicianAddOn={vi.fn()}
-        onUpdateDictation={vi.fn()}
       />,
     );
+
+    const advancedNav = screen.getByRole("navigation", { name: "Advanced settings sections" });
+    fireEvent.click(within(advancedNav).getByRole("button", { name: /Routing/i }));
 
     const routineCard = screen.getByText("Routine Background Work").closest("article");
     expect(routineCard).toBeTruthy();
@@ -122,7 +178,7 @@ describe("SettingsWorkspace strategy planner", () => {
       <SettingsWorkspace
         state={state}
         manifests={[manifest]}
-        settingsSection="logician"
+        settingsSection="advanced"
         settingsNotice={null}
         providerDiagnostics={[]}
         providerDiagnosticsBusy={false}
@@ -148,9 +204,11 @@ describe("SettingsWorkspace strategy planner", () => {
         onStartMemoryService={vi.fn()}
         onStopMemoryService={vi.fn()}
         onOpenLogicianAddOn={vi.fn()}
-        onUpdateDictation={vi.fn()}
       />,
     );
+
+    const advancedNav = screen.getByRole("navigation", { name: "Advanced settings sections" });
+    fireEvent.click(within(advancedNav).getByRole("button", { name: /Logician/i }));
 
     expect(screen.getByText("Logician Trust Kernel")).toBeTruthy();
     expect(screen.getByText("Protocol flow explorer")).toBeTruthy();
@@ -170,59 +228,5 @@ describe("SettingsWorkspace strategy planner", () => {
     expect(screen.getByText("Hook enforcement")).toBeTruthy();
     expect(screen.getByText("Evidence trust policy")).toBeTruthy();
     expect(screen.getByText("before-task-complete")).toBeTruthy();
-  });
-
-  it("persists dictation engineSelection, language, and task changes", () => {
-    const onUpdateDictation = vi.fn();
-    const state = buildDefaultState([]);
-
-    render(
-      <SettingsWorkspace
-        state={state}
-        manifests={[]}
-        settingsSection="dictation"
-        settingsNotice={null}
-        providerDiagnostics={[]}
-        providerDiagnosticsBusy={false}
-        activeProviderProbeId={null}
-        providerSmokeResults={{}}
-        providerSmokeBusyId={null}
-        providerDrafts={{}}
-        memoryServiceStatus={null}
-        memoryServiceBusy={false}
-        memoryServiceLastResult={null}
-        onSettingsSectionChange={vi.fn()}
-        onUpdateProvider={vi.fn()}
-        onCreateProvider={vi.fn()}
-        onUpdateWorkloadStrategy={vi.fn()}
-        onUpdateWorkloadStrategyRoute={vi.fn()}
-        onProviderDraftChange={vi.fn()}
-        onSaveProviderSecret={vi.fn()}
-        onProbeProvider={vi.fn()}
-        onProbeAllProviders={vi.fn()}
-        onSetupProvider={vi.fn()}
-        onSmokeTestProvider={vi.fn()}
-        onRefreshMemoryServiceStatus={vi.fn()}
-        onStartMemoryService={vi.fn()}
-        onStopMemoryService={vi.fn()}
-        onOpenLogicianAddOn={vi.fn()}
-        onUpdateDictation={onUpdateDictation}
-      />,
-    );
-
-    // Engine: click Whisper radio
-    const whisperRadio = screen.getByRole("radio", { name: /Whisper — faster/i });
-    fireEvent.click(whisperRadio);
-    expect(onUpdateDictation).toHaveBeenLastCalledWith({ engineSelection: "whisper" });
-
-    // Language: change dropdown to Spanish
-    const languageSelect = screen.getByLabelText("Language");
-    fireEvent.change(languageSelect, { target: { value: "es" } });
-    expect(onUpdateDictation).toHaveBeenLastCalledWith({ language: "es" });
-
-    // Task: click Translate radio
-    const translateRadio = screen.getByRole("radio", { name: /Translate \(output English\)/i });
-    fireEvent.click(translateRadio);
-    expect(onUpdateDictation).toHaveBeenLastCalledWith({ task: "translate" });
   });
 });

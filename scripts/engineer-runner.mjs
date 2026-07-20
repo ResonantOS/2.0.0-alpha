@@ -14,6 +14,10 @@ import { spawnSync } from "node:child_process";
 const DEFAULT_TIMEOUT_MS = 120_000;
 const VALID_STATUSES = new Set(["verified", "failed"]);
 
+function toPortablePath(value) {
+  return String(value ?? "").replace(/\\/g, "/");
+}
+
 export function loadTaskContract(contractPath) {
   if (!contractPath) {
     throw new Error("Missing task contract path.");
@@ -108,10 +112,10 @@ export function parseGitStatusPorcelain(stdout) {
     }
     if (pathSpec.includes(" -> ")) {
       for (const part of pathSpec.split(" -> ")) {
-        changed.add(part.trim().replace(/^"|"$/g, ""));
+        changed.add(toPortablePath(part.trim().replace(/^"|"$/g, "")));
       }
     } else {
-      changed.add(pathSpec.trim().replace(/^"|"$/g, ""));
+      changed.add(toPortablePath(pathSpec.trim().replace(/^"|"$/g, "")));
     }
   }
   return Array.from(changed).sort();
@@ -223,14 +227,14 @@ function normalizeRepoRelativePath(file, repo, field) {
     if (rel.startsWith("..") || isAbsolute(rel)) {
       throw new Error(`Task contract field '${field}' includes a path outside repo: ${file}`);
     }
-    return rel;
+    return toPortablePath(rel);
   }
   const resolved = resolve(repo, file);
   const rel = relative(repo, resolved);
   if (rel.startsWith("..") || isAbsolute(rel)) {
     throw new Error(`Task contract field '${field}' includes a path outside repo: ${file}`);
   }
-  return rel;
+  return toPortablePath(rel);
 }
 
 function printUsage() {

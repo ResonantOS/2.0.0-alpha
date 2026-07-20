@@ -15,6 +15,8 @@ describe("model strategy planner", () => {
     const options = buildStrategyRouteOptions(state);
 
     expect(options.some((option) => option.key === "shared-minimax::node-minimax-cloud::MiniMax-M3")).toBe(true);
+    expect(options.some((option) => option.key === "shared-zai-glm::node-zai-glm-cloud::zai/glm-5.2")).toBe(true);
+    expect(options.find((option) => option.key === "shared-zai-glm::node-zai-glm-cloud::zai/glm-5.2")?.costPosture).toBe("paid-api");
     expect(options.find((option) => option.runtimeNodeId === "node-local-resurrect")?.costPosture).toBe("emergency-only");
     expect(options.some((option) => option.key === "gx10-local-llama::node-gx10-qwen::Qwen3.6-35B-A3B-Q4_K_M.gguf")).toBe(true);
     expect(costPostureLabel("subscription")).toBe("Subscription");

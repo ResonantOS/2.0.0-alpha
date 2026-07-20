@@ -1,0 +1,90 @@
+name: project-issue-sync
+
+on:
+  issues:
+    types: [opened, reopened, edited, labeled, unlabeled, closed]
+  pull_request_target:
+    types: [opened, reopened, ready_for_review, converted_to_draft, closed, labeled, unlabeled]
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Log planned Project/label changes without writing them."
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: project-issue-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    name: Sync Project 2 release fields and issue labels
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Check Project token
+        id: project-token
+        env:
+          HAS_PROJECT_SYNC_TOKEN: ${{ secrets.PROJECT_SYNC_TOKEN != '' }}
+        run: |
+          if [ "$HAS_PROJECT_SYNC_TOKEN" != "true" ]; then
+            # Project 2 synchronization is optional infrastructure: when the
+            # PROJECT_SYNC_TOKEN secret is not configured, warn and skip the sync
+            # steps rather than failing the job. A hard failure here surfaced a
+            # red check on every PR/commit even though nothing in the change was
+            # wrong. Configure the org secret to enable the sync.
+            echo "::warning::PROJECT_SYNC_TOKEN is not configured. Skipping Project 2 synchronization."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Capture Project 2 scope snapshot
+        id: snapshot
+        if: steps.project-token.outputs.configured == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.PROJECT_SYNC_TOKEN }}
+        run: |
+          # Best-effort: an auth/scope problem — e.g. PROJECT_SYNC_TOKEN missing
+          # the 'project' + 'read:org' scope, which surfaces as "unknown owner
+          # type" — must warn and skip the sync, not fail the job and email the
+          # maintainer on every push/schedule/issue trigger. A *working* token
+          # still runs the roadmap/sync checks below, which may legitimately fail.
+          if gh project item-list 2 --owner ResonantOS --format json --limit 500 > "$RUNNER_TEMP/project-2.json" 2>"$RUNNER_TEMP/project-2.err"; then
+            echo "snapshot-ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Project 2 sync skipped — could not read the org project: $(tr '\n' ' ' < "$RUNNER_TEMP/project-2.err"). PROJECT_SYNC_TOKEN likely needs 'project' + 'read:org' scope for the ResonantOS org."
+            echo "snapshot-ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify roadmap scope against Project 2
+        if: steps.snapshot.outputs.snapshot-ok == 'true'
+        run: npm run project:check-roadmap -- --project-json "$RUNNER_TEMP/project-2.json"
+
+      - name: Sync project and labels
+        if: steps.snapshot.outputs.snapshot-ok == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.PROJECT_SYNC_TOKEN }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+        run: |
+          args=""
+          if [ "$DRY_RUN" = "true" ]; then
+            args="--dry-run"
+          fi
+          node scripts/sync-project-issue-labels.mjs $args

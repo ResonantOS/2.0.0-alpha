@@ -1,0 +1,89 @@
+name: agent-control-live-certification
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      public_submit_contract:
+        description: Require the #240 human-only public-submit handoff or auto-detect it.
+        required: false
+        type: choice
+        default: auto
+        options:
+          - auto
+          - required
+  pull_request:
+    branches:
+      - dev
+    paths:
+      - "browser-first/resonantos-side-panel-extension/src/lib/agent-control*"
+      - "browser-first/resonantos-side-panel-extension/src/lib/control-*"
+      - "browser-first/resonantos-side-panel-extension/src/lib/browser-page-actions.js"
+      - "browser-first/resonantos-side-panel-extension/src/content.js"
+      - "browser-first/resonantos-side-panel-extension/src/lib/content-field-safety.js"
+      - "browser-first/test/browser-page-actions.test.mjs"
+      - "browser-first/test/content-redaction.test.mjs"
+      - "browser-first/test/agent-control-live.mjs"
+      - "browser-first/test/agent-control-live-report.mjs"
+      - "browser-first/test/agent-control-live-report.test.mjs"
+      - ".github/workflows/agent-control-live.yml"
+      - "package.json"
+      - "package-lock.json"
+  schedule:
+    - cron: "17 3 * * *"
+
+concurrency:
+  group: agent-control-live-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  agent-control-live:
+    name: Agent Control live-browser certification
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install stable Chrome
+        id: chrome
+        uses: browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd
+        with:
+          chrome-version: stable
+          install-dependencies: true
+
+      - name: Run live Agent Control certification
+        id: certification
+        continue-on-error: true
+        env:
+          CI: "true"
+          RESONANTOS_LIVE_PROFILE: agent-control
+          RESONANTOS_LIVE_CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+          RESONANTOS_LIVE_ARTIFACT_DIR: ${{ runner.temp }}/agent-control-live/${{ github.run_id }}-${{ github.run_attempt }}
+          RESONANTOS_PUBLIC_SUBMIT_CONTRACT: ${{ github.event_name == 'workflow_dispatch' && inputs.public_submit_contract || 'auto' }}
+        run: xvfb-run -a npm run test:browser-first:live
+
+      - name: Upload live certification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: agent-control-live-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/agent-control-live/${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Reject uncertified run
+        if: always() && steps.certification.outcome != 'success'
+        run: exit 1

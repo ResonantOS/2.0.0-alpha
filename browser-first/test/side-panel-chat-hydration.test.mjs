@@ -8,7 +8,7 @@ test("side panel chat hydration owns startup ordering and state handoff", async 
   const hydration = createSidePanelChatHydration({
     chatSessionStore: {
       hydrate: async () => events.push("session-hydrate"),
-      ensureFreshSession: async () => events.push("ensure-fresh-session")
+      ensureFreshSession: async () => events.push("unexpected-ensure-fresh-session")
     },
     hydrateControlPreflight: async () => events.push("hydrate-control-preflight"),
     hydrateProviderModelOptions: async () => events.push("hydrate-provider-options"),
@@ -43,7 +43,6 @@ test("side panel chat hydration owns startup ordering and state handoff", async 
     ["storage-get", ["augmentorContextDockExpanded"]],
     ["context-expanded", true],
     "hydrate-control-preflight",
-    "ensure-fresh-session",
     "render-messages",
     "render-attachments",
     "update-connection-line",
@@ -56,7 +55,7 @@ test("side panel chat hydration safely treats missing context dock state as coll
   const hydration = createSidePanelChatHydration({
     chatSessionStore: {
       hydrate: async () => undefined,
-      ensureFreshSession: async () => undefined
+      ensureFreshSession: async () => events.push("unexpected-ensure-fresh-session")
     },
     hydrateControlPreflight: async () => undefined,
     hydrateProviderModelOptions: async () => undefined,

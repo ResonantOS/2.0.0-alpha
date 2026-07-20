@@ -1,0 +1,122 @@
+name: Bug report
+description: Report reproducible incorrect behavior in the browser-first alpha.
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use test data and the minimum diagnostics needed to reproduce the bug. Never include API keys, access tokens, cookies, wallet credentials, browser profiles, login databases, generated bridge tokens, private prompts, provider payloads, or other personal data. Report suspected vulnerabilities through SECURITY.md, not this public form.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What failed, and what were you trying to do?
+      placeholder: A concise description of the observable problem.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Primary area
+      description: Choose the area that owns the failing behavior.
+      options:
+        - Extension
+        - Bridge
+        - Chat
+        - Settings
+        - Hermes
+        - OpenCode
+        - Living Archive
+        - Blackboard
+        - Build
+        - Security
+        - Documentation
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Provide the alpha version, tag, or commit hash. Do not provide a local path.
+      placeholder: 2.0.0-alpha.0 or a commit hash
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system, Chromium browser/version, and Node.js version when the bridge is involved.
+      placeholder: macOS 15; Chrome 138; Node.js 22.13.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Use a clean profile or disposable test data where practical.
+      placeholder: |
+        1. Start from...
+        2. Open...
+        3. Select...
+        4. Observe...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Redacted diagnostics
+      description: Optional minimal console output or screenshots. Remove tokens, user content, account identifiers, URLs with query secrets, and unrelated logs. Never upload a browser profile or credential database.
+      render: shell
+
+  - type: dropdown
+    id: safety
+    attributes:
+      label: Safety or privacy impact
+      description: Does the bug affect credentials, personal data, permissions, payments, wallets, public submission, destructive actions, or required human approval?
+      options:
+        - "No known safety or privacy impact"
+        - "Yes - details are safe to describe publicly below"
+        - "Not sure"
+    validations:
+      required: true
+
+  - type: textarea
+    id: safety_details
+    attributes:
+      label: Public safety context
+      description: Describe only non-sensitive impact and the expected human-only boundary. For a suspected vulnerability, stop and use SECURITY.md.
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Public-report confirmation
+      options:
+        - label: I searched existing issues and this is not an obvious duplicate.
+          required: true
+        - label: I removed secrets, credentials, private user data, browser profiles, and unredacted sensitive logs.
+          required: true
+        - label: This is not a suspected security vulnerability requiring private disclosure.
+          required: true

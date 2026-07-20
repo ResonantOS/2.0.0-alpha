@@ -1,0 +1,1209 @@
+{
+  "version": 1,
+  "families": {
+    "supply-chain": {
+      "status": "active",
+      "description": "Dependency, lockfile, registry, and CI workflow integrity checks."
+    },
+    "runtime-hardening": {
+      "status": "active",
+      "description": "Subprocess/runtime hardening: argv secrets, env scoping, pinned load roots, terminal command allowlist."
+    }
+  },
+  "recordSets": {
+    "browser-first-production-spawns": [
+      {
+        "id": "addon-delegation:hermes-python-adapter",
+        "site": "browser-first/host/addon-delegation-service.mjs:execHermesPythonAdapter",
+        "sources": [
+          {
+            "path": "browser-first/host/addon-delegation-service.mjs",
+            "anchor": "spawnProcess(runtime.pythonPath, [adapterPath, promptPath, outputPath], {"
+          },
+          {
+            "path": "browser-first/host/hermes-runtime.mjs",
+            "anchor": "export function hermesPythonRuntimeDiagnostics"
+          }
+        ],
+        "program": "<home>/.hermes/hermes-agent/venv/bin/python",
+        "args": [
+          "/tmp/resonantos_hermes_adapter.py",
+          "/tmp/resonantos-hermes-task.md",
+          "/tmp/result.json"
+        ],
+        "shell": false,
+        "runtime": "hermes",
+        "env_clear": true,
+        "env_vars": [
+          "HOME",
+          "PATH",
+          "SHELL",
+          "TERM",
+          "TMPDIR",
+          "TEMP",
+          "TMP",
+          "LANG",
+          "LC_ALL",
+          "XDG_CONFIG_HOME",
+          "XDG_DATA_HOME",
+          "XDG_CACHE_HOME",
+          "OPENAI_BASE_URL",
+          "ANTHROPIC_API_KEY",
+          "DEEPSEEK_API_KEY",
+          "GEMINI_API_KEY",
+          "GOOGLE_GENERATIVE_AI_API_KEY",
+          "GOOGLE_API_KEY",
+          "MINIMAX_API_KEY",
+          "OPENAI_API_KEY",
+          "OPENROUTER_API_KEY",
+          "XAI_API_KEY",
+          "ZAI_API_KEY",
+          "GLM_API_KEY",
+          "ZHIPUAI_API_KEY",
+          "HERMES_CONFIG",
+          "HERMES_HOME",
+          "HERMES_INFERENCE_PROVIDER",
+          "HERMES_INFERENCE_MODEL",
+          "RESONANTOS_HERMES_BASE_URL",
+          "RESONANTOS_HERMES_API_KEY",
+          "RESONANTOS_HERMES_API_MODE",
+          "RESONANTOS_HERMES_AGENT_ROOT",
+          "RESONANTOS_HERMES_MAX_TURNS"
+        ],
+        "opt_in": true,
+        "opt_in_vars": [
+          "SHELL",
+          "TERM",
+          "TEMP",
+          "TMP",
+          "XDG_CONFIG_HOME",
+          "XDG_DATA_HOME",
+          "XDG_CACHE_HOME",
+          "OPENAI_BASE_URL",
+          "ANTHROPIC_API_KEY",
+          "DEEPSEEK_API_KEY",
+          "GEMINI_API_KEY",
+          "GOOGLE_GENERATIVE_AI_API_KEY",
+          "GOOGLE_API_KEY",
+          "MINIMAX_API_KEY",
+          "OPENAI_API_KEY",
+          "OPENROUTER_API_KEY",
+          "XAI_API_KEY",
+          "ZAI_API_KEY",
+          "GLM_API_KEY",
+          "ZHIPUAI_API_KEY",
+          "HERMES_CONFIG",
+          "HERMES_INFERENCE_PROVIDER",
+          "HERMES_INFERENCE_MODEL",
+          "RESONANTOS_HERMES_BASE_URL",
+          "RESONANTOS_HERMES_API_KEY",
+          "RESONANTOS_HERMES_API_MODE",
+          "RESONANTOS_HERMES_AGENT_ROOT",
+          "RESONANTOS_HERMES_MAX_TURNS"
+        ],
+        "kind": "binary",
+        "resolution": {
+          "base": "install-prefix",
+          "path": "<home>/.hermes/hermes-agent/venv/bin/python",
+          "canonical_path": "<home>/.hermes/hermes-agent/venv/bin/python",
+          "validated_by": "hermesPythonRuntimeDiagnostics",
+          "source": "fixed-user-install-root",
+          "derived_from": "<home>/.hermes/hermes-agent/venv/bin/hermes",
+          "installation_root": "<home>/.hermes/hermes-agent"
+        },
+        "approved_by": "explicit Hermes execution enablement"
+      },
+      {
+        "id": "addon-delegation:opencode-cli",
+        "site": "browser-first/host/addon-delegation-service.mjs:execOpenCodeCli",
+        "sources": [
+          {
+            "path": "browser-first/host/addon-delegation-service.mjs",
+            "anchor": "async function execOpenCodeCli(command, args, options = {})"
+          },
+          {
+            "path": "browser-first/host/opencode-runtime.mjs",
+            "anchor": "export function opencodeRuntimeDiagnostics"
+          }
+        ],
+        "program": "<home>/.opencode/bin/opencode",
+        "args": [
+          "run",
+          "Read the attached ResonantOS OpenCode task packet and return the requested artifact.",
+          "--file",
+          "/tmp/resonantos-opencode-task.md",
+          "--dir",
+          "/repo",
+          "-m",
+          "openai/gpt-5.4-mini",
+          "--format",
+          "json"
+        ],
+        "shell": false,
+        "runtime": "opencode",
+        "env_clear": true,
+        "env_vars": [
+          "HOME",
+          "PATH",
+          "SHELL",
+          "TERM",
+          "TMPDIR",
+          "TEMP",
+          "TMP",
+          "LANG",
+          "LC_ALL",
+          "XDG_CONFIG_HOME",
+          "XDG_DATA_HOME",
+          "XDG_CACHE_HOME",
+          "OPENCODE_CONFIG",
+          "OPENCODE_DATA",
+          "OPENCODE_CACHE",
+          "OPENCODE_SERVER_USERNAME",
+          "OPENCODE_SERVER_PASSWORD",
+          "ANTHROPIC_API_KEY",
+          "DEEPSEEK_API_KEY",
+          "GEMINI_API_KEY",
+          "GOOGLE_GENERATIVE_AI_API_KEY",
+          "GOOGLE_API_KEY",
+          "GLM_API_KEY",
+          "MINIMAX_API_KEY",
+          "OPENAI_API_KEY",
+          "OPENROUTER_API_KEY",
+          "XAI_API_KEY",
+          "ZAI_API_KEY",
+          "ZHIPUAI_API_KEY",
+          "ANTHROPIC_BASE_URL",
+          "DEEPSEEK_BASE_URL",
+          "GEMINI_BASE_URL",
+          "GOOGLE_GENERATIVE_AI_BASE_URL",
+          "GOOGLE_API_BASE_URL",
+          "GLM_BASE_URL",
+          "MINIMAX_BASE_URL",
+          "OPENAI_BASE_URL",
+          "OPENROUTER_BASE_URL",
+          "XAI_BASE_URL",
+          "ZAI_BASE_URL",
+          "ZHIPUAI_BASE_URL"
+        ],
+        "opt_in": true,
+        "opt_in_vars": [
+          "SHELL",
+          "TERM",
+          "TEMP",
+          "TMP",
+          "XDG_CONFIG_HOME",
+          "XDG_DATA_HOME",
+          "XDG_CACHE_HOME",
+          "OPENCODE_CONFIG",
+          "OPENCODE_DATA",
+          "OPENCODE_CACHE",
+          "OPENCODE_SERVER_USERNAME",
+          "OPENCODE_SERVER_PASSWORD",
+          "ANTHROPIC_API_KEY",
+          "DEEPSEEK_API_KEY",
+          "GEMINI_API_KEY",
+          "GOOGLE_GENERATIVE_AI_API_KEY",
+          "GOOGLE_API_KEY",
+          "GLM_API_KEY",
+          "MINIMAX_API_KEY",
+          "OPENAI_API_KEY",
+          "OPENROUTER_API_KEY",
+          "XAI_API_KEY",
+          "ZAI_API_KEY",
+          "ZHIPUAI_API_KEY",
+          "ANTHROPIC_BASE_URL",
+          "DEEPSEEK_BASE_URL",
+          "GEMINI_BASE_URL",
+          "GOOGLE_GENERATIVE_AI_BASE_URL",
+          "GOOGLE_API_BASE_URL",
+          "GLM_BASE_URL",
+          "MINIMAX_BASE_URL",
+          "OPENAI_BASE_URL",
+          "OPENROUTER_BASE_URL",
+          "XAI_BASE_URL",
+          "ZAI_BASE_URL",
+          "ZHIPUAI_BASE_URL"
+        ],
+        "kind": "binary",
+        "resolution": {
+          "base": "install-prefix",
+          "path": "<home>/.opencode/bin/opencode",
+          "canonical_path": "<home>/.opencode/bin/opencode",
+          "validated_by": "opencodeRuntimeDiagnostics",
+          "source": "fixed-user-install-root"
+        },
+        "approved_by": "explicit OpenCode execution enablement"
+      },
+      {
+        "id": "addon-delegation:hermes-dashboard-start",
+        "site": "browser-first/host/addon-delegation-service.mjs:executeHermesDashboardStart",
+        "sources": [
+          {
+            "path": "browser-first/host/addon-delegation-service.mjs",
+            "anchor": "const child = spawnProcess(command, args, {"
+          },
+          {
+            "path": "browser-first/host/hermes-runtime.mjs",
+            "anchor": "export function hermesRuntimeDiagnostics"
+          }
+        ],
+        "program": "<home>/.hermes/hermes-agent/venv/bin/hermes",
+        "args": [
+          "dashboard",
+          "--host",
+          "<clientReachableHost>",
+          "--port",
+          "9119",
+          "--no-open",
+          "--tui"
+        ],
+        "shell": false,
+        "runtime": "hermes",
+        "env_clear": true,
+        "env_vars": [
+          "HOME",
+          "PATH",
+          "SHELL",
+          "TERM",
+          "TMPDIR",
+          "TEMP",
+          "TMP",
+          "LANG",
+          "LC_ALL",
+          "XDG_CONFIG_HOME",
+          "XDG_DATA_HOME",
+          "XDG_CACHE_HOME",
+          "OPENAI_BASE_URL",
+          "HERMES_CONFIG",
+          "ANTHROPIC_API_KEY",
+          "DEEPSEEK_API_KEY",
+          "GEMINI_API_KEY",
+          "GOOGLE_GENERATIVE_AI_API_KEY",
+          "GOOGLE_API_KEY",
+          "MINIMAX_API_KEY",
+          "OPENAI_API_KEY",
+          "OPENROUTER_API_KEY",
+          "XAI_API_KEY",
+          "ZAI_API_KEY",
+          "GLM_API_KEY",
+          "ZHIPUAI_API_KEY",
+          "HERMES_HOME",
+          "HERMES_INFERENCE_PROVIDER",
+          "HERMES_INFERENCE_MODEL"
+        ],
+        "opt_in": true,
+        "opt_in_vars": [
+          "SHELL",
+          "TERM",
+          "TEMP",
+          "TMP",
+          "XDG_CONFIG_HOME",
+          "XDG_DATA_HOME",
+          "XDG_CACHE_HOME",
+          "OPENAI_BASE_URL",
+          "HERMES_CONFIG",
+          "ANTHROPIC_API_KEY",
+          "DEEPSEEK_API_KEY",
+          "GEMINI_API_KEY",
+          "GOOGLE_GENERATIVE_AI_API_KEY",
+          "GOOGLE_API_KEY",
+          "MINIMAX_API_KEY",
+          "OPENAI_API_KEY",
+          "OPENROUTER_API_KEY",
+          "XAI_API_KEY",
+          "ZAI_API_KEY",
+          "GLM_API_KEY",
+          "ZHIPUAI_API_KEY",
+          "HERMES_INFERENCE_PROVIDER",
+          "HERMES_INFERENCE_MODEL"
+        ],
+        "kind": "binary",
+        "resolution": {
+          "base": "install-prefix",
+          "path": "<home>/.hermes/hermes-agent/venv/bin/hermes",
+          "canonical_path": "<home>/.hermes/hermes-agent/venv/bin/hermes",
+          "validated_by": "hermesRuntimeDiagnostics",
+          "source": "fixed-user-install-root"
+        },
+        "approved_by": "addon-runtime-control capability"
+      },
+      {
+        "id": "addon-delegation:hermes-dashboard-stop",
+        "site": "browser-first/host/addon-delegation-service.mjs:executeHermesDashboardStop",
+        "sources": [
+          {
+            "path": "browser-first/host/addon-delegation-service.mjs",
+            "anchor": "const child = spawnProcess(command, [\"dashboard\", \"--stop\"], {"
+          },
+          {
+            "path": "browser-first/host/hermes-runtime.mjs",
+            "anchor": "export function hermesRuntimeDiagnostics"
+          }
+        ],
+        "program": "<home>/.hermes/hermes-agent/venv/bin/hermes",
+        "args": [
+          "dashboard",
+          "--stop"
+        ],
+        "shell": false,
+        "runtime": "hermes",
+        "env_clear": true,
+        "env_vars": [
+          "HOME",
+          "PATH",
+          "SHELL",
+          "TERM",
+          "TMPDIR",
+          "TEMP",
+          "TMP",
+          "LANG",
+          "LC_ALL",
+          "XDG_CONFIG_HOME",
+          "XDG_DATA_HOME",
+          "XDG_CACHE_HOME",
+          "OPENAI_BASE_URL",
+          "HERMES_CONFIG",
+          "ANTHROPIC_API_KEY",
+          "DEEPSEEK_API_KEY",
+          "GEMINI_API_KEY",
+          "GOOGLE_GENERATIVE_AI_API_KEY",
+          "GOOGLE_API_KEY",
+          "MINIMAX_API_KEY",
+          "OPENAI_API_KEY",
+          "OPENROUTER_API_KEY",
+          "XAI_API_KEY",
+          "ZAI_API_KEY",
+          "GLM_API_KEY",
+          "ZHIPUAI_API_KEY",
+          "HERMES_HOME",
+          "HERMES_INFERENCE_PROVIDER",
+          "HERMES_INFERENCE_MODEL"
+        ],
+        "opt_in": true,
+        "opt_in_vars": [
+          "SHELL",
+          "TERM",
+          "TEMP",
+          "TMP",
+          "XDG_CONFIG_HOME",
+          "XDG_DATA_HOME",
+          "XDG_CACHE_HOME",
+          "OPENAI_BASE_URL",
+          "HERMES_CONFIG",
+          "ANTHROPIC_API_KEY",
+          "DEEPSEEK_API_KEY",
+          "GEMINI_API_KEY",
+          "GOOGLE_GENERATIVE_AI_API_KEY",
+          "GOOGLE_API_KEY",
+          "MINIMAX_API_KEY",
+          "OPENAI_API_KEY",
+          "OPENROUTER_API_KEY",
+          "XAI_API_KEY",
+          "ZAI_API_KEY",
+          "GLM_API_KEY",
+          "ZHIPUAI_API_KEY",
+          "HERMES_INFERENCE_PROVIDER",
+          "HERMES_INFERENCE_MODEL"
+        ],
+        "kind": "binary",
+        "resolution": {
+          "base": "install-prefix",
+          "path": "<home>/.hermes/hermes-agent/venv/bin/hermes",
+          "canonical_path": "<home>/.hermes/hermes-agent/venv/bin/hermes",
+          "validated_by": "hermesRuntimeDiagnostics",
+          "source": "fixed-user-install-root"
+        },
+        "approved_by": "addon-runtime-control capability"
+      },
+      {
+        "id": "memory-source-browse:macos-picker",
+        "site": "browser-first/host/memory-source-settings-service.mjs:executeMemorySourceBrowse:darwin",
+        "sources": [
+          {
+            "path": "browser-first/host/browser-first-host-utils.mjs",
+            "anchor": "execFile(command, args, {"
+          },
+          {
+            "path": "browser-first/host/memory-source-settings-service.mjs",
+            "anchor": "selectedPath = await execFileStdout(\"/usr/bin/osascript\", ["
+          }
+        ],
+        "program": "/usr/bin/osascript",
+        "args": [
+          "-e",
+          "POSIX path of (choose folder with prompt \"Select a folder or Obsidian vault for Living Archive\")"
+        ],
+        "shell": false,
+        "runtime": "memory",
+        "env_clear": true,
+        "env_vars": [
+          "HOME",
+          "LANG",
+          "LC_ALL",
+          "TMPDIR"
+        ],
+        "kind": "binary",
+        "resolution": {
+          "base": "system-bin",
+          "path": "/usr/bin/osascript"
+        },
+        "approved_by": "memory-source-browse capability"
+      },
+      {
+        "id": "memory-source-browse:windows-picker",
+        "site": "browser-first/host/memory-source-settings-service.mjs:executeMemorySourceBrowse:win32",
+        "sources": [
+          {
+            "path": "browser-first/host/browser-first-host-utils.mjs",
+            "anchor": "execFile(command, args, {"
+          },
+          {
+            "path": "browser-first/host/browser-first-host-utils.mjs",
+            "anchor": "export function windowsPowerShellDiagnostics"
+          },
+          {
+            "path": "browser-first/host/memory-source-settings-service.mjs",
+            "anchor": "const powerShellRuntime = windowsPowerShellDiagnostics();"
+          }
+        ],
+        "program": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        "args": [
+          "-NoProfile",
+          "-STA",
+          "-Command",
+          "Add-Type -AssemblyName System.Windows.Forms; $dialog = New-Object System.Windows.Forms.FolderBrowserDialog; $dialog.Description = \"Select a folder or Obsidian vault for Living Archive\"; if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $dialog.SelectedPath }"
+        ],
+        "shell": false,
+        "runtime": "memory",
+        "env_clear": true,
+        "env_vars": [
+          "SystemRoot",
+          "WINDIR",
+          "USERPROFILE",
+          "TEMP",
+          "TMP"
+        ],
+        "opt_in": true,
+        "opt_in_vars": [
+          "SystemRoot",
+          "WINDIR",
+          "USERPROFILE",
+          "TEMP",
+          "TMP"
+        ],
+        "kind": "binary",
+        "resolution": {
+          "base": "absolute",
+          "path": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+          "canonical_path": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+          "validated_by": "windowsPowerShellDiagnostics",
+          "source": "fixed-windows-system-root"
+        },
+        "approved_by": "memory-source-browse capability"
+      },
+      {
+        "id": "memory-source-browse:zenity-picker",
+        "site": "browser-first/host/memory-source-settings-service.mjs:executeMemorySourceBrowse:zenity",
+        "sources": [
+          {
+            "path": "browser-first/host/browser-first-host-utils.mjs",
+            "anchor": "execFile(command, args, {"
+          },
+          {
+            "path": "browser-first/host/memory-source-settings-service.mjs",
+            "anchor": "await execFileStdout(picker, [\"--file-selection\", \"--directory\", \"--title\", prompt], options)"
+          }
+        ],
+        "program": "/usr/bin/zenity",
+        "args": [
+          "--file-selection",
+          "--directory",
+          "--title",
+          "Select a folder or Obsidian vault for Living Archive"
+        ],
+        "shell": false,
+        "runtime": "memory",
+        "env_clear": true,
+        "env_vars": [
+          "HOME",
+          "LANG",
+          "LC_ALL",
+          "TMPDIR",
+          "DISPLAY",
+          "WAYLAND_DISPLAY",
+          "XAUTHORITY",
+          "DBUS_SESSION_BUS_ADDRESS",
+          "XDG_RUNTIME_DIR"
+        ],
+        "opt_in": true,
+        "opt_in_vars": [
+          "DISPLAY",
+          "WAYLAND_DISPLAY",
+          "XAUTHORITY",
+          "DBUS_SESSION_BUS_ADDRESS",
+          "XDG_RUNTIME_DIR"
+        ],
+        "kind": "binary",
+        "candidates": [
+          {
+            "base": "system-bin",
+            "path": "/usr/bin/zenity"
+          },
+          {
+            "base": "system-bin",
+            "path": "/bin/zenity"
+          },
+          {
+            "base": "system-bin",
+            "path": "/usr/local/bin/zenity"
+          }
+        ],
+        "approved_by": "memory-source-browse capability"
+      },
+      {
+        "id": "memory-source-browse:kdialog-picker",
+        "site": "browser-first/host/memory-source-settings-service.mjs:executeMemorySourceBrowse:kdialog",
+        "sources": [
+          {
+            "path": "browser-first/host/browser-first-host-utils.mjs",
+            "anchor": "execFile(command, args, {"
+          },
+          {
+            "path": "browser-first/host/memory-source-settings-service.mjs",
+            "anchor": "await execFileStdout(picker, [\"--getexistingdirectory\", environment.HOME ?? os.homedir(), \"--title\", prompt], options)"
+          }
+        ],
+        "program": "/usr/bin/kdialog",
+        "args": [
+          "--getexistingdirectory",
+          "/home/user",
+          "--title",
+          "Select a folder or Obsidian vault for Living Archive"
+        ],
+        "shell": false,
+        "runtime": "memory",
+        "env_clear": true,
+        "env_vars": [
+          "HOME",
+          "LANG",
+          "LC_ALL",
+          "TMPDIR",
+          "DISPLAY",
+          "WAYLAND_DISPLAY",
+          "XAUTHORITY",
+          "DBUS_SESSION_BUS_ADDRESS",
+          "XDG_RUNTIME_DIR"
+        ],
+        "opt_in": true,
+        "opt_in_vars": [
+          "DISPLAY",
+          "WAYLAND_DISPLAY",
+          "XAUTHORITY",
+          "DBUS_SESSION_BUS_ADDRESS",
+          "XDG_RUNTIME_DIR"
+        ],
+        "kind": "binary",
+        "candidates": [
+          {
+            "base": "system-bin",
+            "path": "/usr/bin/kdialog"
+          },
+          {
+            "base": "system-bin",
+            "path": "/bin/kdialog"
+          },
+          {
+            "base": "system-bin",
+            "path": "/usr/local/bin/kdialog"
+          }
+        ],
+        "approved_by": "memory-source-browse capability"
+      },
+      {
+        "id": "browser-diagnostics:macos-open",
+        "site": "browser-first/host/browser-diagnostics-service.mjs:launchDiagnosticDownload:darwin:open",
+        "sources": [
+          {
+            "path": "browser-first/host/browser-diagnostics-service.mjs",
+            "anchor": "command = \"/usr/bin/open\";"
+          }
+        ],
+        "program": "/usr/bin/open",
+        "args": [
+          "/Users/reviewer/Downloads/report.pdf"
+        ],
+        "shell": false,
+        "runtime": "browser-host",
+        "env_clear": true,
+        "env_vars": [
+          "HOME",
+          "LANG",
+          "LC_ALL",
+          "TMPDIR"
+        ],
+        "kind": "binary",
+        "resolution": {
+          "base": "system-bin",
+          "path": "/usr/bin/open"
+        },
+        "approved_by": "browser-download-action capability"
+      },
+      {
+        "id": "browser-diagnostics:macos-reveal",
+        "site": "browser-first/host/browser-diagnostics-service.mjs:launchDiagnosticDownload:darwin:reveal",
+        "sources": [
+          {
+            "path": "browser-first/host/browser-diagnostics-service.mjs",
+            "anchor": "args = action === \"reveal\" ? [\"-R\", filePath] : [filePath];"
+          }
+        ],
+        "program": "/usr/bin/open",
+        "args": [
+          "-R",
+          "/Users/reviewer/Downloads/report.pdf"
+        ],
+        "shell": false,
+        "runtime": "browser-host",
+        "env_clear": true,
+        "env_vars": [
+          "HOME",
+          "LANG",
+          "LC_ALL",
+          "TMPDIR"
+        ],
+        "kind": "binary",
+        "resolution": {
+          "base": "system-bin",
+          "path": "/usr/bin/open"
+        },
+        "approved_by": "browser-download-action capability"
+      },
+      {
+        "id": "browser-diagnostics:windows-open",
+        "site": "browser-first/host/browser-diagnostics-service.mjs:launchDiagnosticDownload:win32:open",
+        "sources": [
+          {
+            "path": "browser-first/host/browser-diagnostics-service.mjs",
+            "anchor": "args = [filePath];"
+          },
+          {
+            "path": "browser-first/host/browser-first-host-utils.mjs",
+            "anchor": "export const TRUSTED_WINDOWS_SYSTEM_ROOT"
+          }
+        ],
+        "program": "C:\\Windows\\explorer.exe",
+        "args": [
+          "C:\\Users\\reviewer\\Downloads\\report & budget|draft^100%.pdf"
+        ],
+        "shell": false,
+        "runtime": "browser-host",
+        "env_clear": true,
+        "env_vars": [
+          "SystemRoot",
+          "WINDIR",
+          "USERPROFILE",
+          "TEMP",
+          "TMP"
+        ],
+        "opt_in": true,
+        "opt_in_vars": [
+          "SystemRoot",
+          "WINDIR",
+          "USERPROFILE",
+          "TEMP",
+          "TMP"
+        ],
+        "kind": "binary",
+        "resolution": {
+          "base": "absolute",
+          "path": "C:\\Windows\\explorer.exe",
+          "validated_by": "fixedWindowsSystemRootPolicy",
+          "source": "fixed-windows-system-root"
+        },
+        "approved_by": "browser-download-action capability"
+      },
+      {
+        "id": "browser-diagnostics:windows-reveal",
+        "site": "browser-first/host/browser-diagnostics-service.mjs:launchDiagnosticDownload:win32:reveal",
+        "sources": [
+          {
+            "path": "browser-first/host/browser-diagnostics-service.mjs",
+            "anchor": "command = path.win32.join(windowsSystemRoot, \"explorer.exe\");"
+          },
+          {
+            "path": "browser-first/host/browser-first-host-utils.mjs",
+            "anchor": "export const TRUSTED_WINDOWS_SYSTEM_ROOT"
+          }
+        ],
+        "program": "C:\\Windows\\explorer.exe",
+        "args": [
+          "/select,",
+          "C:\\Users\\reviewer\\Downloads\\report.pdf"
+        ],
+        "shell": false,
+        "runtime": "browser-host",
+        "env_clear": true,
+        "env_vars": [
+          "SystemRoot",
+          "WINDIR",
+          "USERPROFILE",
+          "TEMP",
+          "TMP"
+        ],
+        "opt_in": true,
+        "opt_in_vars": [
+          "SystemRoot",
+          "WINDIR",
+          "USERPROFILE",
+          "TEMP",
+          "TMP"
+        ],
+        "kind": "binary",
+        "resolution": {
+          "base": "absolute",
+          "path": "C:\\Windows\\explorer.exe",
+          "validated_by": "fixedWindowsSystemRootPolicy",
+          "source": "fixed-windows-system-root"
+        },
+        "approved_by": "browser-download-action capability"
+      },
+      {
+        "id": "browser-diagnostics:linux-open",
+        "site": "browser-first/host/browser-diagnostics-service.mjs:launchDiagnosticDownload:linux:open",
+        "sources": [
+          {
+            "path": "browser-first/host/browser-diagnostics-service.mjs",
+            "anchor": "command = resolveExecutable(\"xdg-open\", { searchPath: linuxOpenSearchPath });"
+          }
+        ],
+        "program": "/usr/bin/xdg-open",
+        "args": [
+          "/home/reviewer/Downloads/report.pdf"
+        ],
+        "shell": false,
+        "runtime": "browser-host",
+        "env_clear": true,
+        "env_vars": [
+          "HOME",
+          "PATH",
+          "LANG",
+          "LC_ALL",
+          "TMPDIR",
+          "DISPLAY",
+          "WAYLAND_DISPLAY",
+          "XAUTHORITY",
+          "DBUS_SESSION_BUS_ADDRESS",
+          "XDG_RUNTIME_DIR"
+        ],
+        "opt_in": true,
+        "opt_in_vars": [
+          "DISPLAY",
+          "WAYLAND_DISPLAY",
+          "XAUTHORITY",
+          "DBUS_SESSION_BUS_ADDRESS",
+          "XDG_RUNTIME_DIR"
+        ],
+        "kind": "binary",
+        "candidates": [
+          {
+            "base": "system-bin",
+            "path": "/usr/bin/xdg-open"
+          },
+          {
+            "base": "system-bin",
+            "path": "/bin/xdg-open"
+          },
+          {
+            "base": "system-bin",
+            "path": "/usr/local/bin/xdg-open"
+          }
+        ],
+        "approved_by": "browser-download-action capability"
+      },
+      {
+        "id": "browser-diagnostics:linux-reveal",
+        "site": "browser-first/host/browser-diagnostics-service.mjs:launchDiagnosticDownload:linux:reveal",
+        "sources": [
+          {
+            "path": "browser-first/host/browser-diagnostics-service.mjs",
+            "anchor": "args = [action === \"reveal\" ? path.dirname(filePath) : filePath];"
+          }
+        ],
+        "program": "/usr/bin/xdg-open",
+        "args": [
+          "/home/reviewer/Downloads"
+        ],
+        "shell": false,
+        "runtime": "browser-host",
+        "env_clear": true,
+        "env_vars": [
+          "HOME",
+          "PATH",
+          "LANG",
+          "LC_ALL",
+          "TMPDIR",
+          "DISPLAY",
+          "WAYLAND_DISPLAY",
+          "XAUTHORITY",
+          "DBUS_SESSION_BUS_ADDRESS",
+          "XDG_RUNTIME_DIR"
+        ],
+        "opt_in": true,
+        "opt_in_vars": [
+          "DISPLAY",
+          "WAYLAND_DISPLAY",
+          "XAUTHORITY",
+          "DBUS_SESSION_BUS_ADDRESS",
+          "XDG_RUNTIME_DIR"
+        ],
+        "kind": "binary",
+        "candidates": [
+          {
+            "base": "system-bin",
+            "path": "/usr/bin/xdg-open"
+          },
+          {
+            "base": "system-bin",
+            "path": "/bin/xdg-open"
+          },
+          {
+            "base": "system-bin",
+            "path": "/usr/local/bin/xdg-open"
+          }
+        ],
+        "approved_by": "browser-download-action capability"
+      },
+      {
+        "id": "bridge-tls:generate-ca",
+        "site": "browser-first/host/bridge-tls.mjs:generateCa",
+        "sources": [
+          {
+            "path": "browser-first/host/bridge-tls.mjs",
+            "anchor": "\"req\", \"-x509\", \"-new\", \"-nodes\","
+          },
+          {
+            "path": "browser-first/host/bridge-tls.mjs",
+            "anchor": "export function resolveOpenSslPath"
+          }
+        ],
+        "program": "/usr/bin/openssl",
+        "args": [
+          "req",
+          "-x509",
+          "-new",
+          "-nodes",
+          "-newkey",
+          "ed25519",
+          "-keyout",
+          "/user/BridgeTLS/ca.key",
+          "-out",
+          "/user/BridgeTLS/ca.crt",
+          "-days",
+          "3650",
+          "-subj",
+          "/CN=ResonantOS Bridge CA (self-signed, per-user trust)/O=ResonantOS"
+        ],
+        "shell": false,
+        "runtime": "browser-host",
+        "env_clear": true,
+        "env_vars": [
+          "HOME",
+          "LANG",
+          "LC_ALL",
+          "TMPDIR"
+        ],
+        "kind": "binary",
+        "candidates": [
+          {
+            "base": "system-bin",
+            "path": "/opt/homebrew/bin/openssl"
+          },
+          {
+            "base": "system-bin",
+            "path": "/usr/local/bin/openssl"
+          },
+          {
+            "base": "system-bin",
+            "path": "/usr/bin/openssl"
+          },
+          {
+            "base": "system-bin",
+            "path": "/bin/openssl"
+          },
+          {
+            "base": "system-bin",
+            "path": "C:\\Program Files\\OpenSSL-Win64\\bin\\openssl.exe"
+          },
+          {
+            "base": "system-bin",
+            "path": "C:\\Program Files\\Git\\usr\\bin\\openssl.exe"
+          }
+        ],
+        "approved_by": "fixed bridge TLS certificate operation"
+      },
+      {
+        "id": "bridge-tls:generate-leaf",
+        "site": "browser-first/host/bridge-tls.mjs:generateLeaf:request",
+        "sources": [
+          {
+            "path": "browser-first/host/bridge-tls.mjs",
+            "anchor": "\"req\", \"-new\", \"-nodes\","
+          },
+          {
+            "path": "browser-first/host/bridge-tls.mjs",
+            "anchor": "export function resolveOpenSslPath"
+          }
+        ],
+        "program": "/usr/bin/openssl",
+        "args": [
+          "req",
+          "-new",
+          "-nodes",
+          "-newkey",
+          "ed25519",
+          "-keyout",
+          "/user/BridgeTLS/bridge.key",
+          "-out",
+          "/user/BridgeTLS/bridge.csr",
+          "-subj",
+          "/CN=ResonantOS Bridge/emailAddress=bridge@resonantos.local"
+        ],
+        "shell": false,
+        "runtime": "browser-host",
+        "env_clear": true,
+        "env_vars": [
+          "HOME",
+          "LANG",
+          "LC_ALL",
+          "TMPDIR"
+        ],
+        "kind": "binary",
+        "candidates": [
+          {
+            "base": "system-bin",
+            "path": "/opt/homebrew/bin/openssl"
+          },
+          {
+            "base": "system-bin",
+            "path": "/usr/local/bin/openssl"
+          },
+          {
+            "base": "system-bin",
+            "path": "/usr/bin/openssl"
+          },
+          {
+            "base": "system-bin",
+            "path": "/bin/openssl"
+          },
+          {
+            "base": "system-bin",
+            "path": "C:\\Program Files\\OpenSSL-Win64\\bin\\openssl.exe"
+          },
+          {
+            "base": "system-bin",
+            "path": "C:\\Program Files\\Git\\usr\\bin\\openssl.exe"
+          }
+        ],
+        "approved_by": "fixed bridge TLS certificate operation"
+      },
+      {
+        "id": "bridge-tls:sign-leaf",
+        "site": "browser-first/host/bridge-tls.mjs:generateLeaf:sign",
+        "sources": [
+          {
+            "path": "browser-first/host/bridge-tls.mjs",
+            "anchor": "\"x509\", \"-req\","
+          },
+          {
+            "path": "browser-first/host/bridge-tls.mjs",
+            "anchor": "export function resolveOpenSslPath"
+          }
+        ],
+        "program": "/usr/bin/openssl",
+        "args": [
+          "x509",
+          "-req",
+          "-in",
+          "/user/BridgeTLS/bridge.csr",
+          "-CA",
+          "/user/BridgeTLS/ca.crt",
+          "-CAkey",
+          "/user/BridgeTLS/ca.key",
+          "-set_serial",
+          "<serial>",
+          "-out",
+          "/user/BridgeTLS/bridge.crt",
+          "-days",
+          "825",
+          "-extfile",
+          "/user/BridgeTLS/bridge.ext"
+        ],
+        "shell": false,
+        "runtime": "browser-host",
+        "env_clear": true,
+        "env_vars": [
+          "HOME",
+          "LANG",
+          "LC_ALL",
+          "TMPDIR"
+        ],
+        "kind": "binary",
+        "candidates": [
+          {
+            "base": "system-bin",
+            "path": "/opt/homebrew/bin/openssl"
+          },
+          {
+            "base": "system-bin",
+            "path": "/usr/local/bin/openssl"
+          },
+          {
+            "base": "system-bin",
+            "path": "/usr/bin/openssl"
+          },
+          {
+            "base": "system-bin",
+            "path": "/bin/openssl"
+          },
+          {
+            "base": "system-bin",
+            "path": "C:\\Program Files\\OpenSSL-Win64\\bin\\openssl.exe"
+          },
+          {
+            "base": "system-bin",
+            "path": "C:\\Program Files\\Git\\usr\\bin\\openssl.exe"
+          }
+        ],
+        "approved_by": "fixed bridge TLS certificate operation"
+      },
+      {
+        "id": "bridge-tls:inspect-sans",
+        "site": "browser-first/host/bridge-tls.mjs:getCertSans",
+        "sources": [
+          {
+            "path": "browser-first/host/bridge-tls.mjs",
+            "anchor": "\"x509\", \"-in\", tmp, \"-noout\", \"-ext\", \"subjectAltName\""
+          },
+          {
+            "path": "browser-first/host/bridge-tls.mjs",
+            "anchor": "export function resolveOpenSslPath"
+          }
+        ],
+        "program": "/usr/bin/openssl",
+        "args": [
+          "x509",
+          "-in",
+          "/tmp/resonantos-cert.pem",
+          "-noout",
+          "-ext",
+          "subjectAltName"
+        ],
+        "shell": false,
+        "runtime": "browser-host",
+        "env_clear": true,
+        "env_vars": [
+          "HOME",
+          "LANG",
+          "LC_ALL",
+          "TMPDIR"
+        ],
+        "kind": "binary",
+        "candidates": [
+          {
+            "base": "system-bin",
+            "path": "/opt/homebrew/bin/openssl"
+          },
+          {
+            "base": "system-bin",
+            "path": "/usr/local/bin/openssl"
+          },
+          {
+            "base": "system-bin",
+            "path": "/usr/bin/openssl"
+          },
+          {
+            "base": "system-bin",
+            "path": "/bin/openssl"
+          },
+          {
+            "base": "system-bin",
+            "path": "C:\\Program Files\\OpenSSL-Win64\\bin\\openssl.exe"
+          },
+          {
+            "base": "system-bin",
+            "path": "C:\\Program Files\\Git\\usr\\bin\\openssl.exe"
+          }
+        ],
+        "approved_by": "fixed bridge TLS certificate inspection"
+      }
+    ]
+  },
+  "checks": [
+    {
+      "id": "npm-lockfiles",
+      "family": "supply-chain",
+      "policy": "block",
+      "adapter": "npm-lockfiles",
+      "surfaces": [
+        ".",
+        "addons/resonant-browser-host"
+      ],
+      "lockfiles": [
+        "package-lock.json",
+        "npm-shrinkwrap.json"
+      ]
+    },
+    {
+      "id": "subprocess-no-argv-secret",
+      "family": "runtime-hardening",
+      "policy": "observe",
+      "adapter": "subprocess-no-argv-secret",
+      "recordSets": [
+        "browser-first-production-spawns"
+      ],
+      "surfaces": [
+        "browser-first/host",
+        "src"
+      ]
+    },
+    {
+      "id": "subprocess-env-clear",
+      "family": "runtime-hardening",
+      "policy": "observe",
+      "adapter": "subprocess-env-clear",
+      "recordSets": [
+        "browser-first-production-spawns"
+      ],
+      "surfaces": [
+        "browser-first/host",
+        "src"
+      ]
+    },
+    {
+      "id": "subprocess-pinned-roots",
+      "family": "runtime-hardening",
+      "policy": "observe",
+      "adapter": "subprocess-pinned-roots",
+      "recordSets": [
+        "browser-first-production-spawns"
+      ],
+      "surfaces": [
+        "browser-first/host",
+        "src"
+      ]
+    },
+    {
+      "id": "subprocess-terminal-allowlist",
+      "family": "runtime-hardening",
+      "policy": "observe",
+      "adapter": "subprocess-terminal-allowlist",
+      "recordSets": [
+        "browser-first-production-spawns"
+      ],
+      "surfaces": [
+        "browser-first/host",
+        "src"
+      ]
+    }
+  ]
+}

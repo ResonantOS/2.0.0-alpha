@@ -53,6 +53,10 @@ test("Agent Control host service owns planner, next-action, and news routes", ()
       "POST /web/news",
     ],
   );
+  assert.deepEqual(
+    agentControlRoutes.map((route) => route.requiredCapability),
+    ["agent-control-plan", "agent-control-plan", "agent-control-plan"],
+  );
 });
 
 test("Agent Control host service fails fast when provider dependencies are missing", () => {

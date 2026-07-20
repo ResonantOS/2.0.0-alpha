@@ -1,6 +1,8 @@
 const restrictedPlannerText = /\b(seed|private key|password|passphrase|wallet|phantom|sign|signature|approve|buy|sell|swap|stake|unstake|bridge|mint|claim|pay|payment|checkout|login|delete|remove|destroy|credential|2fa|otp|transfer)\b/i;
 const hardApprovalBoundaryText = /\b(seed|private key|password|passphrase|wallet|phantom|sign|signature|approve|buy|sell|swap|stake|unstake|bridge|mint|claim|pay|payment|checkout|login|delete|remove|destroy|credential|2fa|otp|transfer|card|cvc|cvv|iban|billing|autofill|personal contact|human-controlled autofill)\b/i;
-const publicSubmitBoundaryText = /\b(submit|publish|post|share|send|save|confirm)\b/i;
+// #240: keep aligned with content.js PUBLIC_COMMIT_VERBS so the runner classifies
+// the same controls the content script hands off (minus the hard-boundary verbs).
+const publicSubmitBoundaryText = /\b(submit|publish|post|share|send|save|confirm|connect|reserve|book|order|apply|vote|subscribe|register|comment)\b/i;
 
 export function approvalBoundaryForStep(step, reason = "") {
   const stepHaystack = [

@@ -148,7 +148,8 @@ function activeProjectRow({ project, sessions, onArchive, onDelete, onPin, onRen
   return row;
 }
 
-function artifactManagementPanel({ bridgeRequest }) {
+function artifactManagementPanel({ bridgeRequest, getBridgeRequest }) {
+  const bridge = () => (typeof getBridgeRequest === "function" ? getBridgeRequest() : bridgeRequest);
   const section = document.createElement("section");
   section.className = "settings-note settings-work-artifacts";
   let artifacts = [];
@@ -188,7 +189,7 @@ function artifactManagementPanel({ bridgeRequest }) {
   const requestReview = async (artifact) => {
     setStatus(status, `Creating review request for ${artifact.path}...`);
     try {
-      const result = await bridgeRequest("/archive/review/request", {
+      const result = await bridge()("/archive/review/request", {
         method: "POST",
         body: {
           path: artifact.path,
@@ -211,7 +212,7 @@ function artifactManagementPanel({ bridgeRequest }) {
     preview.append(title, loading);
     setStatus(status, `Loading preview for ${artifact.path}...`);
     try {
-      const result = await bridgeRequest("/archive/intake/read", {
+      const result = await bridge()("/archive/intake/read", {
         method: "POST",
         body: { path: artifact.path }
       });
@@ -278,7 +279,7 @@ function artifactManagementPanel({ bridgeRequest }) {
     preview.replaceChildren();
     setStatus(status, "Loading intake artifacts...");
     try {
-      const result = await bridgeRequest("/archive/intake/list", {
+      const result = await bridge()("/archive/intake/list", {
         method: "POST",
         body: { limit: 8 }
       });
@@ -316,7 +317,8 @@ function matchesQuery(item, query, projects = []) {
   return haystack.includes(query.toLowerCase());
 }
 
-export function renderWorkSection(container, { bridgeRequest, chatSessionStore, onOpenSession, onRestore }) {
+export function renderWorkSection(container, { bridgeRequest, getBridgeRequest, chatSessionStore, onOpenSession, onRestore }) {
+  const bridge = () => (typeof getBridgeRequest === "function" ? getBridgeRequest() : bridgeRequest);
   if (!chatSessionStore) {
     container.replaceChildren(
       settingsHeader({
@@ -492,7 +494,7 @@ export function renderWorkSection(container, { bridgeRequest, chatSessionStore, 
       }),
       activeList,
       archive,
-      artifactManagementPanel({ bridgeRequest })
+      artifactManagementPanel({ bridgeRequest, getBridgeRequest })
     );
   };
 

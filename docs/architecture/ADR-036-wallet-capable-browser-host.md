@@ -1,8 +1,15 @@
 # ADR-036: Resonant Browser Host Architecture
 
-Status: Superseded by ADR-037 on 2026-05-25.
+## Decision Metadata
 
-This ADR is retained as a research record. The external Chrome/Brave CDP host proved wallet compatibility requirements, but it is not the product direction because the user requirement is one browser app that contains ResonantOS functionality.
+- Decision status: Superseded
+- Alpha applicability: Not applicable
+- Superseded by: ADR-037
+- Owner: Browser architecture
+- Decision date: Not recorded
+- Status date: 2026-05-25
+- Alpha note: This external-browser sidecar direction is historical. It does
+  not define the unpacked-extension Alpha package.
 
 ## Decision
 

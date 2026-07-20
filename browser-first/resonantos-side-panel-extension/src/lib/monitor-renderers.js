@@ -34,6 +34,7 @@ function auditLabel(entry) {
 function preflightDecisionLabel(decision) {
   if (!decision) return "";
   const modeLabels = {
+    "allowed-task-class-once": "allowed task class once",
     "approved-once": "approved once",
     "trusted-safe-actions": "trusted safe actions",
     "skipped-by-consent": "used stored consent",
@@ -71,6 +72,9 @@ function targetCandidateText(candidate = {}) {
   return [
     candidate.label || candidate.text || candidate.name || candidate.ref || "",
     candidate.ref ? `#${candidate.ref}` : "",
+    candidate.visibleIndex ? `index:${candidate.visibleIndex}` : "",
+    candidate.context ? `context:${candidate.context}` : "",
+    candidate.form?.label ? `form:${candidate.form.label}` : "",
     candidate.fieldKind ? `kind:${candidate.fieldKind}` : "",
     candidate.approvalRequired ? "approval-required" : ""
   ].filter(Boolean).join(" · ");
@@ -136,6 +140,7 @@ function stepDetailRows(step) {
     ["Success signals", listValue(details.successSignals)],
     ["Stop boundaries", listValue(details.stopConditions)],
     ["Confidence", details.confidence || ""],
+    ["Human state", details.humanInterventionState || ""],
     ["Uncertainty", details.uncertainty || ""],
     ["Ambiguous target", details.ambiguousTarget ? "yes" : ""],
     ["Target candidates", targetCandidates],
@@ -210,6 +215,7 @@ export function createMonitorRenderers({
   updateContextDockVisibility
 }) {
   const {
+    approvalAllowOnceButton,
     approvalApproveButton,
     approvalCard,
     approvalReason,
@@ -445,6 +451,12 @@ export function createMonitorRenderers({
             : "Safe-action boundary: you may approve once or trust this task class for this site."
       ].filter(Boolean).join("\n");
       approvalApproveButton.disabled = boundary === "hard";
+      if (approvalAllowOnceButton) {
+        approvalAllowOnceButton.disabled = boundary !== "safe";
+        approvalAllowOnceButton.title = boundary === "safe"
+          ? "Allow this safe task class for this execution only. This does not persist."
+          : "One-time task-class consent never bypasses wallet, payment, login, credential, or public-submit boundaries.";
+      }
       approvalTrustSiteButton.disabled = boundary !== "safe";
       approvalTrustSiteButton.title = boundary === "safe"
         ? "Trust safe non-sensitive actions for this task class on this site."
@@ -452,6 +464,7 @@ export function createMonitorRenderers({
     } else {
       approvalCard.hidden = true;
       approvalApproveButton.disabled = false;
+      if (approvalAllowOnceButton) approvalAllowOnceButton.disabled = false;
       approvalTrustSiteButton.disabled = false;
     }
     updateContextDockVisibility();
@@ -497,8 +510,11 @@ export function createMonitorRenderers({
       const title = document.createElement("strong");
       title.textContent = consent.taskClass;
       const meta = document.createElement("small");
+      const expiryLabel = consent.mode === "allow-once"
+        ? `this execution only · ${consent.usesRemaining ?? 1} use remaining`
+        : `expires ${new Date(consent.expiresAt).toLocaleDateString()}`;
       meta.textContent = [
-        `${consent.mode} · expires ${new Date(consent.expiresAt).toLocaleDateString()}`,
+        `${consent.mode} · ${expiryLabel}`,
         consent.reason ? `${consent.source || "human"} · ${consent.reason}` : ""
       ].filter(Boolean).join(" · ");
       details.append(title, meta);
@@ -532,13 +548,20 @@ export function createMonitorRenderers({
     const consentEntries = Object.values(taskConsents)
       .filter((consent) => consent.siteKey && consent.taskClass)
       .sort((a, b) => `${a.siteKey}::${a.taskClass}`.localeCompare(`${b.siteKey}::${b.taskClass}`));
-    permissionManagerPanel.hidden = permissionEntries.length === 0 && consentEntries.length === 0;
+    const activeConsentKeys = new Set(consentEntries.map((consent) => `${consent.siteKey}::${consent.taskClass}`));
+    const taskHistoryEntries = Object.entries(taskAudit)
+      .flatMap(([key, entries]) => (Array.isArray(entries) ? entries : []).map((entry) => ({ key, entry })))
+      .filter(({ key, entry }) => !activeConsentKeys.has(key) || entry?.action !== "set")
+      .sort((a, b) => Number(b.entry?.at ?? 0) - Number(a.entry?.at ?? 0))
+      .slice(0, 12);
+    permissionManagerPanel.hidden = permissionEntries.length === 0 && consentEntries.length === 0 && taskHistoryEntries.length === 0;
     permissionManagerList.replaceChildren();
     if (permissionManagerPanel.hidden) {
       updateContextDockVisibility();
       return;
     }
-    permissionManagerTitle.textContent = `${permissionEntries.length + consentEntries.length} stored browser ${permissionEntries.length + consentEntries.length === 1 ? "grant" : "grants"}`;
+    const totalEntries = permissionEntries.length + consentEntries.length + taskHistoryEntries.length;
+    permissionManagerTitle.textContent = `${totalEntries} browser ${totalEntries === 1 ? "grant/history entry" : "grant/history entries"}`;
     permissionEntries.forEach(([siteKey, mode]) => {
       const item = document.createElement("li");
       const details = document.createElement("div");
@@ -562,8 +585,11 @@ export function createMonitorRenderers({
       title.textContent = `${consent.siteKey} · ${consent.taskClass}`;
       const meta = document.createElement("small");
       const auditKey = `${consent.siteKey}::${consent.taskClass}`;
+      const expiryLabel = consent.mode === "allow-once"
+        ? `this execution only · ${consent.usesRemaining ?? 1} use remaining`
+        : `expires ${new Date(consent.expiresAt).toLocaleDateString()}`;
       meta.textContent = [
-        `task-class consent · ${consent.mode} · expires ${new Date(consent.expiresAt).toLocaleDateString()}`,
+        `task-class consent · ${consent.mode} · ${expiryLabel}`,
         auditLabel(latestAudit(taskAudit, auditKey) ?? { action: "set", at: consent.grantedAt, source: consent.source, reason: consent.reason })
       ].filter(Boolean).join(" · ");
       details.append(title, meta);
@@ -573,6 +599,18 @@ export function createMonitorRenderers({
       revoke.title = `Revoke ${consent.taskClass} consent for ${consent.siteKey}`;
       revoke.addEventListener("click", () => onRevokeTaskConsent?.(consent));
       item.append(details, revoke);
+      permissionManagerList.append(item);
+    });
+    taskHistoryEntries.forEach(({ key, entry }) => {
+      const item = document.createElement("li");
+      item.dataset.history = "true";
+      const details = document.createElement("div");
+      const title = document.createElement("strong");
+      title.textContent = `${entry?.siteKey || key.split("::")[0]} · ${entry?.taskClass || key.split("::")[1] || "general"}`;
+      const meta = document.createElement("small");
+      meta.textContent = `task-class history · ${auditLabel(entry)}`;
+      details.append(title, meta);
+      item.append(details);
       permissionManagerList.append(item);
     });
     updateContextDockVisibility();

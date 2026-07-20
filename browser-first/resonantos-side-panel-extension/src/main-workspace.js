@@ -1,6 +1,7 @@
 import { createBrowserPageActions } from "./lib/browser-page-actions.js";
 import { normalizeBrowserUrl } from "./lib/browser-command-parser.js";
-import { createBridgeClient } from "./lib/bridge-client.js";
+import { createBridgeClient, createRawBridgeFetch, detectLoopbackBridge, initCapabilityTokens, isUnauthorizedBridgeError, resolveBridgeConfig } from "./lib/bridge-client.js";
+import { createPrefsSync } from "./lib/prefs-sync.js";
 import { createChatSessionStore } from "./lib/chat-session-store.js";
 import { createComposerController } from "./lib/composer-controller.js";
 import {
@@ -50,6 +51,7 @@ const STORAGE_KEYS = {
   sitePermissionAudit: "augmentorSitePermissionAudit",
   taskConsents: "augmentorTaskConsents",
   taskConsentAudit: "augmentorTaskConsentAudit",
+  regenerationMode: "augmentorRegenerationMode",
   browserJobs: "augmentorBrowserJobs",
   activeBrowserJob: "augmentorActiveBrowserJob",
   appearance: "augmentorAppearancePreferences",
@@ -84,13 +86,99 @@ const saveSelectionButton = document.querySelector("#save-selection");
 const contextToggleButton = document.querySelector("#context-toggle");
 const modelSelect = document.querySelector("#model-select");
 const thinkingDepthSelect = document.querySelector("#thinking-depth");
+const regenerationModeSelect = document.querySelector("#regeneration-mode");
 const dictateButton = document.querySelector("#dictate-button");
 const contextMeter = document.querySelector("#context-meter");
 const contextPopover = document.querySelector("#context-popover");
 const composerNotice = document.querySelector("#composer-notice");
 const connectionLine = document.querySelector("#connection-line");
 const sendButton = commandForm.querySelector(".send-button");
-const bridgeRequest = createBridgeClient();
+// `bridgeRequest` and `rawFetch` are `let` because the rebind chain
+// below replaces them once loopback detection has settled. Anything
+// that holds a reference to the current value (e.g. prefsSync's getter)
+// will see the updated function on the next call.
+//
+// We deliberately use .then() chains (not top-level await) because
+// some Chromium/Edge builds throw "Service worker registration
+// failed" if the extension page's top-level evaluation awaits a
+// fetch. The promise itself still resolves before any user interaction
+// is possible, so message handlers that fire during the bootstrap
+// window simply retry on the next event.
+let bridgeRequest = null;
+let rawFetch = null;
+let prefsSync = null;
+let rebindInFlight = null;
+
+function rebindBridge({ forceResolve = false, refreshGenerated = false } = {}) {
+  if (rebindInFlight && !forceResolve) return rebindInFlight;
+  rebindInFlight = resolveBridgeConfig({ refreshGenerated })
+    .then((cfg) => detectLoopbackBridge(cfg))
+    .then((cfg) => {
+      bridgeRequest = createBridgeClient(cfg);
+      rawFetch = createRawBridgeFetch(cfg);
+      if (!prefsSync) {
+        prefsSync = createPrefsSync({ getBridgeRequest: () => bridgeRequest });
+        prefsSync.install();
+      }
+      return initCapabilityTokens(cfg)
+        .catch(() => undefined)
+        .then(() => ({ cfg, bridgeRequest, rawFetch }));
+    })
+    .catch(() => null);
+  return rebindInFlight;
+}
+
+function hydrateAfterRebind(options = {}) {
+  return rebindBridge(options).then((result) => {
+    if (!result) return null;
+    void prefsSync.hydrate().catch(() => undefined);
+    return result;
+  });
+}
+
+async function currentBridgeRequest(route, options = {}) {
+  const req = typeof bridgeRequest === "function"
+    ? bridgeRequest
+    : (await hydrateAfterRebind())?.bridgeRequest;
+  if (typeof req !== "function") {
+    throw new Error("Browser bridge is unavailable.");
+  }
+  try {
+    return await req(route, options);
+  } catch (error) {
+    if (!isUnauthorizedBridgeError(error)) throw error;
+    rebindInFlight = null;
+    const rebound = await hydrateAfterRebind({ forceResolve: true, refreshGenerated: true });
+    if (typeof rebound?.bridgeRequest !== "function") throw error;
+    return rebound.bridgeRequest(route, options);
+  }
+}
+
+async function currentRawFetch(route, options = {}) {
+  const req = typeof rawFetch === "function"
+    ? rawFetch
+    : (await hydrateAfterRebind())?.rawFetch;
+  if (typeof req !== "function") {
+    throw new Error("Browser bridge raw fetch is unavailable.");
+  }
+  const response = await req(route, options);
+  if (response?.status !== 401) return response;
+  rebindInFlight = null;
+  const rebound = await hydrateAfterRebind({ forceResolve: true, refreshGenerated: true });
+  if (typeof rebound?.rawFetch !== "function") return response;
+  return rebound.rawFetch(route, options);
+}
+
+const getBridgeRequest = () => currentBridgeRequest;
+
+void hydrateAfterRebind();
+
+chrome?.storage?.onChanged?.addListener?.((changes, area) => {
+  if (area !== "local") return;
+  if (!changes?.bridgeTargetOverride) return;
+  rebindInFlight = null;
+  void hydrateAfterRebind();
+});
 let busy = false;
 let activeWorkspace = "answer";
 let pendingWorkspaceAction = null;
@@ -104,6 +192,10 @@ let personalizationSettings = null;
 let initialSettingsSection = "overview";
 let messageActions = null;
 const allowedWorkspaces = new Set(["answer", "artifacts", "addons", "memory", "hermes", "opencode", "settings"]);
+
+function normalizeRegenerationMode(value) {
+  return value === "overwrite" ? "overwrite" : "branch";
+}
 
 function parseWorkspaceDeepLink(hash = window.location.hash) {
   const normalized = String(hash ?? "").replace(/^#/, "").trim();
@@ -197,7 +289,8 @@ const setMainActivity = (_phase, label, detail = "") => {
 };
 const browserPageActions = createBrowserPageActions({
   addMessage,
-  bridgeRequest,
+  bridgeRequest: currentBridgeRequest,
+  getBridgeRequest,
   chrome,
   getControlledTabId: () => controlledTabId,
   getLastSnapshot: () => lastSnapshot,
@@ -225,7 +318,8 @@ const browserPageActions = createBrowserPageActions({
 
 const mainWorkspaceActions = createMainWorkspaceActionController({
   addMessage,
-  bridgeRequest,
+  bridgeRequest: currentBridgeRequest,
+  getBridgeRequest,
   browserPageActions,
   chatSessionStore,
   chromeApi: chrome,
@@ -233,6 +327,7 @@ const mainWorkspaceActions = createMainWorkspaceActionController({
   composerController,
   composerNotice,
   getBusy: () => busy,
+  getLastSnapshot: () => lastSnapshot,
   getModel: () => modelSelect.value,
   getPersonalizationSettings: () => personalizationSettings,
   getThinkingDepth: () => thinkingDepthSelect.value,
@@ -304,13 +399,15 @@ const chatRenderers = createSidePanelRenderers({
 
 messageActions = createMessageActionController({
   addMessage,
-  bridgeRequest,
+  bridgeRequest: currentBridgeRequest,
+  getBridgeRequest,
   chatSessionStore,
   commandInput,
   composerController,
   fileInput,
   flashCopied: (id) => chatRenderers.flashCopied(id),
   getLastSnapshot: () => lastSnapshot,
+  getRegenerationMode: () => normalizeRegenerationMode(regenerationModeSelect?.value),
   getRespondToCommand: () => mainWorkspaceActions.regenerate,
   navigator,
   renderAttachments,
@@ -473,6 +570,23 @@ async function setStarterPromptPreference(hidden) {
   renderMessages();
 }
 
+async function hydrateRegenerationModePreference() {
+  const settings = await chrome.storage?.local?.get?.([STORAGE_KEYS.regenerationMode]).catch(() => ({}));
+  if (regenerationModeSelect) {
+    regenerationModeSelect.value = normalizeRegenerationMode(settings?.[STORAGE_KEYS.regenerationMode]);
+  }
+}
+
+async function setRegenerationModePreference(mode) {
+  const normalized = normalizeRegenerationMode(mode);
+  if (regenerationModeSelect) {
+    regenerationModeSelect.value = normalized;
+  }
+  await chrome.storage?.local?.set?.({
+    [STORAGE_KEYS.regenerationMode]: normalized
+  }).catch(() => undefined);
+}
+
 function renderAttachments() {
   chatRenderers.renderAttachments();
 }
@@ -569,13 +683,14 @@ function renderMessages() {
     const initialArtifactPath = pendingWorkspaceAction?.workspace === "memory" ? pendingWorkspaceAction.artifactPath : "";
     const initialPromotedPage = pendingWorkspaceAction?.workspace === "memory" ? pendingWorkspaceAction.promotedPage : "";
     pendingWorkspaceAction = null;
-    renderLivingArchiveWorkspace({ container: transcript, bridgeRequest, initialQuery, initialReviewPath, initialArtifactPath, initialPromotedPage });
+    renderLivingArchiveWorkspace({ container: transcript, bridgeRequest: currentBridgeRequest, getBridgeRequest, initialQuery, initialReviewPath, initialArtifactPath, initialPromotedPage });
     return;
   }
   if (activeWorkspace === "artifacts") {
     renderArtifactsWorkspace({
       container: transcript,
-      bridgeRequest,
+      bridgeRequest: currentBridgeRequest,
+      getBridgeRequest,
       onContinueArtifact: continueFromArtifact,
       onOpenReviewQueue: openMemoryReviewQueue
     });
@@ -584,7 +699,8 @@ function renderMessages() {
   if (activeWorkspace === "addons") {
     renderAddOnsWorkspace({
       container: transcript,
-      bridgeRequest,
+      bridgeRequest: currentBridgeRequest,
+      getBridgeRequest,
       onOpenProviderHandoff: async (handoff) => {
         if (!handoff?.url) return;
         await chrome.tabs.create({ url: handoff.url }).catch(() => undefined);
@@ -600,13 +716,14 @@ function renderMessages() {
   if (activeWorkspace === "opencode") {
     const initialMission = pendingWorkspaceAction?.workspace === "opencode" ? pendingWorkspaceAction.mission : "";
     pendingWorkspaceAction = null;
-    renderOpenCodeWorkspace({ container: transcript, bridgeRequest, initialMission });
+    renderOpenCodeWorkspace({ container: transcript, bridgeRequest: currentBridgeRequest, getBridgeRequest, initialMission });
     return;
   }
   if (activeWorkspace === "settings") {
     renderSettingsWorkspace({
       container: transcript,
-      bridgeRequest,
+      bridgeRequest: currentBridgeRequest,
+      getBridgeRequest,
       chatSessionStore,
       onOpenSession: async (sessionId) => {
         await switchToSession(sessionId);
@@ -625,6 +742,7 @@ function renderMessages() {
       storage: chrome.storage?.local,
       storageKeys: STORAGE_KEYS,
       taskConsentStore,
+      prefsSync,
       initialSection: initialSettingsSection
     });
     return;
@@ -667,7 +785,7 @@ function workspaceShell({ eyebrow, title, body }) {
 }
 
 async function statusForAddon(addonId) {
-  const result = await bridgeRequest("/addons/status", { method: "GET" });
+  const result = await currentBridgeRequest("/addons/status", { method: "GET" });
   return result?.addons?.find((addon) => addon.id === addonId) ?? null;
 }
 
@@ -687,8 +805,23 @@ function renderStatusWorkspace({ eyebrow, title, body, addonId }) {
   });
 }
 
-function renderHermesWorkspace() {
-  renderHermesDashboardWorkspace({ container: transcript, bridgeRequest, statusForAddon });
+async function renderHermesWorkspace() {
+  // Resolve the bridge URL fresh on each render so the override flow works.
+  // We await the loopback-detected config so the iframe and the JSON
+  // endpoints both hit the same URL (no LAN-URL-first-then-rebind race).
+  const cfg = await resolveBridgeConfig()
+    .then((c) => detectLoopbackBridge(c))
+    .catch(() => null);
+  const effective = cfg ?? (globalThis.__RESONANTOS_BRIDGE_CONFIG__ ?? {});
+  renderHermesDashboardWorkspace({
+    container: transcript,
+    bridgeRequest: currentBridgeRequest,
+    getBridgeRequest,
+    rawFetch: currentRawFetch,
+    bridgeUrl: effective.bridgeUrl ?? "http://127.0.0.1:47773",
+    bridgeToken: effective.bridgeToken ?? "",
+    statusForAddon,
+  });
 }
 
 async function addMessage(role, content, options = {}) {
@@ -821,6 +954,7 @@ modelSelect.addEventListener("change", () => void chatSessionStore.persist().the
   updateContextMeter();
 }));
 thinkingDepthSelect.addEventListener("change", () => void chatSessionStore.persist());
+regenerationModeSelect?.addEventListener("change", () => void setRegenerationModePreference(regenerationModeSelect.value));
 dictateButton.addEventListener("click", () => {
   dictationController.toggle();
 });
@@ -846,7 +980,8 @@ window.addEventListener("hashchange", () => {
 });
 
 await hydrateProviderModelOptions({
-  bridgeRequest,
+  bridgeRequest: currentBridgeRequest,
+  getBridgeRequest,
   getPreferredModel: () => modelSelect.value,
   modelSelect,
   setStatus: updateConnectionLine
@@ -856,6 +991,7 @@ await Promise.all([
   chatSessionStore.hydrate(),
   hydrateAppearancePreferences(),
   hydrateStarterPromptPreference(),
+  hydrateRegenerationModePreference(),
   hydrateActiveWorkspace()
 ]);
 const requestedDeepLink = parseWorkspaceDeepLink();

@@ -1,7 +1,14 @@
 # ADR-031: Agent Add-on SDK Lessons From Hermes
 
-Status: Accepted  
-Date: 2026-05-07
+## Decision Metadata
+
+- Decision status: Accepted
+- Alpha applicability: Partial
+- Superseded by: None
+- Owner: Agent add-on SDK
+- Decision date: 2026-05-07
+- Alpha note: Host mediation, compatibility checks, bounded delegation, and
+  human approval boundaries apply. Hermes remains optional local service.
 
 ## Decision
 

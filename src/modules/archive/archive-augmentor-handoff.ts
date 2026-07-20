@@ -42,7 +42,7 @@ export const buildArchivePreflightAugmentorPrompt = (report: ArchiveLibraryPrefl
     "- Copy-on-import preserves the original source and makes the managed ResonantOS copy canonical.",
     "- Obvious technical/generated folders can be excluded automatically.",
     "- Ambiguous folders should be explained, not silently reorganised.",
-    "- TOL-specific behavior belongs to the Audio2TOL add-on and should not be treated as core Living Archive functionality unless that add-on is installed.",
+    "- Specialist media extraction belongs to reviewed add-ons and should not be treated as core Living Archive functionality unless such an add-on is installed.",
     "",
     "Preflight facts:",
     `- Source path: ${report.sourcePath}`,
@@ -73,4 +73,3 @@ export const buildArchivePreflightAugmentorPrompt = (report: ArchiveLibraryPrefl
     "",
     "Answer as Augmentor. Start with the user-facing meaning of the result, then give the recommended next action. If there is a risk or uncertainty, state it clearly.",
   ].join("\n");
-

@@ -178,18 +178,27 @@ export function createSidePanelControlCommandController({
       });
       return null;
     }
-    if (!options.resumedFromJob && existingConsent?.mode === "allow-safe" && !options.preflightApproved) {
+    if (!options.resumedFromJob && ["allow-safe", "allow-once"].includes(existingConsent?.mode) && !options.preflightApproved) {
+      const isOneTimeConsent = existingConsent.mode === "allow-once";
       setNextControlPreflightDecision({
         id: existingConsent.id ?? `${existingConsent.siteKey}::${existingConsent.taskClass}`,
         goal,
         siteKey: existingConsent.siteKey,
         taskClass: existingConsent.taskClass,
-        mode: "skipped-by-consent",
+        mode: isOneTimeConsent ? "allowed-task-class-once" : "skipped-by-consent",
         permissionMode: mode,
         decidedAt: new Date().toISOString(),
         source: existingConsent.source || "task-consent-store",
-        reason: existingConsent.reason || "Stored safe task-class consent allowed preflight skip."
+        reason: existingConsent.reason || (isOneTimeConsent ? "One-time safe task-class consent allowed this run." : "Stored safe task-class consent allowed preflight skip.")
       });
+      if (isOneTimeConsent) {
+        await taskConsentStore.consumeTaskConsent?.({
+          siteKey: existingConsent.siteKey,
+          taskClass: existingConsent.taskClass,
+          reason: `Consumed by Agent Control run: ${goal}`,
+          source: "control-command"
+        });
+      }
     }
     await clearControlPreflight();
     try {

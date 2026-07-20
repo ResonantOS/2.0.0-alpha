@@ -3,9 +3,11 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import * as hostUtils from "../host/browser-first-host-utils.mjs";
 import {
   dashboardTarget,
   execFileStdout,
+  executableCandidates,
   expandUserPath,
   isInsidePath,
   listFilesRecursive,
@@ -77,4 +79,60 @@ test("browser-first host utils execute bounded stdout commands", async () => {
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
   }
+});
+
+test("browser-first host utils can constrain executable lookup to trusted roots", () => {
+  const searchPath = ["/usr/bin", "/bin"].join(path.delimiter);
+  assert.deepEqual(
+    executableCandidates("zenity", { platform: "linux", searchPath }),
+    ["/usr/bin/zenity", "/bin/zenity"],
+  );
+});
+
+test("browser-first host utils use a fixed C drive Windows system root", () => {
+  assert.equal(typeof hostUtils.resolveWindowsSystemRoot, "function");
+  assert.equal(hostUtils.TRUSTED_WINDOWS_SYSTEM_ROOT, "C:\\Windows");
+  assert.equal(hostUtils.resolveWindowsSystemRoot({ SystemRoot: "D:\\Windows" }), "C:\\Windows");
+  assert.equal(hostUtils.resolveWindowsSystemRoot({ SystemRoot: "D:\\Attacker" }), "C:\\Windows");
+});
+
+test("Windows executable candidates exclude command shims", () => {
+  const searchPath = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0";
+  assert.deepEqual(
+    executableCandidates("powershell", { platform: "win32", searchPath }),
+    [`${searchPath}\\powershell.exe`],
+  );
+});
+
+test("Windows PowerShell diagnostics ignore a present command shim", () => {
+  assert.equal(typeof hostUtils.windowsPowerShellDiagnostics, "function");
+  const command = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
+  const commandShim = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.cmd";
+  const probes = [];
+
+  const diagnostics = hostUtils.windowsPowerShellDiagnostics({
+    exists(candidate) {
+      probes.push(candidate);
+      return candidate === commandShim;
+    },
+    realpath: (candidate) => candidate,
+    stat: () => ({ isFile: () => true }),
+  });
+
+  assert.equal(diagnostics.installed, false);
+  assert.equal(diagnostics.command, null);
+  assert.deepEqual(probes, [command]);
+});
+
+test("Windows PowerShell diagnostics reject a canonical path escape", () => {
+  const command = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
+  const diagnostics = hostUtils.windowsPowerShellDiagnostics({
+    exists: (candidate) => candidate === command,
+    realpath: () => "C:\\Users\\attacker\\powershell.exe",
+    stat: () => ({ isFile: () => true }),
+  });
+
+  assert.equal(diagnostics.installed, false);
+  assert.equal(diagnostics.command, null);
+  assert.ok(diagnostics.rejections.some(({ reason }) => /canonical PowerShell path differs/i.test(reason)));
 });

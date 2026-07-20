@@ -7,11 +7,12 @@
   "main": "src/browser-host.mjs",
   "scripts": {
     "test": "node --test test/*.test.mjs",
-    "start": "node src/browser-host.mjs",
-    "start:electron": "electron src/electron-visible-host.mjs"
+    "start": "node src/browser-host.mjs"
+  },
+  "engines": {
+    "node": ">=22.13.0"
   },
   "dependencies": {
-    "electron": "^41.3.0",
     "playwright": "^1.59.1"
   }
 }

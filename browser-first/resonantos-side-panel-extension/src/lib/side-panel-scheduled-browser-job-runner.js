@@ -195,10 +195,21 @@ export function createSidePanelScheduledBrowserJobRunner({
         };
         syncFocusedLocalRun();
       },
-      taskConsentForStep: async ({ goal }) => taskConsentStore.consentFor({
-        siteKey: job.pageLock?.siteKey,
-        goal
-      }),
+      taskConsentForStep: async ({ goal }) => {
+        const consent = await taskConsentStore.consentFor({
+          siteKey: job.pageLock?.siteKey,
+          goal
+        });
+        if (consent?.mode === "allow-once") {
+          await taskConsentStore.consumeTaskConsent?.({
+            siteKey: consent.siteKey,
+            taskClass: consent.taskClass,
+            reason: `Consumed by scheduled safe approval retry for: ${goal}`,
+            source: "browser-job-runner"
+          });
+        }
+        return consent;
+      },
       updateBrowserJob,
       updateControlRunArtifacts: (artifacts) => {
         localRun = { ...localRun, artifacts };

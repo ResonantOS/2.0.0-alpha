@@ -1,8 +1,14 @@
 # ADR-017: Resonant Browser Add-on And Live AI Control
 
-## Status
+## Decision Metadata
 
-Superseded for product Browser engine selection by `ADR-025: Native Embedded Browser Host`.
+- Decision status: Superseded
+- Alpha applicability: Not applicable
+- Superseded by: ADR-025
+- Owner: Browser architecture
+- Decision date: Not recorded
+- Alpha note: This embedded-browser decision is historical. Alpha browser UI
+  and control live in the Chrome MV3 extension.
 
 ## Decision
 

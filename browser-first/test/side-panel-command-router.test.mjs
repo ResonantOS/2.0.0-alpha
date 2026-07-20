@@ -9,6 +9,7 @@ function createHarness() {
     calls.push([name, ...args]);
   };
   const router = createSidePanelCommandRouter({
+    allowControlPreflightOnceForTaskClass: handler("allow-control-once"),
     bindMentionedTab: handler("bind"),
     cancelBrowserJob: handler("cancel"),
     approveControlPreflight: handler("approve-control"),
@@ -35,6 +36,7 @@ function createHarness() {
     runJobsCommand: handler("jobs"),
     runMemorySearchCommand: handler("memory"),
     runNaturalDelegationCommand: handler("natural-delegate"),
+    runResonatorCommand: handler("resonator"),
     reportBrowserJob: handler("report"),
     runSitePermissionCommand: handler("site"),
     runStatusCommand: handler("status"),
@@ -61,6 +63,7 @@ test("side panel command router dispatches slash commands", async () => {
   await harness.router.respondToCommand("/status");
   await harness.router.respondToCommand("/browser open resonantos.com");
   await harness.router.respondToCommand("/control find a booking");
+  await harness.router.respondToCommand("/highlight #target");
   await harness.router.respondToCommand("/email Follow up | body: Draft the email");
   await harness.router.respondToCommand("/calendar Planning | body: Draft the event");
   await harness.router.respondToCommand("/save selection");
@@ -85,6 +88,8 @@ test("side panel command router dispatches slash commands", async () => {
     ["browser", "open resonantos.com"],
     ["bind", "/control find a booking"],
     ["control", "find a booking"],
+    ["bind", "/highlight #target"],
+    ["resonator", "highlight", "#target"],
     ["bind", "/email Follow up | body: Draft the email"],
     ["draft", "email", "Follow up | body: Draft the email"],
     ["bind", "/calendar Planning | body: Draft the event"],
@@ -114,6 +119,7 @@ test("side panel command router dispatches browser state slash commands", async 
   await harness.router.respondToCommand("/report job-a");
   await harness.router.respondToCommand("/cancel job-a");
   await harness.router.respondToCommand("/approve-control control-a");
+  await harness.router.respondToCommand("/allow-control-once control-a");
   await harness.router.respondToCommand("/deny-control control-a");
 
   assert.deepEqual(harness.calls.map((call) => call[0]), [
@@ -132,7 +138,26 @@ test("side panel command router dispatches browser state slash commands", async 
     "bind", "report",
     "bind", "cancel",
     "bind", "approve-control",
+    "bind", "allow-control-once",
     "bind", "deny-control"
+  ]);
+});
+
+test("side panel command router dispatches Resonator guide slash commands", async () => {
+  const harness = createHarness();
+
+  await harness.router.respondToCommand("/highlight #hero");
+  await harness.router.respondToCommand('/arrow ".primary" Continue here');
+  await harness.router.respondToCommand("/spotlight #checkout Review this");
+  await harness.router.respondToCommand("/step #one First; #two Second");
+  await harness.router.respondToCommand("/clear");
+
+  assert.deepEqual(harness.calls.filter((call) => call[0] !== "bind"), [
+    ["resonator", "highlight", "#hero"],
+    ["resonator", "arrow", "\".primary\" Continue here"],
+    ["resonator", "spotlight", "#checkout Review this"],
+    ["resonator", "step", "#one First; #two Second"],
+    ["resonator", "clear", ""]
   ]);
 });
 
@@ -190,6 +215,22 @@ test("side panel command router dispatches natural delegation before chat", asyn
     ["natural-delegate", { missingTarget: false, mission: "review the research packet", target: "hermes" }],
     ["natural-delegate", { missingTarget: true, mission: "to another agent?", target: "" }],
     ["natural-delegate", { missingTarget: true, mission: "or delegate to other agents?", target: "" }]
+  ]);
+});
+
+test("side panel command router falls back to slash delegation if natural handler is missing", async () => {
+  const calls = [];
+  const router = createSidePanelCommandRouter({
+    bindMentionedTab: async (...args) => calls.push(["bind", ...args]),
+    runChatTurn: async (...args) => calls.push(["chat", ...args]),
+    runDelegateCommand: async (...args) => calls.push(["delegate", ...args])
+  });
+
+  await router.respondToCommand("ask Hermes to research the project options");
+
+  assert.deepEqual(calls, [
+    ["bind", "ask Hermes to research the project options"],
+    ["delegate", "hermes research the project options"]
   ]);
 });
 

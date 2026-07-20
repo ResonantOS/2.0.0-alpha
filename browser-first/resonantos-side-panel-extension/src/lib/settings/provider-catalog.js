@@ -1,4 +1,4 @@
-const knownProviderOrder = ["shared-minimax", "shared-openai"];
+const knownProviderOrder = ["shared-minimax", "shared-zai-glm", "shared-openai"];
 
 export function providerSort(left, right) {
   const leftIndex = knownProviderOrder.indexOf(left.id);
@@ -75,6 +75,13 @@ export const providerTypePresets = {
     category: "Direct providers",
     apiBaseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     models: ["qwen-max", "qwen-plus", "qwen-turbo"],
+  },
+  zai: {
+    label: "Z.AI GLM",
+    providerType: "openai-compatible",
+    category: "Direct providers",
+    apiBaseUrl: "http://127.0.0.1:18789/v1",
+    models: ["zai/glm-5.2", "zai/glm-5-turbo", "zai/glm-5.1", "zai/glm-5", "zai/glm-5v-turbo", "zai/glm-4.7", "zai/glm-4.6"],
   },
   cohere: {
     label: "Cohere",

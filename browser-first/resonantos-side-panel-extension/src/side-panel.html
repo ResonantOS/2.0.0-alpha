@@ -55,6 +55,7 @@
           <p id="control-preflight-body">Review the task before Augmentor operates this page.</p>
           <div class="approval-actions">
             <button id="control-preflight-approve" type="button">Approve</button>
+            <button id="control-preflight-once" type="button">Allow class once</button>
             <button id="control-preflight-trust" type="button">Trust safe actions</button>
             <button id="control-preflight-deny" type="button">Deny</button>
           </div>
@@ -95,6 +96,7 @@
             <p id="approval-reason"></p>
             <div class="approval-actions">
               <button id="approval-approve" type="button">Approve once</button>
+              <button id="approval-allow-once" type="button">Allow class once</button>
               <button id="approval-trust-site" type="button">Trust this task class</button>
               <button id="approval-deny" type="button">Deny</button>
               <button id="approval-delegate" type="button">Delegate issue</button>
@@ -133,6 +135,7 @@
           <select id="model-select" class="model-select" aria-label="Connected model">
             <option value="__auto__">Auto route</option>
               <option value="MiniMax-M3">MiniMax M3</option>
+            <option value="zai/glm-5.2">Z.AI GLM 5.2</option>
             <option value="gpt-5.5">GPT 5.5</option>
             <option value="gpt-5.4-mini">GPT 5.4 Mini</option>
             <option value="batiai/gemma4-e2b:q4">Gemma 4 2B</option>
@@ -141,6 +144,10 @@
             <option value="minimal">Minimal</option>
             <option value="medium">Medium</option>
             <option value="high">High</option>
+          </select>
+          <select id="regeneration-mode" class="regeneration-select" aria-label="Regenerate behavior">
+            <option value="branch">Branch</option>
+            <option value="overwrite">Overwrite</option>
           </select>
           <button id="dictate-button" type="button" class="icon-button muted" title="Start voice dictation" aria-label="Start voice dictation">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V7a3 3 0 0 0-3-3Z"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>

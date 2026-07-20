@@ -13,8 +13,8 @@ const grant = (capability: CapabilityGrant["capability"], granted = false): Capa
 });
 
 const manifest = (): AddOnManifest => ({
-  id: "addon.audio2tol",
-  name: "Audio2TOL",
+  id: "addon.custom-tool",
+  name: "Custom Tool",
   version: "0.1.0",
   author: "test",
   category: "tool",
@@ -22,14 +22,14 @@ const manifest = (): AddOnManifest => ({
   runtimeType: "local-service",
   surfaces: [
     {
-      id: "audio2tol-page",
+      id: "custom-tool-page",
       type: "page",
-      label: "Audio2TOL",
-      description: "TOL intake workspace.",
+      label: "Custom Tool",
+      description: "Custom tool workspace.",
       shellNavigation: {
-        sectionId: "audio2tol",
-        dockIcon: "audio2tol",
-        eyebrow: "TOL",
+        sectionId: "custom-tool",
+        dockIcon: "custom-tool",
+        eyebrow: "Tool",
         order: 70,
         requiredCapabilities: ["filesystem", "archive-read"],
       },
@@ -61,12 +61,12 @@ describe("add-on surface dock routing", () => {
 
     expect(routes).toEqual([
       {
-        addonId: "addon.audio2tol",
-        surfaceId: "audio2tol-page",
-        sectionId: "audio2tol",
-        label: "Audio2TOL",
-        eyebrow: "TOL",
-        dockIcon: "audio2tol",
+        addonId: "addon.custom-tool",
+        surfaceId: "custom-tool-page",
+        sectionId: "custom-tool",
+        label: "Custom Tool",
+        eyebrow: "Tool",
+        dockIcon: "custom-tool",
         order: 70,
       },
     ]);

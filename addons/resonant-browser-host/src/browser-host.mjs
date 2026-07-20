@@ -4,13 +4,37 @@
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { assertContained } from "./lib/path-contains.mjs";
 
 const DEFAULT_HOME_URL = "https://resonantos.com";
 const DEFAULT_VIEWPORT = { width: 1440, height: 1000 };
+const DEFAULT_CHROMIUM_ARGS = ["--password-store=basic", "--use-mock-keychain"];
 const MAX_TEXT_CHARS = 12000;
 const MAX_LINKS = 80;
 
 const nowIso = () => new Date().toISOString();
+
+function optionalString(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+export function resolveChromiumLaunchOptions({ headless = true, params = {}, env = process.env } = {}) {
+  const executablePath =
+    optionalString(params.executablePath) ?? optionalString(env.RESONANTOS_BROWSER_HOST_EXECUTABLE_PATH);
+  const channel = optionalString(params.browserChannel) ?? optionalString(env.RESONANTOS_BROWSER_HOST_CHANNEL);
+  const launchOptions = {
+    headless,
+    args: DEFAULT_CHROMIUM_ARGS,
+  };
+
+  if (executablePath) {
+    launchOptions.executablePath = executablePath;
+  } else if (channel) {
+    launchOptions.channel = channel;
+  }
+
+  return launchOptions;
+}
 
 function createSessionId() {
   return `browser-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
@@ -73,16 +97,19 @@ export class ResonantBrowserHost {
     const defaultUrl = assertSafeHttpUrl(params.defaultUrl ?? DEFAULT_HOME_URL);
     this.headless = params.headless ?? this.headless;
     this.sessionId = createSessionId();
-    this.browser = await chromium.launch({
-      headless: this.headless,
-      args: ["--password-store=basic", "--use-mock-keychain"],
-    });
+    const launchOptions = resolveChromiumLaunchOptions({ headless: this.headless, params });
+    this.browser = await chromium.launch(launchOptions);
     this.context = await this.browser.newContext({
       viewport: params.viewport ?? this.viewport,
       deviceScaleFactor: 1,
     });
     this.page = await this.context.newPage();
-    this.record("session.started", { engine: "chromium", headless: this.headless });
+    this.record("session.started", {
+      engine: "chromium",
+      headless: this.headless,
+      channel: launchOptions.channel ?? null,
+      executablePathConfigured: Boolean(launchOptions.executablePath),
+    });
     await this.openUrl({ url: defaultUrl });
     return this.health();
   }
@@ -186,7 +213,12 @@ export class ResonantBrowserHost {
     if (!params.artifactsDir) {
       throw new Error("Evidence capture requires artifactsDir.");
     }
-    const path = `${params.artifactsDir.replace(/\/$/, "")}/${this.sessionId}-${Date.now()}.png`;
+    // P1-d containment: the screenshot leaf must resolve INSIDE the realpath of
+    // the caller-declared artifactsDir. A `..` chain, an absolute reroot, or a
+    // symlink that escapes the artifacts root is refused before any FS write.
+    const artifactsRoot = params.artifactsDir.replace(/\/$/, "");
+    const path = `${artifactsRoot}/${this.sessionId}-${Date.now()}.png`;
+    assertContained(artifactsRoot, path, "evidence screenshot");
     await page.screenshot({ path, fullPage: Boolean(params.fullPage) });
     this.record("evidence.captured", { path, reason: params.reason ?? "unspecified" });
     return {

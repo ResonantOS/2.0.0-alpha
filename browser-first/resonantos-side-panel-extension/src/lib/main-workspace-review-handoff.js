@@ -1,5 +1,5 @@
 // Intent citation: docs/architecture/ADR-027-living-archive-llm-wiki-compliance.md
-// Intent citation: docs/FEATURE_INVENTORY_2026-05-26.md
+// Intent citation: docs/reference/CAPABILITY_MATRIX.md
 
 export function renderReviewQueueNotice({ container, result = {}, onOpenReviewQueue }) {
   if (!container || !result?.reviewRequestPath) return false;

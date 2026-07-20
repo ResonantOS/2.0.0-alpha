@@ -183,7 +183,11 @@ function previewArticle(artifact, actions) {
   return article;
 }
 
-export function renderArtifactsWorkspace({ container, bridgeRequest, onContinueArtifact, onOpenReviewQueue }) {
+export function renderArtifactsWorkspace({ container, bridgeRequest, getBridgeRequest, onContinueArtifact, onOpenReviewQueue }) {
+  // Resolve at call time. The module-level `bridgeRequest` may be
+  // null at construction (rebind still in flight); the getter lets
+  // us re-read the current value on every call.
+  const bridge = () => (typeof getBridgeRequest === "function" ? getBridgeRequest() : bridgeRequest);
   const section = document.createElement("section");
   section.className = "artifacts-workspace";
   section.setAttribute("aria-label", "Artifacts workspace");
@@ -223,7 +227,7 @@ export function renderArtifactsWorkspace({ container, bridgeRequest, onContinueA
     preview.replaceChildren();
     setStatus(status, `Loading ${artifact.title || artifact.path}…`);
     try {
-      const result = await bridgeRequest("/archive/intake/read", {
+      const result = await bridge()("/archive/intake/read", {
         method: "POST",
         body: { path: artifact.path }
       });
@@ -239,7 +243,7 @@ export function renderArtifactsWorkspace({ container, bridgeRequest, onContinueA
         requestReview: async (selected) => {
           setStatus(status, `Creating review request for ${selected.path}…`);
           try {
-            const review = await bridgeRequest("/archive/review/request", {
+            const review = await bridge()("/archive/review/request", {
               method: "POST",
               body: {
                 path: selected.path,
@@ -274,7 +278,7 @@ export function renderArtifactsWorkspace({ container, bridgeRequest, onContinueA
     preview.replaceChildren();
     setStatus(status, "Loading intake artifacts…");
     try {
-      const result = await bridgeRequest("/archive/intake/list", {
+      const result = await bridge()("/archive/intake/list", {
         method: "POST",
         body: { limit: 60 }
       });

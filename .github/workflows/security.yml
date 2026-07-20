@@ -1,0 +1,44 @@
+# Security observe workflow.
+#
+# Runs the security-pipeline check registry in OBSERVE mode (non-gating): a
+# finding never fails the workflow and no job here is wired as a required
+# status check or branch-protection gate. Additive alongside alpha-build.yml,
+# which this workflow does not touch.
+#
+# Action refs are pinned to full 40-char commit SHAs per
+# docs/security-pipeline/sha-pin-policy.md (lead by example).
+
+name: security-observe
+
+# Least-privilege default token for the whole workflow.
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    branches: [dev]
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+jobs:
+  security-pipeline:
+    name: "security pipeline (observe)"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # observe/warn: a finding must never fail the workflow at P0.
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        # pin: full 40-char commit SHA per sha-pin-policy.md.
+        # NOTE: verify this SHA at the commit gate before merge.
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Setup Node.js
+        # pin: full 40-char commit SHA per sha-pin-policy.md.
+        # NOTE: verify this SHA at the commit gate before merge.
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version-file: .nvmrc
+      - name: Run security-pipeline registry (observe, non-gating)
+        run: node scripts/security-pipeline/run-check.mjs --config .github/security-pipeline/checks.yml

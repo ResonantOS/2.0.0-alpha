@@ -42,10 +42,30 @@ export function createProviderHostService({ redactDiagnosticText, extractJsonObj
     ...service,
     providerBridgeRoutes: [
       { method: "GET", path: "/providers/status", handler: service.executeProviderStatus },
-      { method: "POST", path: "/providers/health", handler: service.executeProviderHealthCheck },
-      { method: "POST", path: "/providers/connectivity-test", handler: service.executeProviderConnectivityTest },
-      { method: "GET", path: "/providers/diagnostics-history", handler: service.executeProviderDiagnosticsHistory },
-      { method: "GET", path: "/providers/routing-strategies", handler: service.executeProviderRoutingStrategies },
+      {
+        method: "POST",
+        path: "/providers/health",
+        requiredCapability: "provider-diagnostics-read",
+        handler: service.executeProviderHealthCheck,
+      },
+      {
+        method: "POST",
+        path: "/providers/connectivity-test",
+        requiredCapability: "provider-diagnostics-read",
+        handler: service.executeProviderConnectivityTest,
+      },
+      {
+        method: "GET",
+        path: "/providers/diagnostics-history",
+        requiredCapability: "provider-diagnostics-read",
+        handler: service.executeProviderDiagnosticsHistory,
+      },
+      {
+        method: "GET",
+        path: "/providers/routing-strategies",
+        requiredCapability: "provider-diagnostics-read",
+        handler: service.executeProviderRoutingStrategies,
+      },
       {
         method: "POST",
         path: "/providers/credentials",
@@ -60,6 +80,12 @@ export function createProviderHostService({ redactDiagnosticText, extractJsonObj
       },
       {
         method: "POST",
+        path: "/providers/accounts/remove",
+        requiredCapability: "provider-credential-write",
+        handler: service.executeProviderAccountRemove,
+      },
+      {
+        method: "POST",
         path: "/providers/routing-strategies",
         requiredCapability: "provider-routing-write",
         handler: service.executeProviderRoutingStrategySave,
@@ -70,8 +96,18 @@ export function createProviderHostService({ redactDiagnosticText, extractJsonObj
         requiredCapability: "provider-routing-write",
         handler: service.executeProviderModelPreferencesSave,
       },
-      { method: "POST", path: "/augmentor/chat", handler: service.executeBridgeChat },
-      { method: "POST", path: "/augmentor/inline", handler: service.executeInlineAssistant },
+      {
+        method: "POST",
+        path: "/augmentor/chat",
+        requiredCapability: "provider-model-invoke",
+        handler: service.executeBridgeChat,
+      },
+      {
+        method: "POST",
+        path: "/augmentor/inline",
+        requiredCapability: "provider-model-invoke",
+        handler: service.executeInlineAssistant,
+      },
     ],
   };
 }

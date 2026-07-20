@@ -28,6 +28,7 @@ test("opencode workspace renders runtime status and creates governed delegation 
       return {
         installed: true,
         command: "/usr/local/bin/opencode",
+        model: "openai/gpt-5.4-mini",
         detail: "OpenCode runtime was detected.",
         delegationPackets: 1
       };
@@ -57,6 +58,7 @@ test("opencode workspace renders runtime status and creates governed delegation 
     assert.match(container.textContent, /Scoped coding work/);
     assert.match(container.textContent, /OpenCode runtime was detected/);
     assert.match(container.textContent, /\/usr\/local\/bin\/opencode/);
+    assert.match(container.textContent, /model openai\/gpt-5\.4-mini/);
     assert.match(container.textContent, /Provider secrets, wallet actions, and trusted Living Archive writes/);
 
     const mission = container.querySelector("textarea");
@@ -86,7 +88,17 @@ test("opencode workspace can create an initial routed delegation", async () => {
   const bridgeRequest = async (route, options = {}) => {
     calls.push([route, options]);
     if (route === "/opencode/status") {
-      return { installed: false, command: "", detail: "OpenCode runtime was not detected." };
+      return {
+        installed: false,
+        command: "",
+        detail: "OpenCode runtime was not detected.",
+        installHint: "Install OpenCode with `curl -fsSL https://opencode.ai/install | bash`.",
+        installCommand: "curl -fsSL https://opencode.ai/install | bash",
+        alternativeInstallCommands: ["npm install -g opencode-ai"],
+        configureCommand: "OPENCODE_COMMAND=/absolute/path/to/opencode",
+        searchedCommands: ["opencode", "opencode-ai"],
+        searchedPaths: ["~/.local/bin/opencode", "/opt/homebrew/bin/opencode"],
+      };
     }
     if (route === "/addons/delegate") {
       return { id: "opencode-routed", path: "BrowserFirst/Delegations/opencode/opencode-routed.md" };
@@ -114,7 +126,39 @@ test("opencode workspace can create an initial routed delegation", async () => {
     assert.match(container.textContent, /opencode-routed/);
     assert.match(container.textContent, /Blocked: OpenCode runtime unavailable/);
     assert.match(container.textContent, /Next action: Install or start OpenCode/);
+    assert.match(container.textContent, /curl -fsSL https:\/\/opencode\.ai\/install \| bash/);
+    assert.match(container.textContent, /npm install -g opencode-ai/);
+    assert.match(container.textContent, /OPENCODE_COMMAND=\/absolute\/path\/to\/opencode/);
+    assert.match(container.textContent, /Command names checked: opencode, opencode-ai/);
+    assert.match(container.textContent, /~\/\.local\/bin\/opencode/);
     assert.match(container.textContent, /OpenCode is an add-on worker/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("opencode workspace replaces raw bridge fetch failures with setup guidance", async () => {
+  const { container, cleanup } = setupDom();
+  const bridgeRequest = async () => {
+    throw new TypeError("Failed to fetch");
+  };
+
+  try {
+    renderOpenCodeWorkspace({ container, bridgeRequest });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.match(container.textContent, /OpenCode status unavailable/);
+    assert.match(container.textContent, /ResonantOS bridge is unreachable/);
+    assert.match(container.textContent, /Settings > Bridge Target/);
+    assert.doesNotMatch(container.textContent, /Failed to fetch/);
+
+    const mission = container.querySelector("textarea");
+    mission.value = "Use OpenCode to inspect a bounded file and return verification evidence.";
+    container.querySelector(".opencode-task-form").dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.match(container.textContent, /OpenCode delegation failed/);
+    assert.doesNotMatch(container.textContent, /Failed to fetch/);
   } finally {
     cleanup();
   }

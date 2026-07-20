@@ -1,7 +1,14 @@
 # ADR-026: Minimal Kernel And Replaceable Default Add-ons
 
-Status: Accepted  
-Date: 2026-04-30
+## Decision Metadata
+
+- Decision status: Accepted
+- Alpha applicability: Applies
+- Superseded by: None
+- Owner: Core and add-ons
+- Decision date: 2026-04-30
+- Alpha note: Replaceable chat, memory-system, and add-on boundaries apply to
+  Alpha extension and bridge surfaces.
 
 ## Decision
 

@@ -33,7 +33,12 @@ function option(value, text, selected) {
   return node;
 }
 
-function routingCard({ strategy, models, bridgeRequest, statusNode, reload }) {
+function routingCard({ strategy, models, bridgeRequest, getBridgeRequest, statusNode, reload }) {
+  // `bridge` is a lazy getter so we always invoke the latest bridgeRequest
+  // closure (handles rebind during the late-bound hydrate in main-workspace).
+  // The caller (renderRoutingSection) may pass either bridgeRequest (older
+  // call sites) or getBridgeRequest (newer ones); we honor both.
+  const bridge = () => (typeof getBridgeRequest === "function" ? getBridgeRequest() : bridgeRequest);
   const card = document.createElement("article");
   card.className = "settings-routing-card";
   card.dataset.state = strategy.routeState;
@@ -96,7 +101,7 @@ function routingCard({ strategy, models, bridgeRequest, statusNode, reload }) {
     save.disabled = true;
     setStatus(statusNode, `Saving ${strategy.label} routing strategy...`);
     try {
-      await bridgeRequest("/providers/routing-strategies", {
+      await bridge()("/providers/routing-strategies", {
         method: "POST",
         capability: "provider-routing-write",
         body: {
@@ -120,7 +125,8 @@ function routingCard({ strategy, models, bridgeRequest, statusNode, reload }) {
   return card;
 }
 
-export function renderRoutingSection(container, { bridgeRequest }) {
+export function renderRoutingSection(container, { bridgeRequest, getBridgeRequest }) {
+  const bridge = () => (typeof getBridgeRequest === "function" ? getBridgeRequest() : bridgeRequest);
   const statusNode = document.createElement("p");
   statusNode.className = "settings-status";
   statusNode.textContent = "Loading routing strategies...";
@@ -142,13 +148,14 @@ export function renderRoutingSection(container, { bridgeRequest }) {
   );
 
   const load = async () => {
-    const result = await bridgeRequest("/providers/routing-strategies", { method: "GET" });
+    const result = await bridge()("/providers/routing-strategies", { method: "GET" });
     const models = Array.isArray(result.models) ? result.models : [];
     const strategies = Array.isArray(result.strategies) ? result.strategies : [];
     grid.replaceChildren(...strategies.map((strategy) => routingCard({
       strategy,
       models,
       bridgeRequest,
+      getBridgeRequest,
       statusNode,
       reload: load
     })));

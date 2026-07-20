@@ -1,8 +1,14 @@
 # ADR-034: Engineer Runner Guardrails
 
-Status: Accepted
+## Decision Metadata
 
-Date: 2026-05-13
+- Decision status: Accepted
+- Alpha applicability: Development only
+- Superseded by: None
+- Owner: Engineer runner
+- Decision date: 2026-05-13
+- Alpha note: Governs repository task verification, not a shipped runtime
+  component.
 
 ## Context
 

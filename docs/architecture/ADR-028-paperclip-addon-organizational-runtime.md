@@ -1,10 +1,14 @@
 # ADR-028: Paperclip Add-on Organizational Runtime
 
-Date: 2026-05-01
+## Decision Metadata
 
-## Status
-
-Accepted for architecture. V0 connector is development-only and is not in the public default catalog.
+- Decision status: Accepted
+- Alpha applicability: Deferred
+- Superseded by: None
+- Owner: Paperclip add-on
+- Decision date: 2026-05-01
+- Alpha note: The connector is development-only and is not in the Alpha
+  default catalog.
 
 ## Decision
 

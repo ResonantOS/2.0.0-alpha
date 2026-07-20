@@ -25,8 +25,6 @@ import type {
   ArchiveReviewDecisionResult,
   ArchiveSourceFolderScanResult,
   ArchiveSourceWatchRecord,
-  ArchiveTolBundleBuildResult,
-  ArchiveTolBundleCandidate,
   ArchiveSearchSourceHit,
   ArchiveSemanticLintResult,
   ArchiveRuntimeStatus,
@@ -40,7 +38,6 @@ import { applyProviderDiagnostics } from "../../core/policies";
 import { providerCredentialReady } from "../../core/provider-credentials";
 import { resolveArchiveIngestRoute, resolveRoutineRoute, routedProviderLabel } from "../../core/provider-service";
 import {
-  requestArchiveBuildTolBundle,
   requestArchiveAiMemoryBuildJob,
   requestArchiveAiMemoryBuildJobs,
   requestArchiveBackgroundCycle,
@@ -57,7 +54,6 @@ import {
   requestArchiveReviewArtifacts,
   requestArchiveReviewQueue,
   requestArchiveSourceFolderScan,
-  requestArchiveTolBundleCandidates,
   requestProviderDiagnostics,
 } from "../../core/runtime";
 
@@ -321,24 +317,6 @@ type ArchiveSemanticLintControllerInput = {
   setChatNotice: Dispatch<SetStateAction<string | null>>;
   setArchiveQueueBusy: Dispatch<SetStateAction<boolean>>;
   setArchiveSemanticLintResult: Dispatch<SetStateAction<ArchiveSemanticLintResult | null>>;
-  errorMessageOf: (error: unknown, fallback: string) => string;
-};
-
-type ArchiveTolBundlesControllerInput = {
-  setChatNotice: Dispatch<SetStateAction<string | null>>;
-  setArchiveQueueBusy: Dispatch<SetStateAction<boolean>>;
-  setArchiveTolBundles: Dispatch<SetStateAction<ArchiveTolBundleCandidate[]>>;
-  errorMessageOf: (error: unknown, fallback: string) => string;
-};
-
-type ArchiveBuildTolBundleControllerInput = {
-  sessionId: string;
-  setChatNotice: Dispatch<SetStateAction<string | null>>;
-  setArchiveQueueBusy: Dispatch<SetStateAction<boolean>>;
-  setArchiveTolBundles: Dispatch<SetStateAction<ArchiveTolBundleCandidate[]>>;
-  setArchiveQueue: Dispatch<SetStateAction<ArchiveQueuedIngestRequest[]>>;
-  setArchiveReviewArtifacts: Dispatch<SetStateAction<ArchiveReviewArtifact[]>>;
-  setArchiveTolBundleResult: Dispatch<SetStateAction<ArchiveTolBundleBuildResult | null>>;
   errorMessageOf: (error: unknown, fallback: string) => string;
 };
 
@@ -1202,55 +1180,6 @@ export const runArchiveSemanticLint = async ({
     setChatNotice(`Semantic archive lint finished: ${result.findings.length} finding(s), ${result.candidatesReviewed} candidate(s) reviewed.`);
   } catch (error) {
     setChatNotice(errorMessageOf(error, "Failed to run Living Archive semantic lint."));
-  } finally {
-    setArchiveQueueBusy(false);
-  }
-};
-
-export const loadArchiveTolBundles = async ({
-  setChatNotice,
-  setArchiveQueueBusy,
-  setArchiveTolBundles,
-  errorMessageOf,
-}: ArchiveTolBundlesControllerInput): Promise<void> => {
-  setArchiveQueueBusy(true);
-  setChatNotice(null);
-  try {
-    const bundles = await requestArchiveTolBundleCandidates();
-    setArchiveTolBundles(bundles);
-  } catch (error) {
-    setChatNotice(errorMessageOf(error, "Failed to detect Audio2TOL bundles."));
-  } finally {
-    setArchiveQueueBusy(false);
-  }
-};
-
-export const buildArchiveTolBundle = async ({
-  sessionId,
-  setChatNotice,
-  setArchiveQueueBusy,
-  setArchiveTolBundles,
-  setArchiveQueue,
-  setArchiveReviewArtifacts,
-  setArchiveTolBundleResult,
-  errorMessageOf,
-}: ArchiveBuildTolBundleControllerInput): Promise<void> => {
-  setArchiveQueueBusy(true);
-  setChatNotice(null);
-  try {
-    const result = await requestArchiveBuildTolBundle({ sessionId, actorId: "strategist.core" });
-    const [bundles, queue, artifacts] = await Promise.all([
-      requestArchiveTolBundleCandidates(),
-      requestArchiveReviewQueue(),
-      requestArchiveReviewArtifacts(),
-    ]);
-    setArchiveTolBundles(bundles);
-    setArchiveQueue(queue);
-    setArchiveReviewArtifacts(artifacts);
-    setArchiveTolBundleResult(result);
-    setChatNotice(`Queued TOL bundle ${result.sessionId} for Living Archive ingest review.`);
-  } catch (error) {
-    setChatNotice(errorMessageOf(error, "Failed to build Audio2TOL intake bundle."));
   } finally {
     setArchiveQueueBusy(false);
   }

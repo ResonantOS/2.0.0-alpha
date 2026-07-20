@@ -1,4 +1,4 @@
-// Intent citation: browser-first/COMET_PARITY_BACKLOG.md
+// Intent citation: docs/reference/CAPABILITY_MATRIX.md
 // Draft connectors are provider handoffs only; they never send email or schedule events.
 
 const SUPPORTED_HANDOFFS = {

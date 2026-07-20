@@ -1,7 +1,14 @@
 # ADR-018: Add-on SDK V0
 
-Status: Accepted  
-Date: 2026-04-27
+## Decision Metadata
+
+- Decision status: Accepted
+- Alpha applicability: Applies
+- Superseded by: None
+- Owner: Add-on SDK
+- Decision date: 2026-04-27
+- Alpha note: Internal manifest, capability, provenance, and validation
+  contracts apply to Alpha add-on surfaces.
 
 ## Decision
 

@@ -39,7 +39,7 @@
 .paperclip-warning,
 .paperclip-error,
 .paperclip-embed-shell {
-  border: 1px solid rgba(138, 128, 112, 0.12);
+  border: var(--border-line-sm);
   border-radius: 18px;
   background: rgba(255, 248, 236, 0.028);
 }
@@ -84,7 +84,7 @@
   place-items: center;
   width: 1.62rem;
   height: 1.62rem;
-  border: 1px solid rgba(138, 128, 112, 0.14);
+  border: var(--border-line-md);
   border-radius: 999px;
   background: rgba(255, 248, 236, 0.035);
   color: var(--text-secondary);
@@ -108,7 +108,7 @@
 }
 
 .paperclip-runtime-pill.ready {
-  background: rgba(16, 185, 129, 0.12);
+  background: var(--accent-surface);
   color: var(--accent);
 }
 
@@ -160,7 +160,7 @@
 .paperclip-field input {
   width: 100%;
   min-width: 0;
-  border: 1px solid rgba(138, 128, 112, 0.16);
+  border: var(--border-line-lg);
   border-radius: 12px;
   background: rgba(0, 0, 0, 0.22);
   color: var(--text-primary);
@@ -173,7 +173,7 @@
   min-width: 0;
   min-height: 5rem;
   resize: vertical;
-  border: 1px solid rgba(138, 128, 112, 0.16);
+  border: var(--border-line-lg);
   border-radius: 12px;
   background: rgba(0, 0, 0, 0.22);
   color: var(--text-primary);
@@ -196,7 +196,7 @@
 
 .paperclip-summary-card {
   min-width: 0;
-  border: 1px solid rgba(138, 128, 112, 0.12);
+  border: var(--border-line-sm);
   border-radius: 16px;
   background: rgba(255, 248, 236, 0.026);
   padding: 0.7rem;
@@ -220,7 +220,7 @@
   width: 100%;
   min-width: 0;
   margin-top: 0.35rem;
-  border: 1px solid rgba(138, 128, 112, 0.16);
+  border: var(--border-line-lg);
   border-radius: 10px;
   background: rgba(0, 0, 0, 0.24);
   color: var(--text-primary);
@@ -249,8 +249,8 @@
 }
 
 .paperclip-success {
-  border: 1px solid rgba(16, 185, 129, 0.22);
-  background: rgba(16, 185, 129, 0.06);
+  border: 1px solid var(--accent-border);
+  background: var(--accent-surface-xs);
   color: var(--accent);
 }
 

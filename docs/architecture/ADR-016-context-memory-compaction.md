@@ -1,8 +1,14 @@
 # ADR-016: Context Memory Compaction
 
-## Status
+## Decision Metadata
 
-Accepted.
+- Decision status: Accepted
+- Alpha applicability: Deferred
+- Superseded by: None
+- Owner: Conversation memory
+- Decision date: Not recorded
+- Alpha note: The full host-owned Context Memory Pipeline is not an Alpha
+  release requirement.
 
 ## Decision
 

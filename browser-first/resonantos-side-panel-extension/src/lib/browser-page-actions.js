@@ -1,4 +1,5 @@
 import { isReadableSubframeTab, rankedReadableBrowserTabs } from "./readable-tab-ranking.js";
+import { parseQuotedText } from "./browser-command-parser.js";
 import {
   daoAffordances,
   daoControlLines,
@@ -7,10 +8,108 @@ import {
 } from "./wallet-dao-audit-markdown.js";
 import { normalizeWalletProviderState, walletStateMarkdown } from "./wallet-state.js";
 
+const readOnlyAllowedContentActions = new Set([
+  "control_overlay",
+  "detect_forms",
+  "get_selection",
+  "read_page",
+  "resonator"
+]);
+
+const subframeContentActionTypes = new Set([
+  "click_text",
+  "detect_forms",
+  "get_selection",
+  "read_page",
+  "scroll_page",
+  "type_text"
+]);
+
+function safeBrowserUrlForDisplay(value) {
+  try {
+    const url = new URL(String(value || ""));
+    if (!["http:", "https:"].includes(url.protocol)) return "";
+    url.username = "";
+    url.password = "";
+    url.search = "";
+    url.hash = "";
+    return url.href;
+  } catch {
+    return String(value ?? "").split(/[?#]/)[0].slice(0, 300);
+  }
+}
+
+function sanitizeBrowserSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== "object") return snapshot;
+  const safe = { ...snapshot };
+  safe.url = safeBrowserUrlForDisplay(safe.url);
+  if (safe.frame && typeof safe.frame === "object") {
+    safe.frame = { ...safe.frame, referrer: safeBrowserUrlForDisplay(safe.frame.referrer) };
+  }
+  if (Array.isArray(safe.iframes)) {
+    safe.iframes = safe.iframes.map((frame) => ({ ...frame, src: safeBrowserUrlForDisplay(frame?.src) }));
+  }
+  if (Array.isArray(safe.links)) {
+    safe.links = safe.links.map((link) => ({ ...link, href: safeBrowserUrlForDisplay(link?.href) }));
+  }
+  if (Array.isArray(safe.forms)) {
+    safe.forms = safe.forms.map((form) => ({ ...form, action: safeBrowserUrlForDisplay(form?.action) }));
+  }
+  if (Array.isArray(safe.controls)) {
+    safe.controls = safe.controls.map((control) => ({
+      ...control,
+      form: control?.form ? { ...control.form, action: safeBrowserUrlForDisplay(control.form.action) } : control?.form
+    }));
+  }
+  if (Array.isArray(safe.fields)) {
+    safe.fields = safe.fields.map((field) => ({
+      ...field,
+      form: field?.form ? { ...field.form, action: safeBrowserUrlForDisplay(field.form.action) } : field?.form
+    }));
+  }
+  if (Array.isArray(safe.frames)) {
+    safe.frames = safe.frames.map((frame) => ({ ...frame, url: safeBrowserUrlForDisplay(frame?.url) }));
+  }
+  return safe;
+}
+
+function parseResonatorTarget(body) {
+  const raw = String(body ?? "").trim();
+  const quoted = parseQuotedText(raw);
+  if (quoted) {
+    return { text: quoted };
+  }
+  if (!raw) return null;
+  const [first, ...rest] = raw.split(/\s+/);
+  const selectorLike = /^(#|\.|\[|[a-z][\w-]*(?:[#.[>~:]|$))/i.test(first);
+  if (selectorLike) {
+    return { selector: first, label: rest.join(" ").trim() };
+  }
+  return { text: raw };
+}
+
+function parseResonatorCommandPayload(action, body) {
+  if (action === "clear") return {};
+  if (action === "step") {
+    const steps = String(body ?? "")
+      .split(";")
+      .map((part) => parseResonatorTarget(part))
+      .filter(Boolean)
+      .map((step, index) => ({ ...step, label: step.label || step.text || `Step ${index + 1}` }));
+    return steps.length ? { steps } : null;
+  }
+  return parseResonatorTarget(body);
+}
+
 export function createBrowserPageActions(deps) {
   const {
     addMessage,
     bridgeRequest,
+    // Optional getter for the late-bound bridge client. The rebind
+    // chain sets the module-level `bridgeRequest` *after* this
+    // controller is constructed, so passing a value here captures a
+    // stale `null`. When a getter is provided, it wins.
+    getBridgeRequest,
     chrome,
     getModel = () => "MiniMax-M3",
     getThinkingDepth = () => "minimal",
@@ -21,11 +120,13 @@ export function createBrowserPageActions(deps) {
     setActivity,
     setContextMeter,
     setControlledTabId,
+    getLastSnapshot = () => null,
     setLastSnapshot,
     setStatus,
     siteKeyForUrl,
     sleep
   } = deps;
+  const bridge = () => (typeof getBridgeRequest === "function" ? getBridgeRequest() : bridgeRequest);
 
   const reviewQueueGuidance = "Next: open Living Archive > Review Queue to inspect, draft, verify, and promote it if it should become trusted AI Memory.";
 
@@ -96,7 +197,7 @@ export function createBrowserPageActions(deps) {
     setLastSnapshot(null);
     setContextMeter(null);
     if (action === "news") {
-      const news = await bridgeRequest("/web/news", {
+      const news = await bridge()("/web/news", {
         method: "POST",
         body: { query, limit: 5 }
       }).catch((error) => ({ error: error instanceof Error ? error.message : String(error), items: [] }));
@@ -115,7 +216,7 @@ export function createBrowserPageActions(deps) {
   function mergeFrameSnapshots(responses) {
     const snapshots = responses
       .filter((response) => response?.ok && response.snapshot)
-      .map((response) => response.snapshot);
+      .map((response) => sanitizeBrowserSnapshot(response.snapshot));
     if (!snapshots.length) {
       return null;
     }
@@ -139,7 +240,9 @@ export function createBrowserPageActions(deps) {
 
   async function sendContentActionToFrames(tabId, message) {
     const frames = await chrome.webNavigation?.getAllFrames?.({ tabId }).catch(() => null);
-    const frameIds = Array.isArray(frames) && frames.length ? frames.map((frame) => frame.frameId) : [0];
+    const frameIds = subframeContentActionTypes.has(message.type) && Array.isArray(frames) && frames.length
+      ? frames.map((frame) => frame.frameId)
+      : [0];
     const responses = [];
     for (const frameId of frameIds) {
       const response = await chrome.tabs.sendMessage(tabId, message, { frameId }).catch((error) => ({
@@ -186,7 +289,7 @@ export function createBrowserPageActions(deps) {
     if (siteMode === "blocked") {
       return { ok: false, error: `Assistant is blocked on ${siteKeyForUrl(tab.url)}.` };
     }
-    if (siteMode === "read-only" && payload.type !== "read_page" && payload.type !== "get_selection" && payload.type !== "detect_forms" && payload.type !== "control_overlay") {
+    if (siteMode === "read-only" && !readOnlyAllowedContentActions.has(payload.type)) {
       return { ok: false, error: `Assistant actions are read-only on ${siteKeyForUrl(tab.url)}.` };
     }
     const message = {
@@ -203,11 +306,13 @@ export function createBrowserPageActions(deps) {
       await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         files: [
+          "src/lib/resonant-context.js",
+          "src/lib/context-plugins.js",
+          "src/lib/resonator.js",
           "src/lib/control-overlay.js",
           "src/lib/content-field-safety.js",
           "src/lib/content-inline-actions.js",
           "src/lib/content-control-refs.js",
-          "src/lib/resonant-context.js",
           "src/content.js"
         ]
       }).catch(() => undefined);
@@ -218,12 +323,80 @@ export function createBrowserPageActions(deps) {
     return sendContentActionToFrames(tab.id, message);
   }
 
+  function sameContextTab(snapshot, tab) {
+    if (!snapshot || !tab?.id) return false;
+    const snapshotTabId = Number(snapshot.tabId ?? snapshot.tab?.id);
+    if (Number.isFinite(snapshotTabId) && snapshotTabId !== tab.id) return false;
+    if (Number.isFinite(snapshotTabId)) return true;
+    return Boolean(snapshot.url && tab.url && snapshot.url === tab.url);
+  }
+
+  async function hydrateCachedTabSnapshot(tab) {
+    if (!tab?.id) {
+      setLastSnapshot(null);
+      setContextMeter(null);
+      return null;
+    }
+    const currentSnapshot = getLastSnapshot();
+    if (sameContextTab(currentSnapshot, tab)) {
+      setContextMeter(currentSnapshot);
+      return currentSnapshot;
+    }
+    const response = await chrome.runtime?.sendMessage?.({
+      channel: "resonantos.browser_first",
+      type: "active_tab_context",
+      tabId: tab.id
+    }).catch(() => null);
+    const snapshot = response?.snapshot ?? null;
+    if (sameContextTab(snapshot, tab)) {
+      setLastSnapshot(snapshot);
+      setContextMeter(snapshot);
+      return snapshot;
+    }
+    setLastSnapshot(null);
+    setContextMeter(null);
+    return null;
+  }
+
   const setPageControlOverlay = async (active, label = "", phase = "") => sendContentAction({
     type: "control_overlay",
     active,
     label: label || (active ? "Augmentor is operating this page" : ""),
     phase
   });
+
+  async function runResonatorCommand(action, body = "") {
+    const normalizedAction = String(action ?? "").toLowerCase();
+    const allowedActions = new Set(["arrow", "clear", "highlight", "spotlight", "step"]);
+    if (!allowedActions.has(normalizedAction)) {
+      await addMessage("system", `Unknown Resonator command: ${normalizedAction || "empty"}.`);
+      return { ok: false, error: "Unknown Resonator command." };
+    }
+    const payload = parseResonatorCommandPayload(normalizedAction, body);
+    if (payload === null) {
+      await addMessage("system", `Resonator ${normalizedAction} needs a selector or quoted visible text target.`);
+      setStatus("Resonator target needed");
+      setActivity("failed", "Resonator target needed", normalizedAction);
+      return { ok: false, error: "Resonator target required." };
+    }
+    setActivity("browser-control", `Showing Resonator ${normalizedAction}`, String(body || normalizedAction).slice(0, 160));
+    setStatus("Guiding page");
+    const response = await sendContentAction({
+      type: "resonator",
+      action: normalizedAction,
+      payload
+    });
+    if (response?.ok) {
+      await addMessage("system", `Resonator ${normalizedAction} displayed on the active page.`);
+      setStatus("Ready");
+      setActivity("completed", `Resonator ${normalizedAction} displayed`, normalizedAction);
+      return response;
+    }
+    await addMessage("system", `Resonator ${normalizedAction} failed: ${response?.error ?? "unknown error"}`);
+    setStatus("Resonator failed");
+    setActivity("failed", `Resonator ${normalizedAction} failed`, response?.error ?? "unknown error");
+    return response;
+  }
 
   async function typeIntoActivePage({ text, field = "", ref = "", submit, userApproved = false }) {
     setActivity("tool-running", "Typing into page", text);
@@ -308,9 +481,10 @@ export function createBrowserPageActions(deps) {
   async function refreshTabContext() {
     setStatus("Reading");
     const tab = await activeTab();
-    const label = tab?.title || tab?.url || "No page context";
+    const label = tab?.title || safeBrowserUrlForDisplay(tab?.url) || "No page context";
     deps.setReadButtonTitle(`Attach/read current page: ${label}`);
     await renderSitePermissionPanel(tab);
+    await hydrateCachedTabSnapshot(tab);
     setStatus("Ready");
     return tab;
   }
@@ -324,12 +498,15 @@ export function createBrowserPageActions(deps) {
       return null;
     }
 
-    setActivity("reading", "Reading browser page", tab.title || tab.url);
+    setActivity("reading", "Reading browser page", tab.title || safeBrowserUrlForDisplay(tab.url));
     setStatus("Reading page");
-    const response = await sendContentAction({
+    const rawResponse = await sendContentAction({
       channel: "resonantos.browser_first.content",
       type: "read_page"
     });
+    const response = rawResponse?.ok
+      ? { ...rawResponse, snapshot: sanitizeBrowserSnapshot(rawResponse.snapshot) }
+      : rawResponse;
 
     setLastSnapshot(response?.snapshot ?? null);
     setContextMeter(response?.snapshot ?? null);
@@ -519,7 +696,7 @@ export function createBrowserPageActions(deps) {
       return { ok: false, error: walletResult?.error ?? "Wallet detection unavailable." };
     }
     const { fields, visibleControls } = daoAffordances(snapshot);
-    const result = await bridgeRequest("/archive/intake", {
+    const result = await bridge()("/archive/intake", {
       method: "POST",
       body: {
         title: `Wallet / DAO Audit: ${snapshot.title || snapshot.url || "Active page"}`,
@@ -537,7 +714,7 @@ export function createBrowserPageActions(deps) {
         }
       }
     });
-    const review = await bridgeRequest("/archive/review/request", {
+    const review = await bridge()("/archive/review/request", {
       method: "POST",
       body: {
         path: result.path,
@@ -668,7 +845,7 @@ export function createBrowserPageActions(deps) {
     let model = "";
     let fallback = false;
     try {
-      const result = await bridgeRequest("/augmentor/chat", {
+      const result = await bridge()("/augmentor/chat", {
         method: "POST",
         body: {
           model: getModel(),
@@ -703,7 +880,7 @@ export function createBrowserPageActions(deps) {
         `Provider error: ${error instanceof Error ? error.message : String(error)}`
       ].join("\n");
     }
-    const result = await bridgeRequest("/archive/intake", {
+    const result = await bridge()("/archive/intake", {
       method: "POST",
       body: {
         title: `Summary: ${snapshot.title || snapshot.url || "Untitled"}`,
@@ -712,7 +889,7 @@ export function createBrowserPageActions(deps) {
         content: pageSummaryIntakeMarkdown(snapshot, summary, { model, fallback })
       }
     });
-    const review = await bridgeRequest("/archive/review/request", {
+    const review = await bridge()("/archive/review/request", {
       method: "POST",
       body: {
         path: result.path,
@@ -753,7 +930,7 @@ export function createBrowserPageActions(deps) {
       setActivity("failed", "No readable tab content", "Research trail");
       return { ok: false, error: "No readable tab content available.", skipped };
     }
-    const result = await bridgeRequest("/archive/intake", {
+    const result = await bridge()("/archive/intake", {
       method: "POST",
       body: {
         title: `Research Trail: ${title}`,
@@ -762,7 +939,7 @@ export function createBrowserPageActions(deps) {
         content: researchTrailIntakeMarkdown({ title, snapshots, skipped })
       }
     });
-    const review = await bridgeRequest("/archive/review/request", {
+    const review = await bridge()("/archive/review/request", {
       method: "POST",
       body: {
         path: result.path,
@@ -787,7 +964,7 @@ export function createBrowserPageActions(deps) {
       return { ok: false, error: "No browser page context available." };
     }
     setActivity("tool-running", "Saving page to Living Archive intake", snapshot.title || snapshot.url);
-    const result = await bridgeRequest("/archive/intake", {
+    const result = await bridge()("/archive/intake", {
       method: "POST",
       body: {
         title: `Page: ${snapshot.title || snapshot.url || "Untitled"}`,
@@ -796,7 +973,7 @@ export function createBrowserPageActions(deps) {
         content: pageIntakeMarkdown(snapshot)
       }
     });
-    const review = await bridgeRequest("/archive/review/request", {
+    const review = await bridge()("/archive/review/request", {
       method: "POST",
       body: {
         path: result.path,
@@ -825,7 +1002,7 @@ export function createBrowserPageActions(deps) {
     }
     const title = response.title || selection.title || "Selected browser text";
     const url = response.url || selection.url || "";
-    const result = await bridgeRequest("/archive/intake", {
+    const result = await bridge()("/archive/intake", {
       method: "POST",
       body: {
         title: `Selection: ${title}`,
@@ -839,7 +1016,7 @@ export function createBrowserPageActions(deps) {
         ].join("\n")
       }
     });
-    const review = await bridgeRequest("/archive/review/request", {
+    const review = await bridge()("/archive/review/request", {
       method: "POST",
       body: {
         path: result.path,
@@ -865,6 +1042,7 @@ export function createBrowserPageActions(deps) {
     prepareDaoWorkflowGuidance,
     readActivePage,
     refreshTabContext,
+    runResonatorCommand,
     scrollActivePage,
     searchBrowser,
     sendContentAction,

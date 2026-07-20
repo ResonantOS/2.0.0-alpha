@@ -8,7 +8,6 @@ export function createBrowserDiagnosticsHostService({
   browserFirstRoot,
   memoryRoot,
   profileDir,
-  browserLaunchLogPath,
   readProviderSecrets,
   executeProviderStatus,
   executeAddonsStatus,
@@ -30,7 +29,6 @@ export function createBrowserDiagnosticsHostService({
     browserFirstRoot,
     memoryRoot,
     profileDir,
-    browserLaunchLogPath,
     readProviderSecrets,
     executeProviderStatus,
     executeAddonsStatus,
@@ -51,6 +49,7 @@ export function createBrowserDiagnosticsHostService({
       bridge: "resonantos-browser-first",
       providers: {
         "shared-minimax": Boolean(secrets["shared-minimax"]),
+        "shared-zai-glm": Boolean(secrets["shared-zai-glm"]),
         "shared-openai": Boolean(secrets["shared-openai"]),
       },
       memory,
@@ -69,7 +68,6 @@ export function createBrowserDiagnosticsHostService({
     browserFirstRoot,
     memoryRoot,
     profileDir,
-    browserLaunchLogPath,
     executeSystemStatus,
     executeProviderStatus,
     executeAddonsStatus,
@@ -83,6 +81,7 @@ export function createBrowserDiagnosticsHostService({
     executeSystemStatus,
     browserDiagnosticsRoutes: [
       { method: "GET", path: "/status", handler: executeSystemStatus },
+      { method: "GET", path: "/workspace/inspect", handler: service.executeWorkspaceInspection },
       { method: "GET", path: "/browser/downloads", handler: service.executeBrowserDownloads },
       { method: "GET", path: "/browser/launch-diagnostics", handler: service.executeBrowserLaunchDiagnostics },
       {

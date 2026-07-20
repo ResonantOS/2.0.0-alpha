@@ -15,7 +15,6 @@ import type {
 } from "./contracts";
 import {
   requestArchiveRuntimeStatus,
-  requestArchiveTolBundleCandidates,
   requestBrowserEngineStatus,
   requestHermesStatus,
   requestObsidianVaultIndex,
@@ -220,35 +219,6 @@ const executeManifestOnlyCheck = (input: ExecuteCommandInput): CommandExecution 
   };
 };
 
-const executeAudio2TolBundlePreflight = async (): Promise<CommandExecution> => {
-  const candidates = await requestArchiveTolBundleCandidates();
-  const readyCandidates = candidates.filter((candidate) => candidate.status === "bundle-ready");
-  const missingCandidates = candidates.filter((candidate) => candidate.status !== "bundle-ready");
-  const status: LogicianExecutionStatus = readyCandidates.length > 0 ? "passed" : candidates.length > 0 ? "degraded" : "failed";
-
-  return {
-    status,
-    summary: readyCandidates.length
-      ? `${readyCandidates.length} ready Audio2TOL bundle(s) detected.`
-      : candidates.length
-        ? "Audio2TOL sessions were detected, but none are complete enough for intake."
-        : "No Audio2TOL bundle candidates were detected.",
-    detail:
-      candidates.length > 0
-        ? candidates
-            .slice(0, 10)
-            .map((candidate) => `${candidate.sessionId}: ${candidate.status}`)
-            .join("\n")
-        : "Check the Living Archive TOL mappings for raw audio, transcripts, and analysis notes.",
-    evidence: {
-      candidateCount: candidates.length,
-      readyCount: readyCandidates.length,
-      missingCount: missingCandidates.length,
-      candidates: candidates.slice(0, 25),
-    },
-  };
-};
-
 const executeCommandRef = async (input: ExecuteCommandInput): Promise<CommandExecution> => {
   switch (input.script.commandRef) {
     case "provider.route.preflight":
@@ -328,8 +298,6 @@ const executeCommandRef = async (input: ExecuteCommandInput): Promise<CommandExe
         evidence: { status },
       };
     }
-    case "audio2tol.bundle_preflight":
-      return executeAudio2TolBundlePreflight();
     case "logician.policy_check":
     case "openclaw.gateway_preflight":
     case "r-awareness.context_pack_check":

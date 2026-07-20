@@ -1,4 +1,6 @@
 import { delegationGuidanceText } from "./delegation-guidance.js";
+import { createAddonIframe } from "./addon-iframe.js";
+import { hermesStatusMessage } from "./runtime-error-messages.js";
 
 function runtimeLine(hermesStatus = {}) {
   const cli = hermesStatus.available ? "CLI detected" : "CLI not detected";
@@ -19,7 +21,7 @@ function taskCountsLine(taskCounts = {}) {
 function dashboardLine(dashboard = {}) {
   return dashboard.running
     ? `Dashboard running · ${dashboard.url}`
-    : `${dashboard.rawStatus || "Hermes dashboard stopped"} · ${dashboard.detail || "Start it to embed the workspace."}`;
+    : `${dashboard.rawStatus || "Hermes dashboard stopped"} · ${dashboard.detail || "Start it to embed the dashboard in this workspace."}`;
 }
 
 function renderStatusText({ addon, dashboard, hermesStatus }) {
@@ -47,24 +49,48 @@ function renderStatusText({ addon, dashboard, hermesStatus }) {
   return lines.filter(Boolean).join("\n");
 }
 
-export function renderHermesDashboardWorkspace({ container, bridgeRequest, statusForAddon }) {
+export function renderHermesDashboardWorkspace({ container, bridgeRequest, getBridgeRequest, rawFetch, bridgeUrl, bridgeToken, statusForAddon }) {
+  const bridge = () => (typeof getBridgeRequest === "function" ? getBridgeRequest() : bridgeRequest);
   const section = document.createElement("section");
   section.className = "hermes-dashboard-workspace";
   section.setAttribute("aria-label", "Hermes dashboard workspace");
   const status = document.createElement("div");
   status.className = "dashboard-status";
   status.textContent = "Checking Hermes status...";
-  const frameCard = document.createElement("section");
-  frameCard.className = "dashboard-frame-card";
-  const iframe = document.createElement("iframe");
-  iframe.title = "Hermes dashboard";
-  iframe.hidden = true;
+  // The Hermes dashboard lives at http://127.0.0.1:9119 on the bridge
+  // host. The extension's newtab is a chrome-extension:// (secure) origin,
+  // so embedding http:// directly is blocked by Chrome as mixed content.
+  //
+  // The bridge proxies <addon-proxy>/<path> to the dashboard's actual
+  // port. The extension fetches through the bridge and inlines the
+  // dashboard HTML into a sandboxed <iframe srcdoc> on the secure
+  // extension page. This works for ANY addon (Hermes, OpenCode,
+  // OpenClaw, ...) without per-machine TLS, cert installs, or admin
+  // rights.
+  const renderIframe = createAddonIframe({
+    addonId: "hermes",
+    proxyPath: "/hermes-dashboard/",
+    addonLabel: "Hermes dashboard",
+    apiBasePath: "/api",
+    rawFetch,
+    bridgeUrl,
+    bridgeToken,
+    // src mode: the Hermes bundle lives on a different origin
+    // (https://localhost:19443) than the extension page. MV3 forbids
+    // loosening the extension CSP via meta-CSP in srcdoc, so the only
+    // way to load the React bundle is to give the iframe its own
+    // origin by pointing src directly at the bridge proxy.
+    mode: "src",
+  });
+  const { reload: reloadIframe } = renderIframe({ container: section });
+  const actionsCard = document.createElement("section");
+  actionsCard.className = "dashboard-actions-card";
   const placeholder = document.createElement("div");
   placeholder.className = "dashboard-placeholder";
   const placeholderTitle = document.createElement("strong");
   placeholderTitle.textContent = "Hermes dashboard is not running";
   const placeholderBody = document.createElement("p");
-  placeholderBody.textContent = "Start the local Hermes dashboard to load it here. Delegation remains available from Augmentor chat with /hermes.";
+  placeholderBody.textContent = "Start the Hermes dashboard to embed it in this workspace. Delegation remains available from Augmentor chat with /hermes.";
   const actions = document.createElement("div");
   actions.className = "module-action-row";
   const start = document.createElement("button");
@@ -78,42 +104,40 @@ export function renderHermesDashboardWorkspace({ container, bridgeRequest, statu
   refresh.textContent = "Refresh";
   actions.append(start, stop, refresh);
   placeholder.append(placeholderTitle, placeholderBody, actions);
-  frameCard.append(iframe, placeholder);
-  section.append(status, frameCard);
+  actionsCard.append(placeholder);
+  section.append(status, actionsCard);
   container.append(section);
 
   const setDashboardState = ({ addon, dashboard, hermesStatus }) => {
     const running = Boolean(dashboard?.running);
-    iframe.hidden = !running;
     placeholder.hidden = running;
-    if (running) {
-      iframe.src = dashboard.url;
-    }
     status.textContent = renderStatusText({ addon, dashboard, hermesStatus });
   };
   const loadStatus = async () => {
     const [addon, dashboard, hermesStatus] = await Promise.all([
       statusForAddon("addon.hermes"),
-      bridgeRequest("/hermes/dashboard/status", { method: "POST", body: { port: 9119 } }),
-      bridgeRequest("/hermes/status", { method: "POST", body: {} }),
+      bridge()("/hermes/dashboard/status", { method: "POST", body: { port: 9119 } }),
+      bridge()("/hermes/status", { method: "POST", body: {} }),
     ]);
     setDashboardState({ addon, dashboard, hermesStatus });
+    return { dashboard, hermesStatus };
   };
   const startDashboard = async () => {
     start.disabled = true;
     status.textContent = "Starting Hermes dashboard...";
     try {
-      const dashboard = await bridgeRequest("/hermes/dashboard/start", {
+      const dashboard = await bridge()("/hermes/dashboard/start", {
         method: "POST",
         body: { host: "127.0.0.1", port: 9119, includeTui: true }
       });
       const [addon, hermesStatus] = await Promise.all([
         statusForAddon("addon.hermes"),
-        bridgeRequest("/hermes/status", { method: "POST", body: {} }),
+        bridge()("/hermes/status", { method: "POST", body: {} }),
       ]);
       setDashboardState({ addon, dashboard, hermesStatus });
+      reloadIframe();
     } catch (error) {
-      status.textContent = `Hermes dashboard failed to start: ${error instanceof Error ? error.message : String(error)}`;
+      status.textContent = hermesStatusMessage(error, "Hermes dashboard failed to start");
     } finally {
       start.disabled = false;
     }
@@ -125,26 +149,29 @@ export function renderHermesDashboardWorkspace({ container, bridgeRequest, statu
     stop.disabled = true;
     status.textContent = "Stopping Hermes dashboard...";
     try {
-      const dashboard = await bridgeRequest("/hermes/dashboard/stop", { method: "POST", body: { port: 9119 } });
+      const dashboard = await bridge()("/hermes/dashboard/stop", { method: "POST", body: { port: 9119 } });
       const [addon, hermesStatus] = await Promise.all([
         statusForAddon("addon.hermes"),
-        bridgeRequest("/hermes/status", { method: "POST", body: {} }),
+        bridge()("/hermes/status", { method: "POST", body: {} }),
       ]);
       setDashboardState({ addon, dashboard, hermesStatus });
     } catch (error) {
-      status.textContent = `Hermes dashboard failed to stop: ${error instanceof Error ? error.message : String(error)}`;
+      status.textContent = hermesStatusMessage(error, "Hermes dashboard failed to stop");
     } finally {
       stop.disabled = false;
     }
   });
-  refresh.addEventListener("click", () => void loadStatus().catch((error) => {
-    status.textContent = `Hermes status unavailable: ${error instanceof Error ? error.message : String(error)}`;
+  refresh.addEventListener("click", () => void Promise.all([loadStatus(), reloadIframe()]).catch((error) => {
+    status.textContent = hermesStatusMessage(error);
   }));
-  void loadStatus().catch((error) => {
-    status.textContent = `Hermes status unavailable: ${error instanceof Error ? error.message : String(error)}`;
-  }).then(() => {
-    if (iframe.hidden) {
-      void startDashboard();
-    }
-  });
+  void loadStatus()
+    .then(({ dashboard, hermesStatus }) => {
+      if (!dashboard?.running && hermesStatus?.available) {
+        return startDashboard();
+      }
+      reloadIframe();
+    })
+    .catch((error) => {
+      status.textContent = hermesStatusMessage(error);
+    });
 }

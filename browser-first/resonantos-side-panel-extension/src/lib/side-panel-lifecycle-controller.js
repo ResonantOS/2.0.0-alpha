@@ -1,6 +1,9 @@
 export function createSidePanelLifecycleController({
   activeTab = async () => null,
   addMessage = async () => undefined,
+  allowControlPreflightOnceForTaskClass = async () => undefined,
+  allowCurrentTaskOnceForSafeActions = async () => undefined,
+  approvalAllowOnceButton = null,
   approvalApproveButton = null,
   approvalDelegateButton = null,
   approvalDenyButton = null,
@@ -17,6 +20,7 @@ export function createSidePanelLifecycleController({
   contextToggleButton = null,
   controlPreflightApproveButton = null,
   controlPreflightDenyButton = null,
+  controlPreflightOnceButton = null,
   controlPreflightTrustButton = null,
   delegateControlIssue = async () => undefined,
   denyPendingControlStep = async () => undefined,
@@ -107,10 +111,12 @@ export function createSidePanelLifecycleController({
     });
   contextMeter?.addEventListener?.("click", toggleContextPopover);
     approvalApproveButton?.addEventListener?.("click", () => void runBusyUiAction(approvePendingControlStep));
+    approvalAllowOnceButton?.addEventListener?.("click", () => void runBusyUiAction(allowCurrentTaskOnceForSafeActions));
     approvalTrustSiteButton?.addEventListener?.("click", () => void runBusyUiAction(trustCurrentTaskForSafeActions));
     approvalDenyButton?.addEventListener?.("click", () => void denyPendingControlStep());
     approvalDelegateButton?.addEventListener?.("click", () => void runBusyUiAction(delegateControlIssue));
     controlPreflightApproveButton?.addEventListener?.("click", () => void runBusyUiAction(() => approveControlPreflight(getPendingControlPreflight()?.id ?? "")));
+    controlPreflightOnceButton?.addEventListener?.("click", () => void runBusyUiAction(() => allowControlPreflightOnceForTaskClass(getPendingControlPreflight()?.id ?? "")));
     controlPreflightTrustButton?.addEventListener?.("click", () => void runBusyUiAction(() => trustControlPreflightForSafeActions(getPendingControlPreflight()?.id ?? "")));
     controlPreflightDenyButton?.addEventListener?.("click", () => void runBusyUiAction(() => denyControlPreflight(getPendingControlPreflight()?.id ?? "")));
     jobMonitorToggle?.addEventListener?.("click", async () => {

@@ -7,7 +7,8 @@ import { activateBrowserJobPage } from "./lib/browser-job-activation.js";
 import { createBrowserJobScheduler } from "./lib/browser-job-scheduler.js";
 import { createBrowserJobStore } from "./lib/browser-job-store.js";
 import { createBrowserPageActions } from "./lib/browser-page-actions.js";
-import { createBridgeClient } from "./lib/bridge-client.js";
+import { createBridgeClient, detectLoopbackBridge, initCapabilityTokens, isUnauthorizedBridgeError, resolveBridgeConfig } from "./lib/bridge-client.js";
+import { createPrefsSync } from "./lib/prefs-sync.js";
 import { createChatSessionStore } from "./lib/chat-session-store.js";
 import { createChatTurnController } from "./lib/chat-turn-controller.js";
 import {
@@ -53,6 +54,7 @@ const {
   activityDetail,
   activityLabel,
   activityPanel,
+  approvalAllowOnceButton,
   approvalApproveButton,
   approvalCard,
   approvalDelegateButton,
@@ -79,6 +81,7 @@ const {
   controlPreflightBody,
   controlPreflightCard,
   controlPreflightDenyButton,
+  controlPreflightOnceButton,
   controlPreflightTitle,
   controlPreflightTrustButton,
   controlStepList,
@@ -95,6 +98,7 @@ const {
   permissionManagerPanel,
   permissionManagerTitle,
   readButton,
+  regenerationModeSelect,
   saveIntakeButton,
   saveSelectionButton,
   sitePermissionHost,
@@ -108,7 +112,67 @@ const {
   transcript
 } = getSidePanelElements(document);
 
-const bridgeRequest = createBridgeClient();
+// `bridgeRequest` is `let` because the rebind chain below replaces it
+// once loopback detection has settled. We use .then() chains (not
+// top-level await) to keep MV3 SW registration happy.
+let bridgeRequest = null;
+let prefsSync = null;
+let rebindInFlight = null;
+
+function rebindBridge({ forceResolve = false, refreshGenerated = false } = {}) {
+  if (rebindInFlight && !forceResolve) return rebindInFlight;
+  rebindInFlight = resolveBridgeConfig({ refreshGenerated })
+    .then((cfg) => detectLoopbackBridge(cfg))
+    .then((cfg) => {
+      bridgeRequest = createBridgeClient(cfg);
+      if (!prefsSync) {
+        prefsSync = createPrefsSync({ getBridgeRequest: () => bridgeRequest });
+        prefsSync.install();
+      }
+      return initCapabilityTokens(cfg)
+        .catch(() => undefined)
+        .then(() => ({ cfg, bridgeRequest }));
+    })
+    .catch(() => null);
+  return rebindInFlight;
+}
+
+function hydrateAfterRebind(options = {}) {
+  return rebindBridge(options).then((result) => {
+    if (!result) return null;
+    void prefsSync.hydrate().catch(() => undefined);
+    return result;
+  });
+}
+
+async function currentBridgeRequest(route, options = {}) {
+  const req = typeof bridgeRequest === "function"
+    ? bridgeRequest
+    : (await hydrateAfterRebind())?.bridgeRequest;
+  if (typeof req !== "function") {
+    throw new Error("Browser bridge is unavailable.");
+  }
+  try {
+    return await req(route, options);
+  } catch (error) {
+    if (!isUnauthorizedBridgeError(error)) throw error;
+    rebindInFlight = null;
+    const rebound = await hydrateAfterRebind({ forceResolve: true, refreshGenerated: true });
+    if (typeof rebound?.bridgeRequest !== "function") throw error;
+    return rebound.bridgeRequest(route, options);
+  }
+}
+
+const getBridgeRequest = () => currentBridgeRequest;
+
+void hydrateAfterRebind();
+
+chrome?.storage?.onChanged?.addListener?.((changes, area) => {
+  if (area !== "local") return;
+  if (!changes?.bridgeTargetOverride) return;
+  rebindInFlight = null;
+  void hydrateAfterRebind();
+});
 const STORAGE_KEYS = SIDE_PANEL_STORAGE_KEYS;
 let lastSnapshot = null;
 let statusLabel = "Ready";
@@ -122,6 +186,27 @@ let personalizationSettings = null;
 let messageActions = null;
 let monitorRenderers = null;
 let browserJobScheduler = null;
+
+function normalizeRegenerationMode(value) {
+  return value === "overwrite" ? "overwrite" : "branch";
+}
+
+async function hydrateRegenerationModePreference() {
+  const settings = await chrome.storage?.local?.get?.([STORAGE_KEYS.regenerationMode]).catch(() => ({}));
+  if (regenerationModeSelect) {
+    regenerationModeSelect.value = normalizeRegenerationMode(settings?.[STORAGE_KEYS.regenerationMode]);
+  }
+}
+
+async function setRegenerationModePreference(mode) {
+  const normalized = normalizeRegenerationMode(mode);
+  if (regenerationModeSelect) {
+    regenerationModeSelect.value = normalized;
+  }
+  await chrome.storage?.local?.set?.({
+    [STORAGE_KEYS.regenerationMode]: normalized
+  }).catch(() => undefined);
+}
 
 const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
 const { withBrowserActionLock } = createBrowserActionLock();
@@ -341,13 +426,15 @@ const dictationController = createDictationController({
 
 messageActions = createMessageActionController({
   addMessage,
-  bridgeRequest,
+  bridgeRequest: currentBridgeRequest,
+  getBridgeRequest,
   chatSessionStore,
   commandInput,
   composerController,
   fileInput,
   flashCopied,
   getLastSnapshot: () => lastSnapshot,
+  getRegenerationMode: () => normalizeRegenerationMode(regenerationModeSelect?.value),
   getRespondToCommand: () => respondToCommand,
   navigator,
   renderAttachments,
@@ -357,7 +444,7 @@ messageActions = createMessageActionController({
 
 const browserPageActions = createBrowserPageActions({
   addMessage,
-  bridgeRequest,
+  bridgeRequest: currentBridgeRequest,
   chrome,
   getControlledTabId: () => controlledTabId,
   getModel: () => modelSelect.value,
@@ -392,6 +479,7 @@ const {
   readActivePage,
   prepareDaoWorkflowGuidance,
   refreshTabContext,
+  runResonatorCommand,
   scrollActivePage,
   saveCurrentPageToArchive,
   saveResearchTrailToArchive,
@@ -423,6 +511,7 @@ monitorRenderers = createMonitorRenderers({
   approvalBoundaryForStep,
   controlStepLabel,
   elements: {
+    approvalAllowOnceButton,
     approvalApproveButton,
     approvalCard,
     approvalReason,
@@ -546,7 +635,8 @@ const tabContextController = createTabContextController({
 const bindMentionedTab = tabContextController.bindMentionedTab;
 
 const controlPlanningService = createControlPlanningService({
-  bridgeRequest,
+  bridgeRequest: currentBridgeRequest,
+  getBridgeRequest,
   getLastSnapshot: () => lastSnapshot,
   getModel: () => modelSelect.value,
   getSystemPrompt: () => personalizationSettings?.augmentor?.systemPrompt ?? "",
@@ -581,7 +671,8 @@ const executeControlStep = controlStepExecutor.executeControlStep;
 
 const controlReportingService = createControlReportingService({
   addMessage,
-  bridgeRequest,
+  bridgeRequest: currentBridgeRequest,
+  getBridgeRequest,
   controlStepLabel,
   getCurrentControlRun: () => currentControlRun,
   getLastSnapshot: () => lastSnapshot,
@@ -649,10 +740,19 @@ const agentControlRunner = createAgentControlRunner({
   startControlRun,
   taskConsentForStep: async ({ goal }) => {
     const tab = await activeTab();
-    return taskConsentStore.consentFor({
+    const consent = await taskConsentStore.consentFor({
       siteKey: siteKeyForUrl(tab?.url),
       goal
     });
+    if (consent?.mode === "allow-once") {
+      await taskConsentStore.consumeTaskConsent?.({
+        siteKey: consent.siteKey,
+        taskClass: consent.taskClass,
+        reason: `Consumed by safe approval retry for: ${goal}`,
+        source: "agent-control-runner"
+      });
+    }
+    return consent;
   },
   updateBrowserJob,
   updateControlRunArtifacts,
@@ -758,11 +858,13 @@ const controlCommandController = createSidePanelControlCommandController({
 const prepareBrowserJobPageLock = controlCommandController.prepareBrowserJobPageLock;
 const runControlCommand = controlCommandController.runControlCommand;
 
+const allowControlPreflightOnceForTaskClass = controlPreflightController.allowControlPreflightOnceForTaskClass;
 const approveControlPreflight = controlPreflightController.approveControlPreflight;
 const denyControlPreflight = controlPreflightController.denyControlPreflight;
 const trustControlPreflightForSafeActions = controlPreflightController.trustControlPreflightForSafeActions;
 
 const {
+  allowCurrentTaskOnceForSafeActions,
   approvePendingControlStep,
   denyPendingControlStep,
   trustCurrentTaskForSafeActions,
@@ -805,7 +907,8 @@ const saveIntake = browserActionController.saveIntake;
 
 const chatTurnController = createChatTurnController({
   addMessage,
-  bridgeRequest,
+  bridgeRequest: currentBridgeRequest,
+  getBridgeRequest,
   chatSessionStore,
   clearActivitySoon,
   clearAttachments: () => messageActions.clearAttachments(),
@@ -841,6 +944,7 @@ const {
   runHistorySearchCommand,
   runJobsCommand,
   runMemorySearchCommand,
+  runNaturalDelegationCommand,
   reportBrowserJob,
   runSitePermissionCommand,
   runStatusCommand,
@@ -848,7 +952,8 @@ const {
 } = createAppCommandHandlers({
   activeTab,
   addMessage,
-  bridgeRequest,
+  bridgeRequest: currentBridgeRequest,
+  getBridgeRequest,
   browserJobStore,
   chrome,
   detectWalletState,
@@ -902,6 +1007,7 @@ controlStopButton.addEventListener("click", () => {
 });
 
 const commandRouter = createSidePanelCommandRouter({
+  allowControlPreflightOnceForTaskClass,
   bindMentionedTab,
   clickActivePageText,
   detectActivePageForms,
@@ -925,6 +1031,8 @@ const commandRouter = createSidePanelCommandRouter({
   runHistorySearchCommand,
   runJobsCommand: showBrowserJobsCommand,
   runMemorySearchCommand,
+  runNaturalDelegationCommand,
+  runResonatorCommand,
   reportBrowserJob,
   runSitePermissionCommand,
   runStatusCommand,
@@ -948,7 +1056,8 @@ const chatHydration = createSidePanelChatHydration({
   chatSessionStore,
   hydrateControlPreflight,
   hydrateProviderModelOptions: () => hydrateProviderModelOptions({
-    bridgeRequest,
+    bridgeRequest: currentBridgeRequest,
+    getBridgeRequest,
     getPreferredModel: () => modelSelect.value,
     modelSelect,
     setStatus
@@ -972,6 +1081,9 @@ const hydrateChatSettings = chatHydration.hydrateChatSettings;
 const lifecycleController = createSidePanelLifecycleController({
   activeTab,
   addMessage,
+  allowControlPreflightOnceForTaskClass,
+  allowCurrentTaskOnceForSafeActions,
+  approvalAllowOnceButton,
   approvalApproveButton,
   approvalDelegateButton,
   approvalDenyButton,
@@ -988,6 +1100,7 @@ const lifecycleController = createSidePanelLifecycleController({
   contextToggleButton,
   controlPreflightApproveButton,
   controlPreflightDenyButton,
+  controlPreflightOnceButton,
   controlPreflightTrustButton,
   delegateControlIssue,
   denyControlPreflight,
@@ -1041,6 +1154,7 @@ const consumePendingSidebarPrompt = lifecycleController.consumePendingSidebarPro
 window.__resonantosSidePanelReady = false;
 try {
   lifecycleController.bindListeners();
+  regenerationModeSelect?.addEventListener("change", () => void setRegenerationModePreference(regenerationModeSelect.value));
   window.__resonantosSidePanelReady = true;
 } catch (error) {
   window.__resonantosSidePanelReadyError = error instanceof Error
@@ -1050,6 +1164,7 @@ try {
 }
 
 hydrateChatSettings().then(async () => {
+  await hydrateRegenerationModePreference();
   await loadBrowserJobs();
   await tabContextController.hydrateInitialContext();
   await consumePendingSidebarPrompt();

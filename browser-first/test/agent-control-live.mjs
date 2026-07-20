@@ -1,22 +1,49 @@
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { spawn, spawnSync } from "node:child_process";
-import { writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { deflateSync } from "node:zlib";
+import { chromium } from "playwright";
+
+import {
+  createLiveCertificationReport,
+  decidePublicSubmitScenario,
+  decideUnavailableCertification,
+} from "./agent-control-live-report.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
-const hostBinary = path.join(
-  repoRoot,
-  "addons",
-  "resonant-browser-native",
-  "build",
-  "ResonantBrowserNativeHost.app",
-  "Contents",
-  "MacOS",
-  "ResonantBrowserNativeHost",
-);
 const resonantExtensionId = "cdpdmmalhmokbfcfgogoepnjplaakgnl";
+const isCi = /^(?:1|true)$/i.test(process.env.CI ?? "");
+const liveProfile = process.env.RESONANTOS_LIVE_PROFILE ?? (isCi ? "agent-control" : "full");
+const publicSubmitContract = process.env.RESONANTOS_PUBLIC_SUBMIT_CONTRACT ?? "auto";
+const artifactDir = path.resolve(
+  process.env.RESONANTOS_LIVE_ARTIFACT_DIR
+    ?? path.join(os.tmpdir(), `resonantos-agent-control-live-${process.pid}`),
+);
+const certificationReport = createLiveCertificationReport({
+  artifactDir,
+  profile: liveProfile,
+  roots: [repoRoot, os.homedir()],
+  runId: process.env.GITHUB_RUN_ID ?? "local",
+  runAttempt: process.env.GITHUB_RUN_ATTEMPT ?? "1",
+});
+
+if (process.env.RESONANTOS_LIVE_FORCE_UNAVAILABLE === "1") {
+  const unavailable = decideUnavailableCertification({
+    ci: isCi,
+    reason: "Forced Chrome-unavailable probe.",
+  });
+  certificationReport.record(
+    "environment-chrome",
+    isCi ? "failed" : "excluded",
+    unavailable.reason,
+  );
+  await certificationReport.write({ status: unavailable.status });
+  console.error(`agent-control-live ${unavailable.status}: ${unavailable.reason}`);
+  process.exit(unavailable.exitCode);
+}
+
 async function freeLoopbackPort() {
   const server = http.createServer();
   await new Promise((resolve, reject) => {
@@ -24,11 +51,27 @@ async function freeLoopbackPort() {
     server.listen(0, "127.0.0.1", resolve);
   }).catch((error) => {
     if (error?.code === "EPERM" || error?.code === "EACCES") {
-      console.log("agent-control-live skipped: localhost bind is denied in this sandbox.");
-      process.exit(0);
+      return decideUnavailableCertification({
+        ci: isCi,
+        reason: "Localhost bind is denied in this environment.",
+      });
     }
     throw error;
   });
+  if (!server.listening) {
+    const unavailable = decideUnavailableCertification({
+      ci: isCi,
+      reason: "Localhost bind is denied in this environment.",
+    });
+    certificationReport.record(
+      "environment-loopback",
+      isCi ? "failed" : "excluded",
+      unavailable.reason,
+    );
+    await certificationReport.write({ status: unavailable.status });
+    console.error(`agent-control-live ${unavailable.status}: ${unavailable.reason}`);
+    process.exit(unavailable.exitCode);
+  }
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : 0;
   await new Promise((resolve) => server.close(resolve));
@@ -359,7 +402,7 @@ const calendarHtml = `<!doctype html>
 </html>`;
 
 function assert(condition, message) {
-  if (!condition) throw new Error(message);
+  certificationReport.assert(condition, message);
 }
 
 async function waitForDebugPort(getHostLogs = () => "") {
@@ -513,18 +556,6 @@ async function waitForBrowserJobTerminal(panel, goalPattern, label) {
   throw new Error(`${label} did not reach a terminal browser-job state. Jobs:\n${JSON.stringify(state.jobs, null, 2)}\nPanel text:\n${state.text}`);
 }
 
-async function cancelBrowserJobByGoal(panel, goalPattern, label) {
-  const state = (await evaluate(panel, `(async () => ({
-    jobs: (await chrome.storage.local.get("augmentorBrowserJobs")).augmentorBrowserJobs ?? [],
-    text: document.body.innerText
-  }))()`)).result.value;
-  const job = state.jobs.find((entry) => goalPattern.test(String(entry.goal ?? "")));
-  assert(job?.id, `${label} job was not found for cancellation. Jobs:\n${JSON.stringify(state.jobs, null, 2)}`);
-  await submitControlCommand(panel, `/cancel ${job.id}`);
-  await waitForPanelText(panel, /Cancelled browser job/, `${label} cancellation`);
-  return waitForBrowserJobTerminal(panel, goalPattern, `${label} cancellation`);
-}
-
 async function waitForPageCondition(page, expression, label) {
   let lastError = null;
   let consecutiveErrors = 0;
@@ -543,7 +574,82 @@ async function waitForPageCondition(page, expression, label) {
   const text = await evaluate(page, "document.body.innerText")
     .then((result) => result.result.value)
     .catch(() => `<page text unavailable: ${lastError instanceof Error ? lastError.message : String(lastError)}>`);
-  throw new Error(`${label} did not become true. Page text:\n${text}`);
+  const evaluationError = lastError
+    ? `\nLast evaluation error: ${lastError instanceof Error ? lastError.message : String(lastError)}`
+    : "";
+  throw new Error(`${label} did not become true.${evaluationError}\nPage text:\n${text}`);
+}
+
+async function verifyPublicSubmitBoundary(panel, page) {
+  await evaluate(panel, `(() => {
+    globalThis.__resonantosLivePublicSubmitOverrideCalls = 0;
+    globalThis.__resonantosNextActionOverride = async () => {
+      globalThis.__resonantosLivePublicSubmitOverrideCalls += 1;
+      return {
+        source: "test-next-action",
+        thought: "Attempt unsafe submit; content script must block this.",
+        status: "continue",
+        action: { type: "click", text: "Submit public form" },
+        approvalReason: null,
+        doneSummary: null
+      };
+    };
+    return true;
+  })()`);
+  const baseline = (await evaluate(panel, `({
+    messageCount: document.querySelectorAll("#transcript .message").length
+  })`)).result.value;
+  await submitControlCommand(panel, `/control click "Submit public form"`);
+  let outcome;
+  try {
+    outcome = await waitForPageCondition(panel, `(async () => {
+      const jobs = (await chrome.storage.local.get("augmentorBrowserJobs")).augmentorBrowserJobs ?? [];
+      const publicJobs = jobs.filter((job) => /Submit public form/i.test(job.pendingApproval?.step?.text ?? ""));
+      const buttons = [...document.querySelectorAll("button")]
+        .filter((button) => /click "Submit public form"/i.test(button.title || ""))
+        .map((button) => button.textContent.trim());
+      const newMessageText = [...document.querySelectorAll("#transcript .message")]
+        .slice(${Number(baseline.messageCount)})
+        .map((message) => message.innerText)
+        .join("\\n");
+      const humanSignal = /human-only|click it yourself|must be performed by the human|then resume/i.test(newMessageText);
+      if (!publicJobs.length && !humanSignal) return false;
+      return { publicJobs, buttons, newMessageText, humanSignal };
+    })()`, "public-submit boundary outcome");
+  } catch (error) {
+    const diagnostics = (await evaluate(panel, `(async () => ({
+      overrideCalls: globalThis.__resonantosLivePublicSubmitOverrideCalls ?? 0,
+      jobs: (await chrome.storage.local.get("augmentorBrowserJobs")).augmentorBrowserJobs ?? []
+    }))()`)).result.value;
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\nDiagnostics: ${JSON.stringify(diagnostics)}`);
+  }
+  const blockedState = (await evaluate(page, `({ submitted: window.__submitted, status: document.querySelector("#status").textContent })`)).result.value;
+  assert(!blockedState.submitted, `Public-submit boundary executed the action: ${JSON.stringify(blockedState)}`);
+  const approvalJobs = outcome.publicJobs.filter((job) => job.status === "approval" && job.pendingApproval);
+  const hasExecutableApproval = outcome.buttons.includes("Approve once");
+  const humanHandoff = outcome.humanSignal && approvalJobs.length === 0 && !hasExecutableApproval;
+  const decision = decidePublicSubmitScenario({ mode: publicSubmitContract, humanHandoff });
+  certificationReport.record("post-approval-public-submit", decision.status, decision.reason);
+  if (decision.status === "failed") assert(false, decision.reason);
+  if (humanHandoff) {
+    assert(!hasExecutableApproval, `Human-only public-submit exposed an approval bypass: ${JSON.stringify(outcome)}`);
+    assert(approvalJobs.length === 0, `Human-only public-submit created an executable approval job: ${JSON.stringify(outcome)}`);
+    await waitForComposerReady(panel, "human-only public-submit handoff");
+  } else {
+    assert(hasExecutableApproval, `Legacy public-submit job approval is not visible: ${JSON.stringify(outcome)}`);
+    assert(approvalJobs.length > 0, `Legacy public-submit pending approval is missing: ${JSON.stringify(outcome)}`);
+    await evaluate(panel, `(() => {
+      const deny = [...document.querySelectorAll("button")].find((button) =>
+        button.textContent === "Deny" && /click "Submit public form"/i.test(button.title || "")
+      );
+      if (!deny) throw new Error("No per-job Deny button found.");
+      deny.click();
+    })()`);
+    const deniedJob = await waitForBrowserJobTerminal(panel, /click "Submit public form"/i, "public-submit denial");
+    assert(deniedJob.status === "denied", `Legacy public-submit job did not resolve as denied: ${JSON.stringify(deniedJob)}`);
+    await waitForComposerReady(panel, "public-submit denial");
+  }
+  return blockedState;
 }
 
 const server = http.createServer((request, response) => {
@@ -554,13 +660,13 @@ const server = http.createServer((request, response) => {
 await new Promise((resolve) => server.listen(fixturePort, "127.0.0.1", resolve));
 
 const profile = path.join(os.tmpdir(), `resonantos-agent-live-${Date.now()}`);
+const extensionPath = path.join(repoRoot, "browser-first", "resonantos-side-panel-extension");
+
+// Local bridge the extension talks to (run-browser-first.mjs is a compatibility
+// shim that boots the minimal bridge on --bridge-port).
 const host = spawn("node", [
-  "browser-first/host/run-browser-first.mjs",
-  `--url=http://127.0.0.1:${fixturePort}/`,
-  `--profile=${profile}`,
-  `--remote-debugging-port=${debugPort}`,
+  "browser-first/host/run-bridge-minimal.mjs",
   `--bridge-port=${bridgePort}`,
-  "--auto-open-side-panel=false",
 ], {
   cwd: repoRoot,
   stdio: ["ignore", "pipe", "pipe"],
@@ -570,19 +676,45 @@ let hostLogs = "";
 host.stdout.on("data", (chunk) => { hostLogs += chunk.toString(); });
 host.stderr.on("data", (chunk) => { hostLogs += chunk.toString(); });
 
+let browserContext = null;
+let panel = null;
+let page = null;
+let reportScreenshots = [];
+let runError = null;
+
 async function shutdownHost() {
   host.stdout.destroy();
   host.stderr.destroy();
-  if (!host.killed) host.kill("SIGTERM");
-  await Promise.race([
-    new Promise((resolve) => host.once("exit", resolve)),
-    new Promise((resolve) => setTimeout(resolve, 1500)),
+  await browserContext?.close().catch(() => {});
+  if (host.exitCode === null) host.kill("SIGTERM");
+  const exited = await Promise.race([
+    new Promise((resolve) => host.once("exit", () => resolve(true))),
+    new Promise((resolve) => setTimeout(() => resolve(false), 1500)),
   ]);
-  spawnSync("pkill", ["-9", "-f", "ResonantBrowserNativeHost"], { stdio: "ignore" });
-  spawnSync("pkill", ["-9", "-f", "run-browser-first.mjs"], { stdio: "ignore" });
+  if (!exited && host.exitCode === null) host.kill("SIGKILL");
+  await rm(profile, { recursive: true, force: true }).catch(() => {});
 }
 
 try {
+  // #267: Playwright is launch-only. The CI workflow supplies stable Chrome and
+  // an Xvfb display; local runs may use Playwright's Chromium. The raw-CDP body
+  // below continues to drive the unpacked extension over the debug port.
+  const launchOptions = {
+    headless: false,
+    args: [
+      `--disable-extensions-except=${extensionPath}`,
+      `--load-extension=${extensionPath}`,
+      `--remote-debugging-port=${debugPort}`,
+      "--no-first-run",
+      "--no-default-browser-check",
+    ],
+  };
+  if (process.env.RESONANTOS_LIVE_CHROME_PATH) {
+    launchOptions.executablePath = process.env.RESONANTOS_LIVE_CHROME_PATH;
+  }
+  browserContext = await chromium.launchPersistentContext(profile, launchOptions);
+  await (browserContext.pages()[0] ?? await browserContext.newPage())
+    .goto(`http://127.0.0.1:${fixturePort}/`).catch(() => {});
   await waitForDebugPort(() => hostLogs);
   const panelTarget = await openExtensionPanel();
   const fixtureTarget = await waitForBrowserTarget(
@@ -590,8 +722,8 @@ try {
     "Fixture page target"
   );
 
-  const panel = new CdpClient(panelTarget.webSocketDebuggerUrl);
-  const page = new CdpClient(fixtureTarget.webSocketDebuggerUrl);
+  panel = new CdpClient(panelTarget.webSocketDebuggerUrl);
+  page = new CdpClient(fixtureTarget.webSocketDebuggerUrl);
   await panel.connect();
   await page.connect();
   await panel.send("Runtime.enable");
@@ -730,49 +862,57 @@ try {
   assert(!shortcutState.afterMetaEnter.submitted, `Command-modified Enter should not submit: ${JSON.stringify(shortcutState)}`);
   assert(shortcutState.submitted, `Enter should submit the composer: ${JSON.stringify(shortcutState)}`);
   await evaluate(panel, `document.querySelector("#command-input").value = ""; document.querySelector("#transcript").replaceChildren();`);
-  await evaluate(panel, `document.querySelector("#read-page").click()`);
-  await waitForPanelText(panel, /Page context attached:/, "initial content script attachment");
-  await evaluate(panel, `(async () => {
-    const tabs = await chrome.tabs.query({});
-    const tab = tabs.find((candidate) => candidate.url === ${JSON.stringify(`http://127.0.0.1:${fixturePort}/`)});
-    if (!tab?.id) throw new Error("Root fixture tab not found for inline assistant.");
-    const response = await chrome.tabs.sendMessage(tab.id, {
-      channel: "resonantos.browser_first.content",
-      type: "show_inline_assistant_for_text",
-      text: "This page verifies safe browser control, document-style typing, and approval gates.",
-      rect: { left: 44, right: 520, top: 92, bottom: 116, width: 476, height: 24 }
-    });
-    if (!response?.ok) throw new Error(response?.error || "Inline assistant trigger failed.");
-    return response;
-  })()`);
-  await waitForPageCondition(page, `document.querySelector("#resonantos-inline-button")?.style.display === "block"`, "inline assistant button");
-  await evaluate(page, `document.querySelector("#resonantos-inline-button").click()`);
-  const inlineSummary = await waitForPageCondition(page, `document.querySelector("#resonantos-inline-assistant .ros-inline-result")?.innerText.includes("Summary")`, "inline assistant summary");
-  assert(inlineSummary, "Inline assistant did not produce a summary.");
-  const inlinePromptPresent = (await evaluate(page, `Boolean(document.querySelector("#resonantos-inline-assistant .ros-inline-prompt"))`)).result.value;
-  assert(inlinePromptPresent, "Inline Assistant custom prompt input is missing.");
-  await evaluate(page, `document.querySelector('#resonantos-inline-assistant [data-action="send"]').click()`);
-  await waitForPanelText(panel, /Inline Assistant context received\./, "inline send to side panel");
-  const inlineInsertionState = (await evaluate(page, `(() => {
-    const editor = document.querySelector("#inline-editor");
-    editor.focus();
-    const start = editor.value.indexOf("teh quick i");
-    const end = start + "teh quick i".length;
-    editor.setSelectionRange(start, end);
-    editor.dispatchEvent(new Event("select", { bubbles: true }));
-    document.dispatchEvent(new Event("selectionchange"));
-    return true;
-  })()`)).result.value;
-  assert(inlineInsertionState, "Inline editor selection setup failed.");
-  await waitForPageCondition(page, `document.querySelector("#resonantos-inline-button")?.style.display === "block"`, "inline editable selection button");
-  await evaluate(page, `document.querySelector("#resonantos-inline-button").click()`);
-  await evaluate(page, `document.querySelector('#resonantos-inline-assistant [data-action="rewrite"]').click()`);
-  await waitForPageCondition(page, `document.querySelector("#resonantos-inline-assistant .ros-inline-result")?.innerText.includes("the quick I")`, "inline rewrite result");
-  const inlineShortcutLabels = (await evaluate(page, `Array.from(document.querySelectorAll("#resonantos-inline-assistant kbd")).map((node) => node.textContent).join("")`)).result.value;
-  assert(/S/.test(inlineShortcutLabels) && /I/.test(inlineShortcutLabels), `Inline Assistant shortcuts are missing: ${inlineShortcutLabels}`);
-  await evaluate(page, `document.querySelector('#resonantos-inline-assistant [data-action="insert"]').click()`);
-  const inlineEditorValue = (await evaluate(page, `document.querySelector("#inline-editor").value`)).result.value;
-  assert(inlineEditorValue === "prefix the quick I suffix", `Inline Assistant should replace only selected editable text: ${inlineEditorValue}`);
+  if (liveProfile === "full") {
+    await evaluate(panel, `document.querySelector("#read-page").click()`);
+    await waitForPanelText(panel, /Page context attached:/, "initial content script attachment");
+    await evaluate(panel, `(async () => {
+      const tabs = await chrome.tabs.query({});
+      const tab = tabs.find((candidate) => candidate.url === ${JSON.stringify(`http://127.0.0.1:${fixturePort}/`)});
+      if (!tab?.id) throw new Error("Root fixture tab not found for inline assistant.");
+      const response = await chrome.tabs.sendMessage(tab.id, {
+        channel: "resonantos.browser_first.content",
+        type: "show_inline_assistant_for_text",
+        text: "This page verifies safe browser control, document-style typing, and approval gates.",
+        rect: { left: 44, right: 520, top: 92, bottom: 116, width: 476, height: 24 }
+      });
+      if (!response?.ok) throw new Error(response?.error || "Inline assistant trigger failed.");
+      return response;
+    })()`);
+    await waitForPageCondition(page, `document.querySelector("#resonantos-inline-button")?.style.display === "block"`, "inline assistant button");
+    await evaluate(page, `document.querySelector("#resonantos-inline-button").click()`);
+    const inlineSummary = await waitForPageCondition(page, `document.querySelector("#resonantos-inline-assistant .ros-inline-result")?.innerText.includes("Summary")`, "inline assistant summary");
+    assert(inlineSummary, "Inline assistant did not produce a summary.");
+    const inlinePromptPresent = (await evaluate(page, `Boolean(document.querySelector("#resonantos-inline-assistant .ros-inline-prompt"))`)).result.value;
+    assert(inlinePromptPresent, "Inline Assistant custom prompt input is missing.");
+    await evaluate(page, `document.querySelector('#resonantos-inline-assistant [data-action="send"]').click()`);
+    await waitForPanelText(panel, /Inline Assistant context received\./, "inline send to side panel");
+    const inlineInsertionState = (await evaluate(page, `(() => {
+      const editor = document.querySelector("#inline-editor");
+      editor.focus();
+      const start = editor.value.indexOf("teh quick i");
+      const end = start + "teh quick i".length;
+      editor.setSelectionRange(start, end);
+      editor.dispatchEvent(new Event("select", { bubbles: true }));
+      document.dispatchEvent(new Event("selectionchange"));
+      return true;
+    })()`)).result.value;
+    assert(inlineInsertionState, "Inline editor selection setup failed.");
+    await waitForPageCondition(page, `document.querySelector("#resonantos-inline-button")?.style.display === "block"`, "inline editable selection button");
+    await evaluate(page, `document.querySelector("#resonantos-inline-button").click()`);
+    await evaluate(page, `document.querySelector('#resonantos-inline-assistant [data-action="rewrite"]').click()`);
+    await waitForPageCondition(page, `document.querySelector("#resonantos-inline-assistant .ros-inline-result")?.innerText.includes("the quick I")`, "inline rewrite result");
+    const inlineShortcutLabels = (await evaluate(page, `Array.from(document.querySelectorAll("#resonantos-inline-assistant kbd")).map((node) => node.textContent).join("")`)).result.value;
+    assert(/S/.test(inlineShortcutLabels) && /I/.test(inlineShortcutLabels), `Inline Assistant shortcuts are missing: ${inlineShortcutLabels}`);
+    await evaluate(page, `document.querySelector('#resonantos-inline-assistant [data-action="insert"]').click()`);
+    const inlineEditorValue = (await evaluate(page, `document.querySelector("#inline-editor").value`)).result.value;
+    assert(inlineEditorValue === "prefix the quick I suffix", `Inline Assistant should replace only selected editable text: ${inlineEditorValue}`);
+  } else {
+    certificationReport.record(
+      "provider-inline-assistant-flow",
+      "excluded",
+      "Excluded from the Agent Control CI profile because it requires provider behavior owned by a separate certification lane.",
+    );
+  }
   const dockCollapsedState = (await evaluate(panel, `({
     dockHidden: document.querySelector("#context-dock").hidden,
     siteHidden: document.querySelector("#site-permission-panel").hidden,
@@ -830,6 +970,32 @@ try {
   assert(inlineBlocked, "Site block did not hide Inline Assistant.");
   await submitControlCommand(panel, `/site ask`);
   await waitForPanelText(panel, /Set 127\.0\.0\.1 Assistant permission to ask-before-action/, "site ask command");
+
+  const iframeReadState = (await evaluate(panel, `(async () => {
+    const tabs = await chrome.tabs.query({});
+    const tab = tabs.find((candidate) => candidate.url === ${JSON.stringify(`http://127.0.0.1:${fixturePort}/`)});
+    if (!tab?.id) return { error: "Fixture tab not found." };
+    const frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id });
+    const responses = [];
+    for (const frame of frames) {
+      const response = await chrome.tabs.sendMessage(tab.id, {
+        channel: "resonantos.browser_first.content",
+        type: "read_page"
+      }, { frameId: frame.frameId }).catch((error) => ({ ok: false, error: String(error) }));
+      responses.push({
+        frameId: frame.frameId,
+        ok: Boolean(response?.ok),
+        text: String(response?.snapshot?.text ?? "").slice(0, 240),
+        error: response?.error ?? null
+      });
+    }
+    return { tabId: tab.id, frames, responses };
+  })()`)).result.value;
+  assert(
+    iframeReadState.responses?.some((response) => response.ok && response.text.includes("Booking calendar frame")),
+    `Direct frame read did not expose booking context: ${JSON.stringify(iframeReadState)}`,
+  );
+  const blockedState = await verifyPublicSubmitBoundary(panel, page);
 
   await evaluate(panel, `(() => { globalThis.__resonantosNextActionOverride = async ({ snapshot, history }) => ({
     source: "test-next-action",
@@ -1042,7 +1208,8 @@ try {
   })`)).result.value;
   assert(contactBlockedState.email === "", `Contact autofill should be blocked before typing: ${JSON.stringify(contactBlockedState)}`);
   await waitForComposerReady(panel, "contact autofill boundary");
-  await cancelBrowserJobByGoal(panel, /fill the email address/i, "contact autofill boundary");
+  const contactBoundaryJob = await waitForBrowserJobTerminal(panel, /fill the email address/i, "contact autofill boundary");
+  assert(contactBoundaryJob.status === "blocked", `Contact autofill job should stop as blocked: ${JSON.stringify(contactBoundaryJob)}`);
 
   await evaluate(panel, `(() => { globalThis.__resonantosNextActionOverride = async () => ({
     source: "test-next-action",
@@ -1061,40 +1228,8 @@ try {
   })`)).result.value;
   assert(paymentBlockedState.card === "", `Payment autofill should be blocked before typing: ${JSON.stringify(paymentBlockedState)}`);
   await waitForComposerReady(panel, "payment autofill boundary");
-  await cancelBrowserJobByGoal(panel, /fill the card number/i, "payment autofill boundary");
-
-  await evaluate(panel, `(() => { globalThis.__resonantosNextActionOverride = async () => ({
-    source: "test-next-action",
-    thought: "Attempt unsafe submit; content script must block this.",
-    status: "continue",
-    action: { type: "click", text: "Submit public form" },
-    approvalReason: null,
-    doneSummary: null
-  }); return true; })()`);
-  await submitControlCommand(panel, `/control click "Submit public form"`);
-  await waitForPanelText(panel, /Agent Control Mode blocked at action|submit\/public action|requires human approval/i, "approval boundary");
-  await waitForPageCondition(panel, `(async () => {
-    const jobs = (await chrome.storage.local.get("augmentorBrowserJobs")).augmentorBrowserJobs ?? [];
-    return jobs.some((job) => job.status === "approval" && /Submit public form/i.test(job.pendingApproval?.step?.text ?? ""));
-  })()`, "public-submit approval job");
-  const blockedState = (await evaluate(page, `({ submitted: window.__submitted, status: document.querySelector("#status").textContent })`)).result.value;
-  assert(!blockedState.submitted, `Approval gate failed before approval: ${JSON.stringify(blockedState)}`);
-  const publicSubmitApprovalState = (await evaluate(panel, `(async () => ({
-    jobApprovalVisible: /Approve once[\\s\\S]*Deny/.test(document.body.innerText),
-    pendingApprovalJobs: ((await chrome.storage.local.get("augmentorBrowserJobs")).augmentorBrowserJobs ?? [])
-      .filter((job) => job.status === "approval" && job.pendingApproval)
-      .map((job) => ({ goal: job.goal, stepText: job.pendingApproval?.step?.text ?? "", reason: job.pendingApproval?.reason ?? "" }))
-  }))()`)).result.value;
-  assert(publicSubmitApprovalState.jobApprovalVisible, `Public-submit job approval is not visible: ${JSON.stringify(publicSubmitApprovalState)}`);
-  assert(publicSubmitApprovalState.pendingApprovalJobs.some((job) => /Submit public form/i.test(job.stepText)), `Public-submit pending approval missing: ${JSON.stringify(publicSubmitApprovalState)}`);
-  await evaluate(panel, `(() => {
-    const deny = [...document.querySelectorAll("button")].find((button) =>
-      button.textContent === "Deny" && /click "Submit public form"/i.test(button.title || "")
-    );
-    if (!deny) throw new Error("No per-job Deny button found.");
-    deny.click();
-  })()`);
-  await waitForPanelText(panel, /Denied browser action|denied/i, "deny public submit approval");
+  const paymentBoundaryJob = await waitForBrowserJobTerminal(panel, /fill the card number/i, "payment autofill boundary");
+  assert(paymentBoundaryJob.status === "blocked", `Payment autofill job should stop as blocked: ${JSON.stringify(paymentBoundaryJob)}`);
 
   await evaluate(panel, `(() => { globalThis.__resonantosNextActionOverride = async () => ({
     source: "test-next-action",
@@ -1114,9 +1249,10 @@ try {
   const approvalState = (await evaluate(page, `({ submitted: window.__submitted, status: document.querySelector("#status").textContent })`)).result.value;
   assert(approvalState.status !== "wallet-clicked", `Wallet action executed unexpectedly: ${JSON.stringify(approvalState)}`);
 
-  const screenshots = [
-    await captureScreenshotArtifact(panel, "/tmp/resonantos-agent-control-live-panel.png"),
-    await captureScreenshotArtifact(page, "/tmp/resonantos-agent-control-live-page.png"),
+  await mkdir(artifactDir, { recursive: true });
+  reportScreenshots = [
+    await captureScreenshotArtifact(panel, path.join(artifactDir, "panel.png")),
+    await captureScreenshotArtifact(page, path.join(artifactDir, "page.png")),
   ];
 
   console.log(JSON.stringify({
@@ -1128,12 +1264,43 @@ try {
     documentState,
     blockedState,
     approvalState,
-    screenshots,
+    screenshots: reportScreenshots.map((screenshot) => ({
+      ...screenshot,
+      path: screenshot.path ? path.basename(screenshot.path) : null,
+    })),
   }, null, 2));
-
-  panel.close();
-  page.close();
+} catch (error) {
+  runError = error;
+  certificationReport.record(
+    "run-terminal",
+    "failed",
+    error instanceof Error ? error.message : String(error),
+  );
+  throw error;
 } finally {
+  await mkdir(artifactDir, { recursive: true });
+  if (reportScreenshots.length === 0) {
+    reportScreenshots = await Promise.all([
+      panel
+        ? captureScreenshotArtifact(panel, path.join(artifactDir, "panel.png"))
+        : Promise.resolve({ ok: false, path: "panel.png", error: "Panel target was unavailable." }),
+      page
+        ? captureScreenshotArtifact(page, path.join(artifactDir, "page.png"))
+        : Promise.resolve({ ok: false, path: "page.png", error: "Fixture target was unavailable." }),
+    ]);
+  }
+  const hasGate = certificationReport.scenarios.some((scenario) => scenario.status === "gated");
+  await certificationReport.write({
+    status: runError ? "failed" : hasGate ? "passed-with-gates" : "passed",
+    screenshots: reportScreenshots,
+    error: runError,
+    metadata: {
+      commit: process.env.GITHUB_SHA ?? "local",
+      publicSubmitContract,
+    },
+  });
+  panel?.close();
+  page?.close();
   await shutdownHost();
   await new Promise((resolve) => server.close(resolve));
 }

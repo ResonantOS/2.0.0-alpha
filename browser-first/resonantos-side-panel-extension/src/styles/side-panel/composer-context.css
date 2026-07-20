@@ -134,7 +134,8 @@ textarea::placeholder {
 }
 
 .model-select,
-.depth-select {
+.depth-select,
+.regeneration-select {
   flex: 1 1 86px;
   min-width: 54px;
   max-width: 118px;
@@ -150,6 +151,12 @@ textarea::placeholder {
 .depth-select {
   flex: 0 1 58px;
   max-width: 62px;
+}
+
+.regeneration-select {
+  flex: 0 1 78px;
+  min-width: 68px;
+  max-width: 82px;
 }
 
 .depth-select[hidden] {

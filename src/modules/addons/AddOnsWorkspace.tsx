@@ -39,7 +39,6 @@ type AddOnsWorkspaceProps = {
     capabilities: CapabilityGrant["capability"][],
     requestedCapabilities: CapabilityGrant[],
   ) => void;
-  onGrantTerminalWorkspaceAccess: (manifest: AddOnManifest) => void;
   onUpdateAddonConfig: (manifestId: string, config: Record<string, unknown>) => void;
   onRunLogicianScript: (
     manifest: AddOnManifest,
@@ -77,8 +76,6 @@ const isBrowserVisibleReady = (installation: AddOnInstallation | null): boolean 
       hasGrant(installation, "browser-control") &&
       hasGrant(installation, "filesystem"),
   );
-const isTerminalVisibleReady = (installation: AddOnInstallation | null): boolean =>
-  Boolean(installation?.enabled && hasGrant(installation, "shell") && hasGrant(installation, "ui-embedding"));
 const isHermesBridgeReady = (installation: AddOnInstallation | null): boolean =>
   Boolean(installation?.enabled && hasGrant(installation, "shell") && hasGrant(installation, "ui-embedding"));
 const hasScaffoldContract = (manifest: AddOnManifest): boolean =>
@@ -96,9 +93,6 @@ const shellNavigationSectionFor = (manifest: AddOnManifest): ShellSectionId | nu
 const addonPrimaryActionLabel = (manifest: AddOnManifest, installation: AddOnInstallation | null): string => {
   if (manifest.id === "addon.browser" && !isBrowserVisibleReady(installation)) {
     return "Install and grant browser access";
-  }
-  if (manifest.id === "addon.terminal" && !isTerminalVisibleReady(installation)) {
-    return "Install and grant terminal access";
   }
   if (manifest.id === "addon.hermes" && !isHermesBridgeReady(installation)) {
     return "Install and grant Hermes workspace access";
@@ -192,11 +186,6 @@ export function AddOnsWorkspace(props: AddOnsWorkspaceProps) {
                         ["network", "ui-embedding", "browser-control", "filesystem"],
                         manifest.requestedCapabilities,
                       );
-                      return;
-                    }
-                    if (manifest.id === "addon.terminal" && !isTerminalVisibleReady(effectiveInstallation)) {
-                      props.onSelectManifest(manifest.id);
-                      props.onGrantTerminalWorkspaceAccess(manifest);
                       return;
                     }
                     if (manifest.id === "addon.hermes" && !isHermesBridgeReady(effectiveInstallation)) {
@@ -433,18 +422,6 @@ function AddOnDetailPanel(props: AddOnDetailPanelProps) {
         />
       )}
 
-      {props.selectedManifest.id === "addon.audio2tol" && (
-        <div className="bundle-card">
-          <span className="eyebrow">Audio2TOL bundle contract</span>
-          <ul>
-            <li>raw audio</li>
-            <li>transcript</li>
-            <li>protocol analysis artifact</li>
-            <li>rendered note</li>
-            <li>processing metadata</li>
-          </ul>
-        </div>
-      )}
     </Panel>
   );
 }

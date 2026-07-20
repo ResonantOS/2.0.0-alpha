@@ -22,7 +22,6 @@ export function createSidePanelChatHydration(dependencies) {
       const settings = await storage?.get?.([storageKeys.contextDockExpanded]).catch(() => ({}));
       setContextDockExpanded(Boolean(settings?.[storageKeys.contextDockExpanded]));
       await hydrateControlPreflight();
-      await chatSessionStore.ensureFreshSession();
       renderMessages();
       renderAttachments();
       updateConnectionLine();

@@ -139,7 +139,7 @@ test("control run state updates the page overlay with active and blocked step la
   assert.ok(harness.events.some((event) =>
     event[0] === "overlay" &&
     event[1] === true &&
-    event[2] === "Augmentor: Reading page: Reading visible content" &&
+    event[2] === "reading" &&
     event[3] === "reading"
   ));
   assert.ok(harness.events.some((event) =>
@@ -148,6 +148,43 @@ test("control run state updates the page overlay with active and blocked step la
     event[2] === "Blocked: Clicking Reserve: Click requires approval" &&
     event[3] === "blocked"
   ));
+});
+
+test("control run state uses plain public action labels without changing step detail", () => {
+  const stepTypes = [
+    ["read", "reading", "reading"],
+    ["inspect", "reading", "reading"],
+    ["forms", "reading", "reading"],
+    ["tabs", "reading", "reading"],
+    ["open", "reading", "reading"],
+    ["search", "reading", "reading"],
+    ["switch_tab", "reading", "reading"],
+    ["click", "clicking", "clicking"],
+    ["scroll", "clicking", "clicking"],
+    ["type", "typing", "typing"],
+    ["wait", "waiting for you", "waiting"]
+  ];
+  const harness = createHarness({
+    currentControlRun: {
+      id: "job-a",
+      steps: stepTypes.map(([type]) => ({ type, text: "example", state: "pending" })),
+      artifacts: []
+    }
+  });
+
+  stepTypes.forEach(([_type, _label, _phase], index) => {
+    harness.state.updateControlStep(index, "active", `internal note ${index}`);
+  });
+
+  const overlayEvents = harness.events.filter((event) => event[0] === "overlay");
+  assert.deepEqual(
+    overlayEvents.map((event) => [event[2], event[3]]),
+    stepTypes.map(([_type, label, phase]) => [label, phase])
+  );
+  assert.deepEqual(
+    harness.getCurrentControlRun().steps.map((step) => step.note),
+    stepTypes.map((_entry, index) => `internal note ${index}`)
+  );
 });
 
 test("control run state ignores step updates when no run or index exists", () => {

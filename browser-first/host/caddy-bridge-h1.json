@@ -1,0 +1,48 @@
+{
+  "apps": {
+    "http": {
+      "servers": {
+        "srv0": {
+          "listen": [":19443"],
+          "routes": [
+            {
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "headers": {
+                    "request": {
+                      "set": {
+                        "X-Forwarded-Host": ["{http.request.host}"],
+                        "X-Forwarded-Proto": ["https"]
+                      }
+                    }
+                  },
+                  "upstreams": [{ "dial": "127.0.0.1:47773" }]
+                }
+              ]
+            }
+          ],
+          "tls_connection_policies": [
+            {
+              "certificate_selection": { "any_tag": ["cert0"] },
+              "alpn": ["http/1.1"]
+            }
+          ],
+          "automatic_https": { "disable": true },
+          "protocols": ["h1"]
+        }
+      }
+    },
+    "tls": {
+      "certificates": {
+        "load_files": [
+          {
+            "certificate": "REPLACE_WITH_PATH_TO/chain.pem",
+            "key": "REPLACE_WITH_PATH_TO/leaf.key",
+            "tags": ["cert0"]
+          }
+        ]
+      }
+    }
+  }
+}

@@ -189,7 +189,6 @@ async function shutdownHost() {
     new Promise((resolve) => host.once("exit", resolve)),
     new Promise((resolve) => setTimeout(resolve, 1500)),
   ]);
-  spawnSync("pkill", ["-9", "-f", "ResonantBrowserNativeHost"], { stdio: "ignore" });
   spawnSync("pkill", ["-9", "-f", "run-browser-first.mjs"], { stdio: "ignore" });
 }
 

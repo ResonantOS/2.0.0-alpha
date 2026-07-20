@@ -1,16 +1,15 @@
 # ADR-025: Native Embedded Browser Host
 
-## Status
+## Decision Metadata
 
-Superseded by ADR-035 on 2026-05-25 for product Browser/runtime direction.
-
-This ADR is retained as a historical CEF research record. Its standalone CEF
-tests proved useful facts about Chromium rendering and Phantom provider
-injection, but the live Tauri product path did not satisfy the user-facing
-requirement: the embedded Browser rendered incorrectly, could not behave as a
-normal full browser, and created crash/layering risk. Do not continue
-Tauri + in-process CEF as the product Browser path unless ADR-035 is rejected
-or superseded by a later decision.
+- Decision status: Superseded
+- Alpha applicability: Not applicable
+- Superseded by: ADR-035
+- Owner: Browser architecture
+- Decision date: Not recorded
+- Status date: 2026-05-25
+- Alpha note: This is a historical Tauri/CEF research record. Native CEF and
+  Tauri are not Alpha runtime or validation requirements.
 
 ## Decision
 

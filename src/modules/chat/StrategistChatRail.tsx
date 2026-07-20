@@ -39,6 +39,7 @@ import { formatBytes } from "./utils";
 const modelLabel = (model: string): string => {
   const labels: Record<string, string> = {
     "MiniMax-M3": "MiniMax M3",
+    "zai/glm-5.2": "Z.AI GLM 5.2",
     "gpt-5.5": "GPT 5.5",
     "gpt-5.4-mini": "GPT 5.4 Mini",
     "batiai/gemma4-e2b:q4": "Gemma 4 2B (Mac Mini)",
@@ -51,6 +52,7 @@ const supportsThinkingDepth = (model: string): boolean => model.startsWith("gpt-
 
 type StrategistChatRailProps = {
   isOpen: boolean;
+  showCollapsedToggle?: boolean;
   mode: "strategist" | "emergency";
   title: string;
   eyebrow: string;
@@ -77,7 +79,6 @@ type StrategistChatRailProps = {
   attachments: ComposerAttachment[];
   dictating: boolean;
   dictationAvailable: boolean;
-  dictationReady: boolean;
   activeChatModel: string;
   availableModels: string[];
   thinkingDepth: ThinkingDepth;
@@ -99,7 +100,6 @@ type StrategistChatRailProps = {
   } | null;
   chatScrollAnchorRef: RefObject<HTMLDivElement | null>;
   fileInputRef: RefObject<HTMLInputElement | null>;
-  composerRef: RefObject<HTMLTextAreaElement | null>;
   onCreateNewChat: (agentId: string, projectId?: string) => void;
   onCreateProject: (title: string) => void;
   onSetHistoryOpen: (open: boolean) => void;
@@ -504,6 +504,9 @@ export function StrategistChatRail(props: StrategistChatRailProps) {
   };
 
   if (!props.isOpen) {
+    if (props.showCollapsedToggle === false) {
+      return null;
+    }
     return (
       <aside className={`chat-sidebar closed ${props.mode === "emergency" ? "emergency" : ""}`}>
         <button type="button" className="chat-collapsed-toggle" onClick={props.onToggleSidebar}>
@@ -808,7 +811,6 @@ export function StrategistChatRail(props: StrategistChatRailProps) {
           />
         )}
         <textarea
-          ref={props.composerRef}
           value={props.composer}
           onChange={(event) => props.onComposerChange(event.target.value)}
           placeholder={`Message ${props.title}`}
@@ -883,13 +885,15 @@ export function StrategistChatRail(props: StrategistChatRailProps) {
             type="button"
             className={`chat-icon-button ${props.dictating ? "is-live" : ""}`}
             aria-label={props.dictating ? "Stop dictation" : "Start dictation"}
-            title={micButtonTitle({
-              available: props.dictationAvailable,
-              ready: props.dictationReady,
-              dictating: props.dictating,
-            })}
+            title={
+              props.dictationAvailable
+                ? props.dictating
+                  ? "Stop dictation"
+                  : "Start dictation"
+                : "Audio dictate is not available in this browser context."
+            }
             onClick={props.onToggleDictation}
-            disabled={!props.dictationAvailable || !props.dictationReady}
+            disabled={!props.dictationAvailable}
           >
             <MicIcon />
           </button>
@@ -936,17 +940,4 @@ export function StrategistChatRail(props: StrategistChatRailProps) {
       </div>
     </aside>
   );
-}
-
-function micButtonTitle({ available, ready, dictating }: { available: boolean; ready: boolean; dictating: boolean }): string {
-  if (!available) {
-    return "Audio dictate is not available in the desktop runtime yet.";
-  }
-  if (!ready) {
-    return "Loading dictation model…";
-  }
-  if (dictating) {
-    return "Stop dictation";
-  }
-  return "Start dictation (or press Ctrl+Space while editing)";
 }

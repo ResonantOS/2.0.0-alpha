@@ -3,17 +3,25 @@ import test from "node:test";
 
 import {
   parseDaoSlashCommand,
+  parseControlSlashCommand,
   parseDraftSlashCommand,
   parseHermesSlashCommand,
   parseIntakeSlashCommand,
   parseMemorySlashCommand,
   parseOpenCodeSlashCommand,
+  parseWorkspaceInspectionIntent,
   parseWalletSlashCommand,
   planMainWorkspacePrompt
 } from "../resonantos-side-panel-extension/src/lib/main-workspace-prompt-router.js";
 
 test("main workspace prompt router parses explicit workspace slash commands", () => {
   assert.equal(parseMemorySlashCommand("/memory augmentatism"), "augmentatism");
+  assert.equal(parseControlSlashCommand("/control go to disney.com"), "go to disney.com");
+  assert.equal(parseControlSlashCommand("/control"), "");
+  assert.deepEqual(parseWorkspaceInspectionIntent("/control inspect this workspace and summarize languages"), {
+    query: "inspect this workspace and summarize languages",
+    source: "control-slash"
+  });
   assert.equal(parseMemorySlashCommand("/archive"), "");
   assert.equal(parseHermesSlashCommand("/hermes coordinate research"), "coordinate research");
   assert.equal(parseOpenCodeSlashCommand("/open code inspect tests"), "inspect tests");
@@ -123,6 +131,17 @@ test("main workspace prompt router preserves explicit command priority", () => {
   assert.equal(planMainWorkspacePrompt("/wallet status").action, "wallet");
   assert.equal(planMainWorkspacePrompt("/dao review proposal").action, "dao");
   assert.equal(planMainWorkspacePrompt("/calendar Planning | body: Tuesday 10").action, "draft");
+  assert.deepEqual(planMainWorkspacePrompt("/control go to disney.com"), {
+    action: "control",
+    goal: "go to disney.com"
+  });
+  assert.deepEqual(planMainWorkspacePrompt("/control inspect this workspace and summarize the languages, frameworks, runtimes, and package managers used"), {
+    action: "workspace-inspection",
+    intent: {
+      query: "inspect this workspace and summarize the languages, frameworks, runtimes, and package managers used",
+      source: "control-slash"
+    }
+  });
 });
 
 test("main workspace prompt router separates browser control from normal chat", () => {
@@ -130,6 +149,8 @@ test("main workspace prompt router separates browser control from normal chat", 
   assert.equal(planMainWorkspacePrompt("can you navigate to manoloremiddi.com?").action, "control");
   assert.equal(planMainWorkspacePrompt("find latest AI news on the internet").action, "control");
   assert.equal(planMainWorkspacePrompt("hey what's the most inportant new in the world today?").action, "control");
+  assert.equal(planMainWorkspacePrompt("what is your technology stack?").action, "workspace-inspection");
+  assert.equal(planMainWorkspacePrompt("inspect this workspace and summarize the package managers").action, "workspace-inspection");
   assert.equal(planMainWorkspacePrompt("explain the strategy without delegating").action, "chat");
   assert.equal(planMainWorkspacePrompt("").action, "empty");
 });

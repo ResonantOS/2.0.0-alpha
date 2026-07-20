@@ -1,0 +1,99 @@
+{
+  "runId": "HRR-033-V61-CONTEXT-RESONATOR-DETERMINISTIC-CERTIFICATION-20260705",
+  "evidenceRoot": "output/runtime-evidence/context-resonator-remediation-20260704",
+  "artifactsRoot": "output/runtime-evidence/context-resonator-remediation-20260704/certification",
+  "targetJsFiles": [
+    "browser-first/resonantos-side-panel-extension/src/content.js",
+    "browser-first/resonantos-side-panel-extension/src/background.js",
+    "browser-first/resonantos-side-panel-extension/src/lib/background-message-policy.js",
+    "browser-first/resonantos-side-panel-extension/src/lib/browser-page-actions.js",
+    "browser-first/resonantos-side-panel-extension/src/lib/chat-turn-controller.js",
+    "browser-first/resonantos-side-panel-extension/src/lib/resonant-context.js",
+    "browser-first/resonantos-side-panel-extension/src/lib/context-plugins.js",
+    "browser-first/resonantos-side-panel-extension/src/lib/resonator.js",
+    "browser-first/resonantos-side-panel-extension/src/lib/side-panel-command-router.js",
+    "browser-first/resonantos-side-panel-extension/src/side-panel.js"
+  ],
+  "jsonFiles": [
+    "browser-first/resonantos-side-panel-extension/manifest.json",
+    "browser-first/addons/resonant-context/addon.json",
+    "browser-first/addons/resonator/addon.json",
+    "browser-first/resonantos-side-panel-extension/src/addons/resonant-context/addon.json",
+    "browser-first/resonantos-side-panel-extension/src/addons/resonator/addon.json"
+  ],
+  "certificationFiles": [
+    "browser-first/test/hrr033-certification/README.md",
+    "browser-first/test/hrr033-certification/certification.config.json",
+    "browser-first/test/hrr033-certification/run-certification.mjs"
+  ],
+  "focusedTestFiles": [
+    "browser-first/test/alpha-browser-extension-scope.test.mjs",
+    "browser-first/test/context-plugins.test.mjs",
+    "browser-first/test/resonator.test.mjs",
+    "browser-first/test/background-message-policy.test.mjs",
+    "browser-first/test/chat-turn-controller.test.mjs",
+    "browser-first/test/browser-page-actions.test.mjs",
+    "browser-first/test/side-panel-command-router.test.mjs",
+    "browser-first/test/content-redaction.test.mjs"
+  ],
+  "fullRegressionCommand": ["npm", "run", "test:browser-first"],
+  "forbiddenEvidenceText": [
+    "HRR033_QUERY_SECRET_DO_NOT_LEAK",
+    "HRR033_HASH_SECRET_DO_NOT_LEAK",
+    "HRR033_SIBLING_SECRET_DO_NOT_LEAK"
+  ],
+  "proofScreenshots": [
+    {
+      "id": "REQ-003-url-sanitization-side-panel",
+      "source": "screenshots/01-visible-sanitized-read-current-page.png",
+      "crop": "690x880+1185+135",
+      "claim": "Side-panel/user-visible page-context proof is isolated from raw URL query/hash data."
+    },
+    {
+      "id": "REQ-004-redaction-side-panel",
+      "source": "screenshots/01-visible-sanitized-read-current-page.png",
+      "crop": "690x880+1185+135",
+      "claim": "Side-panel/user-visible context proof is isolated from sensitive fixture fields."
+    },
+    {
+      "id": "REQ-006-spa-refresh-side-panel",
+      "source": "screenshots/07-visible-spa-context-refresh.png",
+      "crop": "690x880+1185+135",
+      "claim": "Side-panel/user-visible context reflects SPA refresh after dynamic page mutation."
+    },
+    {
+      "id": "REQ-010-highlight-side-panel",
+      "source": "screenshots/02-visible-resonator-highlight-command.png",
+      "crop": "690x880+1185+135",
+      "claim": "Real side-panel command path reports Resonator highlight success."
+    },
+    {
+      "id": "REQ-010-arrow-side-panel",
+      "source": "screenshots/03-visible-resonator-arrow-command.png",
+      "crop": "690x880+1185+135",
+      "claim": "Real side-panel command path reports Resonator arrow success."
+    },
+    {
+      "id": "REQ-010-spotlight-page",
+      "source": "screenshots/04-visible-resonator-spotlight-command.png",
+      "crop": "980x170+20+900",
+      "compareAgainst": "screenshots/06-visible-resonator-clear-command.png",
+      "minChangedPixels": 1000,
+      "claim": "User-visible page crop proves Resonator spotlight overlay state."
+    },
+    {
+      "id": "REQ-010-step-page",
+      "source": "screenshots/05-visible-resonator-step-command.png",
+      "crop": "980x170+20+900",
+      "compareAgainst": "screenshots/06-visible-resonator-clear-command.png",
+      "minChangedPixels": 1000,
+      "claim": "User-visible page crop proves Resonator step badge overlay state."
+    },
+    {
+      "id": "REQ-010-clear-page",
+      "source": "screenshots/06-visible-resonator-clear-command.png",
+      "crop": "980x170+20+900",
+      "claim": "User-visible page crop proves Resonator clear leaves no visible overlay in the target area."
+    }
+  ]
+}

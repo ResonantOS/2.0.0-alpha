@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -41,18 +41,26 @@ export function redactDiagnosticText(value) {
     .replace(os.homedir(), "~");
 }
 
-export function executableCandidates(commandName) {
-  const names = process.platform === "win32"
-    ? [`${commandName}.cmd`, `${commandName}.exe`, commandName]
-    : [commandName];
-  return String(process.env.PATH ?? "")
-    .split(path.delimiter)
-    .flatMap((entry) => names.map((name) => path.join(entry, name)));
+export function executableCandidates(
+  commandName,
+  { platform = process.platform, searchPath = process.env.PATH ?? "" } = {},
+) {
+  const pathApi = platform === "win32" ? path.win32 : path.posix;
+  const names = platform === "win32" ? [`${commandName}.exe`] : [commandName];
+  return String(searchPath)
+    .split(pathApi.delimiter)
+    .filter(Boolean)
+    .flatMap((entry) => names.map((name) => pathApi.join(entry, name)));
 }
 
 export async function execFileStdout(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    execFile(command, args, { timeout: 120_000, windowsHide: true, ...options }, (error, stdout, stderr) => {
+    execFile(command, args, {
+      timeout: 120_000,
+      windowsHide: true,
+      shell: false,
+      ...options,
+    }, (error, stdout, stderr) => {
       if (error) {
         reject(new Error(String(stderr || error.message || "Command failed.").trim()));
         return;
@@ -62,8 +70,86 @@ export async function execFileStdout(command, args, options = {}) {
   });
 }
 
-export function firstExistingExecutable(commandName) {
-  return executableCandidates(commandName).find((candidate) => existsSync(candidate)) ?? null;
+export function firstExistingExecutable(commandName, options) {
+  return executableCandidates(commandName, options).find((candidate) => existsSync(candidate)) ?? null;
+}
+
+export const TRUSTED_WINDOWS_SYSTEM_ROOT = "C:\\Windows";
+export const TRUSTED_WINDOWS_POWERSHELL_PATH = path.win32.join(
+  TRUSTED_WINDOWS_SYSTEM_ROOT,
+  "System32",
+  "WindowsPowerShell",
+  "v1.0",
+  "powershell.exe",
+);
+
+export function resolveWindowsSystemRoot() {
+  return TRUSTED_WINDOWS_SYSTEM_ROOT;
+}
+
+function sameWindowsPath(left, right) {
+  return path.win32.normalize(String(left)).toLowerCase() ===
+    path.win32.normalize(String(right)).toLowerCase();
+}
+
+function unavailableWindowsPowerShell(rejections) {
+  return {
+    installed: false,
+    command: null,
+    resolution: null,
+    rejections,
+  };
+}
+
+export function windowsPowerShellDiagnostics({
+  exists = existsSync,
+  realpath = (candidate) => realpathSync.native(candidate),
+  stat = statSync,
+} = {}) {
+  const rejections = [];
+  if (!exists(TRUSTED_WINDOWS_POWERSHELL_PATH)) {
+    rejections.push({
+      path: TRUSTED_WINDOWS_POWERSHELL_PATH,
+      reason: "fixed PowerShell executable was not found",
+    });
+    return unavailableWindowsPowerShell(rejections);
+  }
+  try {
+    const details = stat(TRUSTED_WINDOWS_POWERSHELL_PATH);
+    if (!details.isFile()) {
+      rejections.push({
+        path: TRUSTED_WINDOWS_POWERSHELL_PATH,
+        reason: "fixed PowerShell executable is not a regular file",
+      });
+      return unavailableWindowsPowerShell(rejections);
+    }
+    const canonicalPath = realpath(TRUSTED_WINDOWS_POWERSHELL_PATH);
+    if (!sameWindowsPath(canonicalPath, TRUSTED_WINDOWS_POWERSHELL_PATH)) {
+      rejections.push({
+        path: TRUSTED_WINDOWS_POWERSHELL_PATH,
+        reason: "canonical PowerShell path differs from the fixed system executable",
+      });
+      return unavailableWindowsPowerShell(rejections);
+    }
+    return {
+      installed: true,
+      command: canonicalPath,
+      resolution: {
+        base: "absolute",
+        path: canonicalPath,
+        canonical_path: canonicalPath,
+        validated_by: "windowsPowerShellDiagnostics",
+        source: "fixed-windows-system-root",
+      },
+      rejections,
+    };
+  } catch (error) {
+    rejections.push({
+      path: TRUSTED_WINDOWS_POWERSHELL_PATH,
+      reason: error instanceof Error ? error.message : String(error),
+    });
+    return unavailableWindowsPowerShell(rejections);
+  }
 }
 
 export function dashboardTarget(host = "127.0.0.1", port = 9119) {

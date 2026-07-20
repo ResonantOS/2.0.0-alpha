@@ -2,6 +2,7 @@
 // Intent citation: docs/architecture/ADR-015-delegation-fabric-addon-catalog-native-tools.md
 
 import { delegationGuidanceText } from "./delegation-guidance.js";
+import { opencodeStatusMessage } from "./runtime-error-messages.js";
 
 function setStatus(node, text, tone = "neutral") {
   node.textContent = text;
@@ -14,7 +15,44 @@ function boundaryItem(text) {
   return item;
 }
 
-export function renderOpenCodeWorkspace({ container, bridgeRequest, initialMission = "" }) {
+function openCodeRuntimeSetupText(status = {}) {
+  const lines = [];
+  if (status.installHint) {
+    lines.push(`Setup: ${status.installHint}`);
+  }
+  if (status.installCommand) {
+    lines.push(`Primary command: ${status.installCommand}`);
+  }
+  if (Array.isArray(status.alternativeInstallCommands) && status.alternativeInstallCommands.length) {
+    lines.push(`Alternatives: ${status.alternativeInstallCommands.join(" | ")}`);
+  }
+  if (status.configureCommand) {
+    lines.push(`Existing install override: ${status.configureCommand}`);
+  }
+  if (status.overrideConfigured && !status.overrideFound) {
+    lines.push(`Configured override was not found: ${status.overridePath || "OPENCODE_COMMAND"}`);
+  }
+  if (Array.isArray(status.searchedCommands) && status.searchedCommands.length) {
+    lines.push(`Command names checked: ${status.searchedCommands.join(", ")}`);
+  }
+  if (Array.isArray(status.searchedPaths) && status.searchedPaths.length) {
+    const suffix = status.searchedPathOmitted > 0 ? ` (+${status.searchedPathOmitted} more)` : "";
+    lines.push(`Searched paths${suffix}:`);
+    lines.push(...status.searchedPaths.slice(0, 12).map((candidate) => `- ${candidate}`));
+  }
+  return lines.join("\n");
+}
+
+function openCodeStatusMeta(status = {}) {
+  const command = status.command || status.installCommand || "OpenCode command not detected";
+  return [command, status.model ? `model ${status.model}` : ""].filter(Boolean).join(" · ");
+}
+
+export function renderOpenCodeWorkspace({ container, bridgeRequest, getBridgeRequest, initialMission = "" }) {
+  // Resolve at call time. The module-level `bridgeRequest` may be
+  // null at construction (rebind still in flight); the getter lets
+  // us re-read the current value on every call.
+  const bridge = () => (typeof getBridgeRequest === "function" ? getBridgeRequest() : bridgeRequest);
   const section = document.createElement("section");
   section.className = "opencode-main-workspace";
   section.setAttribute("aria-label", "OpenCode workspace");
@@ -76,26 +114,29 @@ export function renderOpenCodeWorkspace({ container, bridgeRequest, initialMissi
   const loadStatus = async () => {
     refreshButton.disabled = true;
     try {
-      const status = await bridgeRequest("/opencode/status", { method: "GET" });
+      const status = await bridge()("/opencode/status", { method: "GET" });
       const executionEnabled = status.executionEnabled !== false;
       statusBody.textContent = status.detail;
-      statusMeta.textContent = status.command || "OpenCode command not detected";
+      statusMeta.textContent = openCodeStatusMeta(status);
       statusCard.dataset.ready = status.installed ? "true" : "false";
       if (!status.installed || !executionEnabled) {
         const guidance = statusCard.querySelector(".delegation-guidance") ?? document.createElement("pre");
         guidance.className = "delegation-guidance";
-        guidance.textContent = delegationGuidanceText({
-          blockedReason: status.blockedReason || status.detail,
-          executionEnabled,
-          runtimeAvailable: Boolean(status.installed),
-          target: "opencode"
-        });
+        guidance.textContent = [
+          delegationGuidanceText({
+            blockedReason: status.blockedReason || status.detail,
+            executionEnabled,
+            runtimeAvailable: Boolean(status.installed),
+            target: "opencode"
+          }),
+          !status.installed ? openCodeRuntimeSetupText(status) : ""
+        ].filter(Boolean).join("\n\n");
         statusCard.append(guidance);
       } else {
         statusCard.querySelector(".delegation-guidance")?.remove();
       }
     } catch (error) {
-      statusBody.textContent = error instanceof Error ? error.message : String(error);
+      statusBody.textContent = opencodeStatusMessage(error);
       statusMeta.textContent = "Status unavailable";
       statusCard.dataset.ready = "false";
       const guidance = statusCard.querySelector(".delegation-guidance") ?? document.createElement("pre");
@@ -124,29 +165,32 @@ export function renderOpenCodeWorkspace({ container, bridgeRequest, initialMissi
     taskButton.disabled = true;
     setStatus(taskStatus, "Creating governed OpenCode delegation packet…");
     try {
-      const result = await bridgeRequest("/addons/delegate", {
+      const result = await bridge()("/addons/delegate", {
         method: "POST",
         body: { target: "opencode", mission }
       });
-      const started = await bridgeRequest("/opencode/delegation/start", {
+      const started = await bridge()("/opencode/delegation/start", {
         method: "POST",
         body: { path: result.path }
       });
       const lifecycle = started.status === "completed"
         ? `Completed · ${started.resultArtifactPath || "result artifact ready"}`
         : started.status === "blocked"
-          ? delegationGuidanceText({
-              blockedReason: started.blockedReason || "OpenCode runtime unavailable",
-              executionEnabled: false,
-              runtimeAvailable: false,
-              target: "opencode"
-            })
+          ? [
+              delegationGuidanceText({
+                blockedReason: started.blockedReason || "OpenCode runtime unavailable",
+                executionEnabled: false,
+                runtimeAvailable: false,
+                target: "opencode"
+              }),
+              openCodeRuntimeSetupText(started)
+            ].filter(Boolean).join("\n\n")
           : `Status ${started.status || "queued"}`;
       setStatus(taskStatus, `Delegation queued: ${result.id} · ${result.path}\n${lifecycle}`, started.status === "blocked" ? "warning" : "success");
       missionInput.value = "";
       await loadStatus();
     } catch (error) {
-      setStatus(taskStatus, error instanceof Error ? error.message : String(error), "error");
+      setStatus(taskStatus, opencodeStatusMessage(error, "OpenCode delegation failed"), "error");
     } finally {
       taskButton.disabled = false;
     }

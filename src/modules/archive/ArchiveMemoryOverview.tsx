@@ -88,7 +88,8 @@ export function ArchiveMemoryOverview({
       artifact.promotion?.status !== "promoted" &&
       artifact.proposedPages.length > 0,
   ).length;
-  const latestBuildStatus = latestBuild?.status ?? "not-started";
+  const latestBuildStatus =
+    latestBuild?.status === "ready-to-promote" ? "ready for AI Memory update" : (latestBuild?.status ?? "not-started").replaceAll("-", " ");
 
   useEffect(() => {
     dialogueEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -112,7 +113,7 @@ export function ArchiveMemoryOverview({
           return "I could not run the AI Memory action because no import manifest is available.";
         case "promote":
           await onPromoteApprovedArtifacts();
-          return "I promoted the approved archive artifacts.";
+          return "I updated AI Memory with the approved archive work.";
         case "maintenance":
           await onRunArchiveMaintenance();
           return "I ran Living Archive maintenance.";
@@ -141,23 +142,26 @@ export function ArchiveMemoryOverview({
       latestLibrary && shouldInspectImportedLibraryCoverage(message)
         ? await runCoverageInspection(latestLibrary)
         : null;
-    await onAskAugmentor(
-      message,
-      [
-        "Living Archive workspace context for this turn:",
-        "You are helping me configure the Living Archive in ResonantOS.",
-        "Do the work for me where possible. Ask only one necessary question at a time.",
-        "This conversation is happening inside the Living Archive workspace. Do not tell the user to move to the right chat rail.",
-        "Do not claim you will run a check, listing, scan, import, repair, or archive operation unless the host has already returned that result in this turn.",
-        "If host inspection results are supplied below, answer from those results and clearly separate imported, skipped, unsupported, and genuinely missing coverage.",
-        latestLibrary
-          ? `Current imported library: ${latestLibrary.libraryName} at ${latestLibrary.canonicalRoot}.`
-          : "No library is imported yet.",
-        `Recommended next action from the archive system: ${recommendedAction.title}. ${recommendedAction.description}`,
-        inspectionContext ? `\n${inspectionContext}` : "",
-      ].join("\n"),
-    );
-    setAgentStatus(null);
+    try {
+      await onAskAugmentor(
+        message,
+        [
+          "Living Archive workspace context for this turn:",
+          "You are helping me configure the Living Archive in ResonantOS.",
+          "Do the work for me where possible. Ask only one necessary question at a time.",
+          "This conversation is happening inside the Living Archive workspace. Do not tell the user to move to the right chat rail.",
+          "Do not claim you will run a check, listing, scan, import, repair, or archive operation unless the host has already returned that result in this turn.",
+          "If host inspection results are supplied below, answer from those results and clearly separate imported, skipped, unsupported, and genuinely missing coverage.",
+          latestLibrary
+            ? `Current imported library: ${latestLibrary.libraryName} at ${latestLibrary.canonicalRoot}.`
+            : "No library is imported yet.",
+          `Recommended next action from the archive system: ${recommendedAction.title}. ${recommendedAction.description}`,
+          inspectionContext ? `\n${inspectionContext}` : "",
+        ].join("\n"),
+      );
+    } finally {
+      setAgentStatus(null);
+    }
   };
   const runCoverageInspection = async (library: ArchiveImportedLibrarySummary): Promise<string> => {
     setAgentStatus(`Inspecting ${library.libraryName} folder coverage before Augmentor answers...`);
@@ -187,7 +191,7 @@ export function ArchiveMemoryOverview({
             <span className="archive-agent-orb" aria-hidden="true" />
             <div>
               <span className="eyebrow">Living Archive Agent</span>
-              <h3>Ask Augmentor to manage your memory.</h3>
+              <h3>Human Knowledge is preserved; AI Memory is the maintained wiki.</h3>
             </div>
           </div>
 
@@ -206,7 +210,7 @@ export function ArchiveMemoryOverview({
             ) : (
               <article className="archive-agent-message assistant">
                 <strong>Augmentor</strong>
-                <MessageContent content="I can connect folders, repair AI Memory builds, explain what is configured, and continue curation. Ask me what you want done, or run the next suggested step below." />
+                <MessageContent content="I can connect any knowledge folder, keep the original material safe, and maintain the AI Memory wiki after review. Obsidian-compatible vaults are optional; they are just one way to work with the same memory files." />
               </article>
             )}
             {working ? (
@@ -266,7 +270,7 @@ export function ArchiveMemoryOverview({
             <SetupCard
               label="Source"
               value={latestLibrary?.libraryName ?? "No folder connected"}
-              detail={latestLibrary ? `${filesImported.toLocaleString()} managed file(s)` : "Add a folder or vault once. ResonantOS keeps a managed copy."}
+              detail={latestLibrary ? `${filesImported.toLocaleString()} managed file(s)` : "Add any folder once. Obsidian-compatible vaults are optional."}
               actionLabel="Add Folder"
               onAction={onImportAnother}
             />
@@ -288,7 +292,7 @@ export function ArchiveMemoryOverview({
             <SetupCard
               label="Automation"
               value={archiveAutomationPolicy.autoSyncEnabled ? "Auto maintenance on" : "Manual control"}
-              detail={`AI builds: ${archiveAutomationPolicy.aiMemoryBuilds}. Pending review: ${pendingReview}. Ready to promote: ${approvedUnpromoted}.`}
+              detail={`AI builds: ${archiveAutomationPolicy.aiMemoryBuilds}. Pending review: ${pendingReview}. Ready for AI Memory update: ${approvedUnpromoted}.`}
               actionLabel={archiveStatusBusy ? "Checking..." : "Review"}
               onAction={onOpenReview}
               disabled={archiveStatusBusy}

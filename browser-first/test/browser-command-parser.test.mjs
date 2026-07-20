@@ -38,6 +38,9 @@ test("browser command parser extracts page read, click, type, and scroll intents
   assert.deepEqual(parseReadPageIntent("what can you see here?"), { action: "read_page" });
   assert.deepEqual(parseReadPageIntent("tell me about the current website"), { action: "read_page" });
   assert.deepEqual(parseClickIntent('click "Add to cart"'), { text: "Add to cart" });
+  assert.deepEqual(parseClickIntent("click About"), { text: "About" });
+  assert.deepEqual(parseClickIntent("open the About screen"), { text: "About" });
+  assert.equal(parseClickIntent("open resonantos.com"), null);
   assert.deepEqual(parseTypeIntent('type "pizza stone" into the search bar'), { text: "pizza stone", submit: true });
   assert.deepEqual(parseScrollIntent("scroll to the bottom"), { direction: "bottom" });
 });

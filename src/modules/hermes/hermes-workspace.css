@@ -34,7 +34,7 @@
 
 .hermes-settings-drawer,
 .hermes-dashboard-frame {
-  border: 1px solid rgba(138, 128, 112, 0.12);
+  border: var(--border-line-sm);
   background: rgba(255, 248, 236, 0.028);
 }
 
@@ -57,7 +57,7 @@
 }
 
 .hermes-pill.ready {
-  background: rgba(16, 185, 129, 0.12);
+  background: var(--accent-surface);
   color: var(--accent);
 }
 

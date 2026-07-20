@@ -1,0 +1,16 @@
+{
+  "id": "addon.resonator",
+  "name": "Resonator",
+  "version": "1.0.0",
+  "description": "Visual guide layer: AI highlights, arrows, spotlights, and step badges to show the human things without taking control.",
+  "author": "Tom Pennington",
+  "mode": "visual-guide",
+  "trust": "page-overlay",
+  "entry": null,
+  "contentScripts": ["resonator.js"],
+  "commands": ["/highlight", "/arrow", "/spotlight", "/step"],
+  "messageChannel": "resonantos.resonator",
+  "capabilities": ["highlight", "arrow", "spotlight", "step-badge", "overlay", "idempotent-clear"],
+  "requires": [],
+  "boundary": "Visual overlay only. CSS animations, no JS loops. No page modification beyond overlay elements. One-command clear."
+}

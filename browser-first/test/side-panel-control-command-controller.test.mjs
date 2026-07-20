@@ -73,6 +73,7 @@ function createHarness({
     shouldRequireControlPreflight: () => shouldPreflight,
     siteKeyForUrl: (url) => new URL(url || "https://unknown.invalid").host,
     taskConsentStore: {
+      consumeTaskConsent: async (request) => events.push(["consume-consent", request]),
       consentFor: async () => consent
     },
     updateBrowserJob: async (jobId, patch) => events.push(["update-job", jobId, patch])
@@ -179,6 +180,25 @@ test("control command controller queues browser jobs and ticks the scheduler aft
   assert.equal(job.planner, "observe-act-verify-loop");
   assert.equal(harness.getNextDecision().mode, "skipped-by-consent");
   assert.ok(harness.events.some((event) => event[0] === "monitor-collapsed" && event[1] === false));
+  assert.equal(harness.getSchedulerTicks(), 1);
+});
+
+test("control command controller consumes one-time task consent when it skips preflight", async () => {
+  const harness = createHarness({
+    consent: {
+      id: "consent-once",
+      mode: "allow-once",
+      siteKey: "example.com",
+      taskClass: "research",
+      reason: "single run"
+    }
+  });
+
+  const job = await harness.controller.runControlCommand("find current news");
+
+  assert.equal(job.id, "job-created");
+  assert.equal(harness.getNextDecision().mode, "allowed-task-class-once");
+  assert.ok(harness.events.some((event) => event[0] === "consume-consent" && event[1].taskClass === "research"));
   assert.equal(harness.getSchedulerTicks(), 1);
 });
 

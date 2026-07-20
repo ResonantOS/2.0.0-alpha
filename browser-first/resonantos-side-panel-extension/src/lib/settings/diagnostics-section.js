@@ -13,7 +13,7 @@ function browserLaunchStatus(result) {
   }
   const value = result.value ?? {};
   if (value.status === "ready") {
-    return { value: "Ready", detail: "native Chromium host, bridge, menu, workspace, and extensions verified", tone: "success" };
+    return { value: "Ready", detail: "extension bridge, menu, workspace, and add-on endpoints verified", tone: "success" };
   }
   return {
     value: "Check",
@@ -49,7 +49,8 @@ function diagnosticsDisclosure(title, body, children = []) {
   return details;
 }
 
-export function renderDiagnosticsSection(container, { bridgeRequest }) {
+export function renderDiagnosticsSection(container, { bridgeRequest, getBridgeRequest }) {
+  const bridge = () => (typeof getBridgeRequest === "function" ? getBridgeRequest() : bridgeRequest);
   const statusNode = document.createElement("p");
   statusNode.className = "settings-status";
   statusNode.textContent = "Checking diagnostics endpoints...";
@@ -79,7 +80,7 @@ export function renderDiagnosticsSection(container, { bridgeRequest }) {
   exportCard.append(exportButton, exportStatus);
   const endpointDetails = diagnosticsDisclosure(
     "Endpoint details",
-    "Open this when you need exact status counts for bridge, providers, add-ons, memory, and the native Chromium host.",
+    "Open this when you need exact status counts for bridge, providers, add-ons, memory, and extension health.",
     [details]
   );
   const exportDetails = diagnosticsDisclosure(
@@ -104,7 +105,7 @@ export function renderDiagnosticsSection(container, { bridgeRequest }) {
     exportButton.disabled = true;
     setStatus(exportStatus, "Exporting redacted diagnostics report...");
     try {
-      const result = await bridgeRequest("/diagnostics/report", {
+      const result = await bridge()("/diagnostics/report", {
         method: "POST",
         capability: "diagnostics-report-export",
         body: { scope: "settings" }
@@ -119,13 +120,13 @@ export function renderDiagnosticsSection(container, { bridgeRequest }) {
 
   const load = async () => {
     const [statusResult, providerResult, addonResult, memoryResult] = await Promise.allSettled([
-      bridgeRequest("/status", { method: "GET" }),
-      bridgeRequest("/providers/status", { method: "GET" }),
-      bridgeRequest("/addons/status", { method: "GET" }),
-      bridgeRequest("/memory/status", { method: "GET" })
+      bridge()("/status", { method: "GET" }),
+      bridge()("/providers/status", { method: "GET" }),
+      bridge()("/addons/status", { method: "GET" }),
+      bridge()("/memory/status", { method: "GET" })
     ]);
     const [browserLaunchResult] = await Promise.allSettled([
-      bridgeRequest("/browser/launch-diagnostics", { method: "GET" })
+      bridge()("/browser/launch-diagnostics", { method: "GET" })
     ]);
     const statusValue = serviceStatus(statusResult);
     const providerValue = serviceStatus(providerResult);

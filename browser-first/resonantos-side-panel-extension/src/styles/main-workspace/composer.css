@@ -116,7 +116,8 @@ textarea {
 }
 
 .model-select,
-.depth-select {
+.depth-select,
+.regeneration-select {
   flex: 1 1 170px;
   min-width: 110px;
   max-width: 240px;
@@ -134,6 +135,12 @@ textarea {
   flex: 0 1 86px;
   min-width: 62px;
   max-width: 86px;
+}
+
+.regeneration-select {
+  flex: 0 1 106px;
+  min-width: 86px;
+  max-width: 106px;
 }
 
 .depth-select[hidden] {

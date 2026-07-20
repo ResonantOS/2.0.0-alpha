@@ -3,23 +3,87 @@
 :root {
   color-scheme: dark;
   font-family: "DM Sans", system-ui, sans-serif;
-  --bg-primary: #151413;
+
+  /* Background */
+  --bg-primary:   #151413;
   --bg-secondary: #201d1a;
-  --bg-tertiary: #29241f;
-  --bg-elevated: rgba(255, 248, 236, 0.04);
-  --text-primary: #e8e3d8;
+  --bg-tertiary:  #29241f;
+
+  /* Text */
+  --text-primary:   #e8e3d8;
   --text-secondary: #c4baa8;
-  --text-muted: #8a8070;
-  --accent: #10b981;
+  --text-muted:     #8a8070;
+
+  /* Brand colors */
+  --accent:       #10b981;
   --accent-hover: #059669;
-  --accent-muted: rgba(16, 185, 129, 0.15);
-  --secondary: #d97706;
-  --secondary-muted: rgba(217, 119, 6, 0.15);
-  --info: #60a5fa;
-  --warning: #fbbf24;
-  --danger: #f87171;
-  --border: rgba(138, 128, 112, 0.18);
-  --shadow: 0 24px 60px rgba(0, 0, 0, 0.3);
+  --secondary:    #d97706;
+  --info:         #60a5fa;
+  --warning:      #fbbf24;
+  --danger:       #f87171;
+
+  /* Primitive: color channels */
+  /* Use with rgb(var(--ch-X) / alpha). Internal to design system. */
+  --ch-accent:    16 185 129;   /* #10b981 */
+  --ch-surface:   255 248 236;  /* warm white */
+  --ch-warm:      138 128 112;  /* warm gray */
+  --ch-secondary: 217 119 6;    /* #d97706 */
+
+  /* Primitive: opacity scale */
+  --alpha-3:  0.03;
+  --alpha-4:  0.04;
+  --alpha-6:  0.06;
+  --alpha-8:  0.08;
+  --alpha-12: 0.12;
+  --alpha-14: 0.14;
+  --alpha-16: 0.16;
+  --alpha-18: 0.18;
+  --alpha-20: 0.20;
+  --alpha-22: 0.22;
+  --alpha-28: 0.28;
+  --alpha-32: 0.32;
+  --alpha-40: 0.40;
+
+  /* Semantic: warm-gray borders */
+  --border-sm: rgb(var(--ch-warm) / var(--alpha-12));
+  --border-md: rgb(var(--ch-warm) / var(--alpha-14));
+  --border-lg: rgb(var(--ch-warm) / var(--alpha-16));
+  --border:    rgb(var(--ch-warm) / var(--alpha-18));
+  /* Compound border shorthands */
+  --border-line:    1px solid var(--border);
+  --border-line-lg: 1px solid var(--border-lg);
+  --border-line-md: 1px solid var(--border-md);
+  --border-line-sm: 1px solid var(--border-sm);
+
+  /* Semantic: accent (green) surfaces */
+  --accent-surface-xs: rgb(var(--ch-accent) / var(--alpha-6));
+  --accent-surface-sm: rgb(var(--ch-accent) / var(--alpha-8));
+  --accent-surface:    rgb(var(--ch-accent) / var(--alpha-12));
+  --accent-surface-md: rgb(var(--ch-accent) / var(--alpha-14));
+  --accent-surface-lg: rgb(var(--ch-accent) / var(--alpha-16));
+  --accent-muted:      rgb(var(--ch-accent) / var(--alpha-16));
+
+  /* Semantic: accent (green) borders */
+  --accent-border-sm: rgb(var(--ch-accent) / var(--alpha-20));
+  --accent-border:    rgb(var(--ch-accent) / var(--alpha-22));
+  --accent-border-md: rgb(var(--ch-accent) / var(--alpha-28));
+  --accent-border-lg: rgb(var(--ch-accent) / var(--alpha-32));
+  --accent-border-xl: rgb(var(--ch-accent) / var(--alpha-40));
+
+  /* Semantic: warm surface tints */
+  --surface-tint-xs:   rgb(var(--ch-surface) / var(--alpha-3));
+  --surface-tint-sm:   rgb(var(--ch-surface) / var(--alpha-4));
+  --surface-tint:      rgb(var(--ch-surface) / var(--alpha-6));
+  --surface-tint-md:   rgb(var(--ch-surface) / var(--alpha-8));
+  --surface-tint-lg:   rgb(var(--ch-surface) / var(--alpha-12));
+  --bg-elevated:       var(--surface-tint-sm);
+
+  /* Secondary muted */
+  --secondary-muted: rgb(var(--ch-secondary) / var(--alpha-16));
+
+  /* Shadow & radius */
+  --shadow:      0 24px 60px rgba(0, 0, 0, 0.3);
+  --shadow-soft: 0 8px 32px rgba(0, 0, 0, 0.18);
   --radius: 18px;
 }
 
@@ -86,19 +150,7 @@ input,
 select {
   width: 100%;
   border: 1px solid var(--border);
-  background: rgba(255, 248, 236, 0.04);
+  background: var(--bg-elevated);
   color: var(--text-primary);
   padding: 0.8rem 0.9rem;
 }
-
-/* Style the OS-rendered <select> popup. :root already sets color-scheme: dark,
-   but Chromium on Linux often ignores that for <select> popups and renders
-   them with the OS theme (white). The explicit option background/color pins
-   the popup to --text-muted per the user's request. */
-select option,
-select option:checked,
-select option:hover {
-  background: var(--text-muted);
-  color: var(--text-primary);
-}
-

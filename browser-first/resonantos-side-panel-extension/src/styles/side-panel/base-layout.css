@@ -29,6 +29,15 @@ textarea {
   font: inherit;
 }
 
+/* Native <option> popups don't inherit a select's translucent background, so
+   without an explicit opaque surface the list renders light text on a white
+   default on Chrome/Windows 11 (#206). Pin an opaque dark surface + light text. */
+select option,
+select optgroup {
+  background-color: var(--bg, #0b120e);
+  color: var(--text, #eef7f0);
+}
+
 button {
   cursor: pointer;
 }

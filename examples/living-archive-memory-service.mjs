@@ -3,16 +3,68 @@
 
 import { createServer } from "node:http";
 import { resolve } from "node:path";
+import { timingSafeEqual } from "node:crypto";
 import { createLivingArchiveBridge } from "./living-archive-mcp.mjs";
 
 const defaultPort = 4888;
 const maxBodyBytes = 5 * 1024 * 1024;
 
+// DD-3 (F6): operations that mutate Living Archive state. These are gated behind
+// readonly-default + a required bearer token. Read operations stay unauth on a
+// loopback bind. This mirrors the readonly throw-points in living-archive-mcp.mjs.
+const writeMemoryOperations = new Set([
+  "intake-write",
+  "ingest-request",
+  "process-ingest-request",
+  "decide-review",
+  "promote-review-artifact",
+  "maintenance-cycle",
+  "background-cycle",
+]);
+
+export const isWriteMemoryOperation = (operation) =>
+  writeMemoryOperations.has(operation);
+
+// Loopback classification kept intentionally narrow: a non-loopback bind is only
+// allowed behind the explicit --unsafe-host / RESONANTOS_MEMORY_SERVICE_UNSAFE_HOST
+// opt-in (DD-3 loopback-default axis).
+const isLoopbackHost = (host) => {
+  const h = String(host ?? "").trim().toLowerCase().replace(/^\[|\]$/g, "");
+  if (h === "" || h === "localhost" || h.endsWith(".localhost")) return h !== "";
+  if (h === "::1") return true;
+  return /^127\./.test(h);
+};
+
+// Constant-time bearer-token comparison. Returns false on any length/format
+// mismatch without leaking timing about the expected token.
+const tokenMatches = (expected, provided) => {
+  if (typeof expected !== "string" || expected.length === 0) return false;
+  if (typeof provided !== "string" || provided.length === 0) return false;
+  const a = Buffer.from(expected, "utf8");
+  const b = Buffer.from(provided, "utf8");
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+};
+
+const extractBearerToken = (request) => {
+  const header = request?.headers?.authorization;
+  if (typeof header !== "string") return "";
+  const match = /^Bearer\s+(.+)$/i.exec(header.trim());
+  return match ? match[1].trim() : "";
+};
+
 const parseArgs = (argv = process.argv.slice(2), env = process.env) => {
   let memoryRoot = env.RESONANTOS_MEMORY_ROOT ?? "";
   let port = Number.parseInt(env.RESONANTOS_MEMORY_SERVICE_PORT ?? String(defaultPort), 10);
   let host = env.RESONANTOS_MEMORY_SERVICE_HOST ?? "127.0.0.1";
-  let readonly = env.RESONANTOS_MCP_READONLY === "1" || env.RESONANTOS_MEMORY_SERVICE_READONLY === "1";
+  // DD-3 readonly-default: writes are off unless an explicit opt-out is given.
+  let writable =
+    env.RESONANTOS_MEMORY_SERVICE_WRITABLE === "1" || env.RESONANTOS_MCP_WRITABLE === "1";
+  // Legacy env that forced readonly on still wins (keeps the old hardening path).
+  const forcedReadonly =
+    env.RESONANTOS_MCP_READONLY === "1" || env.RESONANTOS_MEMORY_SERVICE_READONLY === "1";
+  let unsafeHost = env.RESONANTOS_MEMORY_SERVICE_UNSAFE_HOST === "1";
+  let token = env.RESONANTOS_MEMORY_SERVICE_TOKEN ?? "";
   let maxSearchBytes = Number.parseInt(env.RESONANTOS_MCP_MAX_SEARCH_BYTES ?? "1048576", 10);
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -32,21 +84,40 @@ const parseArgs = (argv = process.argv.slice(2), env = process.env) => {
       index += 1;
       continue;
     }
+    if (arg === "--token") {
+      token = argv[index + 1] ?? token;
+      index += 1;
+      continue;
+    }
     if (arg === "--max-search-bytes") {
       maxSearchBytes = Number.parseInt(argv[index + 1] ?? "", 10);
       index += 1;
       continue;
     }
+    if (arg === "--writable" || arg === "--no-readonly") {
+      writable = true;
+      continue;
+    }
+    if (arg === "--unsafe-host") {
+      unsafeHost = true;
+      continue;
+    }
     if (arg === "--readonly") {
-      readonly = true;
+      writable = false;
     }
   }
+
+  // readonly-default: readonly unless explicitly made writable, and never writable
+  // if a forced-readonly env is set.
+  const readonly = forcedReadonly || !writable;
 
   return {
     memoryRoot: memoryRoot ? resolve(memoryRoot) : "",
     port: Number.isFinite(port) && port >= 0 ? port : defaultPort,
     host: host || "127.0.0.1",
     readonly,
+    unsafeHost,
+    token,
     maxSearchBytes: Number.isFinite(maxSearchBytes) && maxSearchBytes > 0 ? maxSearchBytes : 1_048_576,
   };
 };
@@ -135,7 +206,11 @@ const readJsonBody = (request) =>
   });
 
 export const createLivingArchiveMemoryService = (options = {}) => {
-  const evaluateOperation = createLivingArchiveMemoryOperationEvaluator(options);
+  // DD-3 readonly-default: writes are off unless the caller explicitly passes
+  // readonly: false (an opt-out). Omitting readonly => readonly ON.
+  const readonly = options.readonly === false ? false : true;
+  const evaluateOperation = createLivingArchiveMemoryOperationEvaluator({ ...options, readonly });
+  const token = typeof options.token === "string" ? options.token : "";
 
   return createServer(async (request, response) => {
     if (request.method === "OPTIONS") {
@@ -160,6 +235,25 @@ export const createLivingArchiveMemoryService = (options = {}) => {
       return;
     }
 
+    // DD-3 (F6): mutating operations require both writes-enabled and a valid
+    // bearer token. Reads stay unauth on the loopback bind.
+    if (isWriteMemoryOperation(operation)) {
+      if (readonly) {
+        jsonResponse(response, 403, {
+          error: "Living Archive memory service is readonly; writes are disabled.",
+          operation,
+        });
+        return;
+      }
+      if (!tokenMatches(token, extractBearerToken(request))) {
+        jsonResponse(response, 401, {
+          error: "Living Archive memory service write operations require a valid bearer token.",
+          operation,
+        });
+        return;
+      }
+    }
+
     try {
       const input = await readJsonBody(request);
       const result = await evaluateOperation(operation, input);
@@ -175,6 +269,23 @@ export const createLivingArchiveMemoryService = (options = {}) => {
 
 const main = async () => {
   const config = parseArgs();
+
+  // DD-3 loopback-default: refuse a non-loopback bind unless --unsafe-host opt-in.
+  if (!isLoopbackHost(config.host) && !config.unsafeHost) {
+    process.stderr.write(
+      `Refusing to bind Living Archive memory service to non-loopback host "${config.host}" without --unsafe-host (RESONANTOS_MEMORY_SERVICE_UNSAFE_HOST=1).\n`,
+    );
+    process.exitCode = 1;
+    return;
+  }
+  // Writes require a configured token; without one the service can only be readonly.
+  if (!config.readonly && config.token.length === 0) {
+    process.stderr.write(
+      "Refusing to enable writes without RESONANTOS_MEMORY_SERVICE_TOKEN (or --token); falling back to readonly.\n",
+    );
+    config.readonly = true;
+  }
+
   const server = createLivingArchiveMemoryService(config);
   await new Promise((resolveListen) => server.listen(config.port, config.host, resolveListen));
   const address = server.address();
@@ -187,6 +298,7 @@ const main = async () => {
         endpoint: `http://${config.host}:${port}`,
         memoryRoot: config.memoryRoot,
         readonly: config.readonly,
+        tokenRequiredForWrites: config.token.length > 0,
       },
       null,
       2,

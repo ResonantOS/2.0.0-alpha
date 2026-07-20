@@ -5,7 +5,7 @@
   "author": "Resonant Alpha",
   "category": "memory",
   "sdkVersion": "0.1.0",
-  "description": "Recommended default memory-system add-on for ResonantOS. It manages Human Knowledge, External Knowledge, and AI Memory through host-mediated scoped APIs and can be disabled or replaced by another memory add-on.",
+  "description": "Human Knowledge is preserved; AI Memory is the maintained wiki. Living Archive is the recommended default memory add-on and can be disabled or replaced later.",
   "runtimeType": "local-service",
   "surfaces": [
     {

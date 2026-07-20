@@ -18,6 +18,10 @@ function createHarness(overrides = {}) {
     denyPendingControlStep: async (approval) => events.push(["deny", approval]),
   };
   const taskConsentStore = {
+    consumeTaskConsent: async (consent) => {
+      events.push(["consume-consent", consent]);
+      return consent;
+    },
     setTaskConsent: async (consent) => {
       events.push(["set-consent", consent]);
       return {
@@ -61,6 +65,18 @@ test("control approval actions block hard-boundary automation", async () => {
   assert.match(harness.events.find((event) => event[0] === "message")?.[2], /human-only/);
 });
 
+test("#240: control approval actions block public-submit automation", async () => {
+  const harness = createHarness({
+    approvalBoundaryForStep: () => "public-submit",
+    pendingApproval: { reason: "public submit", step: { type: "click", text: "Submit public form" } },
+  });
+
+  await harness.actions.approvePendingControlStep();
+
+  assert.equal(harness.events.some((event) => event[0] === "approve"), false, "public-submit must not reach the runner approve path");
+  assert.match(harness.events.find((event) => event[0] === "message")?.[2], /human-only/);
+});
+
 test("control approval actions trust only safe task classes before approving", async () => {
   const harness = createHarness();
 
@@ -78,6 +94,23 @@ test("control approval actions trust only safe task classes before approving", a
   assert.ok(harness.events.some((event) => event[0] === "render-task-consent"));
 });
 
+test("control approval actions allow a safe task class once without persisting broad trust", async () => {
+  const harness = createHarness();
+
+  await harness.actions.allowCurrentTaskOnceForSafeActions();
+
+  assert.deepEqual(harness.events[0], ["set-consent", {
+    goal: "find a result",
+    mode: "allow-once",
+    reason: "Allowed once after approval for: click:Continue",
+    siteKey: "example.com",
+    source: "approval-card",
+  }]);
+  assert.ok(harness.events.some((event) => event[0] === "consume-consent" && event[1].taskClass === "research"));
+  assert.match(harness.events.find((event) => event[0] === "message")?.[2], /for this execution only/);
+  assert.ok(harness.events.some((event) => event[0] === "approve"));
+});
+
 test("control approval actions refuse broad trust for non-safe boundaries", async () => {
   const harness = createHarness({
     approvalBoundaryForStep: () => "public-submit",
@@ -88,6 +121,19 @@ test("control approval actions refuse broad trust for non-safe boundaries", asyn
   assert.equal(harness.events.some((event) => event[0] === "set-consent"), false);
   assert.equal(harness.events.some((event) => event[0] === "approve"), false);
   assert.match(harness.events.find((event) => event[0] === "message")?.[2], /Cannot trust this task class/);
+  assert.ok(harness.events.some((event) => event[0] === "render-control-monitor"));
+});
+
+test("control approval actions refuse one-time task class consent for non-safe boundaries", async () => {
+  const harness = createHarness({
+    approvalBoundaryForStep: () => "public-submit",
+  });
+
+  await harness.actions.allowCurrentTaskOnceForSafeActions();
+
+  assert.equal(harness.events.some((event) => event[0] === "set-consent"), false);
+  assert.equal(harness.events.some((event) => event[0] === "approve"), false);
+  assert.match(harness.events.find((event) => event[0] === "message")?.[2], /Cannot allow this task class once/);
   assert.ok(harness.events.some((event) => event[0] === "render-control-monitor"));
 });
 

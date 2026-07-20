@@ -38,11 +38,14 @@ export const inferCostPosture = (
   if (runtimeNode?.kind === "local" || runtimeNode?.kind === "remote-user-owned" || provider?.providerType === "local") {
     return "free-local";
   }
-  if (provider?.authMethod === "subscription" || provider?.authSource === "shared-vault") {
+  if (provider?.authMethod === "subscription") {
     return "subscription";
   }
   if (provider?.authMethod === "api-key") {
     return "paid-api";
+  }
+  if (provider?.authSource === "shared-vault") {
+    return "subscription";
   }
   return "unknown";
 };

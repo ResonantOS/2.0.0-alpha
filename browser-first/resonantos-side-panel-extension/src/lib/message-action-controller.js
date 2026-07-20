@@ -6,18 +6,33 @@ export function fileLooksTextLike(file) {
 export function createMessageActionController({
   addMessage,
   bridgeRequest,
+  // Optional getter for late-bound bridge client. The rebind chain
+  // sets the module-level `bridgeRequest` *after* this controller is
+  // constructed, so passing a value here captures a stale `null`.
+  getBridgeRequest,
   chatSessionStore,
   commandInput,
   composerController,
   fileInput,
   flashCopied,
   getLastSnapshot,
+  getRegenerationMode,
   getRespondToCommand,
   navigator,
   renderAttachments,
   renderMessages,
   setStatus
 }) {
+  // Resolve at call time. The rebind chain sets the module-level
+  // `bridgeRequest` *after* this controller is constructed, so a
+  // captured value can be a stale `null`. The getter wins when set.
+  // We accept the same args as bridgeRequest and forward them so call
+  // sites can do `await bridgeRequestCurrent(path, options)` directly.
+  const bridgeRequestCurrent = (...args) => {
+    const fn = typeof getBridgeRequest === "function" ? getBridgeRequest() : bridgeRequest;
+    return fn(...args);
+  };
+  const selectedRegenerationMode = () => getRegenerationMode?.() === "overwrite" ? "overwrite" : "branch";
   async function clearAttachments() {
     await chatSessionStore.clearAttachments();
     renderAttachments();
@@ -74,7 +89,7 @@ export function createMessageActionController({
     if (!message) return;
     setStatus("Saving");
     try {
-      const result = await bridgeRequest("/archive/intake", {
+      const result = await bridgeRequestCurrent("/archive/intake", {
         method: "POST",
         body: {
           title: `Augmentor message ${new Date(message.createdAt).toLocaleString()}`,
@@ -101,13 +116,16 @@ export function createMessageActionController({
   }
 
   async function regenerateFromMessage(id) {
-    const userMessage = await chatSessionStore.trimToPreviousUserMessage(id);
-    if (!userMessage) {
+    const prepared = await chatSessionStore.prepareRegenerationFromMessage(id, {
+      mode: selectedRegenerationMode()
+    });
+    if (!prepared?.userMessage) {
       await addMessage("system", "No previous user message is available for regeneration.");
       return;
     }
     renderMessages();
-    await getRespondToCommand()(userMessage.content);
+    setStatus(prepared.mode === "overwrite" ? "Regenerating" : "Regenerating branch");
+    await getRespondToCommand()(prepared.userMessage.content);
   }
 
   async function attachFiles(fileList) {

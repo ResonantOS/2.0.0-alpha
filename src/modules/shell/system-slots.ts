@@ -22,14 +22,21 @@ export const hasSystemSlotManifest = (manifests: AddOnManifest[], slotId: System
 export const recommendedSystemSlotManifests = (manifests: AddOnManifest[]): AddOnManifest[] =>
   manifests.filter((manifest) => manifest.systemSlots?.some((slot) => slot.recommended));
 
-const capabilityForSlot = (slotId: SystemSlotId): CapabilityGrant["capability"] | null => {
-  if (slotId === "chat-interface") {
-    return "chat-interface";
+// Every SystemSlotId maps to a backing capability so a manifest cannot seize a
+// slot (and become its active provider) without requesting — and the user
+// granting — that capability. Previously primary-agent and communication-channel
+// returned null, leaving those slots with NO capability gate (P1-b bypass).
+export const capabilityForSlot = (slotId: SystemSlotId): CapabilityGrant["capability"] => {
+  switch (slotId) {
+    case "chat-interface":
+      return "chat-interface";
+    case "memory-system":
+      return "memory-provider";
+    case "primary-agent":
+      return "agent-delegation";
+    case "communication-channel":
+      return "notifications";
   }
-  if (slotId === "memory-system") {
-    return "memory-provider";
-  }
-  return null;
 };
 
 export const activeSystemSlotProvider = (
@@ -43,7 +50,7 @@ export const activeSystemSlotProvider = (
       continue;
     }
     const requiredCapability = capabilityForSlot(slotId);
-    if (requiredCapability && !installation.grantedCapabilities.some((grant) => grant.capability === requiredCapability && grant.granted)) {
+    if (!installation.grantedCapabilities.some((grant) => grant.capability === requiredCapability && grant.granted)) {
       continue;
     }
     return { manifest, installation };

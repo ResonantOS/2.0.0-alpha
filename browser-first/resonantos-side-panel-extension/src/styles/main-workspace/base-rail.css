@@ -73,6 +73,17 @@ textarea {
   font: inherit;
 }
 
+/* The native <option> popup is rendered by the OS/browser and does not inherit
+   a select's translucent background. Without an explicit opaque background the
+   list renders the app's light text on a white default on Chrome/Windows 11,
+   making every dropdown unreadable (#206). Pin an opaque dark surface + light
+   text for readable contrast. */
+select option,
+select optgroup {
+  background-color: var(--bg, #0b120e);
+  color: var(--text, #eef7f0);
+}
+
 button {
   cursor: pointer;
 }

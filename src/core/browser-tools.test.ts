@@ -22,7 +22,7 @@ const browserManifest = (): AddOnManifest => ({
   health: { strategy: "browser-engine-ready" },
   service: {
     protocol: "host-command",
-    entrypoint: "addons/resonant-browser-native/native-browser-host.contract.json",
+    entrypoint: "browser-first/host/run-bridge-minimal.mjs",
     healthCommand: "browser.health",
     shutdownCommand: "browser.close",
   },
@@ -143,27 +143,6 @@ describe("Browser tool runner", () => {
 
     await runner.run({ ...command, humanApproved: true });
     expect(call).toHaveBeenCalledWith("browser.type", command.params, { humanApproved: true });
-  });
-
-  it("requires explicit approval before loading a Browser extension", async () => {
-    const call = vi.fn();
-    const runner = createBrowserToolRunner({
-      manifest: browserManifest(),
-      installation: installation(),
-      transport: { call },
-    });
-
-    await expect(
-      runner.run({ type: "extensions_load_unpacked", params: { path: "/tmp/example-extension" } }),
-    ).rejects.toThrow("Loading a Browser extension requires explicit human approval.");
-    expect(call).not.toHaveBeenCalled();
-
-    await runner.run({ type: "extensions_load_unpacked", params: { path: "/tmp/example-extension" }, humanApproved: true });
-    expect(call).toHaveBeenCalledWith(
-      "browser.extensions.load_unpacked",
-      { path: "/tmp/example-extension" },
-      { humanApproved: true },
-    );
   });
 
   it("refuses Browser AI control when the manifest is not the local-service host contract", async () => {

@@ -1,10 +1,14 @@
 # ADR-030: RecursiveMAS Runtime Node And Add-on
 
-Date: 2026-05-05
+## Decision Metadata
 
-## Status
-
-Accepted for architecture. V0 is experimental and must not be enabled by default.
+- Decision status: Accepted
+- Alpha applicability: Deferred
+- Superseded by: None
+- Owner: RecursiveMAS add-on
+- Decision date: 2026-05-05
+- Alpha note: V0 is experimental, disabled by default, and not required for
+  Alpha.
 
 ## Decision
 

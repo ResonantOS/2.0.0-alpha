@@ -9,7 +9,10 @@ import { createLivingArchiveBridge } from "./living-archive-mcp.mjs";
 import {
   createLivingArchiveMemoryOperationEvaluator,
   createLivingArchiveMemoryService,
+  isWriteMemoryOperation,
 } from "./living-archive-memory-service.mjs";
+
+const TEST_TOKEN = "test-memory-service-token";
 
 const makeMemoryRoot = async () => {
   const root = await mkdtemp(join(tmpdir(), "resonantos-memory-service-"));
@@ -49,13 +52,18 @@ function skipIfSandboxLocalhostDenied(t, error) {
   return false;
 }
 
-const postMemory = async (endpoint, operation, input = {}) => {
+const postMemory = async (endpoint, operation, input = {}, token = TEST_TOKEN) => {
+  const headers = {
+    "content-type": "application/json",
+    accept: "application/json",
+  };
+  // Writes require a bearer token (DD-3 F6). Reads stay unauth on loopback.
+  if (token && isWriteMemoryOperation(operation)) {
+    headers.authorization = `Bearer ${token}`;
+  }
   const response = await fetch(`${endpoint}/memory/${operation}`, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      accept: "application/json",
-    },
+    headers,
     body: JSON.stringify(input),
   });
   const payload = await response.json();
@@ -187,7 +195,7 @@ test("Living Archive memory service operation evaluator returns deterministic se
 
 test("Living Archive memory service exposes portable status, search, read, intake, review queue, and lint over HTTP", async (t) => {
   const root = await makeMemoryRoot();
-  const server = createLivingArchiveMemoryService({ memoryRoot: root, readonly: false });
+  const server = createLivingArchiveMemoryService({ memoryRoot: root, readonly: false, token: TEST_TOKEN });
   let endpoint;
   try {
     endpoint = await listen(server);
@@ -213,7 +221,7 @@ test("Living Archive memory service exposes portable status, search, read, intak
 
 test("Living Archive MCP bridge can use the local memory service as its live backend", async (t) => {
   const root = await makeMemoryRoot();
-  const server = createLivingArchiveMemoryService({ memoryRoot: root, readonly: false });
+  const server = createLivingArchiveMemoryService({ memoryRoot: root, readonly: false, token: TEST_TOKEN });
   let endpoint;
   try {
     endpoint = await listen(server);
@@ -227,6 +235,7 @@ test("Living Archive MCP bridge can use the local memory service as its live bac
     const bridge = createLivingArchiveBridge({
       memoryRoot: "",
       memoryServiceUrl: endpoint,
+      memoryServiceToken: TEST_TOKEN,
       maxSearchBytes: 1024 * 1024,
       readonly: false,
     });
@@ -266,6 +275,109 @@ test("Living Archive MCP bridge can use the local memory service as its live bac
     assert.equal(promoted.status, "promoted");
     const readBack = await bridge.callTool("living_archive_read", { path: promoted.promotedPage });
     assert.match(readBack.content, /Hermes can queue knowledge/);
+  } finally {
+    await new Promise((resolveClose) => server.close(resolveClose));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// --- DD-3 (F6) hardening: token-gated writes, readonly default, CORS ---------
+
+test("DD-3: write operations are classified and gate-able", () => {
+  assert.equal(isWriteMemoryOperation("intake-write"), true);
+  assert.equal(isWriteMemoryOperation("ingest-request"), true);
+  assert.equal(isWriteMemoryOperation("process-ingest-request"), true);
+  assert.equal(isWriteMemoryOperation("decide-review"), true);
+  assert.equal(isWriteMemoryOperation("promote-review-artifact"), true);
+  assert.equal(isWriteMemoryOperation("maintenance-cycle"), true);
+  assert.equal(isWriteMemoryOperation("background-cycle"), true);
+  // Reads must NOT be gated.
+  assert.equal(isWriteMemoryOperation("status"), false);
+  assert.equal(isWriteMemoryOperation("search"), false);
+  assert.equal(isWriteMemoryOperation("read"), false);
+  assert.equal(isWriteMemoryOperation("review-queue"), false);
+  assert.equal(isWriteMemoryOperation("lint"), false);
+});
+
+test("DD-3: writes require a bearer token; reads stay unauth; CORS is not wildcard", async (t) => {
+  const root = await makeMemoryRoot();
+  const server = createLivingArchiveMemoryService({ memoryRoot: root, readonly: false, token: TEST_TOKEN });
+  let endpoint;
+  try {
+    endpoint = await listen(server);
+  } catch (error) {
+    await rm(root, { recursive: true, force: true });
+    if (skipIfSandboxLocalhostDenied(t, error)) return;
+    throw error;
+  }
+
+  try {
+    // Read on loopback without a token: allowed.
+    const status = await postMemory(endpoint, "status", {}, "");
+    assert.equal(status.response.status, 200);
+    // CORS allow-origin must be an allowlist, never "*".
+    const acao = status.response.headers.get("access-control-allow-origin");
+    assert.ok(acao && acao !== "*", `CORS allow-origin must not be wildcard, got ${acao}`);
+
+    // Write with NO token: rejected 401.
+    const noToken = await postMemory(endpoint, "intake-write", {
+      actorId: "external.agent",
+      bucket: "obsidian",
+      fileName: "note.md",
+      content: "# Note",
+    }, "");
+    assert.equal(noToken.response.status, 401);
+
+    // Write with WRONG token: rejected 401.
+    const wrongToken = await postMemory(endpoint, "intake-write", {
+      actorId: "external.agent",
+      bucket: "obsidian",
+      fileName: "note.md",
+      content: "# Note",
+    }, "not-the-token");
+    assert.equal(wrongToken.response.status, 401);
+
+    // Write with the VALID token: accepted.
+    const ok = await postMemory(endpoint, "intake-write", {
+      actorId: "external.agent",
+      bucket: "obsidian",
+      fileName: "note.md",
+      content: "# Note",
+    }, TEST_TOKEN);
+    assert.equal(ok.response.status, 200);
+    assert.equal(ok.payload.artifactPath, "INTAKE/mcp/obsidian/note.md");
+  } finally {
+    await new Promise((resolveClose) => server.close(resolveClose));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("DD-3: readonly default rejects writes even with a token", async (t) => {
+  const root = await makeMemoryRoot();
+  // readonly defaults ON: a service created without an explicit writable opt-in
+  // refuses writes (403) regardless of token presence.
+  const server = createLivingArchiveMemoryService({ memoryRoot: root, token: TEST_TOKEN });
+  let endpoint;
+  try {
+    endpoint = await listen(server);
+  } catch (error) {
+    await rm(root, { recursive: true, force: true });
+    if (skipIfSandboxLocalhostDenied(t, error)) return;
+    throw error;
+  }
+
+  try {
+    const blocked = await postMemory(endpoint, "intake-write", {
+      actorId: "external.agent",
+      bucket: "obsidian",
+      fileName: "note.md",
+      content: "# Note",
+    }, TEST_TOKEN);
+    assert.equal(blocked.response.status, 403);
+
+    // Reads still work in readonly mode.
+    const status = await postMemory(endpoint, "status", {}, "");
+    assert.equal(status.response.status, 200);
   } finally {
     await new Promise((resolveClose) => server.close(resolveClose));
     await rm(root, { recursive: true, force: true });

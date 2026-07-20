@@ -1,7 +1,15 @@
 # ADR-009: Rust Service & IPC Boundary
 
-Status: Accepted  
-Date: 2026-04-23
+## Decision Metadata
+
+- Decision status: Accepted
+- Alpha applicability: Not applicable
+- Superseded by: None
+- Owner: Historical host boundary
+- Decision date: 2026-04-23
+- Alpha note: Rust/Tauri IPC is not an Alpha runtime path. Alpha privileged
+  operations use the authenticated, capability-gated Node bridge defined in
+  `ALPHA_RUNTIME_BOUNDARY.md`.
 
 ## Decision
 

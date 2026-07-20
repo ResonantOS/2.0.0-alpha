@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   modelCatalogEntriesForProvider,
   providerConnectivityTarget,
+  providerRouteForModel,
   providerRouteForWorkload,
   resolveRoutingStrategies,
 } from "../host/provider-fabric-core.mjs";
@@ -72,6 +73,52 @@ test("provider fabric escalates to paid fallback only when subscription route is
   assert.equal(decision.route.wireModel, "gpt-5.5");
 });
 
+test("provider fabric uses Z.AI GLM before OpenAI and local fallbacks when it is configured", () => {
+  const secrets = { "shared-zai-glm": "stored-zai-glm" };
+  const strategies = resolveRoutingStrategies({ secrets });
+  const augmentor = strategies.find((strategy) => strategy.id === "augmentor-chat");
+  const decision = providerRouteForWorkload({
+    workloadId: "augmentor-chat",
+    requestedModel: "__auto__",
+    secrets,
+    strategies,
+  });
+
+  assert.equal(augmentor.fallbackChain[0].model, "zai/glm-5.2");
+  assert.equal(augmentor.fallbackChain[0].state, "available");
+  assert.equal(decision.route.providerId, "shared-zai-glm");
+  assert.equal(decision.route.providerType, "openai-compatible");
+  assert.equal(decision.route.apiBaseUrl, "http://127.0.0.1:18789/v1");
+  assert.equal(decision.route.wireModel, "zai/glm-5.2");
+});
+
+test("provider fabric uses Z.AI GLM for routine delegation before local fallback", () => {
+  const secrets = { "shared-zai-glm": "stored-zai-glm" };
+  const localRuntimeUrl = "http://127.0.0.1:11434/v1";
+  const strategies = resolveRoutingStrategies({ secrets, localRuntimeUrl });
+  const routine = strategies.find((strategy) => strategy.id === "routine-delegation");
+  const decision = providerRouteForWorkload({
+    workloadId: "routine-delegation",
+    requestedModel: "__auto__",
+    secrets,
+    strategies,
+    localRuntimeUrl,
+  });
+
+  assert.equal(routine.fallbackChain[0].model, "zai/glm-5.2");
+  assert.equal(routine.fallbackChain[0].state, "available");
+  assert.equal(decision.route.providerId, "shared-zai-glm");
+  assert.equal(decision.route.wireModel, "zai/glm-5.2");
+});
+
+test("provider fabric maps manual GLM-family selection to the Z.AI provider", () => {
+  const route = providerRouteForModel("zai/glm-5.2");
+
+  assert.equal(route.providerId, "shared-zai-glm");
+  assert.equal(route.providerType, "openai-compatible");
+  assert.equal(route.wireModel, "zai/glm-5.2");
+});
+
 test("provider fabric blocks manual selection of disabled models", () => {
   const preferences = {
     allowedModels: {
@@ -130,11 +177,14 @@ test("provider fabric can use local runtime as final fallback when configured", 
 
 test("provider fabric exposes bounded connectivity targets without prompts", () => {
   const openAi = providerConnectivityTarget("shared-openai");
+  const zaiGlm = providerConnectivityTarget("shared-zai-glm");
   const miniMax = providerConnectivityTarget("shared-minimax");
   const local = providerConnectivityTarget("desktop-local", { localRuntimeUrl: "http://127.0.0.1:11434/v1/models" });
 
   assert.equal(openAi.url, "https://api.openai.com/v1/models");
   assert.equal(openAi.sendsCredential, true);
+  assert.equal(zaiGlm.url, "http://127.0.0.1:18789/v1/models");
+  assert.equal(zaiGlm.sendsCredential, true);
   assert.equal(miniMax.url, "https://api.minimax.io/v1/models");
   assert.equal(miniMax.sendsCredential, true);
   assert.equal(local.url, "http://127.0.0.1:11434/v1/models");

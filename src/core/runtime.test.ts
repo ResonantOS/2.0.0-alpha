@@ -1,7 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AddOnManifest, ResonantShellState } from "./contracts";
 import { buildDefaultState } from "./defaults";
-import { applyProviderCredentialStatuses, normalizeState, rebaseStateOnManifests } from "./runtime";
+import { applyProviderCredentialStatuses, normalizeState, rebaseStateOnManifests, requestProviderSmokeTest } from "./runtime";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("runtime state migration", () => {
   it("migrates legacy recovery state onto the Resonant Engineer Agent and Gemma local runtime", () => {
@@ -202,6 +206,19 @@ describe("runtime state migration", () => {
     expect(updated.providers.find((item) => item.id === provider.id)?.credentialStatus).toBe("configured");
   });
 
+  it("fails provider smoke tests closed when the alpha bridge is not configured", async () => {
+    await expect(requestProviderSmokeTest({
+      providerId: "provider-coder7",
+      providerType: "openai-compatible",
+      apiBaseUrl: "http://192.168.1.13:8081/v1",
+      runtimeNodeId: "node-coder7",
+      runtimeNodeKind: "remote-user-owned",
+      runtimeNodeEndpoint: "http://192.168.1.13:8081/v1",
+      authTier: "supported",
+      model: "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF:Q4_K_M",
+    })).rejects.toThrow("Browser-first bridge is not configured.");
+  });
+
   it("rebases stale placeholder GX10 runtime state onto the verified default runtime", () => {
     const base = buildDefaultState([]);
     const persisted = {
@@ -224,6 +241,49 @@ describe("runtime state migration", () => {
     expect(gx10?.endpoint).toBe("http://192.168.1.77:30004/v1");
     expect(gx10?.healthState).toBe("ready");
     expect(gx10?.supportedModels).toEqual(["Qwen3.6-35B-A3B-Q4_K_M.gguf"]);
+  });
+
+  it("migrates older persisted state onto the default Z.AI GLM fallback provider and runtime", () => {
+    const base = buildDefaultState([]);
+    const persisted = {
+      ...base,
+      providers: base.providers.filter((provider) => provider.id !== "shared-zai-glm"),
+      runtimeNodes: base.runtimeNodes.filter((node) => node.id !== "node-zai-glm-cloud"),
+      providerRouting: {
+        ...base.providerRouting,
+        fallbackPolicies: base.providerRouting.fallbackPolicies.map((policy) =>
+          policy.id === "core-default"
+            ? {
+                ...policy,
+                orderedProviderProfileIds: policy.orderedProviderProfileIds.filter((id) => id !== "shared-zai-glm"),
+                orderedRuntimeNodeIds: (policy.orderedRuntimeNodeIds ?? []).filter((id) => id !== "node-zai-glm-cloud"),
+              }
+            : policy,
+        ),
+      },
+      modelStrategy: {
+        ...base.modelStrategy,
+        fallbackChains: base.modelStrategy.fallbackChains.map((chain) => ({
+          ...chain,
+          orderedRoutes: chain.orderedRoutes.filter((route) => route.providerProfileId !== "shared-zai-glm"),
+        })),
+      },
+    } satisfies ResonantShellState;
+
+    const normalized = normalizeState(persisted, base);
+
+    expect(normalized.providers.find((provider) => provider.id === "shared-zai-glm")?.primaryModel).toBe("zai/glm-5.2");
+    expect(normalized.runtimeNodes.find((node) => node.id === "node-zai-glm-cloud")?.supportedModels).toEqual(["zai/glm-5.2"]);
+    expect(
+      normalized.providerRouting.fallbackPolicies
+        .find((policy) => policy.id === "core-default")
+        ?.orderedProviderProfileIds,
+    ).toContain("shared-zai-glm");
+    expect(
+      normalized.modelStrategy.fallbackChains
+        .find((chain) => chain.id === "chain-core-fast")
+        ?.orderedRoutes.some((route) => route.providerProfileId === "shared-zai-glm"),
+    ).toBe(true);
   });
 
   it("adds the default workspace layout to older persisted UI preferences", () => {

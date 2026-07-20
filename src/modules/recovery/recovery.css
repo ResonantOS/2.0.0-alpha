@@ -3,7 +3,7 @@
 }
 
 .archive-action-card.active {
-  border-color: rgba(16, 185, 129, 0.4);
+  border-color: var(--accent-border-xl);
 }
 
 .archive-action-card.warning {
@@ -135,8 +135,8 @@
 .recovery-log-entry {
   padding: 0.85rem;
   border-radius: var(--radius);
-  border: 1px solid var(--border);
-  background: rgba(255, 248, 236, 0.03);
+  border: var(--border-line-md);
+  background: var(--surface-tint-xs);
   min-width: 0;
 }
 
@@ -146,8 +146,8 @@
 }
 
 .recovery-dashboard-card.recommended {
-  border-color: rgba(16, 185, 129, 0.28);
-  background: rgba(16, 185, 129, 0.08);
+  border-color: var(--accent-border-md);
+  background: var(--accent-surface-sm);
 }
 
 .recovery-dashboard-card-head {
@@ -186,7 +186,7 @@
 }
 
 .recovery-checklist-step.complete {
-  border-color: rgba(16, 185, 129, 0.28);
+  border-color: var(--accent-border-md);
 }
 
 .recovery-log-list {
@@ -198,7 +198,7 @@
   flex: 0 0 auto;
   border-radius: 999px;
   padding: 0.25rem 0.55rem;
-  background: rgba(255, 248, 236, 0.04);
+  background: var(--surface-tint-sm);
   font-size: 0.72rem;
   white-space: nowrap;
 }
@@ -230,8 +230,8 @@
 .chat-sidebar,
 .inline-notice {
   border-radius: var(--radius);
-  border: 1px solid var(--border);
-  background: rgba(255, 248, 236, 0.03);
+  border: var(--border-line-md);
+  background: var(--surface-tint-xs);
 }
 
 .message-stack {
@@ -242,7 +242,7 @@
   overflow: auto;
   flex: 1 1 auto;
   min-height: 0;
-  border: 1px solid rgba(138, 128, 112, 0.16);
+  border: var(--border-line-lg);
   border-radius: 18px;
   background: rgba(9, 11, 12, 0.18);
 }
@@ -283,13 +283,13 @@
   margin: 0 0.95rem;
   padding: 0.75rem 0.8rem;
   border-radius: 14px;
-  border: 1px solid rgba(138, 128, 112, 0.18);
-  background: rgba(255, 248, 236, 0.03);
+  border: var(--border-line);
+  background: var(--surface-tint-xs);
 }
 
 .agent-activity-rail.live {
   border-color: rgba(16, 185, 129, 0.26);
-  background: rgba(16, 185, 129, 0.08);
+  background: var(--accent-surface-sm);
 }
 
 .agent-activity-pulse {
@@ -337,7 +337,7 @@
   padding: 0.82rem;
   border-radius: 14px;
   border: 1px solid rgba(248, 113, 113, 0.18);
-  background: rgba(255, 248, 236, 0.03);
+  background: var(--surface-tint-xs);
 }
 
 .recovery-candidates-list {
@@ -352,12 +352,12 @@
   padding: 0.7rem 0.75rem;
   border-radius: 12px;
   border: 1px solid rgba(248, 113, 113, 0.12);
-  background: rgba(255, 248, 236, 0.03);
+  background: var(--surface-tint-xs);
 }
 
 .recovery-candidate.recommended {
   border-color: rgba(16, 185, 129, 0.26);
-  background: rgba(16, 185, 129, 0.08);
+  background: var(--accent-surface-sm);
 }
 
 .recovery-candidate-copy {
@@ -471,7 +471,7 @@
 @keyframes activity-pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.08);
+    box-shadow: 0 0 0 0 var(--accent-surface-sm);
     transform: scale(1);
   }
   50% {

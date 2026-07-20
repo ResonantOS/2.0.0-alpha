@@ -52,6 +52,7 @@ function createHarness(overrides = {}) {
       <strong id="approval-title"></strong>
       <p id="approval-reason"></p>
       <button id="approval-approve"></button>
+      <button id="approval-allow-once"></button>
       <button id="approval-trust"></button>
     </section>
   `);
@@ -80,6 +81,7 @@ function createHarness(overrides = {}) {
     approvalBoundaryForStep: (step) => step.boundary ?? "safe",
     controlStepLabel: (step) => step.label ?? step.type,
     elements: {
+      approvalAllowOnceButton: dom.window.document.querySelector("#approval-allow-once"),
       approvalApproveButton: dom.window.document.querySelector("#approval-approve"),
       approvalCard: dom.window.document.querySelector("#approval"),
       approvalReason: dom.window.document.querySelector("#approval-reason"),
@@ -540,6 +542,17 @@ test("monitor renderers show and revoke task consent history", async () => {
         mode: "allow-safe",
         grantedAt: 1000,
         expiresAt: 2000
+      },
+      "example.com::research": {
+        siteKey: "example.com",
+        taskClass: "research",
+        mode: "allow-once",
+        grantedAt: 1500,
+        expiresAt: 3000,
+        reason: "Allowed once from preflight",
+        source: "control-preflight",
+        sessionOnly: true,
+        usesRemaining: 1
       }
     }
   });
@@ -547,11 +560,15 @@ test("monitor renderers show and revoke task consent history", async () => {
   await harness.renderers.renderTaskConsentPanel();
 
   assert.equal(harness.dom.window.document.querySelector("#consents").hidden, false);
-  assert.match(harness.dom.window.document.querySelector("#consents-title").textContent, /1 trusted task class/);
+  assert.match(harness.dom.window.document.querySelector("#consents-title").textContent, /2 trusted task classes/);
   assert.match(harness.dom.window.document.querySelector("#consents-list").textContent, /booking/);
   assert.match(harness.dom.window.document.querySelector("#consents-list").textContent, /Trusted after approval/);
-  assert.doesNotMatch(harness.dom.window.document.querySelector("#consents-list").textContent, /research/);
-  harness.dom.window.document.querySelector("#consents-list button").click();
+  assert.match(harness.dom.window.document.querySelector("#consents-list").textContent, /allow-once/);
+  assert.match(harness.dom.window.document.querySelector("#consents-list").textContent, /this execution only/);
+  assert.doesNotMatch(harness.dom.window.document.querySelector("#consents-list").textContent, /other\.com/);
+  [...harness.dom.window.document.querySelectorAll("#consents-list button")]
+    .find((button) => /booking/.test(button.title))
+    .click();
   assert.deepEqual(harness.state.revoked, ["booking"]);
 
   harness.state.contextDockExpanded = false;
@@ -581,7 +598,8 @@ test("monitor renderers show permission manager across sites and grants", async 
       }
     },
     taskConsentAudit: {
-      "example.com::booking": [{ action: "set", at: 1000, source: "approval-card", reason: "trusted for booking" }]
+      "example.com::booking": [{ action: "set", at: 1000, source: "approval-card", reason: "trusted for booking" }],
+      "old.example::research": [{ action: "revoke", at: 1100, source: "settings", reason: "release test revoke" }]
     }
   });
 
@@ -590,13 +608,15 @@ test("monitor renderers show permission manager across sites and grants", async 
   const panel = harness.dom.window.document.querySelector("#permission-manager");
   const list = harness.dom.window.document.querySelector("#permission-manager-list");
   assert.equal(panel.hidden, false);
-  assert.match(harness.dom.window.document.querySelector("#permission-manager-title").textContent, /3 stored browser grants/);
+  assert.match(harness.dom.window.document.querySelector("#permission-manager-title").textContent, /4 browser grant\/history entries/);
   assert.match(list.textContent, /blocked.example/);
   assert.match(list.textContent, /blocked for test/);
   assert.match(list.textContent, /read.example/);
   assert.doesNotMatch(list.textContent, /default.example/);
   assert.match(list.textContent, /example.com · booking/);
   assert.match(list.textContent, /trusted for booking/);
+  assert.match(list.textContent, /old.example · research/);
+  assert.match(list.textContent, /release test revoke/);
   list.querySelector("button").click();
   assert.deepEqual(harness.state.resetSites, ["blocked.example"]);
   list.querySelectorAll("button")[2].click();

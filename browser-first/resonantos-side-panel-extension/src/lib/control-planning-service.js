@@ -24,12 +24,14 @@ function attachRunbookDefaults(decision, runbook) {
 
 export function createControlPlanningService({
   bridgeRequest,
+  getBridgeRequest,
   getLastSnapshot,
   getModel,
   getThinkingDepth,
   globalScope = globalThis,
   readActivePage
 }) {
+  const bridge = () => (typeof getBridgeRequest === "function" ? getBridgeRequest() : bridgeRequest);
   const requestControlPlan = async (goal, snapshot) => {
     const runbook = buildControlRunbook(goal, snapshot, []);
     if (typeof globalScope.__resonantosControlPlannerOverride === "function") {
@@ -38,7 +40,7 @@ export function createControlPlanningService({
         { dedupeControlSteps }
       );
     }
-    const result = await bridgeRequest("/augmentor/control-plan", {
+    const result = await bridge()("/augmentor/control-plan", {
       method: "POST",
       body: {
         goal,
@@ -82,7 +84,7 @@ export function createControlPlanningService({
       }
     }
     try {
-      const result = await bridgeRequest("/augmentor/next-action", {
+      const result = await bridge()("/augmentor/next-action", {
         method: "POST",
         body: {
           goal,

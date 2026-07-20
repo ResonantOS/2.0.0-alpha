@@ -1,8 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { AddOnInstallation, AddOnManifest, AddOnScriptDefinition, CapabilityGrant } from "./contracts";
-import * as runtime from "./runtime";
 import {
   assessLogicianHookActivation,
   buildVerifyAgentReport,
@@ -232,37 +231,6 @@ describe("Logician execution layer", () => {
 
     expect(report.status).toBe("warn");
     expect(report.findings.map((item) => item.code)).toContain("delegation-verification-artifact-missing");
-  });
-
-  it("runs Audio2TOL preflight against real bundle candidate discovery", async () => {
-    const audio2TolManifest = publicManifest("audio2tol.json");
-    const script = audio2TolManifest.scripts?.find((candidate) => candidate.commandRef === "audio2tol.bundle_preflight");
-    if (!script) {
-      throw new Error("missing Audio2TOL preflight script");
-    }
-    const candidatesSpy = vi.spyOn(runtime, "requestArchiveTolBundleCandidates").mockResolvedValueOnce([
-      {
-        sessionId: "2026-04-21-1003",
-        rawAudioPath: "03_TOL/RAW Audio/260421_1003.mp3",
-        transcriptPath: "03_TOL/TOL Transcripts/2026-04-21-1003_TOL_Transcript.md",
-        analysisPath: "03_TOL/TOL Analysis/2026-04-21-1003_TOL_Analysis.md",
-        status: "bundle-ready",
-        strategicActionsCount: 2,
-        explicitDirectivesCount: 1,
-      },
-    ]);
-
-    const artifact = await executeLogicianScript({
-      manifest: audio2TolManifest,
-      installation: installationForManifest(audio2TolManifest),
-      script,
-      humanInitiated: true,
-    });
-
-    expect(artifact.status).toBe("passed");
-    expect(artifact.summary).toContain("1 ready Audio2TOL bundle");
-    expect(artifact.evidence.readyCount).toBe(1);
-    candidatesSpy.mockRestore();
   });
 
   it("runs hooks by resolving their declared handler script", async () => {

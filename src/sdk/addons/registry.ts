@@ -50,9 +50,22 @@ const sourceDefaults = (
     };
   }
 
+  // P1-e: a bundled-catalog manifest with NO provenance must NOT be trusted by
+  // omission. Previously an absent provenance silently defaulted to
+  // curated-signed/verified/reviewed. Instead, mark a manifest lacking any
+  // provenance metadata as dev/internal/unreviewed (sideloaded-unverified /
+  // unverified / unreviewed) so missing provenance is visible, never crashing.
+  if (!manifest.provenance) {
+    return {
+      provenanceTier: "sideloaded-unverified",
+      verificationState: "unverified",
+      reviewState: "unreviewed",
+    };
+  }
+
   return {
-    provenanceTier: manifest.provenance?.tier ?? "curated-signed",
-    verificationState: manifest.provenance?.verificationState ?? "verified",
+    provenanceTier: manifest.provenance.tier ?? "curated-signed",
+    verificationState: manifest.provenance.verificationState ?? "verified",
     reviewState: "reviewed",
   };
 };

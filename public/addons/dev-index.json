@@ -1,5 +1,4 @@
 [
-  "audio2tol.json",
   "augmentor-chat.json",
   "browser.json",
   "hermes.json",
@@ -10,6 +9,5 @@
   "opencode.json",
   "r-awareness.json",
   "shield.json",
-  "telegram-channel.json",
-  "terminal.json"
+  "telegram-channel.json"
 ]

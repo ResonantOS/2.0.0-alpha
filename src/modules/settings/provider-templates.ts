@@ -326,12 +326,13 @@ export const providerTemplates: ProviderTemplate[] = [
     models: ["hunyuan-large", "hunyuan-standard"],
     note: "Profile shell for Hunyuan-family access; execution adapter and regional auth need dedicated setup.",
   }),
-  adapterPendingTemplate({
-    id: "zhipu",
-    label: "Zhipu AI GLM",
-    apiBaseUrl: "https://open.bigmodel.cn/api/paas/v4",
-    models: ["glm-4", "glm-4-plus"],
-    note: "Profile can be stored now; GLM routing needs a native adapter or OpenAI-compatible confirmation.",
+  openAiCompatibleTemplate({
+    id: "zai",
+    label: "Z.AI GLM",
+    apiBaseUrl: "http://127.0.0.1:18789/v1",
+    models: ["zai/glm-5.2", "zai/glm-5-turbo", "zai/glm-5.1", "zai/glm-5", "zai/glm-5v-turbo", "zai/glm-4.7", "zai/glm-4.6"],
+    primaryModel: "zai/glm-5.2",
+    note: "OpenClaw/Z.AI route for GLM-family models such as the configured zai/glm-5.2 route.",
   }),
   openAiCompatibleTemplate({
     id: "databricks-mosaic",

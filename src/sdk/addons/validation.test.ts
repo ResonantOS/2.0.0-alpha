@@ -363,14 +363,14 @@ describe("add-on SDK manifest validation", () => {
       validManifest({
         surfaces: [
           {
-            id: "audio2tol-page",
+            id: "custom-tool-page",
             type: "page",
-            label: "Audio2TOL",
-            description: "TOL intake workspace.",
+            label: "Custom Tool",
+            description: "Custom tool workspace.",
             shellNavigation: {
-              sectionId: "audio2tol",
-              dockIcon: "audio2tol",
-              eyebrow: "TOL",
+              sectionId: "custom-tool",
+              dockIcon: "custom-tool",
+              eyebrow: "Tool",
               order: 70,
               requiredCapabilities: ["network"],
             },
@@ -720,5 +720,57 @@ describe("add-on SDK manifest validation", () => {
     expect(result.issues.some((issue) => issue.code === "install-unrequested-capability")).toBe(true);
     expect(result.issues.some((issue) => issue.code === "memory-access-knowledge-write-forbidden")).toBe(true);
     expect(result.issues.some((issue) => issue.code === "smoke-test-unrequested-capability")).toBe(true);
+  });
+
+  it("rejects a systemSlot claim whose backing capability is not declared (P1-b ungated slot bypass)", () => {
+    const result = validateAddOnManifest(
+      validManifest({
+        // Claims the primary-agent slot but does NOT declare agent-delegation,
+        // so the runtime grant gate (activeSystemSlotProvider) can never apply.
+        systemSlots: [
+          { id: "primary-agent", role: "default-provider", replaceable: true },
+        ],
+      }),
+    );
+
+    expect(result.valid).toBe(false);
+    expect(
+      result.issues.some(
+        (issue) => issue.code === "system-slot-undeclared-capability" && issue.path === "systemSlots[0].id",
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects a systemSlot claim with an unknown slot id", () => {
+    const result = validateAddOnManifest(
+      validManifest({
+        systemSlots: [
+          { id: "root-controller" as never, role: "default-provider", replaceable: true },
+        ],
+      }),
+    );
+
+    expect(result.valid).toBe(false);
+    expect(result.issues.some((issue) => issue.code === "system-slot-unknown")).toBe(true);
+  });
+
+  it("accepts a properly capability-gated systemSlot claim", () => {
+    const base = validManifest();
+    const result = validateAddOnManifest(
+      validManifest({
+        // primary-agent's backing capability (agent-delegation) is declared, so
+        // the runtime grant gate can apply -> covered.
+        requestedCapabilities: [
+          ...base.requestedCapabilities,
+          { capability: "agent-delegation", granted: false, scope: "system", revocationBehavior: "hard-stop" },
+        ],
+        systemSlots: [
+          { id: "primary-agent", role: "default-provider", replaceable: true },
+        ],
+      }),
+    );
+
+    expect(result.issues.filter((issue) => issue.code.startsWith("system-slot"))).toEqual([]);
+    expect(result.valid).toBe(true);
   });
 });

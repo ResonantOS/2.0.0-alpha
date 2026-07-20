@@ -19,6 +19,10 @@ import {
   shouldDeregisterMovedSourceAfterRollback,
 } from "./memory-source-move.mjs";
 import { assertMemorySettingsSourceCanSave } from "./memory-settings-policy.mjs";
+import {
+  resolveWindowsSystemRoot,
+  windowsPowerShellDiagnostics as defaultWindowsPowerShellDiagnostics,
+} from "./browser-first-host-utils.mjs";
 
 const defaultMemorySettings = {
   activeMemoryAddon: "living-archive",
@@ -27,6 +31,9 @@ const defaultMemorySettings = {
   syncMode: "manual-review",
   sources: [],
 };
+
+const folderPickerPrompt = "Select a folder or Obsidian vault for Living Archive";
+const linuxPickerSearchPath = ["/usr/bin", "/bin", "/usr/local/bin"].join(path.delimiter);
 
 export function createMemorySourceSettingsService({
   memoryRoot,
@@ -44,6 +51,9 @@ export function createMemorySourceSettingsService({
   firstExistingExecutable,
   isInsidePath,
   executeAddonsStatus,
+  environment = process.env,
+  platform = process.platform,
+  windowsPowerShellDiagnostics = defaultWindowsPowerShellDiagnostics,
 } = {}) {
   function assertDependency(name, value) {
     if (!value) {
@@ -66,8 +76,37 @@ export function createMemorySourceSettingsService({
     firstExistingExecutable,
     isInsidePath,
     executeAddonsStatus,
+    windowsPowerShellDiagnostics,
   })) {
     assertDependency(name, value);
+  }
+
+  function pickerEnvironment() {
+    const keys = platform === "win32"
+      ? ["USERPROFILE", "TEMP", "TMP"]
+      : platform === "darwin"
+        ? ["HOME", "LANG", "LC_ALL", "TMPDIR"]
+        : [
+          "HOME",
+          "LANG",
+          "LC_ALL",
+          "TMPDIR",
+          "DISPLAY",
+          "WAYLAND_DISPLAY",
+          "XAUTHORITY",
+          "DBUS_SESSION_BUS_ADDRESS",
+          "XDG_RUNTIME_DIR",
+        ];
+    const scopedEnvironment = Object.fromEntries(
+      keys.map((key) => [key, environment[key]]).filter(([, value]) => value !== undefined),
+    );
+    return platform === "win32"
+      ? {
+        SystemRoot: resolveWindowsSystemRoot(environment),
+        WINDIR: resolveWindowsSystemRoot(environment),
+        ...scopedEnvironment,
+      }
+      : scopedEnvironment;
   }
 
   async function executeMemoryStatus() {
@@ -430,20 +469,25 @@ export function createMemorySourceSettingsService({
   }
 
   async function executeMemorySourceBrowse(payload = {}) {
-    const override = String(process.env.RESONANTOS_BROWSER_FIRST_PICK_FOLDER_RESULT ?? "").trim();
+    const override = String(environment.RESONANTOS_BROWSER_FIRST_PICK_FOLDER_RESULT ?? "").trim();
     let selectedPath = override;
     if (!selectedPath) {
-      const prompt = String(payload.prompt ?? "Select a folder or Obsidian vault for Living Archive").slice(0, 120);
-      if (process.platform === "darwin") {
+      const prompt = folderPickerPrompt;
+      const options = { env: pickerEnvironment() };
+      if (platform === "darwin") {
         selectedPath = await execFileStdout("/usr/bin/osascript", [
           "-e",
           `POSIX path of (choose folder with prompt ${JSON.stringify(prompt)})`,
-        ]).catch((error) => {
+        ], options).catch((error) => {
           if (/user canceled/i.test(error.message)) return "";
           throw error;
         });
-      } else if (process.platform === "win32") {
-        selectedPath = await execFileStdout("powershell.exe", [
+      } else if (platform === "win32") {
+        const powerShellRuntime = windowsPowerShellDiagnostics();
+        if (!powerShellRuntime?.installed) {
+          throw new Error("Windows PowerShell was not found in the fixed system directory. Paste the path manually.");
+        }
+        selectedPath = await execFileStdout(powerShellRuntime.command, [
           "-NoProfile",
           "-STA",
           "-Command",
@@ -453,15 +497,17 @@ export function createMemorySourceSettingsService({
             `$dialog.Description = ${JSON.stringify(prompt)}`,
             "if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $dialog.SelectedPath }",
           ].join("; "),
-        ]);
+        ], { ...options, shell: false });
       } else {
-        const picker = firstExistingExecutable("zenity") ?? firstExistingExecutable("kdialog");
+        const lookupOptions = { searchPath: linuxPickerSearchPath };
+        const picker = firstExistingExecutable("zenity", lookupOptions) ??
+          firstExistingExecutable("kdialog", lookupOptions);
         if (!picker) {
           throw new Error("No supported native folder picker was found. Install zenity/kdialog or paste the path manually.");
         }
         selectedPath = picker.endsWith("kdialog")
-          ? await execFileStdout(picker, ["--getexistingdirectory", os.homedir(), "--title", prompt])
-          : await execFileStdout(picker, ["--file-selection", "--directory", "--title", prompt]);
+          ? await execFileStdout(picker, ["--getexistingdirectory", environment.HOME ?? os.homedir(), "--title", prompt], options)
+          : await execFileStdout(picker, ["--file-selection", "--directory", "--title", prompt], options);
       }
     }
     selectedPath = expandUserPath(selectedPath);

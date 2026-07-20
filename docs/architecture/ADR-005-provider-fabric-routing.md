@@ -1,7 +1,14 @@
 # ADR-005: Provider Fabric & Routing
 
-Status: Accepted  
-Date: 2026-04-23
+## Decision Metadata
+
+- Decision status: Accepted
+- Alpha applicability: Applies
+- Superseded by: None
+- Owner: Provider host
+- Decision date: 2026-04-23
+- Alpha note: The authenticated Node bridge owns provider credentials, workload
+  routing, diagnostics, and approved provider or local-model requests.
 
 ## Decision
 

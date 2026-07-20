@@ -102,7 +102,8 @@ function addonCard(addon, actions = {}) {
   return card;
 }
 
-export function renderAddonsSection(container, { bridgeRequest }) {
+export function renderAddonsSection(container, { bridgeRequest, getBridgeRequest }) {
+  const bridge = () => (typeof getBridgeRequest === "function" ? getBridgeRequest() : bridgeRequest);
   const statusNode = document.createElement("p");
   statusNode.className = "settings-status";
   statusNode.textContent = "Loading add-on registry...";
@@ -124,13 +125,13 @@ export function renderAddonsSection(container, { bridgeRequest }) {
   );
 
   const load = async () => {
-    const result = await bridgeRequest("/addons/status", { method: "GET" });
+    const result = await bridge()("/addons/status", { method: "GET" });
     const addons = Array.isArray(result.addons) ? result.addons : [];
     grid.replaceChildren(...addons.map((addon) => addonCard(addon, {
       onToggleExecution: async (selected, enabled) => {
         const addon = selected.id === "addon.hermes" ? "hermes" : "opencode";
         setStatus(statusNode, `${enabled ? "Enabling" : "Disabling"} ${selected.name} local execution...`);
-        await bridgeRequest("/addons/execution-settings", {
+        await bridge()("/addons/execution-settings", {
           method: "POST",
           capability: "addon-execution-settings-write",
           body: { addon, localCliExecution: enabled }

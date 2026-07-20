@@ -1,7 +1,15 @@
 # ADR-008: Wallet & Web3 Security
 
-Status: Accepted  
-Date: 2026-04-23
+## Decision Metadata
+
+- Decision status: Accepted
+- Alpha applicability: Partial
+- Superseded by: None
+- Owner: Browser safety
+- Decision date: 2026-04-23
+- Alpha note: Read-only wallet detection and human-only wallet, signing, and
+  value-action boundaries apply. Wallet custody and signing are not Alpha
+  capabilities, and Rust ownership does not apply.
 
 ## Decision
 

@@ -22,6 +22,7 @@ test("control preflight respects explicit approval, resumed jobs, blocked sites,
   assert.equal(shouldRequireControlPreflight({ goal: "find me a good pair of jeans under 50 euro", resumedFromJob: true }), false);
   assert.equal(shouldRequireControlPreflight({ goal: "find me a good pair of jeans under 50 euro", mode: "blocked" }), false);
   assert.equal(shouldRequireControlPreflight({ goal: "find me a good pair of jeans under 50 euro", existingConsent: { mode: "allow-safe" } }), false);
+  assert.equal(shouldRequireControlPreflight({ goal: "find me a good pair of jeans under 50 euro", existingConsent: { mode: "allow-once" } }), false);
 });
 
 test("control preflight creates durable user-facing approval instructions", () => {
@@ -46,6 +47,7 @@ test("control preflight creates durable user-facing approval instructions", () =
   assert.match(message, /Agent Control preflight required/);
   assert.match(message, /Task class: shopping/);
   assert.match(message, /Approve: \/approve-control control-test/);
+  assert.match(message, /Allow class once: \/allow-control-once control-test/);
   assert.match(message, /Deny: \/deny-control control-test/);
   assert.match(message, /Still human-only: wallet, login, credential, payment/);
 });

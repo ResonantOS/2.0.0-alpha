@@ -31,7 +31,7 @@ export async function singleFileIntakeContent(file) {
       "- contentStatus: metadata-only",
       "",
       "## Required Add-on",
-      "Install or enable a specialist attachment add-on before extracting content from this file type. Examples include PDF, DOCX, image, audio, video, or Audio2TOL-specific processors.",
+      "Install or enable a specialist attachment add-on before extracting content from this file type. Examples include PDF, DOCX, image, audio, or video processors.",
       "",
     ].join("\n");
   }

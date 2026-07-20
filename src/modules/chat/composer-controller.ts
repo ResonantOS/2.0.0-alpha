@@ -3,9 +3,20 @@
 
 import type { MutableRefObject } from "react";
 
-import type { DictationController } from "../../dictation/index.js";
+import { canUseDictation, requestMicrophoneAccess, resolveSpeechRecognitionCtor } from "./dictation";
 import type { ComposerAttachment } from "./types";
 import { isTextLikeFile } from "./utils";
+
+export type BrowserSpeechRecognition = {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onresult: ((event: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null;
+  onerror: ((event: { error: string }) => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+};
 
 type SetState<T> = (value: T | ((current: T) => T)) => void;
 
@@ -51,39 +62,68 @@ export const removeComposerAttachment = (
 };
 
 type ToggleDictationInput = {
-  controller: DictationController | null;
+  dictating: boolean;
+  speechRecognitionRef: MutableRefObject<BrowserSpeechRecognition | null>;
+  setDictating: SetState<boolean>;
+  setComposer: SetState<string>;
   setChatNotice: SetState<string | null>;
+  errorMessageOf: (error: unknown, fallback: string) => string;
 };
 
-/**
- * Toggle handler for the chat composer mic button. Delegates to the shared
- * dictation engine controller. The `controller` is created in `App.tsx` and
- * passed in; if it's null (engine preload failed or was never kicked off) we
- * surface a notice and do nothing.
- */
 export const toggleComposerDictation = ({
-  controller,
+  dictating,
+  speechRecognitionRef,
+  setDictating,
+  setComposer,
   setChatNotice,
+  errorMessageOf,
 }: ToggleDictationInput): void => {
-  if (!controller) {
-    setChatNotice("Dictation engine is not ready yet.");
+  if (!canUseDictation()) {
+    setChatNotice("Audio dictate is not available in this browser context.");
     return;
   }
-  if (!controller.isReady()) {
-    setChatNotice("Dictation model is still loading.");
-    return;
-  }
-  void controller.toggle();
-};
 
-/**
- * Compose the latest transcript text into the existing composer string.
- * Returns the new composer value via `setComposer`. The controller already
- * inserts at the cursor; this is a fallback used by callers that pass a
- * `text` callback directly to the engine instead of using `insertAtCursor`.
- */
-export const appendComposerTranscript = (current: string, transcript: string): string => {
-  const text = transcript.trim();
-  if (!text) return current;
-  return `${current}${current ? " " : ""}${text}`.trim();
+  if (dictating) {
+    speechRecognitionRef.current?.stop();
+    setDictating(false);
+    return;
+  }
+
+  void (async () => {
+    const Recognition = resolveSpeechRecognitionCtor() as (new () => BrowserSpeechRecognition) | null;
+    if (!Recognition) {
+      setChatNotice("Audio dictate is not available in this browser context.");
+      return;
+    }
+    try {
+      await requestMicrophoneAccess();
+    } catch (error) {
+      setChatNotice(errorMessageOf(error, "Audio dictate failed: microphone permission was not granted."));
+      return;
+    }
+    const recognition = new Recognition();
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.lang = "en-US";
+    recognition.onresult = (event) => {
+      const transcript = Array.from(event.results)
+        .map((result) => result[0]?.transcript ?? "")
+        .join(" ")
+        .trim();
+      if (transcript) {
+        setComposer((current) => `${current}${current ? " " : ""}${transcript}`.trim());
+      }
+    };
+    recognition.onerror = (event) => {
+      setChatNotice(`Audio dictate failed: ${event.error}`);
+      setDictating(false);
+    };
+    recognition.onend = () => {
+      setDictating(false);
+    };
+    speechRecognitionRef.current = recognition;
+    setChatNotice(null);
+    setDictating(true);
+    recognition.start();
+  })();
 };

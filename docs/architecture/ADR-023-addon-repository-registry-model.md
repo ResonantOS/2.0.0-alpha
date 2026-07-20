@@ -1,7 +1,14 @@
 # ADR-023: Add-on Repository And Registry Model
 
-Status: Accepted  
-Date: 2026-04-28
+## Decision Metadata
+
+- Decision status: Accepted
+- Alpha applicability: Partial
+- Superseded by: None
+- Owner: Add-on registry
+- Decision date: 2026-04-28
+- Alpha note: Bundled manifests, provenance, and explicit grants apply.
+  External registry distribution is deferred.
 
 ## Decision
 
@@ -202,4 +209,4 @@ Related documents:
 
 - `ADR-006: Add-on Runtime & SDK`
 - `ADR-018: Add-on SDK V0`
-- `docs/ALPHA_DISTRIBUTION.md`
+- `docs/release/ALPHA_DISTRIBUTION.md`
