@@ -973,6 +973,14 @@
   text-transform: none;
 }
 
+.settings-provider-field input:disabled,
+.settings-provider-field select:disabled,
+.settings-provider-field textarea:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  background: rgba(0, 0, 0, 0.35);
+}
+
 .settings-provider-modal {
   position: fixed;
   inset: 0;
@@ -1039,6 +1047,18 @@
   border: 0;
   background: var(--accent);
   color: #06110d;
+}
+
+.settings-provider-modal-error {
+  margin: 0;
+  color: rgba(255, 124, 124, 0.95);
+  font-size: 0.78rem;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.settings-provider-modal-error[hidden] {
+  display: none;
 }
 
 .settings-provider-recovery {

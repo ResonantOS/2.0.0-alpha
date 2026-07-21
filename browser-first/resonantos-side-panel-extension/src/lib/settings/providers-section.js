@@ -1,5 +1,6 @@
 import { metricCard, noteCard, safeErrorMessage, setStatus, settingsHeader } from "./settings-common.js";
 import {
+  allowsCustomProviderEndpoint,
   formatLabel,
   modelLabel,
   modelValue,
@@ -19,7 +20,7 @@ function labeledField({ label, input }) {
   return wrapper;
 }
 
-function providerAccountPayload(form, provider = {}) {
+export function providerAccountPayload(form, provider = {}) {
   const FormDataCtor = form.ownerDocument?.defaultView?.FormData ?? FormData;
   const data = new FormDataCtor(form);
   const templateId = String(data.get("templateId") ?? provider.templateId ?? provider.providerType ?? "minimax").trim();
@@ -38,7 +39,7 @@ function providerAccountPayload(form, provider = {}) {
   };
 }
 
-function providerAccountForm(provider = {}) {
+export function providerAccountForm(provider = {}) {
   const form = document.createElement("form");
   form.className = "settings-provider-account-form";
 
@@ -71,6 +72,15 @@ function providerAccountForm(provider = {}) {
   apiBaseUrl.placeholder = "https://api.provider.com/v1";
   apiBaseUrl.value = provider.apiBaseUrl ?? providerTypePresets[template.value]?.apiBaseUrl ?? "";
 
+  function applyTemplateLock() {
+    const editable = allowsCustomProviderEndpoint(template.value);
+    apiBaseUrl.disabled = !editable;
+    apiBaseUrl.title = editable
+      ? ""
+      : "This provider requires its built-in endpoint URL.";
+  }
+  applyTemplateLock();
+
   const role = document.createElement("input");
   role.name = "role";
   role.placeholder = "Fast Augmentor account, routine account, archive account...";
@@ -93,6 +103,7 @@ function providerAccountForm(provider = {}) {
     name.placeholder = `${preset.label} account`;
     apiBaseUrl.value = preset.apiBaseUrl;
     models.value = preset.models.join("\n");
+    applyTemplateLock();
   });
 
   const grid = document.createElement("div");
@@ -109,7 +120,7 @@ function providerAccountForm(provider = {}) {
   return form;
 }
 
-function openProviderAccountModal({ bridgeRequest, getBridgeRequest, statusNode, reload }) {
+export function openProviderAccountModal({ bridgeRequest, getBridgeRequest, statusNode, reload }) {
   const bridge = () => (typeof getBridgeRequest === "function" ? getBridgeRequest() : bridgeRequest);
   const overlay = document.createElement("div");
   overlay.className = "settings-provider-modal";
@@ -128,6 +139,11 @@ function openProviderAccountModal({ bridgeRequest, getBridgeRequest, statusNode,
   close.textContent = "Close";
   heading.append(title, close);
   const form = providerAccountForm();
+  const errorNode = document.createElement("p");
+  errorNode.className = "settings-provider-modal-error";
+  errorNode.setAttribute("aria-live", "assertive");
+  errorNode.hidden = true;
+  form.append(errorNode);
   const actions = document.createElement("div");
   actions.className = "settings-provider-modal-actions";
   const save = document.createElement("button");
@@ -142,10 +158,12 @@ function openProviderAccountModal({ bridgeRequest, getBridgeRequest, statusNode,
   overlay.addEventListener("click", (event) => {
     if (event.target === overlay) overlay.remove();
   });
+
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    errorNode.textContent = "";
+    errorNode.hidden = true;
     save.disabled = true;
-    setStatus(statusNode, "Saving provider account...");
     try {
       await bridge()("/providers/accounts", {
         method: "POST",
@@ -156,7 +174,8 @@ function openProviderAccountModal({ bridgeRequest, getBridgeRequest, statusNode,
       setStatus(statusNode, "Provider account saved.", "success");
       await reload();
     } catch (error) {
-      setStatus(statusNode, `Provider account save failed: ${safeErrorMessage(error)}`, "error");
+      errorNode.textContent = `Provider account save failed: ${safeErrorMessage(error)}`;
+      errorNode.hidden = false;
     } finally {
       save.disabled = false;
     }
