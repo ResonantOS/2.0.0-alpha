@@ -625,8 +625,25 @@ async function verifyPublicSubmitBoundary(panel, page) {
   }
   const blockedState = (await evaluate(page, `({ submitted: window.__submitted, status: document.querySelector("#status").textContent })`)).result.value;
   assert(!blockedState.submitted, `Public-submit boundary executed the action: ${JSON.stringify(blockedState)}`);
-  const approvalJobs = outcome.publicJobs.filter((job) => job.status === "approval" && job.pendingApproval);
-  const hasExecutableApproval = outcome.buttons.includes("Approve once");
+  // The human-only refusal message renders before the job finishes settling, so
+  // `outcome` can be sampled while the job is still queued/running. Classifying
+  // from that snapshot both misses a late "approval" job (a false pass on the
+  // human-only property) and leaves it holding the tab page lock, which starves
+  // every later scenario. Re-read the job store once the job has settled.
+  const settledPublicJobs = await waitForPageCondition(panel, `(async () => {
+    const jobs = (await chrome.storage.local.get("augmentorBrowserJobs")).augmentorBrowserJobs ?? [];
+    const publicJobs = jobs.filter((job) => /Submit public form/i.test(job.goal ?? "")
+      || /Submit public form/i.test(job.pendingApproval?.step?.text ?? ""));
+    if (!publicJobs.length) return false;
+    const settled = publicJobs.every((job) => !["queued", "running"].includes(job.status));
+    if (!settled) return false;
+    const buttons = [...document.querySelectorAll("button")]
+      .filter((button) => /click "Submit public form"/i.test(button.title || ""))
+      .map((button) => button.textContent.trim());
+    return { publicJobs, buttons };
+  })()`, "public-submit job settle");
+  const approvalJobs = settledPublicJobs.publicJobs.filter((job) => job.status === "approval" && job.pendingApproval);
+  const hasExecutableApproval = settledPublicJobs.buttons.includes("Approve once");
   const humanHandoff = outcome.humanSignal && approvalJobs.length === 0 && !hasExecutableApproval;
   const decision = decidePublicSubmitScenario({ mode: publicSubmitContract, humanHandoff });
   certificationReport.record("post-approval-public-submit", decision.status, decision.reason);
