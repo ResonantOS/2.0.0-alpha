@@ -27,8 +27,9 @@ Node test runner, repository security and Alpha verification pipelines.
 - OpenCode remains optional and is not an Alpha runtime or release gate.
 - The session start request cannot override host-owned consent, grants,
   workspace, provider, model, command, environment, host, or port.
-- Required live-session grants are exactly `filesystem`, `shell`, and
-  `providers`; all default denied. `ui-embedding` remains a separate future
+- Required live-session grants are exactly `filesystem` and `providers`; both
+  default denied. Shell and process tools remain denied in the live preview.
+  `ui-embedding` remains a separate future
   grant for embedding OpenCode's web UI and is not required by this governance
   view.
 - The selected workspace must resolve to the repository root or a descendant.
@@ -155,20 +156,21 @@ not register it as a bridge route. It must ignore
 `OPENCODE_SERVER_USERNAME` and `OPENCODE_SERVER_PASSWORD` from the existing
 one-shot `scopedOpenCodeEnv()` allowlist so CLI delegation can never inherit a
 live service credential. Update `executeOpenCodeStatus.requiredGrants` to
-exactly `filesystem`, `shell`, and `providers`.
+exactly `filesystem` and `providers`.
 
 **Step 3: Add explicit Settings controls**
 
-For the OpenCode card only, render a workspace input, the three grant
-checkboxes, and a live-session enable checkbox inside Runtime controls. Save
+For the OpenCode card only, render a workspace input, the two grant checkboxes,
+and a live-session enable checkbox inside Runtime controls. Save
 one complete desired OpenCode setting through the existing capability-gated
 execution-settings route. Use labels and status text that state the preview is
-optional and that OpenCode receives scoped filesystem, shell, and provider
-authority.
+optional, that OpenCode receives scoped filesystem and provider authority, and
+that shell and process tools remain denied.
 
 Update the OpenCode manifest and ADR-021 in this same task so the accepted
 authority model never contradicts the code: the governance session requires
-`filesystem`, `shell`, and `providers`; `ui-embedding` is reserved for a future
+`filesystem` and `providers`; shell remains available only to the separate
+human-approved one-shot handoff; `ui-embedding` is reserved for a future
 OpenCode web-UI proxy. Mark `archive-read` and `archive-intake-write` as
 delegation-only authorities rather than live-session grants.
 
@@ -293,8 +295,8 @@ closure state only. Consume v2 events, enqueue only events whose
 and retain at most 500 entries.
 
 Add `POST /opencode/session/events`. Validate `after` as a non-negative safe
-integer. Return entries as `{ cursor, event }`, plus `nextCursor` and
-`droppedBefore`.
+integer. Return bare sanitized `events`, plus `nextCursor` and
+`droppedBefore`, where `droppedBefore` is the highest evicted cursor.
 
 **Step 6: Update the production composition root in the same change**
 

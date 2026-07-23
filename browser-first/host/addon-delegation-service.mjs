@@ -16,9 +16,11 @@ const DEFAULT_HERMES_PROVIDER = "openai-api";
 const DEFAULT_HERMES_MODEL = "gpt-5.4-mini";
 const DEFAULT_HERMES_MINIMAX_MODEL = "MiniMax-M3";
 const MINIMAX_OPENAI_COMPAT_BASE_URL = "https://api.minimax.io/v1";
-const OPENCODE_LIVE_SESSION_GRANTS = Object.freeze(["filesystem", "shell", "providers"]);
+const OPENCODE_LIVE_SESSION_GRANTS = Object.freeze(["filesystem", "providers"]);
 const OPENCODE_DECLARED_CAPABILITIES = Object.freeze([
-  ...OPENCODE_LIVE_SESSION_GRANTS,
+  "filesystem",
+  "shell",
+  "providers",
   "archive-read",
   "archive-intake-write",
 ]);
@@ -573,8 +575,15 @@ export function createAddonDelegationService(dependencies) {
       ...(providerBaseUrlKey && route?.apiBaseUrl
         ? { [providerBaseUrlKey]: String(route.apiBaseUrl) }
         : {}),
+      OPENCODE_DISABLE_LSP_DOWNLOAD: "1",
       OPENCODE_DISABLE_PROJECT_CONFIG: "1",
-      OPENCODE_PERMISSION: JSON.stringify({ "*": "ask", external_directory: "deny" }),
+      OPENCODE_PERMISSION: JSON.stringify({
+        "*": "ask",
+        bash: "deny",
+        task: "deny",
+        lsp: "deny",
+        external_directory: "deny",
+      }),
     };
   }
 

@@ -6,7 +6,7 @@ import test from "node:test";
 
 import { createAddonDelegationService } from "../host/addon-delegation-service.mjs";
 
-const REQUIRED_LIVE_GRANTS = ["filesystem", "shell", "providers"];
+const REQUIRED_LIVE_GRANTS = ["filesystem", "providers"];
 
 function safeFileSlug(value) {
   return String(value ?? "item")
@@ -179,6 +179,19 @@ test("OpenCode live-session settings default closed and reject invalid desired a
         addon: "opencode",
         localCliExecution: true,
         liveSession: {
+          enabled: false,
+          workspacePath: ".",
+          grantedCapabilities: ["filesystem", "shell", "providers"],
+        },
+      }),
+      /unsupported OpenCode live-session capability: shell/i,
+    );
+
+    await assert.rejects(
+      service.executeAddonExecutionSettingsUpdate({
+        addon: "opencode",
+        localCliExecution: true,
+        liveSession: {
           enabled: true,
           workspacePath: "",
           grantedCapabilities: REQUIRED_LIVE_GRANTS,
@@ -194,7 +207,7 @@ test("OpenCode live-session settings default closed and reject invalid desired a
         liveSession: {
           enabled: true,
           workspacePath: ".",
-          grantedCapabilities: ["filesystem", "shell"],
+          grantedCapabilities: ["filesystem"],
         },
       }),
       /providers.*required/i,
@@ -206,7 +219,7 @@ test("OpenCode live-session settings default closed and reject invalid desired a
       liveSession: {
         enabled: true,
         workspacePath: root,
-        grantedCapabilities: ["providers", "filesystem", "shell", "filesystem"],
+        grantedCapabilities: ["providers", "filesystem", "filesystem"],
       },
     });
 
@@ -228,12 +241,17 @@ test("OpenCode live-session settings default closed and reject invalid desired a
     const addonStatus = await service.executeAddonsStatus();
     const openCodeStatus = addonStatus.addons.find((addon) => addon.id === "addon.opencode");
     assert.deepEqual(openCodeStatus.requestedCapabilities, [
-      ...REQUIRED_LIVE_GRANTS,
+      "filesystem",
+      "shell",
+      "providers",
       "archive-read",
       "archive-intake-write",
     ]);
     assert.deepEqual(openCodeStatus.grantedCapabilities, REQUIRED_LIVE_GRANTS);
-    assert.deepEqual(openCodeStatus.deniedCapabilities, ["archive-read", "archive-intake-write"]);
+    assert.deepEqual(
+      openCodeStatus.deniedCapabilities,
+      ["shell", "archive-read", "archive-intake-write"],
+    );
 
     const revokedGrant = await service.executeAddonExecutionSettingsUpdate({
       addon: "opencode",
@@ -241,7 +259,7 @@ test("OpenCode live-session settings default closed and reject invalid desired a
       liveSession: {
         enabled: true,
         workspacePath: ".",
-        grantedCapabilities: ["filesystem", "shell"],
+        grantedCapabilities: ["filesystem"],
       },
     });
     assert.equal(revokedGrant.settings.opencode.liveSession.enabled, false);
@@ -408,9 +426,8 @@ test("OpenCode live-session preflight fails closed for every persisted gate", as
       const cases = [
         [readySettings({ liveSession: { enabled: false } }), /live session is disabled/i],
         [readySettings({ liveSession: { workspacePath: "" } }), /workspace is required/i],
-        [readySettings({ liveSession: { grantedCapabilities: ["shell", "providers"] } }), /filesystem.*required/i],
-        [readySettings({ liveSession: { grantedCapabilities: ["filesystem", "providers"] } }), /shell.*required/i],
-        [readySettings({ liveSession: { grantedCapabilities: ["filesystem", "shell"] } }), /providers.*required/i],
+        [readySettings({ liveSession: { grantedCapabilities: ["providers"] } }), /filesystem.*required/i],
+        [readySettings({ liveSession: { grantedCapabilities: ["filesystem"] } }), /providers.*required/i],
         [readySettings({ liveSession: { workspacePath: ".." } }), /outside the ResonantOS repository/i],
       ];
 
@@ -490,7 +507,7 @@ test("OpenCode live-session preflight returns scoped internals while public stat
         liveSession: {
           enabled: true,
           workspacePath: workspace,
-          grantedCapabilities: ["providers", "shell", "filesystem"],
+          grantedCapabilities: ["providers", "filesystem"],
         },
       });
 
@@ -507,9 +524,16 @@ test("OpenCode live-session preflight returns scoped internals while public stat
       assert.equal(preflight.childEnvironment.OPENCODE_SERVER_PASSWORD, undefined);
       assert.equal(preflight.childEnvironment.RESONANTOS_BROWSER_FIRST_TOKEN, undefined);
       assert.equal(preflight.childEnvironment.OPENCODE_DISABLE_PROJECT_CONFIG, "1");
+      assert.equal(preflight.childEnvironment.OPENCODE_DISABLE_LSP_DOWNLOAD, "1");
       assert.equal(
         preflight.childEnvironment.OPENCODE_PERMISSION,
-        JSON.stringify({ "*": "ask", external_directory: "deny" }),
+        JSON.stringify({
+          "*": "ask",
+          bash: "deny",
+          task: "deny",
+          lsp: "deny",
+          external_directory: "deny",
+        }),
       );
 
       const status = await service.executeOpenCodeStatus();

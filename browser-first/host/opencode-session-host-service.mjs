@@ -4,6 +4,8 @@ const EVENT_PAYLOAD_BYTES_LIMIT = 32_768;
 const EVENT_TEXT_LIMIT = 8_192;
 const EVENT_COLLECTION_LIMIT = 100;
 const EVENT_REDACTION_LOOKAHEAD_LIMIT = 16_384;
+const EVENT_DELTA_STREAM_LIMIT = 100;
+const START_EVENT_LIMIT = 8;
 const PREFLIGHT_REVOKED_CODE = "OPENCODE_PREFLIGHT_REVOKED";
 
 const SESSION_STATE = Object.freeze({
@@ -99,6 +101,78 @@ function sensitiveValues(attempt) {
   visit(attempt.preflightResult);
   visit(attempt.lifecycle);
   return [...values].sort((left, right) => right.length - left.length);
+}
+
+function createExactTextRedactor(rules) {
+  const exactRules = [];
+  const seen = new Set();
+  for (const rule of rules) {
+    const value = typeof rule?.value === "string"
+      ? rule.value.slice(0, EVENT_REDACTION_LOOKAHEAD_LIMIT)
+      : "";
+    if (value.length < 4 || seen.has(value)) continue;
+    seen.add(value);
+    exactRules.push({
+      replacement: typeof rule.replacement === "string"
+        ? rule.replacement
+        : "[redacted]",
+      value,
+    });
+  }
+  exactRules.sort((left, right) => right.value.length - left.value.length);
+  let pending = "";
+
+  const drainSafeText = () => {
+    let output = "";
+    while (pending) {
+      const match = exactRules.find((rule) => pending.startsWith(rule.value));
+      if (match) {
+        output += match.replacement;
+        pending = pending.slice(match.value.length);
+        continue;
+      }
+      if (exactRules.some((rule) => rule.value.startsWith(pending))) break;
+      output += pending[0];
+      pending = pending.slice(1);
+    }
+    return output;
+  };
+
+  return {
+    hasPending() {
+      return pending.length > 0;
+    },
+    write(value) {
+      if (typeof value !== "string" || !value) return "";
+      pending += value;
+      return drainSafeText();
+    },
+    flush() {
+      let output = drainSafeText();
+      if (!pending) return output;
+      const partialRule = exactRules.find((rule) => (
+        rule.value.startsWith(pending)
+      ));
+      output += partialRule && pending.length >= 4
+        ? partialRule.replacement
+        : pending;
+      pending = "";
+      return output;
+    },
+  };
+}
+
+function createAttemptTextRedactor(attempt) {
+  const home = attempt.preflightResult?.childEnvironment?.HOME
+    ?? attempt.preflightResult?.scopedEnvironment?.HOME;
+  return createExactTextRedactor([
+    ...sensitiveValues(attempt).map((value) => ({
+      value,
+      replacement: "[redacted]",
+    })),
+    { value: attempt.workspace, replacement: "." },
+    { value: typeof home === "string" ? home : "", replacement: "~" },
+  ]);
 }
 
 function redactTruncatedExactValue(text, exactValue, replacement) {
@@ -414,6 +488,7 @@ function sanitizeOpenCodeEvent(event, attempt) {
       sanitized = { type, data: { sessionID, todos } };
       break;
     }
+    case "session.created":
     case "session.updated": {
       const info = objectValue(data.info);
       if (!info || required(info.id) !== sessionID) return null;
@@ -626,8 +701,10 @@ export function createOpencodeSessionHandlers({
     attempt.preflightResult = null;
     attempt.publicResult = null;
     attempt.events.length = 0;
+    attempt.deltaStreams.clear();
     attempt.eventBytes = 0;
     attempt.permissionRequests.clear();
+    attempt.pendingStartEvents.length = 0;
     attempt.cursor = 0;
     attempt.droppedBefore = 0;
 
@@ -777,15 +854,7 @@ export function createOpencodeSessionHandlers({
     return checked;
   }
 
-  function recordEvent(attempt, event) {
-    if (
-      attempt.disposed
-      || currentAttempt !== attempt
-      || state !== SESSION_STATE.RUNNING
-    ) {
-      return;
-    }
-
+  function appendEvent(attempt, event) {
     const sanitizedEvent = sanitizeOpenCodeEvent(event, attempt);
     if (!sanitizedEvent) return;
     const bytes = Buffer.byteLength(JSON.stringify(sanitizedEvent), "utf8");
@@ -817,6 +886,151 @@ export function createOpencodeSessionHandlers({
         attempt.permissionRequests.delete(droppedRequestID);
       }
     }
+  }
+
+  function prepareDeltaEvent(attempt, event) {
+    const source = objectValue(event);
+    const data = objectValue(source?.data);
+    const type = boundedString(source?.type, 128);
+    let key = "";
+    if (type === "session.next.text.delta") {
+      key = `${type}:${boundedString(data?.assistantMessageID, 256)}:${boundedString(data?.textID, 256)}`;
+    } else if (type === "session.next.reasoning.delta") {
+      key = `${type}:${boundedString(data?.assistantMessageID, 256)}:${boundedString(data?.reasoningID, 256)}`;
+    } else if (type === "message.part.delta") {
+      key = `${type}:${boundedString(data?.messageID, 256)}:${boundedString(data?.partID, 256)}:${boundedString(data?.field, 64)}`;
+    } else {
+      return event;
+    }
+    if (
+      data?.sessionID !== attempt.sessionId
+      || typeof data.delta !== "string"
+      || key.includes("::")
+    ) {
+      return null;
+    }
+
+    let stream = attempt.deltaStreams.get(key);
+    if (!stream) {
+      if (attempt.deltaStreams.size >= EVENT_DELTA_STREAM_LIMIT) return null;
+      let lifecycleRedactor = null;
+      if (typeof attempt.lifecycle?.createSensitiveTextRedactor === "function") {
+        lifecycleRedactor = attempt.lifecycle.createSensitiveTextRedactor(
+          "[redacted]",
+        );
+        if (
+          !lifecycleRedactor
+          || typeof lifecycleRedactor.write !== "function"
+          || typeof lifecycleRedactor.flush !== "function"
+        ) {
+          throw new Error("OpenCode lifecycle returned an invalid sensitive text redactor.");
+        }
+      }
+      stream = {
+        event: source,
+        hostRedactor: createAttemptTextRedactor(attempt),
+        lifecycleRedactor,
+      };
+      attempt.deltaStreams.set(key, stream);
+    } else {
+      stream.event = source;
+    }
+
+    const boundedDelta = data.delta.slice(
+      0,
+      EVENT_TEXT_LIMIT + EVENT_REDACTION_LOOKAHEAD_LIMIT,
+    );
+    const hostOutput = stream.hostRedactor.write(boundedDelta);
+    const output = stream.lifecycleRedactor
+      ? stream.lifecycleRedactor.write(hostOutput)
+      : hostOutput;
+    if (
+      !stream.hostRedactor.hasPending()
+      && (
+        !stream.lifecycleRedactor
+        || (
+          typeof stream.lifecycleRedactor.hasPending === "function"
+          && !stream.lifecycleRedactor.hasPending()
+        )
+      )
+    ) {
+      attempt.deltaStreams.delete(key);
+    }
+    if (!output) return null;
+    return {
+      ...source,
+      data: {
+        ...data,
+        delta: output,
+      },
+    };
+  }
+
+  function flushDeltaStreams(attempt) {
+    for (const stream of attempt.deltaStreams.values()) {
+      let output = stream.hostRedactor.flush();
+      if (stream.lifecycleRedactor) {
+        output = stream.lifecycleRedactor.write(output)
+          + stream.lifecycleRedactor.flush();
+      }
+      if (output) {
+        appendEvent(attempt, {
+          ...stream.event,
+          data: {
+            ...stream.event.data,
+            delta: output,
+          },
+        });
+      }
+    }
+    attempt.deltaStreams.clear();
+  }
+
+  function recordEvent(attempt, event) {
+    if (
+      attempt.disposed
+      || currentAttempt !== attempt
+    ) {
+      return;
+    }
+
+    const source = objectValue(event);
+    const data = objectValue(source?.data);
+    if (state === SESSION_STATE.STARTING) {
+      const candidateSessionId = source?.type === "session.created"
+        ? sessionIdFrom(data?.sessionID)
+        : "";
+      if (
+        candidateSessionId
+        && attempt.pendingStartEvents.length < START_EVENT_LIMIT
+      ) {
+        const sanitized = sanitizeOpenCodeEvent(source, {
+          ...attempt,
+          sessionId: candidateSessionId,
+        });
+        if (sanitized) {
+          attempt.pendingStartEvents.push({
+            event: sanitized,
+            sessionId: candidateSessionId,
+          });
+        }
+      }
+      return;
+    }
+    if (state !== SESSION_STATE.RUNNING) return;
+
+    const isIdleBoundary = data?.sessionID === attempt.sessionId
+      && (
+        source?.type === "session.idle"
+        || (
+          source?.type === "session.status"
+          && objectValue(data.status)?.type === "idle"
+        )
+      );
+    if (isIdleBoundary) flushDeltaStreams(attempt);
+
+    const preparedEvent = prepareDeltaEvent(attempt, event);
+    if (preparedEvent) appendEvent(attempt, preparedEvent);
   }
 
   async function consumeEvents(attempt, source) {
@@ -884,17 +1098,6 @@ export function createOpencodeSessionHandlers({
         }
       }
 
-      const session = await client.createSession({
-        directory: attempt.workspace,
-        model: attempt.model,
-      });
-      const sessionId = sessionIdFromResult(session);
-      if (!sessionId) throw new Error("OpenCode did not return a session id.");
-      if (attempt.disposed || currentAttempt !== attempt) {
-        throw new Error("OpenCode session start was cancelled.");
-      }
-      attempt.sessionId = sessionId;
-
       const abortController = newAbortController();
       if (!abortController?.signal || typeof abortController.abort !== "function") {
         throw new Error("OpenCode session controller requires a valid AbortController.");
@@ -910,12 +1113,26 @@ export function createOpencodeSessionHandlers({
         throw new Error("OpenCode session start was cancelled.");
       }
 
+      attempt.pumpPromise = consumeEvents(attempt, source);
+      const session = await client.createSession({
+        directory: attempt.workspace,
+        model: attempt.model,
+      });
+      const sessionId = sessionIdFromResult(session);
+      if (!sessionId) throw new Error("OpenCode did not return a session id.");
+      if (attempt.disposed || currentAttempt !== attempt) {
+        throw new Error("OpenCode session start was cancelled.");
+      }
+      attempt.sessionId = sessionId;
+
       state = SESSION_STATE.RUNNING;
+      for (const pending of attempt.pendingStartEvents.splice(0)) {
+        if (pending.sessionId === sessionId) appendEvent(attempt, pending.event);
+      }
       attempt.publicResult = Object.freeze({
         sessionId,
         workspace: attempt.publicWorkspace,
       });
-      attempt.pumpPromise = consumeEvents(attempt, source);
       return { ...attempt.publicResult };
     } catch (error) {
       await disposeAttempt(attempt, {
@@ -989,11 +1206,13 @@ export function createOpencodeSessionHandlers({
       detachProcessExit: null,
       disposed: false,
       droppedBefore: 0,
+      deltaStreams: new Map(),
       eventBytes: 0,
       events: [],
       lifecycle: null,
       model: checked.model,
       permissionRequests: new Map(),
+      pendingStartEvents: [],
       preflightResult: checked.raw,
       process: null,
       publicResult: null,

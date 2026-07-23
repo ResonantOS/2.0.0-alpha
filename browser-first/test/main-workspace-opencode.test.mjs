@@ -19,6 +19,16 @@ function setupDom() {
   };
 }
 
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
+}
+
 test("opencode workspace renders runtime status and creates governed delegation packets", async () => {
   const { container, cleanup } = setupDom();
   const calls = [];
@@ -35,7 +45,7 @@ test("opencode workspace renders runtime status and creates governed delegation 
           enabled: true,
           workspaceConfigured: true,
           workspacePath: "packages/governed-workspace",
-          grantedCapabilities: ["filesystem", "shell", "providers"],
+          grantedCapabilities: ["filesystem", "providers"],
           ready: true,
           readinessReasons: []
         }
@@ -175,7 +185,7 @@ test("live session controls follow host readiness and never consume a raw OpenCo
               enabled: true,
               workspaceConfigured: true,
               workspacePath: "packages/governed-workspace",
-              grantedCapabilities: ["filesystem", "shell", "providers"],
+              grantedCapabilities: ["filesystem", "providers"],
               ready: true,
               readinessReasons: []
             }
@@ -183,7 +193,7 @@ test("live session controls follow host readiness and never consume a raw OpenCo
               enabled: false,
               workspaceConfigured: true,
               workspacePath: "packages/governed-workspace",
-              grantedCapabilities: ["filesystem", "shell"],
+              grantedCapabilities: ["filesystem"],
               ready: false,
               readinessReasons: ["live-session-disabled", "capability-providers-required"]
             }
@@ -253,6 +263,15 @@ test("live session controls follow host readiness and never consume a raw OpenCo
     assert.equal(Object.hasOwn(sourceOptions, "openEventStream"), false);
     assert.equal(container.querySelector(".oc-scope").textContent, "scope: packages/governed-workspace");
 
+    const pollController = new AbortController();
+    await sourceOptions.postJson(
+      "/opencode/session/events",
+      { sessionId: "session-owned", after: 0 },
+      { signal: pollController.signal }
+    );
+    const pollCall = calls.find(([route]) => route === "/opencode/session/events");
+    assert.equal(pollCall?.[1]?.signal, pollController.signal);
+
     sourceOptions.onCursorGap({ requestedAfter: 1, droppedBefore: 4 });
     assert.match(container.querySelector(".oc-session-notice").textContent, /earlier OpenCode events expired/i);
     sourceOptions.onPollingError(new Error("private runtime failure"));
@@ -293,6 +312,131 @@ test("opencode workspace replaces raw bridge fetch failures with setup guidance"
 
     assert.match(container.textContent, /OpenCode delegation failed/);
     assert.doesNotMatch(container.textContent, /Failed to fetch/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("workspace disposal stops one active source and destroys its session exactly once", async () => {
+  const { container, cleanup } = setupDom();
+  let sourceStops = 0;
+  let sessionDestroys = 0;
+  const bridgeRequest = async (route) => {
+    if (route === "/opencode/status") {
+      return {
+        installed: true,
+        detail: "OpenCode runtime was detected.",
+        liveSession: {
+          enabled: true,
+          workspaceConfigured: true,
+          workspacePath: ".",
+          grantedCapabilities: ["filesystem", "providers"],
+          ready: true,
+          readinessReasons: []
+        }
+      };
+    }
+    throw new Error(`Unexpected route ${route}`);
+  };
+  const source = {
+    async start() {
+      return { sessionId: "session-dispose", workspace: "." };
+    },
+    subscribe() {
+      return () => {};
+    },
+    async sendPrompt() {},
+    async replyPermission() {},
+    async stop() {
+      sourceStops += 1;
+      return { stopped: true };
+    }
+  };
+
+  try {
+    const dispose = renderOpenCodeWorkspace({
+      container,
+      bridgeRequest,
+      createBridgeSource: () => source,
+      createSession: () => ({
+        destroy() {
+          sessionDestroys += 1;
+        }
+      })
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    container.querySelector(".opencode-start-session").dispatchEvent(new Event("click"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal(typeof dispose, "function");
+    await Promise.all([dispose(), dispose()]);
+    assert.equal(sourceStops, 1);
+    assert.equal(sessionDestroys, 1);
+  } finally {
+    cleanup();
+  }
+});
+
+test("workspace disposal waits for an in-flight source start and prevents a late mount", async () => {
+  const { container, cleanup } = setupDom();
+  const started = deferred();
+  let sourceStops = 0;
+  let sessionCreates = 0;
+  const bridgeRequest = async (route) => {
+    if (route === "/opencode/status") {
+      return {
+        installed: true,
+        detail: "OpenCode runtime was detected.",
+        liveSession: {
+          enabled: true,
+          workspaceConfigured: true,
+          workspacePath: ".",
+          grantedCapabilities: ["filesystem", "providers"],
+          ready: true,
+          readinessReasons: []
+        }
+      };
+    }
+    throw new Error(`Unexpected route ${route}`);
+  };
+  const source = {
+    start() {
+      return started.promise;
+    },
+    subscribe() {
+      return () => {};
+    },
+    async sendPrompt() {},
+    async replyPermission() {},
+    async stop() {
+      sourceStops += 1;
+      await started.promise;
+      return { stopped: true };
+    }
+  };
+
+  try {
+    const dispose = renderOpenCodeWorkspace({
+      container,
+      bridgeRequest,
+      createBridgeSource: () => source,
+      createSession: () => {
+        sessionCreates += 1;
+        return { destroy() {} };
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    container.querySelector(".opencode-start-session").dispatchEvent(new Event("click"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const disposed = dispose();
+    started.resolve({ sessionId: "session-late", workspace: "." });
+    await disposed;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal(sourceStops, 1);
+    assert.equal(sessionCreates, 0);
+    assert.equal(container.querySelector(".oc-session"), null);
   } finally {
     cleanup();
   }

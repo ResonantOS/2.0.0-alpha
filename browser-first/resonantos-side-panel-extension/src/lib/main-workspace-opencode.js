@@ -53,7 +53,6 @@ function openCodeStatusMeta(status = {}) {
 const LIVE_SESSION_REASON_TEXT = Object.freeze({
   "capability-filesystem-required": "Filesystem capability is required.",
   "capability-providers-required": "Provider capability is required.",
-  "capability-shell-required": "Shell capability is required.",
   "live-session-disabled": "The OpenCode live session is disabled.",
   "local-cli-disabled": "Local CLI execution is disabled.",
   "preflight-failed": "The governed session preflight did not complete.",
@@ -173,12 +172,28 @@ export function renderOpenCodeWorkspace({
   let liveSessionReady = false;
   let activeSession = null;
   let activeSource = null;
+  let pendingSource = null;
   let startPending = false;
+  let destroyed = false;
+  let disposePromise = null;
+  const sourceStopPromises = new WeakMap();
+
+  function stopSourceOnce(source) {
+    if (!source || typeof source !== "object") return Promise.resolve();
+    let promise = sourceStopPromises.get(source);
+    if (!promise) {
+      promise = Promise.resolve().then(() => source.stop?.());
+      sourceStopPromises.set(source, promise);
+    }
+    return promise;
+  }
 
   const loadStatus = async () => {
+    if (destroyed) return;
     refreshButton.disabled = true;
     try {
       const status = await bridge()("/opencode/status", { method: "GET" });
+      if (destroyed) return;
       const executionEnabled = status.executionEnabled !== false;
       const liveSession = status.liveSession && typeof status.liveSession === "object"
         ? status.liveSession
@@ -208,6 +223,7 @@ export function renderOpenCodeWorkspace({
         statusCard.querySelector(".delegation-guidance")?.remove();
       }
     } catch (error) {
+      if (destroyed) return;
       liveSessionReady = false;
       statusBody.textContent = opencodeStatusMessage(error);
       statusMeta.textContent = "Status unavailable";
@@ -226,7 +242,7 @@ export function renderOpenCodeWorkspace({
       });
       statusCard.append(guidance);
     } finally {
-      refreshButton.disabled = false;
+      if (!destroyed) refreshButton.disabled = false;
     }
   };
 
@@ -234,6 +250,7 @@ export function renderOpenCodeWorkspace({
 
   taskForm.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (destroyed) return;
     const mission = missionInput.value.trim();
     if (mission.length < 8) {
       setStatus(taskStatus, "Describe a concrete OpenCode mission before creating a delegation.", "warning");
@@ -250,6 +267,7 @@ export function renderOpenCodeWorkspace({
         method: "POST",
         body: { path: result.path }
       });
+      if (destroyed) return;
       const lifecycle = started.status === "completed"
         ? `Completed · ${started.resultArtifactPath || "result artifact ready"}`
         : started.status === "blocked"
@@ -267,9 +285,11 @@ export function renderOpenCodeWorkspace({
       missionInput.value = "";
       await loadStatus();
     } catch (error) {
-      setStatus(taskStatus, opencodeStatusMessage(error, "OpenCode delegation failed"), "error");
+      if (!destroyed) {
+        setStatus(taskStatus, opencodeStatusMessage(error, "OpenCode delegation failed"), "error");
+      }
     } finally {
-      taskButton.disabled = false;
+      if (!destroyed) taskButton.disabled = false;
     }
   });
 
@@ -290,13 +310,14 @@ export function renderOpenCodeWorkspace({
     const session = activeSession;
     let cleanupConfirmed = true;
     try {
-      await source?.stop?.();
+      await stopSourceOnce(source);
     } catch {
       cleanupConfirmed = false;
     }
     activeSource = null;
     activeSession = null;
     session?.destroy?.();
+    if (destroyed) return;
     sessionArea.replaceChildren();
     setOverviewHidden(false);
     setStatus(
@@ -310,7 +331,7 @@ export function renderOpenCodeWorkspace({
   }
 
   async function startLiveSession() {
-    if (!liveSessionReady || startPending || activeSource) return;
+    if (destroyed || !liveSessionReady || startPending || activeSource) return;
     startPending = true;
     startSessionButton.disabled = true;
     setStatus(taskStatus, "Starting OpenCode session…");
@@ -318,12 +339,18 @@ export function renderOpenCodeWorkspace({
     try {
       source = bridgeSourceFactory({
         startSession: () => bridge()("/opencode/session/start", { method: "POST", body: {} }),
-        postJson: (path, body) => bridge()(path, { method: "POST", body }),
+        postJson: (path, body, options = {}) => bridge()(path, { method: "POST", body, ...options }),
         onCursorGap: () => activeSession?.showCursorGap?.(),
         onPollingError: () => activeSession?.showTerminated?.()
       });
+      pendingSource = source;
       const info = await source.start();
       if (!info?.sessionId) throw new Error("No session id returned.");
+      if (destroyed) {
+        await stopSourceOnce(source).catch(() => undefined);
+        return;
+      }
+      pendingSource = null;
       activeSource = source;
       setOverviewHidden(true);
       activeSession?.destroy?.();
@@ -340,16 +367,21 @@ export function renderOpenCodeWorkspace({
       });
       setStatus(taskStatus, "");
     } catch (error) {
-      await source?.stop?.().catch(() => undefined);
+      await stopSourceOnce(source).catch(() => undefined);
+      if (pendingSource === source) pendingSource = null;
       if (activeSource === source) activeSource = null;
       activeSession?.destroy?.();
       activeSession = null;
+      if (destroyed) return;
       sessionArea.replaceChildren();
       setOverviewHidden(false);
       setStatus(taskStatus, opencodeStatusMessage(error, "Could not start OpenCode session"), "error");
     } finally {
+      if (pendingSource === source) pendingSource = null;
       startPending = false;
-      startSessionButton.disabled = !liveSessionReady || Boolean(activeSource);
+      if (!destroyed) {
+        startSessionButton.disabled = !liveSessionReady || Boolean(activeSource);
+      }
     }
   }
   startSessionButton.addEventListener("click", () => void startLiveSession());
@@ -358,7 +390,25 @@ export function renderOpenCodeWorkspace({
   if (initialMission.trim()) {
     missionInput.value = initialMission.trim();
     queueMicrotask(() => {
-      taskForm.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      if (!destroyed) {
+        taskForm.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      }
     });
   }
+
+  return function disposeOpenCodeWorkspace() {
+    if (disposePromise) return disposePromise;
+    destroyed = true;
+    const sources = [...new Set([pendingSource, activeSource].filter(Boolean))];
+    pendingSource = null;
+    activeSource = null;
+    startPending = false;
+    const session = activeSession;
+    activeSession = null;
+    session?.destroy?.();
+    disposePromise = Promise.allSettled(
+      sources.map((source) => stopSourceOnce(source))
+    ).then(() => undefined);
+    return disposePromise;
+  };
 }

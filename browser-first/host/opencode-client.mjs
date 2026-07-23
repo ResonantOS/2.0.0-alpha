@@ -11,6 +11,9 @@ const MAX_TERMINATION_WAIT_MS = 30_000;
 const EARLY_CANDIDATE_EXIT_CODE = "OPENCODE_EARLY_CANDIDATE_EXIT";
 const CLOSED_PERMISSION_POLICY = JSON.stringify({
   "*": "ask",
+  bash: "deny",
+  task: "deny",
+  lsp: "deny",
   external_directory: "deny",
 });
 const SERVER_ANNOUNCEMENT_LIMIT = 4_096;
@@ -41,6 +44,55 @@ function isEarlyCandidateExitError(error) {
 
 function basicAuthorization(username, password) {
   return `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`;
+}
+
+function createExactTextRedactor(values, replacement = "[redacted]") {
+  const exactValues = [...new Set(
+    values.filter((value) => typeof value === "string" && value.length >= 4),
+  )].sort((left, right) => right.length - left.length);
+  const substitute = typeof replacement === "string"
+    ? replacement
+    : "[redacted]";
+  let pending = "";
+
+  const drainSafeText = () => {
+    let output = "";
+    while (pending) {
+      const match = exactValues.find((value) => pending.startsWith(value));
+      if (match) {
+        output += substitute;
+        pending = pending.slice(match.length);
+        continue;
+      }
+      if (exactValues.some((value) => value.startsWith(pending))) break;
+      output += pending[0];
+      pending = pending.slice(1);
+    }
+    return output;
+  };
+
+  return Object.freeze({
+    hasPending() {
+      return pending.length > 0;
+    },
+    write(value) {
+      if (typeof value !== "string" || !value) return "";
+      pending += value;
+      return drainSafeText();
+    },
+    flush() {
+      let output = drainSafeText();
+      if (!pending) return output;
+      const partialSensitiveValue = exactValues.some(
+        (value) => value.startsWith(pending),
+      );
+      output += partialSensitiveValue && pending.length >= 4
+        ? substitute
+        : pending;
+      pending = "";
+      return output;
+    },
+  });
 }
 
 function unwrapSdkData(result) {
@@ -74,6 +126,7 @@ function childEnvironment(environment, configDirectory, password) {
   return {
     ...supplied,
     OPENCODE_CONFIG_DIR: configDirectory,
+    OPENCODE_DISABLE_LSP_DOWNLOAD: "1",
     OPENCODE_DISABLE_PROJECT_CONFIG: "1",
     OPENCODE_PERMISSION: CLOSED_PERMISSION_POLICY,
     OPENCODE_SERVER_USERNAME: SERVER_USERNAME,
@@ -285,7 +338,10 @@ export async function createOpencodeSdkClient({
       const subscription = await requireFunction(
         client?.v2?.event?.subscribe,
         "v2 event.subscribe",
-      ).call(client.v2.event, { signal });
+      ).call(client.v2.event, {
+        signal,
+        sseMaxRetryAttempts: 1,
+      });
       if (!subscription?.stream) {
         throw new Error("OpenCode v2 event subscription did not return a stream.");
       }
@@ -488,11 +544,18 @@ export function createOpencodeServerLifecycle({
       Math.min(readinessProbeTimeoutMs, Math.max(1, remainingMs)),
     );
     try {
+      const headers = authorization
+        ? { Authorization: authorization }
+        : {};
       const result = await fetchImpl(`${record.baseUrl}/doc`, {
-        headers: { Authorization: authorization },
+        headers,
         signal: controller.signal,
       });
-      return Number.isInteger(result?.status) ? result.status : null;
+      const status = Number.isInteger(result?.status) ? result.status : null;
+      if (typeof result?.body?.cancel === "function") {
+        await result.body.cancel();
+      }
+      return status;
     } catch {
       return null;
     } finally {
@@ -508,7 +571,19 @@ export function createOpencodeServerLifecycle({
       record.authorization,
       remainingMs,
     );
-    return ownedStatus !== null && ownedStatus >= 200 && ownedStatus < 300;
+    if (ownedStatus === null || ownedStatus < 200 || ownedStatus >= 300) {
+      return false;
+    }
+    const unownedStatus = await authenticatedProbe(
+      record,
+      "",
+      deadline - Date.now(),
+    );
+    if (unownedStatus === 401) return true;
+    if (unownedStatus !== null) {
+      throw new Error("OpenCode server did not enforce authentication.");
+    }
+    return false;
   }
 
   async function waitUntilReady(record) {
@@ -565,6 +640,12 @@ export function createOpencodeServerLifecycle({
       }
       const handle = Object.freeze({
         process: child,
+        createSensitiveTextRedactor(replacement = "[redacted]") {
+          return createExactTextRedactor(
+            [record?.authorization, record?.password],
+            replacement,
+          );
+        },
         redactSensitiveText(value, replacement = "[redacted]") {
           let text = typeof value === "string" ? value : "";
           const substitute = typeof replacement === "string"

@@ -1,7 +1,7 @@
 import { noteCard, safeErrorMessage, setStatus, settingsHeader } from "./settings-common.js";
 import { capabilityReviewElement, capabilityReviewState } from "../addon-capability-review.js";
 
-const OPEN_CODE_LIVE_GRANTS = ["filesystem", "shell", "providers"];
+const OPEN_CODE_LIVE_GRANTS = ["filesystem", "providers"];
 
 function addonTone(addon) {
   if (addon.available || addon.enabled) return "success";
@@ -59,7 +59,7 @@ function openCodeLiveSessionControls(addon, actions = {}) {
   const heading = document.createElement("strong");
   heading.textContent = "Optional developer preview";
   const authority = document.createElement("small");
-  authority.textContent = "Scoped filesystem, shell, and provider authority is required before a live session can start.";
+  authority.textContent = "Scoped filesystem and provider authority is required before a live session can start. Shell and process tools remain denied in live preview.";
 
   const workspaceField = document.createElement("label");
   workspaceField.className = "settings-provider-field";

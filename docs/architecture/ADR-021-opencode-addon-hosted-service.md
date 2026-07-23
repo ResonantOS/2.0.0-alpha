@@ -14,9 +14,10 @@
 Implementation status: the persisted consent, grant, workspace, runtime, and
 provider-route preflight; authenticated child lifecycle; pinned SDK adapter;
 session-bound bridge routes; bounded event relay; and truthful governance UI
-are implemented with deterministic tests. The optional preview still requires
-the live contract check and final certification described below before it may
-be presented as release proof. It remains outside Alpha runtime requirements.
+are implemented with deterministic tests. The real OpenCode 1.18.4 live
+contract check has passed; the optional preview still requires final Alpha
+certification before it may be presented as release proof. It remains outside
+Alpha runtime requirements.
 
 ## Decision
 
@@ -53,8 +54,10 @@ This keeps OpenCode powerful without making it a trusted core memory writer.
   surface; the host-owned settings below, not manifest presence, grant runtime
   authority.
 - A live governance session requires persisted local-CLI consent, persisted
-  live-session consent, and explicit `filesystem`, `shell`, and `providers`
-  grants. Revoking any requirement hard-stops an active session.
+  live-session consent, and explicit `filesystem` and `providers` grants.
+  Revoking any requirement hard-stops an active session.
+- Shell and process tools are denied in the live preview. A separate,
+  human-approved one-shot coding handoff may request scoped shell authority.
 - Launch requires a host-selected workspace path that resolves to the
   repository root or a descendant after symlinks are resolved.
 - Request fields and one-shot execution environment flags cannot override live

@@ -42,6 +42,7 @@ import { createMemoryHostService } from "./memory-host-service.mjs";
 import { createMemorySourceIntakeHostService } from "./memory-source-intake-host-service.mjs";
 import { createMemorySourceSettingsService } from "./memory-source-settings-service.mjs";
 import { opencodeRuntimeDiagnostics } from "./opencode-runtime.mjs";
+import { retryOwnedShutdown } from "./owned-shutdown-retry.mjs";
 import {
   hermesCommand,
   hermesHome,
@@ -459,16 +460,19 @@ const shutdown = async () => {
   }
 };
 
+let bridgeShutdownPromise = null;
 for (const signal of ["SIGINT", "SIGTERM"]) {
-  process.once(signal, () => {
-    void shutdown().then(
-      () => process.exit(0),
-      (error) => {
+  process.on(signal, () => {
+    if (bridgeShutdownPromise) return;
+    bridgeShutdownPromise = retryOwnedShutdown({
+      shutdown,
+      onFailure(error) {
         console.error(redactDiagnosticText(
           error instanceof Error ? error.message : String(error),
         ));
-        process.exit(1);
       },
-    );
+    }).then(({ failures }) => {
+      process.exit(failures > 0 ? 1 : 0);
+    });
   });
 }

@@ -281,6 +281,45 @@ test("an immediate resubscribe restarts polling after the cancelled loop unwinds
   unsubscribeSecond();
 });
 
+test("unsubscribe aborts a held event request so a replacement subscriber can poll", async () => {
+  const pollSignals = [];
+  let polls = 0;
+  const sleeper = createControlledSleeper();
+  const source = createOpenCodeBridgeSource({
+    startSession: async () => ({ sessionId: "session-1" }),
+    postJson: async (path, _body, options = {}) => {
+      if (path !== "/opencode/session/events") return {};
+      polls += 1;
+      pollSignals.push(options.signal);
+      if (polls === 1) {
+        return new Promise((_resolve, reject) => {
+          options.signal?.addEventListener("abort", () => {
+            const error = new Error("aborted");
+            error.name = "AbortError";
+            reject(error);
+          }, { once: true });
+        });
+      }
+      return pollResponse();
+    },
+    sleep: sleeper.sleep,
+  });
+
+  const unsubscribeFirst = source.subscribe(() => {});
+  await waitFor(() => polls === 1, "held poll did not start");
+  unsubscribeFirst();
+  const unsubscribeSecond = source.subscribe(() => {});
+
+  await waitFor(
+    () => polls === 2,
+    "replacement subscriber was blocked behind the held poll",
+  );
+  assert.ok(pollSignals[0] instanceof AbortSignal);
+  assert.equal(pollSignals[0].aborted, true);
+  assert.ok(pollSignals[1] instanceof AbortSignal);
+  unsubscribeSecond();
+});
+
 test("stop cancels polling and explicitly stops the owned bridge session", async () => {
   const posts = [];
   const sleeper = createControlledSleeper();

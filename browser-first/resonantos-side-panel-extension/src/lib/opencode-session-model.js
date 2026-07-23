@@ -309,7 +309,7 @@ export function applyOpenCodeEvent(state, event) {
           added: file.added,
           removed: file.removed,
           status: file.status,
-          touchedAt: changedFiles[file.path]?.touchedAt ?? seq,
+          touchedAt: seq,
         };
       }
       return { ...state, seq, changedFiles };

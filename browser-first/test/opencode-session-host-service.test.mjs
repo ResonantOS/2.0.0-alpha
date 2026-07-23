@@ -76,6 +76,9 @@ function createEventFeed() {
       if (ended) return;
       settleNext({ error });
     },
+    hasWaitingConsumer() {
+      return waiting.length > 0;
+    },
     push(event) {
       if (ended) throw new Error("Cannot push to a closed event feed.");
       settleNext({ value: { done: false, value: event } });
@@ -155,7 +158,9 @@ function createHarness(options = {}) {
       foreignProcess,
       async createSession(input) {
         calls.push(["createSession", input]);
-        return { id: `session-${nextSession++}` };
+        const sessionId = `session-${nextSession++}`;
+        await options.onCreateSession?.({ feed, input, sessionId });
+        return { id: sessionId };
       },
       async dispose() {
         calls.push(["disposeClient", client]);
@@ -300,6 +305,11 @@ test("start runs preflight before lifecycle work and returns only a session id a
   });
   assert.equal(callsNamed(harness, "subscribeEvents").length, 1);
   assert.ok(callsNamed(harness, "subscribeEvents")[0][1].signal instanceof AbortSignal);
+  assert.ok(
+    harness.calls.findIndex(([name]) => name === "subscribeEvents")
+      < harness.calls.findIndex(([name]) => name === "createSession"),
+    "the event stream must be subscribed before session creation so creation events are not lost",
+  );
 });
 
 test("preflight failure starts no lifecycle and an absolute public workspace is rejected", async () => {
@@ -605,6 +615,104 @@ test("the canonical bridge contract returns events and accepts requestId", async
   await harness.handlers.executeOpenCodeSessionStop({ sessionId });
 });
 
+test("the host retains a redacted attributable OpenCode session.created event", async () => {
+  const harness = createHarness();
+  const { sessionId } = await harness.handlers.executeOpenCodeSessionStart({
+    workspacePath: ".",
+  });
+  harness.feeds[0].push({
+    type: "session.created",
+    metadata: { private: "must-not-cross" },
+    data: {
+      sessionID: sessionId,
+      info: {
+        id: sessionId,
+        title: `Created in ${PRIVATE_WORKSPACE}`,
+        agent: "build",
+        directory: PRIVATE_WORKSPACE,
+        model: {
+          providerID: "minimax",
+          id: "MiniMax-M3",
+        },
+      },
+    },
+  });
+
+  await waitFor(async () => {
+    const result = await harness.handlers.executeOpenCodeSessionEvents({
+      sessionId,
+      after: 0,
+    });
+    return result.nextCursor === 1;
+  });
+
+  const result = await harness.handlers.executeOpenCodeSessionEvents({
+    sessionId,
+    after: 0,
+  });
+  assert.deepEqual(result, {
+    events: [{
+      type: "session.created",
+      data: {
+        sessionID: sessionId,
+        info: {
+          id: sessionId,
+          title: "Created in [redacted-path]",
+          agent: "build",
+          model: {
+            providerID: "minimax",
+            id: "MiniMax-M3",
+          },
+        },
+      },
+    }],
+    nextCursor: 1,
+    droppedBefore: 0,
+  });
+  assert.equal(JSON.stringify(result).includes(PRIVATE_WORKSPACE), false);
+  assert.equal(JSON.stringify(result).includes("must-not-cross"), false);
+  await harness.handlers.executeOpenCodeSessionStop({ sessionId });
+});
+
+test("the event pump is consuming before OpenCode emits session.created", async () => {
+  const harness = createHarness({
+    async onCreateSession({ feed, sessionId }) {
+      assert.equal(
+        feed.hasWaitingConsumer(),
+        true,
+        "the SDK event iterator must be active before createSession",
+      );
+      feed.push({
+        type: "session.created",
+        data: {
+          sessionID: sessionId,
+          info: {
+            id: sessionId,
+            title: "Live contract",
+            agent: "build",
+            model: {
+              providerID: "minimax",
+              id: "MiniMax-M3",
+            },
+          },
+        },
+      });
+    },
+  });
+
+  const { sessionId } = await harness.handlers.executeOpenCodeSessionStart({
+    workspacePath: ".",
+  });
+  await waitFor(async () => {
+    const result = await harness.handlers.executeOpenCodeSessionEvents({
+      sessionId,
+      after: 0,
+    });
+    return result.events.some((event) => event.type === "session.created");
+  });
+  await harness.handlers.executeOpenCodeSessionStop({ sessionId });
+});
+
 test("the host drops unknown events and redacts known event payloads before buffering", async () => {
   const providerSecret = "QZ9K-host-selected-secret-value";
   const harness = createHarness({
@@ -680,6 +788,61 @@ test("the host drops unknown events and redacts known event payloads before buff
   await harness.handlers.executeOpenCodeSessionStop({ sessionId });
 });
 
+test("the host cannot reconstruct a provider secret split across adjacent text deltas", async () => {
+  const providerSecret = "QZ9K-host-selected-secret-value";
+  const harness = createHarness({
+    preflight: async (payload, context) => {
+      harness.calls.push(["preflight", payload, context]);
+      return {
+        childEnvironment: {
+          OPENAI_API_KEY: providerSecret,
+        },
+        model: HOST_MODEL,
+        workspace: PRIVATE_WORKSPACE,
+      };
+    },
+  });
+  const { sessionId } = await harness.handlers.executeOpenCodeSessionStart({
+    workspacePath: ".",
+  });
+
+  for (const delta of providerSecret) {
+    harness.feeds[0].push({
+      type: "session.next.text.delta",
+      data: {
+        sessionID: sessionId,
+        assistantMessageID: "assistant-split-secret",
+        textID: "text-split-secret",
+        delta,
+      },
+    });
+  }
+  harness.feeds[0].push({
+    type: "session.idle",
+    data: { sessionID: sessionId },
+  });
+
+  await waitFor(async () => {
+    const result = await harness.handlers.executeOpenCodeSessionEvents({
+      sessionId,
+      after: 0,
+    });
+    return result.events.some((event) => event.type === "session.idle");
+  });
+  const result = await harness.handlers.executeOpenCodeSessionEvents({
+    sessionId,
+    after: 0,
+  });
+  const reconstructed = result.events
+    .filter((event) => event.type === "session.next.text.delta")
+    .map((event) => event.data.delta)
+    .join("");
+
+  assert.equal(reconstructed.includes(providerSecret), false);
+  assert.match(reconstructed, /\[redacted\]/);
+  await harness.handlers.executeOpenCodeSessionStop({ sessionId });
+});
+
 test("the host redacts the lifecycle service credential from allowed tool results", async () => {
   const servicePassword = "generated-service-value";
   const processHandle = createProcessHandle("owned-service");
@@ -721,6 +884,86 @@ test("the host redacts the lifecycle service credential from allowed tool result
   const serialized = JSON.stringify(result);
   assert.equal(serialized.includes(servicePassword), false);
   assert.match(serialized, /\[redacted\]/);
+  await harness.handlers.executeOpenCodeSessionStop({ sessionId });
+});
+
+test("the host cannot reconstruct a lifecycle credential split across adjacent text deltas", async () => {
+  const servicePassword = "generated-service-value";
+  const processHandle = createProcessHandle("owned-service-stream");
+  const lifecycle = {
+    process: processHandle,
+    createSensitiveTextRedactor() {
+      let pending = "";
+      return {
+        write(value) {
+          pending += value;
+          if (pending === servicePassword) {
+            pending = "";
+            return "[redacted]";
+          }
+          if (servicePassword.startsWith(pending)) return "";
+          const output = pending;
+          pending = "";
+          return output;
+        },
+        flush() {
+          const output = pending;
+          pending = "";
+          return output;
+        },
+      };
+    },
+    redactSensitiveText(value, replacement = "[redacted]") {
+      return typeof value === "string"
+        ? value.split(servicePassword).join(replacement)
+        : "";
+    },
+  };
+  const harness = createHarness({
+    lifecycle,
+    startLifecycle: async (...args) => {
+      harness.calls.push(["startLifecycle", ...args]);
+      return lifecycle;
+    },
+  });
+  const { sessionId } = await harness.handlers.executeOpenCodeSessionStart({
+    workspacePath: ".",
+  });
+
+  for (const delta of servicePassword) {
+    harness.feeds[0].push({
+      type: "session.next.text.delta",
+      data: {
+        sessionID: sessionId,
+        assistantMessageID: "assistant-split-service-secret",
+        textID: "text-split-service-secret",
+        delta,
+      },
+    });
+  }
+  harness.feeds[0].push({
+    type: "session.idle",
+    data: { sessionID: sessionId },
+  });
+
+  await waitFor(async () => {
+    const result = await harness.handlers.executeOpenCodeSessionEvents({
+      sessionId,
+      after: 0,
+    });
+    return result.events.some((event) => event.type === "session.idle");
+  });
+  const result = await harness.handlers.executeOpenCodeSessionEvents({
+    sessionId,
+    after: 0,
+  });
+  const reconstructed = result.events
+    .filter((event) => event.type === "session.next.text.delta")
+    .map((event) => event.data.delta)
+    .join("");
+
+  assert.equal(reconstructed.includes(servicePassword), false);
+  assert.match(reconstructed, /\[redacted\]/);
   await harness.handlers.executeOpenCodeSessionStop({ sessionId });
 });
 

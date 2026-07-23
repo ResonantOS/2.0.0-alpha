@@ -158,6 +158,67 @@ test("session.diff consumes data.diff as authoritative attributable file evidenc
   );
 });
 
+test("repeated session.diff updates make the most recently changed file newest", () => {
+  const state = run([
+    event("session.diff", {
+      sessionID: SESSION_ID,
+      diff: [
+        {
+          file: "src/a.js",
+          additions: 1,
+          deletions: 0,
+          status: "modified",
+        },
+      ],
+    }),
+    event("session.diff", {
+      sessionID: SESSION_ID,
+      diff: [
+        {
+          file: "src/b.js",
+          additions: 2,
+          deletions: 0,
+          status: "modified",
+        },
+      ],
+    }),
+    event("session.diff", {
+      sessionID: SESSION_ID,
+      diff: [
+        {
+          file: "src/a.js",
+          additions: 3,
+          deletions: 1,
+          status: "modified",
+        },
+      ],
+    }),
+  ]);
+
+  assert.deepEqual(
+    changedFilesView(state).map(({ path, added, removed, justTouched }) => ({
+      path,
+      added,
+      removed,
+      justTouched,
+    })),
+    [
+      {
+        path: "src/a.js",
+        added: 3,
+        removed: 1,
+        justTouched: true,
+      },
+      {
+        path: "src/b.js",
+        added: 2,
+        removed: 0,
+        justTouched: false,
+      },
+    ],
+  );
+});
+
 test("normalizes the v2 tool lifecycle without accepting legacy properties payloads", () => {
   let state = run([
     event("session.next.tool.called", {

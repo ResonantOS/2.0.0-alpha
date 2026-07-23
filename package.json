@@ -15,6 +15,7 @@
     "test:browser-host": "node --test addons/resonant-browser-host/test/*.test.mjs",
     "test:browser-first": "node scripts/run-browser-first-extension-tests.mjs",
     "test:browser-first:live": "node browser-first/test/agent-control-live.mjs",
+    "test:opencode-live-contract": "node browser-first/test/opencode-live-contract.mjs",
     "browser-first:dev": "node run-bridge-minimal.mjs",
     "browser-first:bridge": "node run-bridge-minimal.mjs",
     "health": "node scripts/health-check.mjs",

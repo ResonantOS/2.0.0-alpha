@@ -77,7 +77,9 @@ runtime boundary.
   process to that workspace, and deny OpenCode's `external_directory`
   permission.
 - Require the live-session grants that match the authority actually exercised:
-  `filesystem`, `shell`, and `providers`.
+  `filesystem` and `providers`. Deny shell and process tools in the live
+  preview; the separate one-shot coding handoff retains its existing,
+  human-approved shell boundary.
 - Start a bridge-owned OpenCode server on loopback with generated Basic
   authentication and `--pure`.
 - Pass only allowlisted process variables and the selected provider credential
@@ -160,7 +162,7 @@ session is authorized only when all of the following are true:
 2. `liveSession.enabled` is true.
 3. `workspacePath` resolves to the repository root or one of its descendants.
 4. `grantedCapabilities` contains exactly the required authority for the
-   governance session: `filesystem`, `shell`, and `providers`.
+   governance session: `filesystem` and `providers`.
 5. The fixed-root OpenCode resolver finds an executable.
 6. The selected provider route is configured.
 
@@ -172,10 +174,11 @@ The live-session preflight reads these persisted settings directly. It does
 not call the one-shot delegation override helper and ignores
 `payload.enableOpenCodeExecution` and `RESONANTOS_OPENCODE_EXECUTION`.
 
-The Add-ons settings UI presents the three grants as explicit checkboxes, a
+The Add-ons settings UI presents the two grants as explicit checkboxes, a
 workspace field, and a separate live-session enable control. Local CLI
-execution remains its own control. The UI sends one complete desired OpenCode
-setting, and the host normalizes and validates it before persisting.
+execution remains its own control, and shell is not offered as a live-session
+grant. The UI sends one complete desired OpenCode setting, and the host
+normalizes and validates it before persisting.
 
 `ui-embedding` is not a live-session grant. The current center panel is a
 ResonantOS governance and evidence view, not OpenCode's web UI. A future design
@@ -253,10 +256,10 @@ events and one MiB. Individual serialized events are limited to 32 KiB, text
 fields to 8 KiB, and accepted collections to 100 entries.
 
 The extension polls the authenticated bridge route with its last cursor. The
-bridge returns events after that cursor, the next cursor, and the earliest
-cursor still retained. If the caller has fallen behind, `droppedBefore`
-explicitly signals the gap rather than silently presenting an incomplete
-transcript.
+bridge returns bare sanitized events after that cursor, the next cursor, and
+the highest cursor already evicted. If the caller has fallen behind,
+`droppedBefore` explicitly signals the gap rather than silently presenting an
+incomplete transcript.
 
 Events are checked before buffering and accepted only when
 `event.data.sessionID` equals the active session.

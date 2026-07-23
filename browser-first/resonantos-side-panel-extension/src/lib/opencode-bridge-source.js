@@ -127,6 +127,8 @@ export function createOpenCodeBridgeSource({
         const response = await postBridgeJson("/opencode/session/events", {
           sessionId: ownedSession.sessionId,
           after: requestedAfter,
+        }, {
+          signal: controller.signal,
         });
         if (controller.signal.aborted || subscribers.size === 0) return;
 

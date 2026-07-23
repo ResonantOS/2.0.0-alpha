@@ -187,6 +187,7 @@ chrome?.storage?.onChanged?.addListener?.((changes, area) => {
 });
 let busy = false;
 let activeWorkspace = "answer";
+let activeWorkspaceCleanup = null;
 let pendingWorkspaceAction = null;
 let controlledTabId = null;
 let lastSnapshot = null;
@@ -790,6 +791,11 @@ function emptyHero() {
 }
 
 function renderMessages() {
+  const cleanup = activeWorkspaceCleanup;
+  activeWorkspaceCleanup = null;
+  if (typeof cleanup === "function") {
+    void Promise.resolve().then(cleanup).catch(() => undefined);
+  }
   transcript.replaceChildren();
   if (activeWorkspace === "hermes") {
     renderHermesWorkspace();
@@ -834,7 +840,12 @@ function renderMessages() {
   if (activeWorkspace === "opencode") {
     const initialMission = pendingWorkspaceAction?.workspace === "opencode" ? pendingWorkspaceAction.mission : "";
     pendingWorkspaceAction = null;
-    renderOpenCodeWorkspace({ container: transcript, bridgeRequest: currentBridgeRequest, getBridgeRequest, initialMission });
+    activeWorkspaceCleanup = renderOpenCodeWorkspace({
+      container: transcript,
+      bridgeRequest: currentBridgeRequest,
+      getBridgeRequest,
+      initialMission
+    });
     return;
   }
   if (activeWorkspace === "settings") {

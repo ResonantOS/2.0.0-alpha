@@ -329,6 +329,9 @@ test("run bridge uses the governed composition and removes the raw fixed-port pr
   assert.doesNotMatch(source, /\b4231\b/);
   assert.doesNotMatch(source, /env:\s*process\.env/);
   assert.match(source, /shutdownOpenCodeSession/);
+  assert.match(source, /retryOwnedShutdown/);
+  assert.match(source, /process\.on\(signal/);
+  assert.doesNotMatch(source, /process\.once\(signal/);
   assert.match(source, /executeAddonExecutionSettingsUpdate/);
   assert.doesNotMatch(source, /shutdownOpenCodeSession\(\)\.catch\(\(\) => undefined\)/);
   assert.equal(

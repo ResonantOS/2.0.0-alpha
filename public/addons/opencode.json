@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "author": "Resonant Alpha",
   "category": "tool",
-  "description": "Optional open-source coding add-on. Packet delegation is available today; a bridge-owned private live worker remains an opt-in developer preview until its authenticated host lifecycle is complete. The current surface is a ResonantOS governance view, not an embedded OpenCode web UI.",
+  "description": "Optional open-source coding add-on. Packet delegation is available today; a bridge-owned authenticated live worker is an opt-in developer preview. The current surface is a ResonantOS governance view, not an embedded OpenCode web UI.",
   "runtimeType": "local-service",
   "surfaces": [
     {
@@ -77,6 +77,7 @@
     "notes": [
       "OpenCode must return changed files, commands run, verification evidence, and residual risks.",
       "Direct filesystem and process access must stay scoped to the task workspace.",
+      "The live preview denies shell and process tools; shell remains available only to a separate human-approved one-shot coding handoff.",
       "Archive read and intake authority apply only to governed delegation packets and artifact intake; they are not live-session grants.",
       "Embedding OpenCode's own web UI is future work and requires a separate ui-embedding grant."
     ]
@@ -136,8 +137,8 @@
       "id": "opencode-local-service",
       "name": "OpenCode local service",
       "type": "local-runtime",
-      "description": "Planned bridge-owned authenticated OpenCode lifecycle for a selected local workspace. The preview stays unavailable until host readiness is proven.",
-      "requiredCapabilities": ["filesystem", "shell", "providers"],
+      "description": "Bridge-owned authenticated OpenCode lifecycle for a selected local workspace. Shell and process tools remain denied in the live preview.",
+      "requiredCapabilities": ["filesystem", "providers"],
       "configScope": "user-config"
     }
   ],
@@ -149,7 +150,7 @@
       "commandRef": "opencode.launch_workspace",
       "runPolicy": "preflight",
       "deterministic": true,
-      "requiredCapabilities": ["filesystem", "shell", "providers"],
+      "requiredCapabilities": ["filesystem", "providers"],
       "producesArtifacts": ["diagnostic-report", "verification-report"],
       "requiresHumanApproval": false
     }
@@ -159,7 +160,7 @@
       "id": "opencode-before-task-complete",
       "event": "before-task-complete",
       "handlerRef": "opencode-workspace-preflight",
-      "requiredCapabilities": ["filesystem", "shell", "providers"],
+      "requiredCapabilities": ["filesystem", "providers"],
       "failurePolicy": "block"
     }
   ],
@@ -181,8 +182,8 @@
   "tools": [
     {
       "name": "opencode.launch_workspace",
-      "description": "Request the planned bridge-owned OpenCode server session for the host-approved workspace after host readiness is proven.",
-      "requiredCapabilities": ["filesystem", "shell", "providers"],
+      "description": "Request the bridge-owned OpenCode server session for the host-approved workspace after persisted consent and host readiness are proven.",
+      "requiredCapabilities": ["filesystem", "providers"],
       "inputSchema": {},
       "outputSchema": {},
       "audit": {

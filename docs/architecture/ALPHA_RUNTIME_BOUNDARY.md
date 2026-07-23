@@ -73,7 +73,8 @@ page-to-filesystem, and page-to-process paths are outside the architecture.
 | `/providers/*`, `/augmentor/chat`, `/augmentor/inline` | `provider-host-service.mjs` and `provider-bridge-service.mjs` | Session-held provider credentials, provider routing, approved cloud or local model endpoints |
 | `/augmentor/control-plan`, `/augmentor/next-action`, `/web/news` | `agent-control-host-service.mjs` | Provider-backed planning and approved network reads |
 | `/memory/*`, `/archive/*` | `memory-host-service.mjs`, memory source services, and `archive-review-host-service.mjs` | User-approved source roots, Living Archive intake/review/promotion state |
-| `/addons/*`, `/hermes/*`, `/opencode/*`, `/goals` | `addon-delegation-host-service.mjs` and `addon-delegation-service.mjs` | Optional local runtimes, scoped workspaces, delegation artifacts |
+| `/addons/*`, `/hermes/*`, `/opencode/status`, `/opencode/delegation/*`, `/goals` | `addon-delegation-host-service.mjs` and `addon-delegation-service.mjs` | Optional local runtimes, scoped workspaces, delegation artifacts |
+| `/opencode/session/*` | `opencode-session-host-service.mjs`, `opencode-session-composition.mjs`, and `opencode-client.mjs` | Optional bridge-owned authenticated OpenCode child, host-selected workspace and provider route, bounded attributable events |
 | `/status`, `/workspace/inspect`, `/browser/*`, `/diagnostics/report` | `browser-diagnostics-host-service.mjs` | Redacted local diagnostics and approved download actions |
 | `/settings/extension-prefs` | `extension-prefs-host-service.mjs` | External user-state preference storage |
 

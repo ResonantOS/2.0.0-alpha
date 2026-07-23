@@ -2238,11 +2238,12 @@ test("settings workspace renders add-on status and capability boundaries", async
     const workspace = container.querySelector('[aria-label="OpenCode workspace"]');
     assert.ok(workspace);
     workspace.value = "packages/governed-workspace";
-    for (const capability of ["filesystem", "shell", "providers"]) {
+    for (const capability of ["filesystem", "providers"]) {
       const checkbox = container.querySelector(`[aria-label="Grant OpenCode ${capability}"]`);
       assert.ok(checkbox);
       checkbox.checked = true;
     }
+    assert.equal(container.querySelector('[aria-label="Grant OpenCode shell"]'), null);
     const liveSession = container.querySelector('[aria-label="Enable OpenCode live session"]');
     assert.ok(liveSession);
     liveSession.checked = true;
@@ -2258,11 +2259,12 @@ test("settings workspace renders add-on status and capability boundaries", async
       options.body.localCliExecution === true &&
       options.body.liveSession?.enabled === true &&
       options.body.liveSession?.workspacePath === "packages/governed-workspace" &&
-      JSON.stringify(options.body.liveSession?.grantedCapabilities) === JSON.stringify(["filesystem", "shell", "providers"])
+      JSON.stringify(options.body.liveSession?.grantedCapabilities) === JSON.stringify(["filesystem", "providers"])
     ));
     assert.match(container.textContent, /Optional developer preview/);
-    assert.match(container.textContent, /Scoped filesystem, shell, and provider authority/);
-    assert.match(container.textContent, /3 granted/);
+    assert.match(container.textContent, /Scoped filesystem and provider authority/);
+    assert.match(container.textContent, /Shell and process tools remain denied/);
+    assert.match(container.textContent, /2 granted/);
 
     const providerGrant = container.querySelector('[aria-label="Grant OpenCode providers"]');
     providerGrant.checked = false;
@@ -2276,7 +2278,7 @@ test("settings workspace renders add-on status and capability boundaries", async
       options.body.addon === "opencode" &&
       options.body.liveSession?.enabled === false &&
       options.body.liveSession?.workspacePath === "packages/governed-workspace" &&
-      JSON.stringify(options.body.liveSession?.grantedCapabilities) === JSON.stringify(["filesystem", "shell"])
+      JSON.stringify(options.body.liveSession?.grantedCapabilities) === JSON.stringify(["filesystem"])
     ));
 
     const openCodeCard = [...container.querySelectorAll(".settings-addon-card")]
@@ -2289,7 +2291,7 @@ test("settings workspace renders add-on status and capability boundaries", async
       options.body.localCliExecution === false &&
       options.body.liveSession?.enabled === false &&
       options.body.liveSession?.workspacePath === "packages/governed-workspace" &&
-      JSON.stringify(options.body.liveSession?.grantedCapabilities) === JSON.stringify(["filesystem", "shell"])
+      JSON.stringify(options.body.liveSession?.grantedCapabilities) === JSON.stringify(["filesystem"])
     ));
 
     container.querySelector('[data-section="diagnostics"]').click();

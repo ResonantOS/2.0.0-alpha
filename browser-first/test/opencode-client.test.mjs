@@ -144,8 +144,8 @@ test("SDK adapter uses the exact authenticated v2 client and session contracts",
   const rawClient = {
     v2: {
       event: {
-        subscribe: async (input) => {
-          calls.push(["subscribe", input]);
+        subscribe: async (options) => {
+          calls.push(["subscribe", options]);
           return { stream };
         },
       },
@@ -213,7 +213,10 @@ test("SDK adapter uses the exact authenticated v2 client and session contracts",
       requestID: "permission-1",
       reply: "once",
     }],
-    ["subscribe", { signal: abortController.signal }],
+    ["subscribe", {
+      signal: abortController.signal,
+      sseMaxRetryAttempts: 1,
+    }],
   ]);
 });
 
@@ -289,8 +292,9 @@ test("lifecycle starts one authenticated pure loopback child with scoped environ
         HOME: "/Users/test",
         MINIMAX_API_KEY: "fixture-key",
         OPENCODE_CONFIG_DIR: CONFIG_DIRECTORY,
+        OPENCODE_DISABLE_LSP_DOWNLOAD: "1",
         OPENCODE_DISABLE_PROJECT_CONFIG: "1",
-        OPENCODE_PERMISSION: "{\"*\":\"ask\",\"external_directory\":\"deny\"}",
+        OPENCODE_PERMISSION: "{\"*\":\"ask\",\"bash\":\"deny\",\"task\":\"deny\",\"lsp\":\"deny\",\"external_directory\":\"deny\"}",
         OPENCODE_SERVER_USERNAME: "resonantos",
         OPENCODE_SERVER_PASSWORD: PASSWORD,
       },
@@ -298,9 +302,18 @@ test("lifecycle starts one authenticated pure loopback child with scoped environ
       stdio: ["ignore", "pipe", "ignore"],
     },
   }]);
-  assert.equal(fetchCalls.length, 1);
+  assert.equal(fetchCalls.length, 2);
   assert.equal(fetchCalls[0].options.headers.Authorization, AUTHORIZATION);
+  assert.equal(fetchCalls[1].options.headers.Authorization, undefined);
   assert.equal(process.env.OPENCODE_SERVER_PASSWORD, originalPassword);
+
+  const sensitiveTextRedactor = handle.createSensitiveTextRedactor();
+  const redactedServiceCredential = [
+    ...PASSWORD,
+  ].map((character) => sensitiveTextRedactor.write(character)).join("")
+    + sensitiveTextRedactor.flush();
+  assert.equal(redactedServiceCredential.includes(PASSWORD), false);
+  assert.match(redactedServiceCredential, /\[redacted\]/);
 
   assert.deepEqual(await lifecycle.createClient(handle), { sdk: true });
   assert.deepEqual(clients, [{
@@ -308,6 +321,56 @@ test("lifecycle starts one authenticated pure loopback child with scoped environ
     baseUrl: `http://127.0.0.1:${PORT}`,
     directory: WORKSPACE,
   }]);
+});
+
+test("lifecycle rejects a loopback server that does not enforce its generated credential", async () => {
+  const child = fakeChild();
+  const { fetchCalls, lifecycle } = lifecycleHarness({
+    child,
+    fetchImpl: async (url, options) => {
+      fetchCalls.push({ url, options });
+      return response(true, 200);
+    },
+    maxStartAttempts: 1,
+  });
+
+  await assert.rejects(
+    lifecycle.start({
+      command: "/fixed/bin/opencode",
+      cwd: WORKSPACE,
+      env: {},
+    }),
+    /did not enforce authentication/i,
+  );
+  assert.equal(fetchCalls.length, 2);
+  assert.equal(fetchCalls[0].options.headers.Authorization, AUTHORIZATION);
+  assert.equal(fetchCalls[1].options.headers.Authorization, undefined);
+  assert.equal(child.killCalls, 1);
+  assert.deepEqual(lifecycle.status(), { state: "stopped" });
+});
+
+test("lifecycle readiness closes authenticated and unauthenticated probe bodies", async () => {
+  const cancelledBodies = [];
+  const { lifecycle } = lifecycleHarness({
+    fetchImpl: async (_url, options) => ({
+      ok: Boolean(options.headers.Authorization),
+      status: options.headers.Authorization ? 200 : 401,
+      body: {
+        async cancel() {
+          cancelledBodies.push(options.headers.Authorization ? "owned" : "unowned");
+        },
+      },
+    }),
+  });
+
+  const handle = await lifecycle.start({
+    command: "/fixed/bin/opencode",
+    cwd: WORKSPACE,
+    env: {},
+  });
+
+  assert.deepEqual(cancelledBodies, ["owned", "unowned"]);
+  await lifecycle.stop(handle);
 });
 
 test("lifecycle delegates port selection to its child and sends no fixed challenge probe", async () => {
@@ -328,8 +391,9 @@ test("lifecycle delegates port selection to its child and sends no fixed challen
     ["serve", "--pure", "--hostname", "127.0.0.1", "--port", "0"],
   );
   assert.deepEqual(spawnCalls[0].options.stdio, ["ignore", "pipe", "ignore"]);
-  assert.equal(fetchCalls.length, 1);
+  assert.equal(fetchCalls.length, 2);
   assert.equal(fetchCalls[0].options.headers.Authorization, AUTHORIZATION);
+  assert.equal(fetchCalls[1].options.headers.Authorization, undefined);
   await lifecycle.stop(handle);
 });
 
