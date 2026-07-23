@@ -7,6 +7,8 @@
 - Owner: OpenCode add-on and browser-first bridge
 - Runtime status: Optional developer preview; not an Alpha release requirement
 - Governing decisions: ADR-006, ADR-015, ADR-021, ADR-034
+- Implementation plan:
+  [Governed OpenCode Session Implementation Plan](../plans/2026-07-22-governed-opencode-session.md)
 
 ## Purpose
 
@@ -189,7 +191,7 @@ separate from the OpenCode service credential.
 | Method and path | Capability | Request | Response |
 | --- | --- | --- | --- |
 | `POST /opencode/session/start` | `addon-runtime-control` | `{}` | `{ ok, sessionId, workspace }` |
-| `POST /opencode/session/prompt` | `addon-runtime-control` | `{ sessionId, text, agent?, model? }` | `{ ok }` |
+| `POST /opencode/session/prompt` | `addon-runtime-control` | `{ sessionId, text }` | `{ ok }` |
 | `POST /opencode/session/permission` | `addon-runtime-control` | `{ sessionId, requestId, reply }` | `{ ok }` |
 | `POST /opencode/session/events` | `addon-runtime-read` | `{ sessionId, after? }` | `{ events, nextCursor, droppedBefore }` |
 | `POST /opencode/session/stop` | `addon-runtime-control` | `{ sessionId }` | `{ ok }` |
