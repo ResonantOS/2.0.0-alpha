@@ -746,6 +746,56 @@ test("stop surfaces a signal failure without releasing owned process authority",
   assert.deepEqual(removedDirectories, [CONFIG_DIRECTORY]);
 });
 
+test("asynchronous child errors after readiness retain ownership until real exit", async () => {
+  const child = fakeChild({ exitOnKill: false });
+  child.kill = (signal) => {
+    child.killCalls += 1;
+    child.killSignals.push(signal);
+    if (signal === "SIGTERM") {
+      queueMicrotask(() => {
+        child.emit("error", Object.assign(
+          new Error("kill EPERM"),
+          { code: "EPERM" },
+        ));
+      });
+    }
+    return true;
+  };
+  const { lifecycle, removedDirectories } = lifecycleHarness({
+    child,
+    terminationGraceMs: 1,
+    terminationKillTimeoutMs: 1,
+  });
+  const handle = await lifecycle.start({
+    command: "/fixed/bin/opencode",
+    cwd: WORKSPACE,
+    env: {},
+  });
+
+  await assert.rejects(
+    lifecycle.stop(handle),
+    /did not terminate/i,
+  );
+  assert.deepEqual(child.killSignals, ["SIGTERM", "SIGKILL"]);
+  assert.equal(child.exitCode, null);
+  assert.deepEqual(lifecycle.status(), { state: "failed" });
+  assert.deepEqual(removedDirectories, []);
+  await assert.rejects(
+    lifecycle.start({
+      command: "/fixed/bin/opencode",
+      cwd: WORKSPACE,
+      env: {},
+    }),
+    /already active/,
+  );
+
+  child.exitCode = 1;
+  child.emit("exit", 1, null);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(lifecycle.status(), { state: "stopped" });
+  assert.deepEqual(removedDirectories, [CONFIG_DIRECTORY]);
+});
+
 test("unexpected child exit clears private state and notifies watchers without a second kill", async () => {
   const child = fakeChild();
   const observed = [];

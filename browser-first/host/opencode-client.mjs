@@ -449,6 +449,13 @@ export function createOpencodeServerLifecycle({
           record.child.removeListener?.("error", record.onChildError);
         }
       }
+      if (record.child && record.onChildSpawn) {
+        if (typeof record.child.off === "function") {
+          record.child.off("spawn", record.onChildSpawn);
+        } else {
+          record.child.removeListener?.("spawn", record.onChildSpawn);
+        }
+      }
       try {
         if (record.configDirectory) {
           await removeConfigDirectory(record.configDirectory);
@@ -587,12 +594,14 @@ export function createOpencodeServerLifecycle({
         handle,
         onChildExit: null,
         onChildError: null,
+        onChildSpawn: null,
         onExit,
         password,
         ready: false,
+        spawnConfirmed: Number.isSafeInteger(child.pid) && child.pid > 0,
       };
       records.set(handle, record);
-      const settleChild = () => {
+      const settleChildExit = () => {
         if (record.exited) return;
         record.exited = true;
         resolveExit();
@@ -600,15 +609,26 @@ export function createOpencodeServerLifecycle({
           state = "failed";
         });
       };
-      record.onChildExit = settleChild;
-      record.onChildError = settleChild;
+      record.onChildExit = settleChildExit;
+      record.onChildError = () => {
+        if (!record.spawnConfirmed) {
+          settleChildExit();
+          return;
+        }
+        state = "failed";
+      };
+      record.onChildSpawn = () => {
+        record.spawnConfirmed = true;
+      };
       child.once?.("exit", record.onChildExit);
-      child.once?.("error", record.onChildError);
+      child.on?.("error", record.onChildError);
+      child.once?.("spawn", record.onChildSpawn);
       active = record;
 
       record.baseUrl = await readServerAddress(child, {
         timeoutMs: readinessTimeoutMs,
       });
+      record.spawnConfirmed = true;
       validateLoopbackBaseUrl(record.baseUrl);
       await waitUntilReady(record);
       if (record.exited) {
