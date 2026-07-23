@@ -5,7 +5,7 @@
 
 .oc-session {
   display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto auto auto minmax(0, 1fr) auto;
   gap: 10px;
   height: 100%;
   min-height: 0;
@@ -19,6 +19,32 @@
 }
 .oc-spacer { flex: 1; }
 .oc-scope { color: rgba(207, 219, 210, 0.6); font-size: 0.6rem; font-variant-numeric: tabular-nums; }
+.oc-preview-label { color: rgba(207, 219, 210, 0.72); font-size: 0.58rem; font-weight: 800; }
+.oc-stop-session {
+  border: 1px solid rgba(255, 121, 91, 0.35);
+  border-radius: 8px;
+  background: rgba(255, 121, 91, 0.08);
+  color: #ffb3a6;
+  font-size: 0.58rem;
+  font-weight: 800;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.oc-stop-session:disabled { cursor: wait; opacity: 0.65; }
+
+.oc-session-notice {
+  margin: 0;
+  border: 1px solid rgba(148, 255, 198, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(238, 247, 240, 0.86);
+  font-size: 0.66rem;
+  line-height: 1.4;
+  padding: 7px 9px;
+}
+.oc-session-notice[hidden] { display: none; }
+.oc-session-notice[data-tone="warning"] { border-color: rgba(255, 190, 90, 0.45); color: #ffce78; }
+.oc-session-notice[data-tone="error"] { border-color: rgba(255, 121, 91, 0.45); color: #ffb3a6; }
 
 .oc-status-pill,
 .oc-agent-pill,
@@ -99,7 +125,7 @@
 .oc-file-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .oc-file {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   border: 1px solid rgba(148, 255, 198, 0.14);
@@ -115,9 +141,6 @@
 .oc-file-stat { font-variant-numeric: tabular-nums; }
 .oc-add { color: #24d18f; margin-right: 5px; }
 .oc-del { color: #ff795b; }
-.oc-revert { border: 1px solid rgba(148, 255, 198, 0.18); border-radius: 7px; background: rgba(255, 255, 255, 0.04); color: rgba(207, 219, 210, 0.85); font-size: 0.54rem; font-weight: 800; padding: 3px 7px; cursor: pointer; }
-.oc-revert:hover { border-color: rgba(255, 121, 91, 0.4); color: #ffb3a6; }
-
 /* Inline approvals — the governance boundary */
 .oc-approvals { display: grid; gap: 8px; }
 .oc-approve { border: 1px solid rgba(255, 190, 90, 0.4); background: rgba(70, 50, 10, 0.32); border-radius: 12px; padding: 10px 12px; }
@@ -133,6 +156,8 @@
 .oc-composer { display: flex; gap: 8px; align-items: flex-end; }
 .oc-composer textarea { flex: 1; resize: none; border: 1px solid rgba(148, 255, 198, 0.15); border-radius: 11px; background: rgba(5, 8, 7, 0.6); color: #eef7f0; font: inherit; font-size: 0.72rem; padding: 9px 11px; }
 .oc-composer button { border: 1px solid rgba(36, 209, 143, 0.5); border-radius: 11px; background: rgba(36, 209, 143, 0.16); color: #eef7f0; font-weight: 800; font-size: 0.7rem; padding: 9px 16px; cursor: pointer; }
+.oc-composer textarea:disabled,
+.oc-composer button:disabled { cursor: not-allowed; opacity: 0.58; }
 
 /* Entry point + mount area in the OpenCode workspace panel */
 .opencode-start-session {
@@ -147,4 +172,5 @@
   cursor: pointer;
 }
 .opencode-start-session[hidden] { display: none; }
+.opencode-start-session:disabled { cursor: not-allowed; opacity: 0.55; }
 .opencode-session-area:not(:empty) { min-height: 480px; margin-top: 10px; }

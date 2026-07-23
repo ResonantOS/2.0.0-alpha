@@ -30,18 +30,19 @@ test("renderChangedFiles rows carry path, counts, and highlight the newest edit"
   assert.equal(rows[0].querySelector(".oc-del").textContent, "−8");
 });
 
-test("renderChangedFiles revert button fires onRevert with the path", () => {
+test("renderChangedFiles exposes evidence without an unimplemented revert control", () => {
   const d = dom(`<strong id="t"></strong><ol id="l"></ol>`);
   const reverted = [];
   renderChangedFiles(d.querySelector("#l"), d.querySelector("#t"), [{ path: "jwt.ts", added: 1, removed: 0 }], {
     document: d,
     onRevert: (p) => reverted.push(p)
   });
-  d.querySelector("#l .oc-revert").dispatchEvent(new d.defaultView.Event("click"));
-  assert.deepEqual(reverted, ["jwt.ts"]);
+  assert.equal(d.querySelector("#l .oc-revert"), null);
+  assert.equal(d.querySelector("#l button"), null);
+  assert.deepEqual(reverted, []);
 });
 
-test("renderApprovals renders a card per approval and routes the decision", () => {
+test("renderApprovals exposes only approve-once and deny decisions", () => {
   const d = dom(`<div id="a"></div>`);
   const replies = [];
   renderApprovals(d.querySelector("#a"), [{ id: "p1", tool: "shell", title: "Run npm test", detail: "npm test" }], {
@@ -51,9 +52,14 @@ test("renderApprovals renders a card per approval and routes the decision", () =
   const card = d.querySelector("#a .oc-approve");
   assert.equal(card.dataset.id, "p1");
   assert.match(card.querySelector("code").textContent, /npm test/);
+  assert.deepEqual(
+    [...card.querySelectorAll("button")].map((button) => button.textContent),
+    ["Approve once", "Deny"]
+  );
+  assert.doesNotMatch(card.textContent, /remember/i);
   card.querySelector(".oc-go").dispatchEvent(new d.defaultView.Event("click"));
   card.querySelector(".oc-no").dispatchEvent(new d.defaultView.Event("click"));
-  assert.deepEqual(replies, [["p1", { approved: true }], ["p1", { approved: false }]]);
+  assert.deepEqual(replies, [["p1", "once"], ["p1", "reject"]]);
 });
 
 test("renderApprovals hides the container when there is nothing to approve", () => {

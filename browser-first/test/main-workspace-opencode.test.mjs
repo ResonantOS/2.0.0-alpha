@@ -30,7 +30,15 @@ test("opencode workspace renders runtime status and creates governed delegation 
         command: "/usr/local/bin/opencode",
         model: "openai/gpt-5.4-mini",
         detail: "OpenCode runtime was detected.",
-        delegationPackets: 1
+        delegationPackets: 1,
+        liveSession: {
+          enabled: true,
+          workspaceConfigured: true,
+          workspacePath: "packages/governed-workspace",
+          grantedCapabilities: ["filesystem", "shell", "providers"],
+          ready: true,
+          readinessReasons: []
+        }
       };
     }
     if (route === "/addons/delegate") {
@@ -98,6 +106,14 @@ test("opencode workspace can create an initial routed delegation", async () => {
         configureCommand: "OPENCODE_COMMAND=/absolute/path/to/opencode",
         searchedCommands: ["opencode", "opencode-ai"],
         searchedPaths: ["~/.local/bin/opencode", "/opt/homebrew/bin/opencode"],
+        liveSession: {
+          enabled: false,
+          workspaceConfigured: false,
+          workspacePath: "",
+          grantedCapabilities: [],
+          ready: false,
+          readinessReasons: ["runtime-unavailable"]
+        }
       };
     }
     if (route === "/addons/delegate") {
@@ -132,6 +148,124 @@ test("opencode workspace can create an initial routed delegation", async () => {
     assert.match(container.textContent, /Command names checked: opencode, opencode-ai/);
     assert.match(container.textContent, /~\/\.local\/bin\/opencode/);
     assert.match(container.textContent, /OpenCode is an add-on worker/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("live session controls follow host readiness and never consume a raw OpenCode URL", async () => {
+  const { container, cleanup } = setupDom();
+  const calls = [];
+  let ready = false;
+  let sourceOptions = null;
+  let sourceCreates = 0;
+  let sourceStarts = 0;
+  let sourceStops = 0;
+  const bridgeRequest = async (route, options = {}) => {
+    calls.push([route, options]);
+    if (route === "/opencode/status") {
+      return {
+        installed: true,
+        executionEnabled: true,
+        command: "/usr/local/bin/opencode",
+        model: "openai/gpt-5.6",
+        detail: "OpenCode runtime was detected.",
+        liveSession: ready
+          ? {
+              enabled: true,
+              workspaceConfigured: true,
+              workspacePath: "packages/governed-workspace",
+              grantedCapabilities: ["filesystem", "shell", "providers"],
+              ready: true,
+              readinessReasons: []
+            }
+          : {
+              enabled: false,
+              workspaceConfigured: true,
+              workspacePath: "packages/governed-workspace",
+              grantedCapabilities: ["filesystem", "shell"],
+              ready: false,
+              readinessReasons: ["live-session-disabled", "capability-providers-required"]
+            }
+      };
+    }
+    if (route === "/opencode/session/start") {
+      const result = {
+        sessionId: "session-owned",
+        workspace: "packages/governed-workspace"
+      };
+      Object.defineProperty(result, "eventUrl", {
+        get() {
+          throw new Error("Raw OpenCode URLs must not be read by the extension.");
+        }
+      });
+      return result;
+    }
+    if (route === "/opencode/session/stop") {
+      return { stopped: true };
+    }
+    if (route === "/opencode/session/events") {
+      return { droppedBefore: 0, events: [], nextCursor: 0 };
+    }
+    throw new Error(`Unexpected route ${route}`);
+  };
+  const createBridgeSource = (options) => {
+    sourceCreates += 1;
+    sourceOptions = options;
+    let session = null;
+    return {
+      async start() {
+        sourceStarts += 1;
+        session = await options.startSession();
+        return { sessionId: session.sessionId, workspace: session.workspace };
+      },
+      subscribe() {
+        return () => {};
+      },
+      async sendPrompt() {},
+      async replyPermission() {},
+      async stop() {
+        sourceStops += 1;
+        return options.postJson("/opencode/session/stop", { sessionId: session.sessionId });
+      }
+    };
+  };
+
+  try {
+    renderOpenCodeWorkspace({ container, bridgeRequest, createBridgeSource });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const start = container.querySelector(".opencode-start-session");
+    assert.equal(start.hidden, false);
+    assert.equal(start.disabled, true);
+    assert.match(container.querySelector(".opencode-live-readiness").textContent, /live session is disabled/i);
+    assert.match(container.querySelector(".opencode-live-readiness").textContent, /provider capability is required/i);
+
+    ready = true;
+    container.querySelector(".opencode-status-card button").dispatchEvent(new Event("click"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(start.disabled, false);
+
+    start.dispatchEvent(new Event("click"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(sourceCreates, 1);
+    assert.equal(sourceStarts, 1);
+    assert.equal(Object.hasOwn(sourceOptions, "openEventStream"), false);
+    assert.equal(container.querySelector(".oc-scope").textContent, "scope: packages/governed-workspace");
+
+    sourceOptions.onCursorGap({ requestedAfter: 1, droppedBefore: 4 });
+    assert.match(container.querySelector(".oc-session-notice").textContent, /earlier OpenCode events expired/i);
+    sourceOptions.onPollingError(new Error("private runtime failure"));
+    assert.match(container.querySelector(".oc-session-notice").textContent, /session ended/i);
+    assert.doesNotMatch(container.querySelector(".oc-session-notice").textContent, /private runtime failure/i);
+
+    container.querySelector(".oc-stop-session").dispatchEvent(new Event("click"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(sourceStops, 1);
+    assert.equal(container.querySelector(".oc-session"), null);
+    assert.equal(container.querySelector(".opencode-hero").hidden, false);
+    assert.ok(calls.some(([route]) => route === "/opencode/session/stop"));
   } finally {
     cleanup();
   }

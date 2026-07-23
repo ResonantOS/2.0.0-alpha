@@ -50,7 +50,48 @@ function openCodeStatusMeta(status = {}) {
   return [command, status.model ? `model ${status.model}` : ""].filter(Boolean).join(" · ");
 }
 
-export function renderOpenCodeWorkspace({ container, bridgeRequest, getBridgeRequest, initialMission = "" }) {
+const LIVE_SESSION_REASON_TEXT = Object.freeze({
+  "capability-filesystem-required": "Filesystem capability is required.",
+  "capability-providers-required": "Provider capability is required.",
+  "capability-shell-required": "Shell capability is required.",
+  "live-session-disabled": "The OpenCode live session is disabled.",
+  "local-cli-disabled": "Local CLI execution is disabled.",
+  "preflight-failed": "The governed session preflight did not complete.",
+  "provider-credential-unavailable": "The selected provider credential is unavailable.",
+  "provider-route-unavailable": "No eligible provider route is available.",
+  "runtime-unavailable": "The OpenCode runtime is unavailable.",
+  "workspace-invalid": "The configured workspace is invalid.",
+  "workspace-required": "A governed workspace is required."
+});
+
+function openCodeLiveReadinessText(liveSession = {}) {
+  if (liveSession.ready) {
+    const workspace = typeof liveSession.workspacePath === "string"
+      ? liveSession.workspacePath.trim()
+      : "";
+    return workspace
+      ? `Live session ready for ${workspace}.`
+      : "Live session ready.";
+  }
+  const reasons = Array.isArray(liveSession.readinessReasons)
+    ? liveSession.readinessReasons
+    : [];
+  const messages = reasons.map((reason) =>
+    LIVE_SESSION_REASON_TEXT[reason] || "The governed session is not ready."
+  );
+  return messages.length
+    ? `Live session not ready. ${[...new Set(messages)].join(" ")}`
+    : "Live session not ready. Check Settings > Add-ons.";
+}
+
+export function renderOpenCodeWorkspace({
+  container,
+  bridgeRequest,
+  getBridgeRequest,
+  initialMission = "",
+  createBridgeSource: bridgeSourceFactory = createOpenCodeBridgeSource,
+  createSession: sessionFactory = createOpenCodeSession
+}) {
   // Resolve at call time. The module-level `bridgeRequest` may be
   // null at construction (rebind still in flight); the getter lets
   // us re-read the current value on every call.
@@ -78,6 +119,9 @@ export function renderOpenCodeWorkspace({ container, bridgeRequest, getBridgeReq
   statusBody.textContent = "Checking OpenCode…";
   const statusMeta = document.createElement("code");
   statusMeta.textContent = "";
+  const liveReadiness = document.createElement("p");
+  liveReadiness.className = "opencode-live-readiness";
+  liveReadiness.textContent = "Live session readiness is being checked.";
   const refreshButton = document.createElement("button");
   refreshButton.type = "button";
   refreshButton.textContent = "Refresh";
@@ -85,8 +129,16 @@ export function renderOpenCodeWorkspace({ container, bridgeRequest, getBridgeReq
   startSessionButton.type = "button";
   startSessionButton.className = "opencode-start-session";
   startSessionButton.textContent = "Start live session";
-  startSessionButton.hidden = true;
-  statusCard.append(statusTitle, statusBody, statusMeta, refreshButton, startSessionButton);
+  startSessionButton.hidden = false;
+  startSessionButton.disabled = true;
+  statusCard.append(
+    statusTitle,
+    statusBody,
+    statusMeta,
+    liveReadiness,
+    refreshButton,
+    startSessionButton
+  );
 
   const boundaryCard = document.createElement("section");
   boundaryCard.className = "opencode-card";
@@ -118,21 +170,33 @@ export function renderOpenCodeWorkspace({ container, bridgeRequest, getBridgeReq
   section.append(header, statusCard, boundaryCard, taskForm);
   container.append(section);
 
+  let liveSessionReady = false;
+  let activeSession = null;
+  let activeSource = null;
+  let startPending = false;
+
   const loadStatus = async () => {
     refreshButton.disabled = true;
     try {
       const status = await bridge()("/opencode/status", { method: "GET" });
       const executionEnabled = status.executionEnabled !== false;
-      statusBody.textContent = status.detail;
+      const liveSession = status.liveSession && typeof status.liveSession === "object"
+        ? status.liveSession
+        : {};
+      liveSessionReady = Boolean(liveSession.ready);
+      statusBody.textContent = status.detail || "OpenCode runtime status loaded.";
       statusMeta.textContent = openCodeStatusMeta(status);
-      statusCard.dataset.ready = status.installed ? "true" : "false";
-      startSessionButton.hidden = !status.installed;
-      if (!status.installed || !executionEnabled) {
+      liveReadiness.textContent = openCodeLiveReadinessText(liveSession);
+      liveReadiness.dataset.tone = liveSessionReady ? "success" : "warning";
+      statusCard.dataset.ready = liveSessionReady ? "true" : "false";
+      startSessionButton.hidden = false;
+      startSessionButton.disabled = !liveSessionReady || startPending || Boolean(activeSource);
+      if (!liveSessionReady) {
         const guidance = statusCard.querySelector(".delegation-guidance") ?? document.createElement("pre");
         guidance.className = "delegation-guidance";
         guidance.textContent = [
           delegationGuidanceText({
-            blockedReason: status.blockedReason || status.detail,
+            blockedReason: liveReadiness.textContent || status.blockedReason || status.detail,
             executionEnabled,
             runtimeAvailable: Boolean(status.installed),
             target: "opencode"
@@ -144,9 +208,14 @@ export function renderOpenCodeWorkspace({ container, bridgeRequest, getBridgeReq
         statusCard.querySelector(".delegation-guidance")?.remove();
       }
     } catch (error) {
+      liveSessionReady = false;
       statusBody.textContent = opencodeStatusMessage(error);
       statusMeta.textContent = "Status unavailable";
+      liveReadiness.textContent = "Live session not ready. Bridge status is unavailable.";
+      liveReadiness.dataset.tone = "error";
       statusCard.dataset.ready = "false";
+      startSessionButton.hidden = false;
+      startSessionButton.disabled = true;
       const guidance = statusCard.querySelector(".delegation-guidance") ?? document.createElement("pre");
       guidance.className = "delegation-guidance";
       guidance.textContent = delegationGuidanceText({
@@ -204,46 +273,83 @@ export function renderOpenCodeWorkspace({ container, bridgeRequest, getBridgeReq
     }
   });
 
-  // Live session: mount the streaming OpenCode workspace element. The bridge
-  // starts (reuses) `opencode serve` and returns the session + its /event URL;
-  // the element streams events directly from the server (host_permissions cover
-  // 127.0.0.1) and routes prompts/permissions back through the bridge.
+  // Live session: one extension-side source owns one authenticated bridge
+  // session. Raw OpenCode URLs and credentials remain inside the local host.
   const sessionArea = document.createElement("div");
   sessionArea.className = "opencode-session-area";
   section.append(sessionArea);
-  let activeSession = null;
+
+  function setOverviewHidden(hidden) {
+    for (const element of [header, statusCard, boundaryCard, taskForm]) {
+      element.hidden = hidden;
+    }
+  }
+
+  async function stopLiveSession() {
+    const source = activeSource;
+    const session = activeSession;
+    let cleanupConfirmed = true;
+    try {
+      await source?.stop?.();
+    } catch {
+      cleanupConfirmed = false;
+    }
+    activeSource = null;
+    activeSession = null;
+    session?.destroy?.();
+    sessionArea.replaceChildren();
+    setOverviewHidden(false);
+    setStatus(
+      taskStatus,
+      cleanupConfirmed
+        ? "OpenCode session stopped."
+        : "OpenCode session ended, but bridge cleanup could not be confirmed. Check runtime status before restarting.",
+      cleanupConfirmed ? "success" : "warning",
+    );
+    await loadStatus();
+  }
 
   async function startLiveSession() {
+    if (!liveSessionReady || startPending || activeSource) return;
+    startPending = true;
     startSessionButton.disabled = true;
     setStatus(taskStatus, "Starting OpenCode session…");
+    let source = null;
     try {
-      const info = await bridge()("/opencode/session/start", { method: "POST", body: {} });
+      source = bridgeSourceFactory({
+        startSession: () => bridge()("/opencode/session/start", { method: "POST", body: {} }),
+        postJson: (path, body) => bridge()(path, { method: "POST", body }),
+        onCursorGap: () => activeSession?.showCursorGap?.(),
+        onPollingError: () => activeSession?.showTerminated?.()
+      });
+      const info = await source.start();
       if (!info?.sessionId) throw new Error("No session id returned.");
-      header.hidden = true;
-      boundaryCard.hidden = true;
-      taskForm.hidden = true;
+      activeSource = source;
+      setOverviewHidden(true);
       activeSession?.destroy?.();
       sessionArea.replaceChildren();
-      const source = createOpenCodeBridgeSource({
-        // Idempotent: return the already-started session so subscribe + prompt share it.
-        startSession: async () => ({ sessionId: info.sessionId, eventUrl: info.eventUrl }),
-        openEventStream: (eventUrl) => fetch(eventUrl),
-        postJson: (path, body) => bridge()(path, { method: "POST", body })
-      });
-      activeSession = createOpenCodeSession({
+      activeSession = sessionFactory({
         document,
         container: sessionArea,
-        scope: info.baseUrl ? "" : "",
+        sessionId: info.sessionId,
+        scope: info.workspace || "",
         subscribe: source.subscribe,
         sendPrompt: source.sendPrompt,
         replyPermission: source.replyPermission,
-        revert: async () => {}
+        onStop: stopLiveSession
       });
       setStatus(taskStatus, "");
     } catch (error) {
+      await source?.stop?.().catch(() => undefined);
+      if (activeSource === source) activeSource = null;
+      activeSession?.destroy?.();
+      activeSession = null;
+      sessionArea.replaceChildren();
+      setOverviewHidden(false);
       setStatus(taskStatus, opencodeStatusMessage(error, "Could not start OpenCode session"), "error");
     } finally {
-      startSessionButton.disabled = false;
+      startPending = false;
+      startSessionButton.disabled = !liveSessionReady || Boolean(activeSource);
     }
   }
   startSessionButton.addEventListener("click", () => void startLiveSession());
