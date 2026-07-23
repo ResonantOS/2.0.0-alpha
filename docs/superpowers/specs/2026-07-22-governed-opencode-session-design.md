@@ -2,7 +2,7 @@
 
 ## Status
 
-- Design status: Approved for implementation
+- Design status: Implemented; certification pending
 - Date: 2026-07-22
 - Owner: OpenCode add-on and browser-first bridge
 - Runtime status: Optional developer preview; not an Alpha release requirement
@@ -13,9 +13,9 @@
 ## Purpose
 
 This design defines the first production-grade boundary between ResonantOS and
-an interactive OpenCode service. It replaces the existing prototype, which
-exposes an unauthenticated OpenCode URL to the extension and relies on stale
-HTTP and event contracts.
+an interactive OpenCode service. The implementation replaces the earlier
+prototype, which exposed an unauthenticated OpenCode URL to the extension and
+relied on stale HTTP and event contracts.
 
 The broader coding-system architecture remains:
 
@@ -29,10 +29,10 @@ This change secures and makes truthful the live OpenCode session boundary. It
 does not make OpenCode, OpenSpec, or Resonant Apex part of the browser-first
 Alpha runtime, and it does not claim to complete the full Apex coding system.
 
-## Existing Problem
+## Replaced Prototype
 
-The current live-session prototype violates the intended ownership boundary in
-several ways:
+The superseded live-session prototype violated the intended ownership boundary
+in several ways:
 
 - The bridge starts `opencode serve` without authentication or `--pure`.
 - The child inherits the bridge's complete environment rather than an explicit
@@ -48,9 +48,26 @@ several ways:
 - The UI exposes controls, including revert and remembered approvals, that the
   host does not correctly implement.
 
-These are security and correctness defects in an optional preview. They do not
-change the Alpha runtime boundary, but the unsafe preview must not remain
-available as if it were governed.
+These were security and correctness defects in an optional preview. The
+implemented boundary below removes the unsafe path without changing the Alpha
+runtime boundary.
+
+## Implementation Map
+
+- `browser-first/host/addon-delegation-service.mjs` owns persisted consent,
+  workspace/grant normalization, provider selection, and preflight.
+- `browser-first/host/opencode-client.mjs` owns the authenticated loopback child
+  and exact OpenCode 1.18.4 SDK adapter.
+- `browser-first/host/opencode-session-host-service.mjs` owns one SDK session,
+  session authorization, redaction, and the bounded event buffer.
+- `browser-first/host/opencode-session-composition.mjs` wires preflight,
+  lifecycle, provider environment, and bridge shutdown without moving policy
+  into the composition root.
+- `browser-first/resonantos-side-panel-extension/src/lib/opencode-bridge-source.js`
+  owns one authenticated bridge poller and cursor.
+- `main-workspace-opencode*.js`, `opencode-session-model.js`, and
+  `opencode-session-view.js` own the optional governance/evidence UI. They do
+  not receive or fetch a raw OpenCode URL.
 
 ## Goals
 
@@ -230,8 +247,10 @@ credential, or an absolute workspace path.
 ## Event Relay
 
 The bridge consumes OpenCode's authenticated v2 event stream through the SDK and
-places matching events in an in-memory ring buffer. Each accepted event gets a
-monotonic ResonantOS cursor. The buffer holds at most 500 events.
+places allowlisted, matching, redacted events in an in-memory ring buffer. Each
+accepted event gets a monotonic ResonantOS cursor. The buffer holds at most 500
+events and one MiB. Individual serialized events are limited to 32 KiB, text
+fields to 8 KiB, and accepted collections to 100 entries.
 
 The extension polls the authenticated bridge route with its last cursor. The
 bridge returns events after that cursor, the next cursor, and the earliest
@@ -261,6 +280,9 @@ The extension normalizes these OpenCode 1.18.4 event shapes:
 - `message.part.delta.data.delta`
 
 Unknown events are ignored without widening access or failing the session.
+Known fields are copied through bounded per-event sanitizers. Exact selected
+provider credentials, the absolute workspace, the child HOME path, common key
+and bearer-token patterns, and absolute paths are redacted before buffering.
 
 ## SDK Contract
 
@@ -323,6 +345,9 @@ verify completion before ResonantOS claims a coding task succeeded.
 - Port collision: allocate another loopback port; do not reuse the listener.
 - Readiness timeout or authentication mismatch: kill the child and clear state.
 - Child exit: mark failed, stop polling, and clear credentials.
+- Stop: wait for the owned child to exit; escalate from `SIGTERM` to `SIGKILL`
+  within a bounded window, and retain blocking ownership if termination cannot
+  be confirmed.
 - Invalid session identifier: reject without disclosing the active identifier.
 - Invalid permission reply: reject before calling OpenCode.
 - Event cursor gap: return `droppedBefore` and require the UI to disclose that

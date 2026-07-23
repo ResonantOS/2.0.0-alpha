@@ -11,19 +11,18 @@
   OpenCode is not a required Alpha runtime component.
 - Revised: 2026-07-22 to define the governed live-session boundary.
 
-Implementation status: persisted consent, grant, workspace, runtime, and exact
-provider-route preflight are implemented. The authenticated child lifecycle,
-SDK adapter, redacted session routes, and bounded event relay described below
-are the approved target contract and are not current authority until the
-bridge-owned host stack and its tests land. The legacy developer-preview
-session path is not certified by this ADR.
+Implementation status: the persisted consent, grant, workspace, runtime, and
+provider-route preflight; authenticated child lifecycle; pinned SDK adapter;
+session-bound bridge routes; bounded event relay; and truthful governance UI
+are implemented with deterministic tests. The optional preview still requires
+the live contract check and final certification described below before it may
+be presented as release proof. It remains outside Alpha runtime requirements.
 
 ## Decision
 
 OpenCode is an optional ResonantOS add-on, not part of the default ResonantOS core.
 
-ResonantOS will integrate OpenCode through a hosted local-service boundary.
-When the governed host stack is complete:
+ResonantOS integrates OpenCode through a hosted local-service boundary:
 
 - ResonantOS starts and stops a private `opencode serve --pure` child for one
   host-approved workspace.
@@ -50,7 +49,9 @@ This keeps OpenCode powerful without making it a trusted core memory writer.
 
 ## Rules
 
-- OpenCode is launched only after the `addon.opencode` manifest is installed and enabled.
+- The bundled `addon.opencode` manifest declares the optional local-service
+  surface; the host-owned settings below, not manifest presence, grant runtime
+  authority.
 - A live governance session requires persisted local-CLI consent, persisted
   live-session consent, and explicit `filesystem`, `shell`, and `providers`
   grants. Revoking any requirement hard-stops an active session.
@@ -82,7 +83,7 @@ Current packet and status commands:
 - `opencode_delegation_artifact`
 - `opencode_delegation_cancel`
 
-Planned governed live-session bridge routes:
+Implemented governed live-session bridge routes:
 
 - `POST /opencode/session/start`
 - `POST /opencode/session/prompt`
