@@ -375,7 +375,7 @@ test("prompt, permission, events, and stop require the active host-owned session
   const harness = createHarness();
   const operations = [
     () => harness.handlers.executeOpenCodeSessionPrompt({ text: "go" }),
-    () => harness.handlers.executeOpenCodeSessionPermission({ permissionId: "p1", reply: "once" }),
+    () => harness.handlers.executeOpenCodeSessionPermission({ requestId: "p1", reply: "once" }),
     () => harness.handlers.executeOpenCodeSessionEvents({ after: 0 }),
     () => harness.handlers.executeOpenCodeSessionStop({}),
   ];
@@ -388,7 +388,7 @@ test("prompt, permission, events, and stop require the active host-owned session
     () => harness.handlers.executeOpenCodeSessionPrompt({ sessionId: "foreign", text: "go" }),
     () => harness.handlers.executeOpenCodeSessionPermission({
       sessionId: "foreign",
-      permissionId: "p1",
+      requestId: "p1",
       reply: "once",
     }),
     () => harness.handlers.executeOpenCodeSessionEvents({ sessionId: "foreign", after: 0 }),
@@ -441,26 +441,36 @@ test("permission replies allow only once or reject and use an attributed request
 
   harness.feeds[0].push({
     type: "permission.v2.asked",
-    data: { id: "request-once", sessionID: sessionId },
+    data: {
+      id: "request-once",
+      sessionID: sessionId,
+      action: "bash",
+      resources: ["npm test"],
+    },
   });
   harness.feeds[0].push({
     type: "permission.v2.asked",
-    data: { id: "request-reject", sessionID: sessionId },
+    data: {
+      id: "request-reject",
+      sessionID: sessionId,
+      action: "edit",
+      resources: ["src/index.js"],
+    },
   });
   await waitFor(async () => {
     const result = await harness.handlers.executeOpenCodeSessionEvents({ sessionId, after: 0 });
-    return result.entries.length === 2;
+    return result.events.length === 2;
   });
 
   await harness.handlers.executeOpenCodeSessionPermission({
     sessionId,
-    permissionId: "request-once",
+    requestId: "request-once",
     requestID: "caller-controlled",
     reply: "once",
   });
   await harness.handlers.executeOpenCodeSessionPermission({
     sessionId,
-    permissionId: "request-reject",
+    requestId: "request-reject",
     reply: "reject",
   });
   assert.deepEqual(
@@ -474,7 +484,7 @@ test("permission replies allow only once or reject and use an attributed request
   await assert.rejects(
     () => harness.handlers.executeOpenCodeSessionPermission({
       sessionId,
-      permissionId: "request-once",
+      requestId: "request-once",
       reply: "always",
     }),
     /once or reject/,
@@ -482,7 +492,7 @@ test("permission replies allow only once or reject and use an attributed request
   await assert.rejects(
     () => harness.handlers.executeOpenCodeSessionPermission({
       sessionId,
-      permissionId: "unknown",
+      requestId: "unknown",
       reply: "once",
     }),
     /active session permission request/,
@@ -504,23 +514,28 @@ test("an attributed permission request can have only one reply in flight", async
   const { sessionId } = await harness.handlers.executeOpenCodeSessionStart({ workspacePath: "." });
   harness.feeds[0].push({
     type: "permission.v2.asked",
-    data: { id: "request-single-flight", sessionID: sessionId },
+    data: {
+      id: "request-single-flight",
+      sessionID: sessionId,
+      action: "bash",
+      resources: ["npm test"],
+    },
   });
   await waitFor(async () => {
     const result = await harness.handlers.executeOpenCodeSessionEvents({ sessionId, after: 0 });
-    return result.entries.length === 1;
+    return result.events.length === 1;
   });
 
   const firstReply = harness.handlers.executeOpenCodeSessionPermission({
     sessionId,
-    permissionId: "request-single-flight",
+    requestId: "request-single-flight",
     reply: "once",
   });
   await waitFor(() => callsNamed(harness, "replyPermission").length === 1);
   await assert.rejects(
     () => harness.handlers.executeOpenCodeSessionPermission({
       sessionId,
-      permissionId: "request-single-flight",
+      requestId: "request-single-flight",
       reply: "once",
     }),
     /active session permission request/,
@@ -532,17 +547,202 @@ test("an attributed permission request can have only one reply in flight", async
   await harness.handlers.executeOpenCodeSessionStop({ sessionId });
 });
 
+test("the canonical bridge contract returns events and accepts requestId", async () => {
+  const harness = createHarness();
+  const { sessionId } = await harness.handlers.executeOpenCodeSessionStart({
+    workspacePath: ".",
+  });
+  harness.feeds[0].push({
+    type: "permission.v2.asked",
+    metadata: { private: "must-not-cross" },
+    location: { directory: PRIVATE_WORKSPACE },
+    data: {
+      id: "request-canonical",
+      sessionID: sessionId,
+      action: "bash",
+      resources: ["npm test"],
+      metadata: { apiKey: "sk-must-not-cross" },
+    },
+  });
+
+  await waitFor(async () => {
+    const result = await harness.handlers.executeOpenCodeSessionEvents({
+      sessionId,
+      after: 0,
+    });
+    return result.nextCursor === 1;
+  });
+
+  const result = await harness.handlers.executeOpenCodeSessionEvents({
+    sessionId,
+    after: 0,
+  });
+  assert.equal(Object.hasOwn(result, "entries"), false);
+  assert.deepEqual(result, {
+    events: [{
+      type: "permission.v2.asked",
+      data: {
+        id: "request-canonical",
+        sessionID: sessionId,
+        action: "bash",
+        resources: ["npm test"],
+      },
+    }],
+    nextCursor: 1,
+    droppedBefore: 0,
+  });
+
+  await harness.handlers.executeOpenCodeSessionPermission({
+    sessionId,
+    requestId: "request-canonical",
+    reply: "once",
+  });
+  assert.deepEqual(callsNamed(harness, "replyPermission").at(-1)[1], {
+    sessionID: sessionId,
+    requestID: "request-canonical",
+    reply: "once",
+  });
+  await harness.handlers.executeOpenCodeSessionStop({ sessionId });
+});
+
+test("the host drops unknown events and redacts known event payloads before buffering", async () => {
+  const providerSecret = "QZ9K-host-selected-secret-value";
+  const harness = createHarness({
+    preflight: async (payload, context) => {
+      harness.calls.push(["preflight", payload, context]);
+      return {
+        childEnvironment: {
+          HOME: "/Users/test",
+          OPENAI_API_KEY: providerSecret,
+        },
+        model: HOST_MODEL,
+        workspace: PRIVATE_WORKSPACE,
+      };
+    },
+  });
+  const { sessionId } = await harness.handlers.executeOpenCodeSessionStart({
+    workspacePath: ".",
+  });
+
+  harness.feeds[0].push({
+    type: "unknown.secret.dump",
+    metadata: { credential: providerSecret },
+    data: {
+      sessionID: sessionId,
+      credential: providerSecret,
+      path: `${PRIVATE_WORKSPACE}/private.txt`,
+    },
+  });
+  harness.feeds[0].push({
+    type: "session.next.text.delta",
+    metadata: { credential: providerSecret },
+    location: { directory: PRIVATE_WORKSPACE },
+    data: {
+      sessionID: sessionId,
+      assistantMessageID: "assistant-1",
+      textID: "text-1",
+      delta: `read ${PRIVATE_WORKSPACE}/src/index.js with ${providerSecret}`,
+      extra: providerSecret,
+    },
+  });
+  harness.feeds[0].push({
+    type: "session.next.text.delta",
+    data: {
+      sessionID: sessionId,
+      assistantMessageID: "assistant-2",
+      textID: "text-2",
+      delta: `${"x".repeat(8_188)}${providerSecret}`,
+    },
+  });
+
+  await waitFor(async () => {
+    const result = await harness.handlers.executeOpenCodeSessionEvents({
+      sessionId,
+      after: 0,
+    });
+    return result.nextCursor === 2;
+  });
+  const result = await harness.handlers.executeOpenCodeSessionEvents({
+    sessionId,
+    after: 0,
+  });
+  assert.equal(result.events.length, 2);
+  assert.deepEqual(Object.keys(result.events[0]).sort(), ["data", "type"]);
+  assert.deepEqual(
+    Object.keys(result.events[0].data).sort(),
+    ["assistantMessageID", "delta", "sessionID", "textID"],
+  );
+  const serialized = JSON.stringify(result);
+  assert.equal(serialized.includes("unknown.secret.dump"), false);
+  assert.equal(serialized.includes(providerSecret), false);
+  assert.equal(serialized.includes("QZ9K"), false);
+  assert.equal(serialized.includes(PRIVATE_WORKSPACE), false);
+  await harness.handlers.executeOpenCodeSessionStop({ sessionId });
+});
+
+test("the host bounds individual events and total buffered event bytes", async () => {
+  const harness = createHarness();
+  const { sessionId } = await harness.handlers.executeOpenCodeSessionStart({
+    workspacePath: ".",
+  });
+  const largeDelta = "x".repeat(20_000);
+  for (let index = 0; index < 500; index += 1) {
+    harness.feeds[0].push({
+      type: "session.next.text.delta",
+      data: {
+        sessionID: sessionId,
+        assistantMessageID: `assistant-${index}`,
+        textID: `text-${index}`,
+        delta: largeDelta,
+      },
+    });
+  }
+
+  await waitFor(async () => {
+    const result = await harness.handlers.executeOpenCodeSessionEvents({
+      sessionId,
+      after: 0,
+    });
+    return result.nextCursor === 500;
+  });
+  const result = await harness.handlers.executeOpenCodeSessionEvents({
+    sessionId,
+    after: 0,
+  });
+  assert.ok(result.events.length < 500);
+  assert.ok(result.droppedBefore > 0);
+  assert.ok(Buffer.byteLength(JSON.stringify(result), "utf8") <= 1_100_000);
+  assert.ok(
+    result.events.every((event) => (
+      Buffer.byteLength(JSON.stringify(event), "utf8") <= 32_768
+    )),
+  );
+  await harness.handlers.executeOpenCodeSessionStop({ sessionId });
+});
+
 test("event attribution is enforced before buffering and polling returns no duplicates", async () => {
   const harness = createHarness();
   const { sessionId } = await harness.handlers.executeOpenCodeSessionStart({ workspacePath: "." });
   const retained = {
-    type: "message.part.updated",
-    data: { sessionID: sessionId, text: "owned" },
+    type: "message.part.delta",
+    data: {
+      sessionID: sessionId,
+      messageID: "message-owned",
+      partID: "part-owned",
+      field: "text",
+      delta: "owned",
+    },
   };
 
   harness.feeds[0].push({
-    type: "message.part.updated",
-    data: { sessionID: "another-session", text: "foreign" },
+    type: "message.part.delta",
+    data: {
+      sessionID: "another-session",
+      messageID: "message-foreign",
+      partID: "part-foreign",
+      field: "text",
+      delta: "foreign",
+    },
   });
   harness.feeds[0].push({
     type: "file.edited",
@@ -557,14 +757,14 @@ test("event attribution is enforced before buffering and polling returns no dupl
 
   const firstPoll = await harness.handlers.executeOpenCodeSessionEvents({ sessionId, after: 0 });
   assert.deepEqual(firstPoll, {
-    entries: [{ cursor: 1, event: retained }],
+    events: [retained],
     nextCursor: 1,
     droppedBefore: 0,
   });
   assert.deepEqual(
     await harness.handlers.executeOpenCodeSessionEvents({ sessionId, after: firstPoll.nextCursor }),
     {
-      entries: [],
+      events: [],
       nextCursor: 1,
       droppedBefore: 0,
     },
@@ -573,14 +773,19 @@ test("event attribution is enforced before buffering and polling returns no dupl
   await harness.handlers.executeOpenCodeSessionStop({ sessionId });
 });
 
-test("the event buffer retains 500 entries and reports a cursor gap after eviction", async () => {
+test("the event buffer retains 500 events and reports a cursor gap after eviction", async () => {
   const harness = createHarness();
   const { sessionId } = await harness.handlers.executeOpenCodeSessionStart({ workspacePath: "." });
 
   for (let index = 1; index <= 501; index += 1) {
     harness.feeds[0].push({
-      type: "message.part.updated",
-      data: { index, sessionID: sessionId },
+      type: "session.next.text.delta",
+      data: {
+        sessionID: sessionId,
+        assistantMessageID: `assistant-${index}`,
+        textID: `text-${index}`,
+        delta: `chunk-${index}`,
+      },
     });
   }
   await waitFor(async () => {
@@ -589,14 +794,14 @@ test("the event buffer retains 500 entries and reports a cursor gap after evicti
   });
 
   const result = await harness.handlers.executeOpenCodeSessionEvents({ sessionId, after: 0 });
-  assert.equal(result.entries.length, 500);
-  assert.equal(result.entries[0].cursor, 2);
-  assert.equal(result.entries.at(-1).cursor, 501);
+  assert.equal(result.events.length, 500);
+  assert.equal(result.events[0].data.textID, "text-2");
+  assert.equal(result.events.at(-1).data.textID, "text-501");
   assert.equal(result.nextCursor, 501);
   assert.equal(result.droppedBefore, 1);
   assert.deepEqual(
     await harness.handlers.executeOpenCodeSessionEvents({ sessionId, after: 501 }),
-    { entries: [], nextCursor: 501, droppedBefore: 1 },
+    { events: [], nextCursor: 501, droppedBefore: 1 },
   );
 
   await harness.handlers.executeOpenCodeSessionStop({ sessionId });
@@ -614,7 +819,7 @@ test("the event cursor must be a non-negative safe integer", async () => {
   }
   assert.deepEqual(
     await harness.handlers.executeOpenCodeSessionEvents({ sessionId }),
-    { entries: [], nextCursor: 0, droppedBefore: 0 },
+    { events: [], nextCursor: 0, droppedBefore: 0 },
   );
 
   await harness.handlers.executeOpenCodeSessionStop({ sessionId });
@@ -670,12 +875,18 @@ test("owned child exit clears session, client, credentials, and buffered event s
   const harness = createHarness();
   const { sessionId } = await harness.handlers.executeOpenCodeSessionStart({ workspacePath: "." });
   harness.feeds[0].push({
-    type: "message.part.updated",
-    data: { sessionID: sessionId, text: "before exit" },
+    type: "message.part.delta",
+    data: {
+      sessionID: sessionId,
+      messageID: "message-before-exit",
+      partID: "part-before-exit",
+      field: "text",
+      delta: "before exit",
+    },
   });
   await waitFor(async () => {
     const result = await harness.handlers.executeOpenCodeSessionEvents({ sessionId, after: 0 });
-    return result.entries.length === 1;
+    return result.events.length === 1;
   });
 
   harness.ownedProcesses[0].emit("exit", 1, null);
@@ -697,7 +908,7 @@ test("owned child exit clears session, client, credentials, and buffered event s
       sessionId: restarted.sessionId,
       after: 0,
     }),
-    { entries: [], nextCursor: 0, droppedBefore: 0 },
+    { events: [], nextCursor: 0, droppedBefore: 0 },
   );
   await harness.handlers.executeOpenCodeSessionStop({ sessionId: restarted.sessionId });
 });

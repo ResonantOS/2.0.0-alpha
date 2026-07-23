@@ -181,9 +181,9 @@ const addonDelegationService = createAddonDelegationService({
 });
 
 const { executeAddonsStatus } = addonDelegationService;
-const { addonDelegationRoutes } = createAddonDelegationHostService(addonDelegationService);
 
 const {
+  executeAddonExecutionSettingsUpdate,
   opencodeSessionRoutes,
   shutdownOpenCodeSession,
 } = createOpencodeSessionBridgeComposition({
@@ -193,6 +193,10 @@ const {
     commandArgs,
     options,
   ),
+});
+const { addonDelegationRoutes } = createAddonDelegationHostService({
+  ...addonDelegationService,
+  executeAddonExecutionSettingsUpdate,
 });
 
 const memorySourceSettingsService = createMemorySourceSettingsService({
@@ -446,14 +450,25 @@ console.log(JSON.stringify({
 console.log("Load browser-first/resonantos-side-panel-extension in Chrome as an unpacked extension.");
 
 const shutdown = async () => {
-  await shutdownOpenCodeSession().catch(() => undefined);
-  clearSessionProviderSecrets();
-  await flushPendingExtensionPrefs().catch(() => undefined);
-  await new Promise((resolve) => bridgeInfo.server.close(resolve));
+  try {
+    await shutdownOpenCodeSession();
+  } finally {
+    clearSessionProviderSecrets();
+    await flushPendingExtensionPrefs().catch(() => undefined);
+    await new Promise((resolve) => bridgeInfo.server.close(resolve));
+  }
 };
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
-  process.on(signal, () => {
-    void shutdown().finally(() => process.exit(0));
+  process.once(signal, () => {
+    void shutdown().then(
+      () => process.exit(0),
+      (error) => {
+        console.error(redactDiagnosticText(
+          error instanceof Error ? error.message : String(error),
+        ));
+        process.exit(1);
+      },
+    );
   });
 }

@@ -72,6 +72,10 @@ test("production OpenCode composition uses persisted preflight and scoped lifecy
     },
   };
   const addonDelegationService = {
+    async executeAddonExecutionSettingsUpdate(payload) {
+      calls.push(["settings.update", payload]);
+      return { stopRequired: false };
+    },
     async executeOpenCodeLiveSessionPreflight(options) {
       calls.push(["preflight", options]);
       if (revoked) {
@@ -150,6 +154,84 @@ test("production OpenCode composition uses persisted preflight and scoped lifecy
   );
 });
 
+test("settings revocation stops the active OpenCode session without another session request", async () => {
+  const child = new EventEmitter();
+  child.exitCode = null;
+  const handle = Object.freeze({ process: child });
+  const calls = [];
+  const lifecycle = {
+    async createClient() {
+      return {
+        async createSession() {
+          return { sessionId: "owned-session" };
+        },
+        async prompt() {},
+        async replyPermission() {},
+        async subscribeEvents({ signal }) {
+          return waitingEventStream(signal);
+        },
+      };
+    },
+    async shutdown() {},
+    async start() {
+      return handle;
+    },
+    async stop(receivedHandle, context) {
+      calls.push(["lifecycle.stop", receivedHandle, context]);
+    },
+  };
+  const addonDelegationService = {
+    async executeAddonExecutionSettingsUpdate(payload) {
+      calls.push(["settings.update", payload]);
+      return {
+        addon: "opencode",
+        stopRequired: true,
+      };
+    },
+    async executeOpenCodeLiveSessionPreflight() {
+      return {
+        childEnvironment: {},
+        command: "/fixed/bin/opencode",
+        model: "minimax/MiniMax-M2.1",
+        workspaceLabel: ".",
+        workspacePath: "/approved/repository",
+      };
+    },
+  };
+  const { createOpencodeSessionBridgeComposition } = await import(
+    `${pathToFileURL(COMPOSITION_PATH).href}?revocation=${Date.now()}`
+  );
+  const composition = createOpencodeSessionBridgeComposition({
+    addonDelegationService,
+    lifecycle,
+  });
+  await route(
+    composition.opencodeSessionRoutes,
+    "/opencode/session/start",
+  ).handler({});
+
+  const updated = await composition.executeAddonExecutionSettingsUpdate({
+    addon: "opencode",
+    liveSession: { enabled: false },
+  });
+
+  assert.deepEqual(updated, {
+    addon: "opencode",
+    stopRequired: true,
+  });
+  assert.equal(calls.filter(([name]) => name === "lifecycle.stop").length, 1);
+  await assert.rejects(
+    () => route(
+      composition.opencodeSessionRoutes,
+      "/opencode/session/prompt",
+    ).handler({
+      sessionId: "owned-session",
+      text: "must not run",
+    }),
+    /no active OpenCode session/i,
+  );
+});
+
 test("run bridge uses the governed composition and removes the raw fixed-port prototype", async () => {
   const source = await readFile(
     path.join(HOST_ROOT, "run-bridge-minimal.mjs"),
@@ -163,6 +245,8 @@ test("run bridge uses the governed composition and removes the raw fixed-port pr
   assert.doesNotMatch(source, /\b4231\b/);
   assert.doesNotMatch(source, /env:\s*process\.env/);
   assert.match(source, /shutdownOpenCodeSession/);
+  assert.match(source, /executeAddonExecutionSettingsUpdate/);
+  assert.doesNotMatch(source, /shutdownOpenCodeSession\(\)\.catch\(\(\) => undefined\)/);
   assert.equal(
     source.match(/\bclearSessionProviderSecrets\b/g)?.length,
     2,

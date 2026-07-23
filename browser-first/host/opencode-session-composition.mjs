@@ -40,6 +40,10 @@ export function createOpencodeSessionBridgeComposition({
     "addonDelegationService.executeOpenCodeLiveSessionPreflight",
     addonDelegationService?.executeOpenCodeLiveSessionPreflight,
   );
+  const executeSettingsUpdate = requiredFunction(
+    "addonDelegationService.executeAddonExecutionSettingsUpdate",
+    addonDelegationService?.executeAddonExecutionSettingsUpdate,
+  );
   const ownedLifecycle = requiredLifecycle(
     lifecycle ?? createOpencodeServerLifecycle({ spawnImpl }),
   );
@@ -64,6 +68,14 @@ export function createOpencodeSessionBridgeComposition({
   });
   const { opencodeSessionRoutes } = createOpencodeSessionHostService(handlers);
 
+  async function executeAddonExecutionSettingsUpdate(payload) {
+    const result = await executeSettingsUpdate.call(addonDelegationService, payload);
+    if (result?.stopRequired) {
+      await handlers.shutdownOpenCodeSession();
+    }
+    return result;
+  }
+
   async function shutdownOpenCodeSession() {
     const results = await Promise.allSettled([
       handlers.shutdownOpenCodeSession(),
@@ -74,6 +86,7 @@ export function createOpencodeSessionBridgeComposition({
   }
 
   return Object.freeze({
+    executeAddonExecutionSettingsUpdate,
     opencodeSessionRoutes,
     shutdownOpenCodeSession,
   });

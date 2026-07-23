@@ -1,4 +1,9 @@
 const EVENT_BUFFER_LIMIT = 500;
+const EVENT_BUFFER_BYTES_LIMIT = 1_048_576;
+const EVENT_PAYLOAD_BYTES_LIMIT = 32_768;
+const EVENT_TEXT_LIMIT = 8_192;
+const EVENT_COLLECTION_LIMIT = 100;
+const EVENT_REDACTION_LOOKAHEAD_LIMIT = 16_384;
 const PREFLIGHT_REVOKED_CODE = "OPENCODE_PREFLIGHT_REVOKED";
 
 const SESSION_STATE = Object.freeze({
@@ -58,6 +63,373 @@ function eventIterable(source) {
 function permissionRequestId(event) {
   if (event?.type !== "permission.v2.asked") return "";
   return typeof event?.data?.id === "string" ? event.data.id.trim() : "";
+}
+
+function objectValue(value) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value
+    : null;
+}
+
+function boundedString(value, limit = 256) {
+  if (typeof value !== "string") return "";
+  return value.slice(0, limit);
+}
+
+function sensitiveValues(attempt) {
+  const values = new Set();
+  const visit = (value, key = "", inheritedSensitive = false, depth = 0) => {
+    if (depth > 4 || value === null || value === undefined) return;
+    const sensitive = inheritedSensitive
+      || /(?:api.?key|authorization|credential|password|secret|token)/i.test(key);
+    if (typeof value === "string") {
+      if (sensitive && value.length >= 4) values.add(value);
+      return;
+    }
+    if (typeof value !== "object") return;
+    for (const [nestedKey, nestedValue] of Object.entries(value)) {
+      visit(
+        nestedValue,
+        nestedKey,
+        sensitive || /credentials?/i.test(key),
+        depth + 1,
+      );
+    }
+  };
+  visit(attempt.preflightResult);
+  visit(attempt.lifecycle);
+  return [...values].sort((left, right) => right.length - left.length);
+}
+
+function redactTruncatedExactValue(text, exactValue, replacement) {
+  if (exactValue.length < 4) return text;
+  const prefix = exactValue.slice(0, 4);
+  for (
+    let start = text.lastIndexOf(prefix);
+    start >= 0;
+    start = text.lastIndexOf(prefix, start - 1)
+  ) {
+    const fragment = text.slice(start);
+    if (fragment.length < exactValue.length && exactValue.startsWith(fragment)) {
+      return `${text.slice(0, start)}${replacement}`;
+    }
+  }
+  return text;
+}
+
+function redactEventText(value, attempt, limit = EVENT_TEXT_LIMIT) {
+  if (typeof value !== "string" || !value) return "";
+  const secrets = sensitiveValues(attempt);
+  const home = attempt.preflightResult?.childEnvironment?.HOME
+    ?? attempt.preflightResult?.scopedEnvironment?.HOME;
+  const exactValues = [
+    ...secrets,
+    attempt.workspace,
+    typeof home === "string" ? home : "",
+  ].filter(Boolean);
+  const lookahead = Math.min(
+    EVENT_REDACTION_LOOKAHEAD_LIMIT,
+    Math.max(512, ...exactValues.map((entry) => entry.length)),
+  );
+  let text = value.slice(0, limit + lookahead);
+
+  for (const secret of secrets) {
+    text = text.split(secret).join("[redacted]");
+  }
+  if (attempt.workspace) {
+    text = text.split(attempt.workspace).join(".");
+  }
+  if (typeof home === "string" && home) {
+    text = text.split(home).join("~");
+  }
+
+  text = text
+    .replace(/sk-[a-z0-9_-]+/gi, "[redacted-key]")
+    .replace(/bearer\s+[a-z0-9._-]+/gi, "Bearer [redacted-token]")
+    .replace(/api[_-]?key\s*[:=]\s*[^\s]+/gi, "api_key=[redacted]")
+    .replace(/token\s*[:=]\s*[^\s]+/gi, "token=[redacted]")
+    .replace(/secret\s*[:=]\s*[^\s]+/gi, "secret=[redacted]")
+    .replace(/\b[a-z]:[\\/][^\s"'`]+/gi, "[redacted-path]")
+    .replace(/(^|[\s("'=])\/(?!\/)[^\s"'`]+/g, "$1[redacted-path]")
+    .slice(0, limit);
+
+  for (const secret of secrets) {
+    text = redactTruncatedExactValue(text, secret, "[redacted]");
+  }
+  if (attempt.workspace) {
+    text = redactTruncatedExactValue(text, attempt.workspace, ".");
+  }
+  if (typeof home === "string" && home) {
+    text = redactTruncatedExactValue(text, home, "~");
+  }
+  return text.slice(0, limit);
+}
+
+function redactEventPath(value, attempt) {
+  const raw = boundedString(value, 2_048).trim();
+  if (!raw) return "";
+  const workspace = attempt.workspace;
+  if (workspace) {
+    if (raw === workspace) return ".";
+    for (const separator of ["/", "\\"]) {
+      const prefix = `${workspace}${separator}`;
+      if (raw.startsWith(prefix)) {
+        return raw.slice(prefix.length).replaceAll("\\", "/");
+      }
+    }
+  }
+  if (isAbsolutePathLike(raw)) return "[redacted-path]";
+  return redactEventText(raw, attempt, 2_048);
+}
+
+function sanitizeJsonValue(value, attempt, depth = 0) {
+  if (depth > 4 || value === undefined) return undefined;
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value === "string") return redactEventText(value, attempt, 2_048);
+  if (Array.isArray(value)) {
+    return value
+      .slice(0, EVENT_COLLECTION_LIMIT)
+      .map((entry) => sanitizeJsonValue(entry, attempt, depth + 1))
+      .filter((entry) => entry !== undefined);
+  }
+  if (typeof value !== "object") return String(value).slice(0, 256);
+
+  const sanitized = {};
+  for (const [key, nestedValue] of Object.entries(value).slice(
+    0,
+    EVENT_COLLECTION_LIMIT,
+  )) {
+    if (/(?:api.?key|authorization|credential|password|secret|token)/i.test(key)) {
+      sanitized[key] = "[redacted]";
+      continue;
+    }
+    const next = sanitizeJsonValue(nestedValue, attempt, depth + 1);
+    if (next !== undefined) sanitized[key] = next;
+  }
+  return sanitized;
+}
+
+function sanitizeOpenCodeEvent(event, attempt) {
+  const source = objectValue(event);
+  const type = boundedString(source?.type, 128);
+  const data = objectValue(source?.data);
+  if (!type || !data || data.sessionID !== attempt.sessionId) return null;
+
+  const sessionID = attempt.sessionId;
+  const required = (value, limit = 256) => {
+    const result = boundedString(value, limit).trim();
+    return result || null;
+  };
+  const deltaEvent = (idKey) => {
+    const id = required(data[idKey]);
+    if (!id || typeof data.delta !== "string") return null;
+    return {
+      type,
+      data: {
+        sessionID,
+        ...(idKey === "textID"
+          ? { assistantMessageID: required(data.assistantMessageID) ?? "", textID: id }
+          : idKey === "reasoningID"
+            ? {
+                assistantMessageID: required(data.assistantMessageID) ?? "",
+                reasoningID: id,
+              }
+            : {
+                messageID: required(data.messageID) ?? "",
+                partID: id,
+                field: data.field,
+              }),
+        delta: redactEventText(data.delta, attempt),
+      },
+    };
+  };
+
+  let sanitized = null;
+  switch (type) {
+    case "session.next.text.delta":
+      sanitized = deltaEvent("textID");
+      break;
+    case "session.next.reasoning.delta":
+      sanitized = deltaEvent("reasoningID");
+      break;
+    case "message.part.delta":
+      if (data.field !== "text" && data.field !== "reasoning") return null;
+      sanitized = deltaEvent("partID");
+      break;
+    case "session.next.tool.called": {
+      const callID = required(data.callID);
+      const tool = required(data.tool);
+      const input = objectValue(data.input);
+      if (!callID || !tool || !input) return null;
+      sanitized = {
+        type,
+        data: {
+          sessionID,
+          assistantMessageID: required(data.assistantMessageID) ?? "",
+          callID,
+          tool,
+          input: sanitizeJsonValue(input, attempt),
+        },
+      };
+      break;
+    }
+    case "session.next.tool.success": {
+      const callID = required(data.callID);
+      if (!callID) return null;
+      sanitized = {
+        type,
+        data: {
+          sessionID,
+          assistantMessageID: required(data.assistantMessageID) ?? "",
+          callID,
+          result: sanitizeJsonValue(data.result ?? data.content ?? "", attempt),
+        },
+      };
+      break;
+    }
+    case "session.next.tool.failed": {
+      const callID = required(data.callID);
+      if (!callID) return null;
+      sanitized = {
+        type,
+        data: {
+          sessionID,
+          assistantMessageID: required(data.assistantMessageID) ?? "",
+          callID,
+          error: sanitizeJsonValue(data.error ?? "failed", attempt),
+        },
+      };
+      break;
+    }
+    case "session.diff": {
+      if (!Array.isArray(data.diff)) return null;
+      const diff = [];
+      for (const candidate of data.diff.slice(0, EVENT_COLLECTION_LIMIT)) {
+        const file = objectValue(candidate);
+        const filePath = redactEventPath(file?.file, attempt);
+        if (
+          !filePath
+          || filePath === "[redacted-path]"
+          || !Number.isFinite(file?.additions)
+          || !Number.isFinite(file?.deletions)
+        ) {
+          continue;
+        }
+        diff.push({
+          file: filePath,
+          additions: file.additions,
+          deletions: file.deletions,
+          ...(file.status === "added"
+            || file.status === "deleted"
+            || file.status === "modified"
+            ? { status: file.status }
+            : {}),
+        });
+      }
+      sanitized = { type, data: { sessionID, diff } };
+      break;
+    }
+    case "permission.v2.asked": {
+      const id = required(data.id);
+      const action = required(data.action);
+      if (
+        !id
+        || !action
+        || !Array.isArray(data.resources)
+        || data.resources.some((resource) => typeof resource !== "string")
+      ) {
+        return null;
+      }
+      sanitized = {
+        type,
+        data: {
+          id,
+          sessionID,
+          action,
+          resources: data.resources
+            .slice(0, EVENT_COLLECTION_LIMIT)
+            .map((resource) => redactEventText(resource, attempt, 1_024)),
+        },
+      };
+      break;
+    }
+    case "permission.v2.replied": {
+      const requestID = required(data.requestID);
+      if (!requestID) return null;
+      sanitized = {
+        type,
+        data: {
+          sessionID,
+          requestID,
+          ...(data.reply === "once"
+            || data.reply === "always"
+            || data.reply === "reject"
+            ? { reply: data.reply }
+            : {}),
+        },
+      };
+      break;
+    }
+    case "todo.updated": {
+      if (!Array.isArray(data.todos)) return null;
+      const todos = [];
+      for (const candidate of data.todos.slice(0, EVENT_COLLECTION_LIMIT)) {
+        const todo = objectValue(candidate);
+        const content = required(todo?.content, 1_024);
+        const status = required(todo?.status, 64);
+        if (!content || !status) return null;
+        todos.push({
+          content: redactEventText(content, attempt, 1_024),
+          status,
+          ...(required(todo.priority, 64) ? { priority: required(todo.priority, 64) } : {}),
+        });
+      }
+      sanitized = { type, data: { sessionID, todos } };
+      break;
+    }
+    case "session.updated": {
+      const info = objectValue(data.info);
+      if (!info || required(info.id) !== sessionID) return null;
+      const model = objectValue(info.model);
+      sanitized = {
+        type,
+        data: {
+          sessionID,
+          info: {
+            id: sessionID,
+            title: redactEventText(info.title ?? "", attempt, 1_024),
+            agent: required(info.agent) ?? "",
+            ...(model && required(model.providerID) && required(model.id)
+              ? {
+                  model: {
+                    providerID: required(model.providerID),
+                    id: required(model.id),
+                  },
+                }
+              : {}),
+          },
+        },
+      };
+      break;
+    }
+    case "session.status": {
+      const status = objectValue(data.status);
+      if (!status || !["busy", "idle", "retry"].includes(status.type)) return null;
+      sanitized = { type, data: { sessionID, status: { type: status.type } } };
+      break;
+    }
+    case "session.idle":
+      sanitized = { type, data: { sessionID } };
+      break;
+    default:
+      return null;
+  }
+
+  return Buffer.byteLength(JSON.stringify(sanitized), "utf8")
+    <= EVENT_PAYLOAD_BYTES_LIMIT
+    ? sanitized
+    : null;
 }
 
 function processSupportsExitEvents(processHandle) {
@@ -225,6 +597,7 @@ export function createOpencodeSessionHandlers({
     attempt.preflightResult = null;
     attempt.publicResult = null;
     attempt.events.length = 0;
+    attempt.eventBytes = 0;
     attempt.permissionRequests.clear();
     attempt.cursor = 0;
     attempt.droppedBefore = 0;
@@ -380,16 +753,19 @@ export function createOpencodeSessionHandlers({
       attempt.disposed
       || currentAttempt !== attempt
       || state !== SESSION_STATE.RUNNING
-      || event?.data?.sessionID !== attempt.sessionId
     ) {
       return;
     }
 
+    const sanitizedEvent = sanitizeOpenCodeEvent(event, attempt);
+    if (!sanitizedEvent) return;
+    const bytes = Buffer.byteLength(JSON.stringify(sanitizedEvent), "utf8");
     attempt.cursor += 1;
-    const entry = { cursor: attempt.cursor, event };
+    const entry = { bytes, cursor: attempt.cursor, event: sanitizedEvent };
     attempt.events.push(entry);
+    attempt.eventBytes += bytes;
 
-    const requestID = permissionRequestId(event);
+    const requestID = permissionRequestId(sanitizedEvent);
     if (requestID) {
       attempt.permissionRequests.set(requestID, {
         cursor: entry.cursor,
@@ -397,15 +773,20 @@ export function createOpencodeSessionHandlers({
       });
     }
 
-    if (attempt.events.length <= EVENT_BUFFER_LIMIT) return;
-    const dropped = attempt.events.shift();
-    attempt.droppedBefore = dropped.cursor;
-    const droppedRequestID = permissionRequestId(dropped.event);
-    if (
-      droppedRequestID
-      && attempt.permissionRequests.get(droppedRequestID)?.cursor === dropped.cursor
+    while (
+      attempt.events.length > EVENT_BUFFER_LIMIT
+      || attempt.eventBytes > EVENT_BUFFER_BYTES_LIMIT
     ) {
-      attempt.permissionRequests.delete(droppedRequestID);
+      const dropped = attempt.events.shift();
+      attempt.eventBytes -= dropped.bytes;
+      attempt.droppedBefore = dropped.cursor;
+      const droppedRequestID = permissionRequestId(dropped.event);
+      if (
+        droppedRequestID
+        && attempt.permissionRequests.get(droppedRequestID)?.cursor === dropped.cursor
+      ) {
+        attempt.permissionRequests.delete(droppedRequestID);
+      }
     }
   }
 
@@ -565,6 +946,7 @@ export function createOpencodeSessionHandlers({
       detachProcessExit: null,
       disposed: false,
       droppedBefore: 0,
+      eventBytes: 0,
       events: [],
       lifecycle: null,
       model: checked.model,
@@ -604,22 +986,22 @@ export function createOpencodeSessionHandlers({
   async function executeOpenCodeSessionPermission(request = {}) {
     const payload = requestBody(request);
     const attempt = requireOwnedAttempt(payload);
-    const permissionId = typeof payload.permissionId === "string"
-      ? payload.permissionId.trim()
+    const requestId = typeof payload.requestId === "string"
+      ? payload.requestId.trim()
       : "";
-    if (!permissionId) {
-      throw new Error("OpenCode permission reply requires a permissionId.");
+    if (!requestId) {
+      throw new Error("OpenCode permission reply requires a requestId.");
     }
     if (payload.reply !== "once" && payload.reply !== "reject") {
       throw new Error("OpenCode permission reply must be once or reject.");
     }
 
     await revalidateOwnedAttempt(attempt, "permission");
-    const mapped = attempt.permissionRequests.get(permissionId);
+    const mapped = attempt.permissionRequests.get(requestId);
     if (!mapped) {
-      throw new Error("OpenCode permissionId is not an active session permission request.");
+      throw new Error("OpenCode requestId is not an active session permission request.");
     }
-    attempt.permissionRequests.delete(permissionId);
+    attempt.permissionRequests.delete(requestId);
     try {
       await attempt.client.replyPermission({
         sessionID: attempt.sessionId,
@@ -630,9 +1012,9 @@ export function createOpencodeSessionHandlers({
       if (
         !attempt.disposed
         && currentAttempt === attempt
-        && !attempt.permissionRequests.has(permissionId)
+        && !attempt.permissionRequests.has(requestId)
       ) {
-        attempt.permissionRequests.set(permissionId, mapped);
+        attempt.permissionRequests.set(requestId, mapped);
       }
       throw error;
     }
@@ -649,9 +1031,9 @@ export function createOpencodeSessionHandlers({
 
     await revalidateOwnedAttempt(attempt, "events");
     return {
-      entries: attempt.events
+      events: attempt.events
         .filter((entry) => entry.cursor > after)
-        .map((entry) => ({ cursor: entry.cursor, event: entry.event })),
+        .map((entry) => entry.event),
       nextCursor: attempt.cursor,
       droppedBefore: attempt.droppedBefore,
     };
