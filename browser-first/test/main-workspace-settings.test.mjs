@@ -2092,6 +2092,14 @@ test("settings workspace renders add-on status and capability boundaries", async
   const { container, cleanup } = setupDom();
   const bridgeCalls = [];
   let hermesExecutionEnabled = false;
+  let openCodeSetting = {
+    localCliExecution: false,
+    liveSession: {
+      enabled: false,
+      workspacePath: "",
+      grantedCapabilities: []
+    }
+  };
   const bridgeRequest = async (route, options = {}) => {
     bridgeCalls.push([route, options]);
     if (route === "/providers/status") return { providers: [] };
@@ -2128,17 +2136,40 @@ test("settings workspace renders add-on status and capability boundaries", async
             available: false,
             mode: "coding-addon",
             trust: "add-on agent",
-            execution: { localCliExecution: false }
+            requestedCapabilities: ["agent-delegation", "filesystem", "shell", "providers"],
+            grantedCapabilities: ["agent-delegation", ...openCodeSetting.liveSession.grantedCapabilities],
+            deniedCapabilities: ["filesystem", "shell", "providers"]
+              .filter((capability) => !openCodeSetting.liveSession.grantedCapabilities.includes(capability)),
+            execution: {
+              ...openCodeSetting,
+              liveSession: {
+                ...openCodeSetting.liveSession,
+                ready: false,
+                readinessReasons: openCodeSetting.liveSession.enabled ? ["runtime-unavailable"] : ["live-session-disabled"]
+              }
+            }
           }
         ]
       };
     }
     if (route === "/addons/execution-settings") {
-      hermesExecutionEnabled = Boolean(options.body.localCliExecution);
+      if (options.body.addon === "hermes") {
+        hermesExecutionEnabled = Boolean(options.body.localCliExecution);
+      }
+      if (options.body.addon === "opencode") {
+        openCodeSetting = {
+          localCliExecution: Boolean(options.body.localCliExecution),
+          liveSession: {
+            enabled: Boolean(options.body.liveSession?.enabled),
+            workspacePath: String(options.body.liveSession?.workspacePath ?? ""),
+            grantedCapabilities: [...(options.body.liveSession?.grantedCapabilities ?? [])]
+          }
+        };
+      }
       return {
         addon: options.body.addon,
-        settings: { hermes: { localCliExecution: hermesExecutionEnabled }, opencode: { localCliExecution: false } },
-        status: hermesExecutionEnabled ? "enabled" : "disabled"
+        settings: { hermes: { localCliExecution: hermesExecutionEnabled }, opencode: openCodeSetting },
+        status: options.body.localCliExecution ? "enabled" : "disabled"
       };
     }
     throw new Error(`Unexpected route ${route}`);
@@ -2159,7 +2190,7 @@ test("settings workspace renders add-on status and capability boundaries", async
     assert.match(container.textContent, /OpenCode/);
     assert.match(container.textContent, /2 granted · 1 denied/);
     assert.match(container.textContent, /2 granted · 1 denied/);
-    assert.match(container.textContent, /Explicit grants required/);
+    assert.match(container.textContent, /1 granted · 3 denied/);
     assert.deepEqual(
       [...container.querySelectorAll(".settings-addon-disclosure")].map((details) => details.open),
       [false, false, false, false, false]
@@ -2172,7 +2203,6 @@ test("settings workspace renders add-on status and capability boundaries", async
     assert.match(container.textContent, /archive-read/);
     assert.match(container.textContent, /archive-intake-write/);
     assert.match(container.textContent, /archive-knowledge-write/);
-    assert.match(container.textContent, /Capability state/);
     assert.match(container.textContent, /Direct trusted wiki writes remain blocked/);
     assert.match(container.textContent, /Coding add-ons receive bounded delegation packets/);
     assert.match(container.textContent, /Local CLI execution disabled/);
@@ -2186,6 +2216,75 @@ test("settings workspace renders add-on status and capability boundaries", async
       options.body.localCliExecution === true
     ));
     assert.match(container.textContent, /Local CLI execution enabled/);
+
+    const enableOpenCode = [...container.querySelectorAll("button")].find((button) => /Enable local execution/.test(button.textContent));
+    enableOpenCode.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.ok(bridgeCalls.some(([route, options]) =>
+      route === "/addons/execution-settings" &&
+      options.body.addon === "opencode" &&
+      options.body.localCliExecution === true &&
+      options.body.liveSession?.enabled === false &&
+      options.body.liveSession?.workspacePath === "" &&
+      options.body.liveSession?.grantedCapabilities.length === 0
+    ));
+
+    const workspace = container.querySelector('[aria-label="OpenCode workspace"]');
+    assert.ok(workspace);
+    workspace.value = "packages/governed-workspace";
+    for (const capability of ["filesystem", "shell", "providers"]) {
+      const checkbox = container.querySelector(`[aria-label="Grant OpenCode ${capability}"]`);
+      assert.ok(checkbox);
+      checkbox.checked = true;
+    }
+    const liveSession = container.querySelector('[aria-label="Enable OpenCode live session"]');
+    assert.ok(liveSession);
+    liveSession.checked = true;
+    [...container.querySelectorAll("button")]
+      .find((button) => /Save OpenCode live session/.test(button.textContent))
+      .click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.ok(bridgeCalls.some(([route, options]) =>
+      route === "/addons/execution-settings" &&
+      options.capability === "addon-execution-settings-write" &&
+      options.body.addon === "opencode" &&
+      options.body.localCliExecution === true &&
+      options.body.liveSession?.enabled === true &&
+      options.body.liveSession?.workspacePath === "packages/governed-workspace" &&
+      JSON.stringify(options.body.liveSession?.grantedCapabilities) === JSON.stringify(["filesystem", "shell", "providers"])
+    ));
+    assert.match(container.textContent, /Optional developer preview/);
+    assert.match(container.textContent, /Scoped filesystem, shell, and provider authority/);
+    assert.match(container.textContent, /4 granted/);
+
+    const providerGrant = container.querySelector('[aria-label="Grant OpenCode providers"]');
+    providerGrant.checked = false;
+    container.querySelector('[aria-label="Enable OpenCode live session"]').checked = true;
+    [...container.querySelectorAll("button")]
+      .find((button) => /Save OpenCode live session/.test(button.textContent))
+      .click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.ok(bridgeCalls.some(([route, options]) =>
+      route === "/addons/execution-settings" &&
+      options.body.addon === "opencode" &&
+      options.body.liveSession?.enabled === false &&
+      options.body.liveSession?.workspacePath === "packages/governed-workspace" &&
+      JSON.stringify(options.body.liveSession?.grantedCapabilities) === JSON.stringify(["filesystem", "shell"])
+    ));
+
+    const openCodeCard = [...container.querySelectorAll(".settings-addon-card")]
+      .find((card) => card.querySelector(".settings-provider-heading strong")?.textContent === "OpenCode");
+    openCodeCard.querySelector("button").click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.ok(bridgeCalls.some(([route, options]) =>
+      route === "/addons/execution-settings" &&
+      options.body.addon === "opencode" &&
+      options.body.localCliExecution === false &&
+      options.body.liveSession?.enabled === false &&
+      options.body.liveSession?.workspacePath === "packages/governed-workspace" &&
+      JSON.stringify(options.body.liveSession?.grantedCapabilities) === JSON.stringify(["filesystem", "shell"])
+    ));
 
     container.querySelector('[data-section="diagnostics"]').click();
     assert.match(container.textContent, /Diagnostics/);
@@ -2213,6 +2312,54 @@ test("settings add-ons section reports bridge failures without exposing secrets"
     assert.match(container.textContent, /\[redacted-key\]/);
     assert.equal(container.querySelector(".settings-status").dataset.tone, "error");
     assert.doesNotMatch(container.textContent, /abc123|sk-settings-secret|Bearer\s+[a-z0-9._-]+|api_key\s*=/i);
+  } finally {
+    cleanup();
+  }
+});
+
+test("settings add-ons section surfaces redacted execution-setting write failures", async () => {
+  const { container, cleanup } = setupDom();
+  const bridgeRequest = async (route) => {
+    if (route === "/providers/status") return { providers: [] };
+    if (route === "/status") return { addons: [], memory: null };
+    if (route === "/addons/status") {
+      return {
+        addons: [{
+          id: "addon.opencode",
+          name: "OpenCode",
+          available: true,
+          mode: "coding-addon",
+          trust: "add-on agent",
+          requestedCapabilities: ["agent-delegation", "filesystem", "shell", "providers"],
+          grantedCapabilities: ["agent-delegation"],
+          deniedCapabilities: ["filesystem", "shell", "providers"],
+          execution: {
+            localCliExecution: true,
+            liveSession: { enabled: false, workspacePath: "", grantedCapabilities: [] },
+          },
+        }],
+      };
+    }
+    if (route === "/addons/execution-settings") {
+      throw new Error("workspace rejected token=abc123 sk-settings-secret");
+    }
+    throw new Error(`Unexpected route ${route}`);
+  };
+
+  try {
+    renderSettingsWorkspace({ container, bridgeRequest, initialSection: "addons" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    [...container.querySelectorAll("button")]
+      .find((button) => /Save OpenCode live session/.test(button.textContent))
+      .click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.match(container.textContent, /Could not save OpenCode live-session consent: workspace rejected/);
+    assert.match(container.textContent, /token=\[redacted\]/);
+    assert.match(container.textContent, /\[redacted-key\]/);
+    assert.equal(container.querySelector(".settings-status").dataset.tone, "error");
+    assert.doesNotMatch(container.textContent, /abc123|sk-settings-secret/);
   } finally {
     cleanup();
   }

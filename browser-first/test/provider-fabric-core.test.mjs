@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  modelCatalog,
   modelCatalogEntriesForProvider,
   providerConnectivityTarget,
+  providerProfiles,
   providerRouteForModel,
   providerRouteForWorkload,
   resolveRoutingStrategies,
@@ -117,6 +119,49 @@ test("provider fabric maps manual GLM-family selection to the Z.AI provider", ()
   assert.equal(route.providerId, "shared-zai-glm");
   assert.equal(route.providerType, "openai-compatible");
   assert.equal(route.wireModel, "zai/glm-5.2");
+});
+
+test("provider fabric routes provider-qualified OpenCode models to the matching built-in profile", () => {
+  const openAi = providerRouteForModel("openai/gpt-5.4-mini");
+  const minimax = providerRouteForModel("minimax/MiniMax-M3");
+
+  assert.equal(openAi.providerId, "shared-openai");
+  assert.equal(openAi.providerType, "openai");
+  assert.equal(openAi.wireModel, "gpt-5.4-mini");
+  assert.equal(minimax.providerId, "shared-minimax");
+  assert.equal(minimax.providerType, "minimax");
+  assert.equal(minimax.wireModel, "MiniMax-M3");
+});
+
+test("provider fabric resolves qualified custom-provider models without falling through to MiniMax", () => {
+  const profiles = [
+    ...providerProfiles,
+    {
+      id: "google-work",
+      label: "Google Work",
+      providerType: "google",
+      apiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+      models: ["gemini-2.5-pro"],
+    },
+  ];
+  const catalog = [
+    ...modelCatalog,
+    {
+      model: "gemini-2.5-pro",
+      wireModel: "gemini-2.5-pro",
+      providerId: "google-work",
+      providerType: "google",
+      providerLabel: "Google Work",
+    },
+  ];
+
+  const route = providerRouteForModel("google/gemini-2.5-pro", { catalog, profiles });
+
+  assert.equal(route.providerId, "google-work");
+  assert.equal(route.providerType, "google");
+  assert.equal(route.wireModel, "gemini-2.5-pro");
+  assert.equal(route.apiBaseUrl, "https://generativelanguage.googleapis.com/v1beta/openai");
+  assert.equal(providerRouteForModel("google/unknown-model", { catalog, profiles }), null);
 });
 
 test("provider fabric blocks manual selection of disabled models", () => {

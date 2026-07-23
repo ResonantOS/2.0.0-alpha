@@ -8,6 +8,7 @@ import type {
   Capability,
   CapabilityScope,
   DelegationArtifactType,
+  DelegationTargetRuntime,
   RevocationBehavior,
   RuntimeIsolationBoundary,
   SystemSlotId,
@@ -64,6 +65,14 @@ const artifactTypes: readonly DelegationArtifactType[] = [
   "diagnostic-report",
   "verification-report",
   "archive-intake-bundle",
+];
+const delegationTargetRuntimes: readonly DelegationTargetRuntime[] = [
+  "native-agent",
+  "addon-agent",
+  "embedded-workspace",
+  "local-service",
+  "terminal-service",
+  "external-agent",
 ];
 const installModes = ["detect-existing-only", "detect-existing-or-install", "bundled", "manual"] as const;
 const credentialSetupModes = ["none", "user-guided", "host-vault", "external"] as const;
@@ -501,6 +510,19 @@ export const validateAddOnManifest = (
 
   if (!isRecord(candidate.health) || !isString(candidate.health.strategy)) {
     pushIssue(issues, "error", "health-strategy", "health.strategy", "health.strategy must be a non-empty string.");
+  }
+
+  if (isRecord(candidate.delegation) && candidate.delegation.defaultTargetRuntime !== undefined) {
+    const targetRuntime = candidate.delegation.defaultTargetRuntime;
+    if (!delegationTargetRuntimes.includes(targetRuntime as DelegationTargetRuntime)) {
+      pushIssue(
+        issues,
+        "error",
+        "delegation-target-runtime",
+        "delegation.defaultTargetRuntime",
+        "delegation.defaultTargetRuntime has an unsupported value.",
+      );
+    }
   }
 
   if (!isRecord(candidate.installHooks)) {

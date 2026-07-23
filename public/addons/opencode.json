@@ -4,14 +4,14 @@
   "version": "0.1.0",
   "author": "Resonant Alpha",
   "category": "tool",
-  "description": "Open-source coding workspace add-on. ResonantOS launches OpenCode as an optional scoped local service, embeds OpenCode's own web UI, and uses the server/API layer for governance and audit.",
-  "runtimeType": "embedded-module",
+  "description": "Optional open-source coding add-on. Packet delegation is available today; a bridge-owned private live worker remains an opt-in developer preview until its authenticated host lifecycle is complete. The current surface is a ResonantOS governance view, not an embedded OpenCode web UI.",
+  "runtimeType": "local-service",
   "surfaces": [
     {
       "id": "opencode-workspace",
-      "type": "embedded-pane",
+      "type": "page",
       "label": "OpenCode Workspace",
-      "description": "Open a coding workspace inside the ResonantOS center surface."
+      "description": "Review live-session consent, permission requests, and session evidence inside the ResonantOS center surface."
     }
   ],
   "requestedCapabilities": [
@@ -25,13 +25,13 @@
       "capability": "shell",
       "granted": false,
       "scope": "workspace",
-      "revocationBehavior": "degrade"
+      "revocationBehavior": "hard-stop"
     },
     {
       "capability": "providers",
       "granted": false,
       "scope": "shared",
-      "revocationBehavior": "degrade"
+      "revocationBehavior": "hard-stop"
     },
     {
       "capability": "archive-read",
@@ -44,12 +44,6 @@
       "granted": false,
       "scope": "intake-only",
       "revocationBehavior": "degrade"
-    },
-    {
-      "capability": "ui-embedding",
-      "granted": false,
-      "scope": "system",
-      "revocationBehavior": "hide-surface"
     }
   ],
   "providerRequirements": {
@@ -69,27 +63,29 @@
     "command": "opencode_status"
   },
   "service": {
-    "protocol": "host-command",
-    "entrypoint": "opencode_start_service",
-    "healthCommand": "opencode_status",
-    "shutdownCommand": "opencode_stop_service"
+    "protocol": "http-json",
+    "entrypoint": "browser-first/host/run-bridge-minimal.mjs",
+    "healthCommand": "/opencode/status",
+    "shutdownCommand": "/opencode/session/stop"
   },
   "delegation": {
     "acceptsTasks": true,
     "taskTypes": ["code-change", "bug-fix", "system-diagnosis"],
     "artifactReturnTypes": ["summary", "diff", "file-list", "log", "diagnostic-report", "verification-report"],
-    "defaultTargetRuntime": "embedded-workspace",
+    "defaultTargetRuntime": "local-service",
     "requiresHumanApprovalBeforeExecution": true,
     "notes": [
       "OpenCode must return changed files, commands run, verification evidence, and residual risks.",
-      "Direct filesystem and process access must stay scoped to the task workspace."
+      "Direct filesystem and process access must stay scoped to the task workspace.",
+      "Archive read and intake authority apply only to governed delegation packets and artifact intake; they are not live-session grants.",
+      "Embedding OpenCode's own web UI is future work and requires a separate ui-embedding grant."
     ]
   },
   "workflowBoundaries": [
     {
       "id": "scoped-coding-workspace",
       "label": "Scoped coding workspace",
-      "jobToBeDone": "Launch OpenCode as a scoped coding workspace with provider routing, filesystem boundaries, and artifact return.",
+      "jobToBeDone": "Launch OpenCode as a scoped local worker with provider routing, filesystem boundaries, explicit permission review, and artifact return.",
       "userValue": "The human can use an open-source coding IDE under ResonantOS governance without broad shell or filesystem leakage.",
       "repeatability": "workflow-package",
       "owner": "addon-agent",
@@ -115,7 +111,7 @@
     {
       "documentPath": "docs/architecture/addon-skills/opencode/CODING_HANDOFF.md",
       "objective": "Delegate bounded coding, debugging, refactor, and coding-workspace diagnosis tasks to OpenCode under ResonantOS governance.",
-      "requiredCapabilities": ["filesystem", "shell", "providers", "ui-embedding"],
+      "requiredCapabilities": ["filesystem", "shell", "providers"],
       "requiredTools": ["opencode.launch_workspace"],
       "workflowPhases": [
         "capture task scope",
@@ -140,8 +136,8 @@
       "id": "opencode-local-service",
       "name": "OpenCode local service",
       "type": "local-runtime",
-      "description": "Starts and embeds an OpenCode service for a selected local workspace.",
-      "requiredCapabilities": ["filesystem", "shell", "ui-embedding"],
+      "description": "Planned bridge-owned authenticated OpenCode lifecycle for a selected local workspace. The preview stays unavailable until host readiness is proven.",
+      "requiredCapabilities": ["filesystem", "shell", "providers"],
       "configScope": "user-config"
     }
   ],
@@ -149,11 +145,11 @@
     {
       "id": "opencode-workspace-preflight",
       "name": "OpenCode workspace preflight",
-      "description": "Verify selected workspace path and service readiness before launching OpenCode.",
+      "description": "Verify persisted consent, required grants, selected workspace, runtime, and provider readiness before launching OpenCode.",
       "commandRef": "opencode.launch_workspace",
       "runPolicy": "preflight",
       "deterministic": true,
-      "requiredCapabilities": ["filesystem", "shell", "ui-embedding"],
+      "requiredCapabilities": ["filesystem", "shell", "providers"],
       "producesArtifacts": ["diagnostic-report", "verification-report"],
       "requiresHumanApproval": false
     }
@@ -163,7 +159,7 @@
       "id": "opencode-before-task-complete",
       "event": "before-task-complete",
       "handlerRef": "opencode-workspace-preflight",
-      "requiredCapabilities": ["filesystem", "shell", "ui-embedding"],
+      "requiredCapabilities": ["filesystem", "shell", "providers"],
       "failurePolicy": "block"
     }
   ],
@@ -185,8 +181,8 @@
   "tools": [
     {
       "name": "opencode.launch_workspace",
-      "description": "Start an OpenCode web/server session for a scoped workspace path.",
-      "requiredCapabilities": ["filesystem", "shell", "ui-embedding"],
+      "description": "Request the planned bridge-owned OpenCode server session for the host-approved workspace after host readiness is proven.",
+      "requiredCapabilities": ["filesystem", "shell", "providers"],
       "inputSchema": {},
       "outputSchema": {},
       "audit": {

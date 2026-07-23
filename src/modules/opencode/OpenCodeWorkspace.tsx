@@ -84,8 +84,18 @@ export function OpenCodeWorkspace({
   const workspacePath = configuredWorkspacePath(installation);
   const filesystemGranted = hasGrant(installation, "filesystem");
   const shellGranted = hasGrant(installation, "shell");
+  const providersGranted = hasGrant(installation, "providers");
   const embeddingGranted = hasGrant(installation, "ui-embedding");
-  const grantsReady = Boolean(installation?.enabled && filesystemGranted && shellGranted && embeddingGranted);
+  const embeddedUiRequested = Boolean(
+    manifest?.surfaces.some((surface) => surface.type === "embedded-pane")
+      && manifest.requestedCapabilities.some((grant) => grant.capability === "ui-embedding"),
+  );
+  const grantsReady = Boolean(
+    installation?.enabled
+      && filesystemGranted
+      && shellGranted
+      && (embeddedUiRequested ? embeddingGranted : providersGranted),
+  );
   const ready = Boolean(grantsReady && workspacePath && status?.installed);
 
   useEffect(() => {
@@ -222,6 +232,10 @@ export function OpenCodeWorkspace({
   };
 
   const startService = async (targetWorkspacePath = workspacePath, options: { automatic?: boolean } = {}) => {
+    if (!embeddedUiRequested) {
+      setError("OpenCode live sessions are managed by the browser-first Chrome extension; the retired embedded desktop host is not part of the Alpha.");
+      return;
+    }
     if (!targetWorkspacePath) {
       setError("Choose a scoped workspace before launching OpenCode.");
       return;
@@ -306,7 +320,7 @@ export function OpenCodeWorkspace({
   };
 
   useEffect(() => {
-    if (!active || !ready || service || busyLabel || stoppedByUser || autoLaunchAttemptedFor === workspacePath) {
+    if (!embeddedUiRequested || !active || !ready || service || busyLabel || stoppedByUser || autoLaunchAttemptedFor === workspacePath) {
       return;
     }
     void startService(workspacePath, { automatic: true });
@@ -323,7 +337,8 @@ export function OpenCodeWorkspace({
     !installation?.enabled ? "enable the add-on" : "",
     !filesystemGranted ? "grant scoped filesystem access" : "",
     !shellGranted ? "grant host-mediated shell access" : "",
-    !embeddingGranted ? "grant UI embedding" : "",
+    embeddedUiRequested && !embeddingGranted ? "grant UI embedding" : "",
+    !embeddedUiRequested && !providersGranted ? "grant scoped provider access" : "",
     !workspacePath ? "choose a workspace folder" : "",
     status && !status.installed ? "install OpenCode runtime" : "",
   ].filter(Boolean);
@@ -340,12 +355,16 @@ export function OpenCodeWorkspace({
           {busyLabel ? <span className="opencode-busy">{busyLabel}...</span> : null}
         </div>
         <div className="opencode-toolbar-actions">
-          <button type="button" className="button-primary touch-action" onClick={() => void setupAndLaunch()} disabled={Boolean(busyLabel)}>
-            {service ? "Restart" : "Launch"}
-          </button>
-          <button type="button" className="button-secondary touch-action" onClick={() => void stopService()} disabled={!service || Boolean(busyLabel)}>
-            Stop
-          </button>
+          {embeddedUiRequested ? (
+            <>
+              <button type="button" className="button-primary touch-action" onClick={() => void setupAndLaunch()} disabled={Boolean(busyLabel)}>
+                {service ? "Restart" : "Launch"}
+              </button>
+              <button type="button" className="button-secondary touch-action" onClick={() => void stopService()} disabled={!service || Boolean(busyLabel)}>
+                Stop
+              </button>
+            </>
+          ) : null}
           <button
             type="button"
             className="opencode-icon-button"
@@ -382,7 +401,11 @@ export function OpenCodeWorkspace({
           <section className="opencode-setup-card">
             <span className="eyebrow">Capability gate</span>
             <strong>{grantsReady ? "Required grants active" : "Required grants missing"}</strong>
-            <p>Requires filesystem, shell, and UI embedding. Provider and archive grants remain separate.</p>
+            <p>
+              {embeddedUiRequested
+                ? "Requires filesystem, shell, and UI embedding. Provider and archive grants remain separate."
+                : "Requires filesystem, shell, and provider access. Archive grants remain delegation-only."}
+            </p>
             <button type="button" className="button-secondary touch-action" onClick={onGrantWorkspaceAccess}>
               Grant OpenCode Access
             </button>
@@ -400,61 +423,84 @@ export function OpenCodeWorkspace({
       ) : null}
       {error ? <div className="opencode-error">{error}</div> : null}
 
-      <section className="opencode-embed-shell" aria-label="OpenCode embedded workspace">
-        {latestDelegation ? (
-          <div className="opencode-delegation-strip">
-            <div>
-              <strong>Delegated task ready</strong>
-              <span>{latestDelegation.packet.mission}</span>
-              <small>{injectionNotice || `TASK.md: ${latestDelegation.workspace.taskMarkdownPath}`}</small>
+      {embeddedUiRequested ? (
+        <section className="opencode-embed-shell" aria-label="OpenCode embedded workspace">
+          {latestDelegation ? (
+            <div className="opencode-delegation-strip">
+              <div>
+                <strong>Delegated task ready</strong>
+                <span>{latestDelegation.packet.mission}</span>
+                <small>{injectionNotice || `TASK.md: ${latestDelegation.workspace.taskMarkdownPath}`}</small>
+              </div>
+              <div className="opencode-delegation-actions">
+                <button
+                  type="button"
+                  className="button-secondary touch-action"
+                  onClick={() => void injectLatestDelegationPrompt()}
+                  disabled={!service}
+                >
+                  Send to OpenCode
+                </button>
+                <button type="button" className="button-secondary touch-action" onClick={() => void refreshLatestDelegation()}>
+                  Refresh
+                </button>
+                <button type="button" className="button-secondary touch-action" onClick={onOpenDelegationMonitor}>
+                  Monitor
+                </button>
+              </div>
             </div>
-            <div className="opencode-delegation-actions">
-              <button
-                type="button"
-                className="button-secondary touch-action"
-                onClick={() => void injectLatestDelegationPrompt()}
-                disabled={!service}
-              >
-                Send to OpenCode
-              </button>
-              <button type="button" className="button-secondary touch-action" onClick={() => void refreshLatestDelegation()}>
-                Refresh
-              </button>
-              <button type="button" className="button-secondary touch-action" onClick={onOpenDelegationMonitor}>
-                Monitor
-              </button>
+          ) : null}
+          {service ? (
+            <>
+              <div className={`opencode-trust-kernel ${service.trustKernelWarning ? "attention" : "ready"}`}>
+                <strong>{service.trustKernelWarning ? "Trust Kernel advisory unavailable" : "Trust Kernel advisory active"}</strong>
+                <span>
+                  {service.trustKernelWarning
+                    ? service.trustKernelWarning
+                    : service.trustKernelPacketPath
+                      ? `Protocol packet: ${service.trustKernelPacketPath}`
+                      : "Protocol packet recorded for this OpenCode session."}
+                </span>
+              </div>
+              <iframe
+                title="OpenCode workspace"
+                src={delegationWebUrl || service.webUrl}
+                className="opencode-embed-frame"
+                sandbox="allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts"
+              />
+            </>
+          ) : (
+            <div className="opencode-embed-placeholder">
+              <strong>OpenCode UI will appear here after launch.</strong>
+              <p>
+                This spike keeps OpenCode as an optional add-on. ResonantOS will use the SDK/API layer for governance and
+                OpenCode's own UI for the coding workspace.
+              </p>
             </div>
-          </div>
-        ) : null}
-        {service ? (
-          <>
-            <div className={`opencode-trust-kernel ${service.trustKernelWarning ? "attention" : "ready"}`}>
-              <strong>{service.trustKernelWarning ? "Trust Kernel advisory unavailable" : "Trust Kernel advisory active"}</strong>
-              <span>
-                {service.trustKernelWarning
-                  ? service.trustKernelWarning
-                  : service.trustKernelPacketPath
-                    ? `Protocol packet: ${service.trustKernelPacketPath}`
-                    : "Protocol packet recorded for this OpenCode session."}
-              </span>
+          )}
+        </section>
+      ) : (
+        <section className="opencode-embed-shell" aria-label="OpenCode governed workspace">
+          {latestDelegation ? (
+            <div className="opencode-delegation-strip">
+              <div>
+                <strong>Delegated task ready</strong>
+                <span>{latestDelegation.packet.mission}</span>
+                <small>{`TASK.md: ${latestDelegation.workspace.taskMarkdownPath}`}</small>
+              </div>
+              <div className="opencode-delegation-actions">
+                <button type="button" className="button-secondary touch-action" onClick={onOpenDelegationMonitor}>
+                  Monitor
+                </button>
+              </div>
             </div>
-            <iframe
-              title="OpenCode workspace"
-              src={delegationWebUrl || service.webUrl}
-              className="opencode-embed-frame"
-              sandbox="allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts"
-            />
-          </>
-        ) : (
+          ) : null}
           <div className="opencode-embed-placeholder">
-            <strong>OpenCode UI will appear here after launch.</strong>
-            <p>
-              This spike keeps OpenCode as an optional add-on. ResonantOS will use the SDK/API layer for governance and
-              OpenCode's own UI for the coding workspace.
-            </p>
+            <strong>OpenCode is governed through the browser-first Chrome extension.</strong>
+            <p>The retired embedded desktop host is outside the Alpha runtime and cannot launch from this page.</p>
           </div>
-        )}
-      </section>
+        </section>
+      )}
     </section>
   );
 }

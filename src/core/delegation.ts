@@ -466,7 +466,7 @@ export const createOpenCodeDelegationPacket = (
     createdAt,
     createdByAgentId: "strategist.core",
     targetAgentId: "opencode.runtime",
-    targetRuntime: "embedded-workspace",
+    targetRuntime: "local-service",
     taskType,
     mission,
     context:
@@ -509,13 +509,13 @@ export const createOpenCodeDelegationPacket = (
             capability: "shell",
             granted: true,
             scope: "workspace",
-            revocationBehavior: "degrade",
+            revocationBehavior: "hard-stop",
           },
           {
-            capability: "ui-embedding",
+            capability: "providers",
             granted: true,
-            scope: "system",
-            revocationBehavior: "hide-surface",
+            scope: "shared",
+            revocationBehavior: "hard-stop",
           },
         ],
     providerPolicy: {
@@ -569,7 +569,7 @@ export const shouldDelegateToOpenCode = (message: string): boolean => {
 
 export const formatOpenCodeTaskWorkspaceCreatedReply = (workspace: TaskWorkspace): string =>
   [
-    "I created an OpenCode delegation workspace and moved you to the OpenCode surface. ResonantOS will submit the task into a visible OpenCode session so you can watch, interrupt, or continue directly there.",
+    "I created an OpenCode delegation workspace and moved you to the OpenCode surface. The browser-first host can submit it to a governed local OpenCode session after explicit consent and preflight.",
     "",
     `- Workspace: \`${workspace.rootPath}\``,
     `- Delegation packet: \`${workspace.packetPath}\``,

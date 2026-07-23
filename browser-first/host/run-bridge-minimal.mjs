@@ -169,6 +169,10 @@ const addonDelegationService = createAddonDelegationService({
   opencodeRuntimeDiagnostics: resolveOpenCodeRuntimeDiagnostics,
   redactPathForDiagnostics,
   readProviderSecrets,
+  resolveOpenCodeProviderRoute: async (model) => providerRouteForModel(model, {
+    catalog: await allModelCatalog(),
+    profiles: await allProviderProfiles(),
+  }),
   repoRoot,
   safeFileSlug,
   socketOpen,

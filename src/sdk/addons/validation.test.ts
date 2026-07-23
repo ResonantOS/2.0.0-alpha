@@ -93,6 +93,23 @@ const validManifest = (overrides: Partial<AddOnManifest> = {}): AddOnManifest =>
 });
 
 describe("add-on SDK manifest validation", () => {
+  it("rejects an unknown delegation target runtime", () => {
+    const result = validateAddOnManifest(validManifest({
+      delegation: {
+        acceptsTasks: true,
+        taskTypes: ["code-change"],
+        artifactReturnTypes: ["summary"],
+        defaultTargetRuntime: "governed-local-session" as never,
+        requiresHumanApprovalBeforeExecution: true,
+      },
+    }));
+
+    expect(result.valid).toBe(false);
+    expect(result.issues.some((issue) =>
+      issue.code === "delegation-target-runtime" && issue.path === "delegation.defaultTargetRuntime"
+    )).toBe(true);
+  });
+
   it("accepts a Browser-style local-service manifest with audited tools", () => {
     const result = validateAddOnManifest(validManifest());
 
