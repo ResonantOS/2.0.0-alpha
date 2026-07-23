@@ -1,84 +1,247 @@
-// Extension-side adapter that connects the live OpenCode session element to the
-// bridge routes. subscribe() streams the bridge's SSE proxy of `opencode serve`'s
-// /event bus (via fetch + a ReadableStream reader, so the auth header travels in
-// a header rather than a URL secret); sendPrompt/replyPermission POST to the
-// session routes. The SSE framing parser is pure and unit-tested.
+// Extension-side adapter for the authenticated, session-bound OpenCode bridge
+// routes. One source owns one bridge session and one bounded polling loop.
 
-// Incrementally parse a text/event-stream. Returns a feed(chunk) function that
-// invokes onEvent(parsedJSON) per complete `data:` event, buffering partial
-// frames across chunk boundaries and ignoring non-JSON keepalives.
-export function createSSEParser(onEvent) {
-  let buffer = "";
-  return function feed(chunk) {
-    buffer += chunk;
-    let sep;
-    while ((sep = buffer.indexOf("\n\n")) >= 0) {
-      const frame = buffer.slice(0, sep);
-      buffer = buffer.slice(sep + 2);
-      const data = frame
-        .split("\n")
-        .filter((line) => line.startsWith("data:"))
-        .map((line) => line.slice(5).replace(/^ /, ""))
-        .join("\n");
-      if (!data) continue;
-      try {
-        onEvent(JSON.parse(data));
-      } catch {
-        /* keepalive / non-JSON frame — ignore */
-      }
+function defaultSleep({ signal } = {}) {
+  return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve();
+      return;
     }
-  };
+    const timer = setTimeout(resolve, 250);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(timer);
+      resolve();
+    }, { once: true });
+  });
 }
 
-// deps:
-//   startSession()               -> { sessionId, eventUrl }
-//   openEventStream(eventUrl)    -> a Response whose body is a ReadableStream (fetch with auth header)
-//   postJson(path, body)         -> POST helper to the bridge
-export function createOpenCodeBridgeSource({ startSession, openEventStream, postJson } = {}) {
-  let sessionId = "";
+function requiredFunction(name, value) {
+  if (typeof value !== "function") {
+    throw new Error(`OpenCode bridge source requires ${name}.`);
+  }
+  return value;
+}
+
+function sessionIdFrom(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function safeCallback(callback, value) {
+  if (typeof callback !== "function") return;
+  try {
+    callback(value);
+  } catch {
+    // UI observers cannot take down the governed polling boundary.
+  }
+}
+
+function validatePollResponse(response, requestedAfter, sessionId) {
+  if (!response || typeof response !== "object" || Array.isArray(response)) {
+    throw new Error("OpenCode event cursor response must be an object.");
+  }
+  const { droppedBefore, entries, nextCursor } = response;
+  if (
+    !Number.isSafeInteger(nextCursor)
+    || nextCursor < requestedAfter
+    || !Number.isSafeInteger(droppedBefore)
+    || droppedBefore < 0
+    || droppedBefore > nextCursor
+    || !Array.isArray(entries)
+  ) {
+    throw new Error("OpenCode event cursor response is malformed.");
+  }
+
+  let previousCursor = requestedAfter;
+  const events = [];
+  for (const entry of entries) {
+    if (
+      !entry
+      || typeof entry !== "object"
+      || Array.isArray(entry)
+      || !Number.isSafeInteger(entry.cursor)
+      || entry.cursor <= previousCursor
+      || entry.cursor > nextCursor
+      || !entry.event
+      || typeof entry.event !== "object"
+      || Array.isArray(entry.event)
+    ) {
+      throw new Error("OpenCode event cursor entries are malformed.");
+    }
+    if (sessionIdFrom(entry.event?.data?.sessionID) !== sessionId) {
+      throw new Error("OpenCode event entry does not belong to the active session.");
+    }
+    previousCursor = entry.cursor;
+    events.push(entry.event);
+  }
+  return { droppedBefore, events, nextCursor };
+}
+
+export function createOpenCodeBridgeSource({
+  onCursorGap,
+  onPollingError,
+  postJson,
+  sleep = defaultSleep,
+  startSession,
+} = {}) {
+  const startBridgeSession = requiredFunction("startSession", startSession);
+  const postBridgeJson = requiredFunction("postJson", postJson);
+  const waitBetweenPolls = requiredFunction("sleep", sleep);
+
+  const subscribers = new Set();
+  let cursor = 0;
+  let session = null;
+  let startPromise = null;
+  let pollRun = null;
+  let stopped = false;
+
+  function ensureSession() {
+    if (stopped) {
+      return Promise.reject(new Error("OpenCode bridge source has been stopped."));
+    }
+    if (session) return Promise.resolve({ ...session });
+    if (!startPromise) {
+      startPromise = Promise.resolve(startBridgeSession())
+        .then((info) => {
+          const sessionId = sessionIdFrom(info?.sessionId);
+          if (!sessionId) {
+            throw new Error("OpenCode bridge session start returned no sessionId.");
+          }
+          session = {
+            sessionId,
+            ...(typeof info?.workspace === "string"
+              ? { workspace: info.workspace }
+              : {}),
+          };
+          return { ...session };
+        })
+        .catch((error) => {
+          startPromise = null;
+          throw error;
+        });
+    }
+    return startPromise;
+  }
+
+  function publish(event) {
+    for (const subscriber of subscribers) safeCallback(subscriber, event);
+  }
+
+  async function runPolling(controller) {
+    try {
+      const ownedSession = await ensureSession();
+      while (!controller.signal.aborted && subscribers.size > 0) {
+        const requestedAfter = cursor;
+        const response = await postBridgeJson("/opencode/session/events", {
+          sessionId: ownedSession.sessionId,
+          after: requestedAfter,
+        });
+        if (controller.signal.aborted || subscribers.size === 0) return;
+
+        const parsed = validatePollResponse(
+          response,
+          requestedAfter,
+          ownedSession.sessionId,
+        );
+        if (parsed.droppedBefore > requestedAfter) {
+          safeCallback(onCursorGap, {
+            droppedBefore: parsed.droppedBefore,
+            requestedAfter,
+            sessionId: ownedSession.sessionId,
+          });
+        }
+        for (const event of parsed.events) publish(event);
+        cursor = parsed.nextCursor;
+
+        await waitBetweenPolls({ signal: controller.signal });
+      }
+    } catch (error) {
+      if (controller.signal.aborted) return true;
+      controller.abort();
+      safeCallback(
+        onPollingError,
+        error instanceof Error ? error : new Error(String(error)),
+      );
+      return false;
+    }
+    return true;
+  }
+
+  function beginPolling() {
+    if (pollRun || stopped || subscribers.size === 0) return;
+    const controller = new AbortController();
+    const promise = runPolling(controller);
+    const run = { controller, promise };
+    pollRun = run;
+    void promise.then((restartAllowed) => {
+      if (pollRun !== run) return;
+      pollRun = null;
+      if (restartAllowed && !stopped && subscribers.size > 0) {
+        beginPolling();
+      }
+    });
+  }
+
+  function cancelPolling() {
+    pollRun?.controller.abort();
+  }
 
   return {
-    async start() {
-      const info = await startSession();
-      sessionId = info?.sessionId ?? "";
-      return info;
+    start() {
+      return ensureSession();
     },
 
     subscribe(onEvent) {
-      let cancelled = false;
-      let reader = null;
-      (async () => {
-        try {
-          const info = await startSession();
-          sessionId = info?.sessionId ?? sessionId;
-          const res = await openEventStream(info?.eventUrl ?? "");
-          if (!res?.body?.getReader) return;
-          reader = res.body.getReader();
-          const decoder = new TextDecoder();
-          const feed = createSSEParser(onEvent);
-          while (!cancelled) {
-            const { value, done } = await reader.read();
-            if (done) break;
-            feed(decoder.decode(value, { stream: true }));
-          }
-        } catch {
-          /* stream ended / connection dropped */
-        }
-      })();
+      if (typeof onEvent !== "function") {
+        throw new Error("OpenCode bridge source subscribe requires an event callback.");
+      }
+      subscribers.add(onEvent);
+      beginPolling();
+      let subscribed = true;
       return () => {
-        cancelled = true;
-        try { reader?.cancel?.(); } catch { /* noop */ }
+        if (!subscribed) return;
+        subscribed = false;
+        subscribers.delete(onEvent);
+        if (subscribers.size === 0) cancelPolling();
       };
     },
 
     async sendPrompt(text) {
-      if (!sessionId) return;
-      await postJson("/opencode/session/prompt", { sessionId, text });
+      if (typeof text !== "string" || !text.trim()) {
+        throw new Error("OpenCode prompt requires non-empty text.");
+      }
+      const ownedSession = await ensureSession();
+      return postBridgeJson("/opencode/session/prompt", {
+        sessionId: ownedSession.sessionId,
+        text,
+      });
     },
 
-    async replyPermission(permissionId, decision) {
-      if (!sessionId) return;
-      await postJson("/opencode/session/permission", { sessionId, permissionId, decision });
-    }
+    async replyPermission(permissionId, reply) {
+      if (reply !== "once" && reply !== "reject") {
+        throw new Error("OpenCode permission reply must be once or reject.");
+      }
+      const id = sessionIdFrom(permissionId);
+      if (!id) {
+        throw new Error("OpenCode permission reply requires a permissionId.");
+      }
+      const ownedSession = await ensureSession();
+      return postBridgeJson("/opencode/session/permission", {
+        sessionId: ownedSession.sessionId,
+        permissionId: id,
+        reply,
+      });
+    },
+
+    async stop() {
+      if (stopped) return { stopped: true };
+      cancelPolling();
+      const ownedSession = session ?? (startPromise ? await startPromise : null);
+      stopped = true;
+      subscribers.clear();
+      if (!ownedSession) return { stopped: false };
+      return postBridgeJson("/opencode/session/stop", {
+        sessionId: ownedSession.sessionId,
+      });
+    },
   };
 }

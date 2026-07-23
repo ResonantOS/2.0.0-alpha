@@ -5,111 +5,330 @@ import {
   applyOpenCodeEvent,
   changedFilesView,
   createOpenCodeSessionState,
-  normalizeOpenCodeEvent
+  normalizeOpenCodeEvent,
 } from "../resonantos-side-panel-extension/src/lib/opencode-session-model.js";
 
-// Feed a list of raw OpenCode events through normalize + reduce.
-function run(events, state = createOpenCodeSessionState()) {
-  return events.reduce((acc, raw) => applyOpenCodeEvent(acc, normalizeOpenCodeEvent(raw)), state);
+const SESSION_ID = "session-owned";
+
+function event(type, data = {}) {
+  return { id: `${type}-event`, type, data };
 }
 
-test("normalizeOpenCodeEvent maps the live OpenCode event types (tolerant of suffixes)", () => {
-  assert.equal(normalizeOpenCodeEvent({ type: "session.next.text.delta", properties: { text: "hi" } }).kind, "text-delta");
-  assert.equal(normalizeOpenCodeEvent({ type: "session.next.tool.called", properties: { callID: "c1", tool: "edit" } }).kind, "tool-called");
-  assert.equal(normalizeOpenCodeEvent({ type: "session.next.tool.success", properties: { callID: "c1" } }).kind, "tool-completed");
-  assert.equal(normalizeOpenCodeEvent({ type: "file.edited", properties: { path: "a.ts", added: 3, removed: 1 } }).kind, "file-edited");
-  assert.equal(normalizeOpenCodeEvent({ type: "session.diff", properties: { files: [] } }).kind, "session-diff");
-  assert.equal(normalizeOpenCodeEvent({ type: "permission.asked", properties: { id: "p1" } }).kind, "permission-asked");
-  assert.equal(normalizeOpenCodeEvent({ type: "permission.replied", properties: { id: "p1" } }).kind, "permission-replied");
-  assert.equal(normalizeOpenCodeEvent({ type: "todo.updated", properties: { todos: [] } }).kind, "todos");
-  assert.equal(normalizeOpenCodeEvent({ type: "server.connected" }), null, "unknown events are ignored");
+function run(events, state = createOpenCodeSessionState({ sessionId: SESSION_ID })) {
+  return events.reduce(
+    (current, raw) => applyOpenCodeEvent(current, normalizeOpenCodeEvent(raw)),
+    state,
+  );
+}
+
+test("normalizes exact OpenCode 1.18.4 text, reasoning, and message-part deltas", () => {
+  const text = normalizeOpenCodeEvent(event("session.next.text.delta", {
+    sessionID: SESSION_ID,
+    assistantMessageID: "assistant-1",
+    textID: "text-1",
+    delta: "Hello",
+  }));
+  const reasoning = normalizeOpenCodeEvent(event("session.next.reasoning.delta", {
+    sessionID: SESSION_ID,
+    assistantMessageID: "assistant-1",
+    reasoningID: "reasoning-1",
+    delta: "Think",
+  }));
+  const part = normalizeOpenCodeEvent(event("message.part.delta", {
+    sessionID: SESSION_ID,
+    messageID: "message-2",
+    partID: "part-2",
+    field: "text",
+    delta: " again",
+  }));
+
+  assert.deepEqual(text, {
+    kind: "text-delta",
+    sessionId: SESSION_ID,
+    messageId: "text-1",
+    text: "Hello",
+  });
+  assert.deepEqual(reasoning, {
+    kind: "reasoning-delta",
+    sessionId: SESSION_ID,
+    messageId: "reasoning-1",
+    text: "Think",
+  });
+  assert.deepEqual(part, {
+    kind: "text-delta",
+    sessionId: SESSION_ID,
+    messageId: "part-2",
+    text: " again",
+  });
 });
 
-test("text deltas stream into a single accumulating transcript entry", () => {
+test("accumulates exact v2 deltas by their text or reasoning identifier", () => {
   const state = run([
-    { type: "text.delta", properties: { messageID: "m1", text: "Refactor " } },
-    { type: "text.delta", properties: { messageID: "m1", text: "the auth " } },
-    { type: "text.delta", properties: { messageID: "m1", text: "module." } }
+    event("session.next.text.delta", {
+      sessionID: SESSION_ID,
+      assistantMessageID: "assistant-1",
+      textID: "text-1",
+      delta: "Refactor ",
+    }),
+    event("session.next.text.delta", {
+      sessionID: SESSION_ID,
+      assistantMessageID: "assistant-1",
+      textID: "text-1",
+      delta: "the bridge.",
+    }),
+    event("session.next.reasoning.delta", {
+      sessionID: SESSION_ID,
+      assistantMessageID: "assistant-1",
+      reasoningID: "reasoning-1",
+      delta: "Check ownership.",
+    }),
   ]);
-  const texts = state.entries.filter((e) => e.type === "text");
-  assert.equal(texts.length, 1, "same messageID accumulates, not one entry per delta");
-  assert.equal(texts[0].text, "Refactor the auth module.");
+
+  assert.deepEqual(
+    state.entries.map(({ type, id, text }) => ({ type, id, text })),
+    [
+      { type: "text", id: "text-1", text: "Refactor the bridge." },
+      { type: "reasoning", id: "reasoning-1", text: "Check ownership." },
+    ],
+  );
 });
 
-test("a new messageID starts a new transcript entry", () => {
+test("fails closed on wrong or missing session IDs when state owns a session", () => {
+  const base = createOpenCodeSessionState({ sessionId: SESSION_ID });
+  const wrong = normalizeOpenCodeEvent(event("session.next.text.delta", {
+    sessionID: "session-other",
+    textID: "wrong",
+    delta: "must not appear",
+  }));
+  const missing = normalizeOpenCodeEvent(event("session.next.text.delta", {
+    textID: "missing",
+    delta: "must not appear",
+  }));
+
+  assert.equal(applyOpenCodeEvent(base, wrong), base);
+  assert.equal(applyOpenCodeEvent(base, missing), base);
+  assert.equal(normalizeOpenCodeEvent(event("session.idle", {
+    sessionID: "session-other",
+  }), SESSION_ID), null);
+  assert.equal(normalizeOpenCodeEvent(event("session.idle", {}), SESSION_ID), null);
+});
+
+test("ignores global file.edited because OpenCode 1.18.4 provides no session attribution", () => {
+  const base = createOpenCodeSessionState({ sessionId: SESSION_ID });
+  const normalized = normalizeOpenCodeEvent(event("file.edited", {
+    file: "unsafe-global.js",
+  }));
+
+  assert.equal(normalized, null);
+  assert.equal(applyOpenCodeEvent(base, normalized), base);
+  assert.deepEqual(base.changedFiles, {});
+});
+
+test("session.diff consumes data.diff as authoritative attributable file evidence", () => {
   const state = run([
-    { type: "text.delta", properties: { messageID: "m1", text: "First." } },
-    { type: "text.delta", properties: { messageID: "m2", text: "Second." } }
+    event("session.diff", {
+      sessionID: SESSION_ID,
+      diff: [
+        {
+          file: "src/auth.js",
+          additions: 7,
+          deletions: 2,
+          status: "modified",
+        },
+        {
+          file: "src/auth.test.js",
+          additions: 18,
+          deletions: 0,
+          status: "added",
+        },
+      ],
+    }),
   ]);
-  assert.deepEqual(state.entries.filter((e) => e.type === "text").map((e) => e.text), ["First.", "Second."]);
+
+  assert.deepEqual(state.changedFiles["src/auth.js"], {
+    added: 7,
+    removed: 2,
+    status: "modified",
+    touchedAt: 1,
+  });
+  assert.equal(state.changedFiles["src/auth.test.js"].added, 18);
+  assert.deepEqual(
+    changedFilesView(state).map(({ path }) => path),
+    ["src/auth.js", "src/auth.test.js"],
+  );
 });
 
-test("tool lifecycle: called -> running, then success -> completed on the same card", () => {
-  let state = run([{ type: "tool.called", properties: { callID: "t1", tool: "edit", input: "jwt.ts" } }]);
-  let tool = state.entries.find((e) => e.type === "tool" && e.id === "t1");
+test("normalizes the v2 tool lifecycle without accepting legacy properties payloads", () => {
+  let state = run([
+    event("session.next.tool.called", {
+      sessionID: SESSION_ID,
+      assistantMessageID: "assistant-1",
+      callID: "call-1",
+      tool: "edit",
+      input: { file: "src/auth.js" },
+      provider: { executed: false },
+    }),
+  ]);
+  let tool = state.entries.find((entry) => entry.type === "tool");
+  assert.equal(tool.id, "call-1");
   assert.equal(tool.state, "running");
-  assert.equal(state.status, "running");
 
-  state = applyOpenCodeEvent(state, normalizeOpenCodeEvent({ type: "tool.success", properties: { callID: "t1", output: "ok" } }));
-  tool = state.entries.find((e) => e.type === "tool" && e.id === "t1");
+  state = applyOpenCodeEvent(
+    state,
+    normalizeOpenCodeEvent(event("session.next.tool.success", {
+      sessionID: SESSION_ID,
+      assistantMessageID: "assistant-1",
+      callID: "call-1",
+      structured: {},
+      content: [],
+      result: "updated",
+      provider: { executed: true },
+    })),
+  );
+  tool = state.entries.find((entry) => entry.type === "tool");
   assert.equal(tool.state, "completed");
-  assert.equal(tool.output, "ok");
-  assert.equal(state.entries.filter((e) => e.type === "tool").length, 1, "completion updates the card, not a new one");
+  assert.equal(tool.output, "updated");
+
+  assert.equal(normalizeOpenCodeEvent({
+    type: "session.next.tool.called",
+    properties: {
+      sessionID: SESSION_ID,
+      callID: "legacy",
+      tool: "shell",
+    },
+  }), null);
 });
 
-test("tool failure marks the card errored", () => {
-  const state = run([
-    { type: "tool.called", properties: { callID: "t1", tool: "shell" } },
-    { type: "tool.failed", properties: { callID: "t1", error: "exit 1" } }
+test("maps permission.v2 request ids and clears only the matching approval", () => {
+  let state = run([
+    event("permission.v2.asked", {
+      id: "permission-1",
+      sessionID: SESSION_ID,
+      action: "bash",
+      resources: ["npm test", "src/**"],
+    }),
+    event("permission.v2.asked", {
+      id: "permission-2",
+      sessionID: SESSION_ID,
+      action: "edit",
+      resources: ["src/auth.js"],
+    }),
   ]);
-  const tool = state.entries.find((e) => e.type === "tool");
-  assert.equal(tool.state, "error");
-  assert.equal(tool.error, "exit 1");
-});
 
-test("file edits roll into the changed-files map, accumulate on re-edit, and highlight the newest", () => {
-  const state = run([
-    { type: "file.edited", properties: { path: "jwt.ts", added: 42, removed: 8 } },
-    { type: "file.edited", properties: { path: "auth.ts", added: 5, removed: 2 } },
-    { type: "file.edited", properties: { path: "jwt.ts", added: 3, removed: 0 } } // re-edit
-  ]);
-  assert.deepEqual(state.changedFiles["jwt.ts"], { added: 45, removed: 8, status: "edited", touchedAt: state.changedFiles["jwt.ts"].touchedAt });
-
-  const view = changedFilesView(state);
-  assert.equal(view.length, 2);
-  assert.equal(view[0].path, "jwt.ts", "most-recently touched is first");
-  assert.equal(view[0].justTouched, true);
-  assert.equal(view[1].justTouched, false);
-});
-
-test("session.diff is authoritative and merges the cumulative file stats", () => {
-  const state = run([
-    { type: "file.edited", properties: { path: "jwt.ts", added: 1, removed: 0 } },
-    { type: "session.diff", properties: { files: [{ path: "jwt.ts", added: 42, removed: 8 }, { path: "auth.test.ts", added: 30, removed: 0 }] } }
-  ]);
-  assert.equal(state.changedFiles["jwt.ts"].added, 42, "session.diff overwrites with the authoritative cumulative count");
-  assert.equal(state.changedFiles["auth.test.ts"].added, 30);
-});
-
-test("permission asked adds an approval and blocks; replying clears it", () => {
-  let state = run([{ type: "permission.asked", properties: { id: "p1", tool: "shell", title: "Run npm test", detail: "npm test" } }]);
-  assert.equal(state.approvals.length, 1);
   assert.equal(state.status, "waiting-approval");
+  assert.deepEqual(state.approvals[0], {
+    id: "permission-1",
+    tool: "bash",
+    title: "bash",
+    detail: "npm test\nsrc/**",
+  });
 
-  state = applyOpenCodeEvent(state, normalizeOpenCodeEvent({ type: "permission.replied", properties: { id: "p1" } }));
-  assert.equal(state.approvals.length, 0);
-  assert.equal(state.status, "running");
+  state = applyOpenCodeEvent(
+    state,
+    normalizeOpenCodeEvent(event("permission.v2.replied", {
+      sessionID: SESSION_ID,
+      requestID: "permission-1",
+      reply: "once",
+    })),
+  );
+  assert.deepEqual(state.approvals.map(({ id }) => id), ["permission-2"]);
+  assert.equal(state.status, "waiting-approval");
 });
 
-test("todo updates replace the plan checklist", () => {
-  const state = run([{ type: "todo.updated", properties: { todos: [{ content: "Shorten TTL", status: "completed" }, { content: "Add rotation", status: "in_progress" }] } }]);
-  assert.deepEqual(state.todos, [{ label: "Shorten TTL", state: "completed" }, { label: "Add rotation", state: "in_progress" }]);
+test("session.updated reads data.info and does not trust top-level metadata aliases", () => {
+  const state = run([
+    event("session.updated", {
+      sessionID: SESSION_ID,
+      info: {
+        id: SESSION_ID,
+        title: "Governed task",
+        agent: "build",
+        model: { providerID: "openai", id: "gpt-5.6" },
+      },
+    }),
+  ]);
+
+  assert.equal(state.title, "Governed task");
+  assert.equal(state.agent, "build");
+  assert.equal(state.model, "openai/gpt-5.6");
+});
+
+test("session.status and session.idle drive only the documented status states", () => {
+  let state = run([
+    event("session.status", {
+      sessionID: SESSION_ID,
+      status: { type: "busy" },
+    }),
+  ]);
+  assert.equal(state.status, "running");
+
+  state = applyOpenCodeEvent(
+    state,
+    normalizeOpenCodeEvent(event("session.status", {
+      sessionID: SESSION_ID,
+      status: {
+        type: "retry",
+        attempt: 2,
+        message: "rate limited",
+        next: 100,
+      },
+    })),
+  );
+  assert.equal(state.status, "running");
+
+  state = applyOpenCodeEvent(
+    state,
+    normalizeOpenCodeEvent(event("session.idle", {
+      sessionID: SESSION_ID,
+    })),
+  );
+  assert.equal(state.status, "idle");
+});
+
+test("todo.updated consumes only data.todos from the owned session", () => {
+  const state = run([
+    event("todo.updated", {
+      sessionID: SESSION_ID,
+      todos: [
+        { content: "Add regression", status: "completed", priority: "high" },
+        { content: "Run browser tests", status: "in_progress", priority: "medium" },
+      ],
+    }),
+  ]);
+
+  assert.deepEqual(state.todos, [
+    { label: "Add regression", state: "completed" },
+    { label: "Run browser tests", state: "in_progress" },
+  ]);
+});
+
+test("unknown events and malformed documented events remain non-fatal no-ops", () => {
+  const base = createOpenCodeSessionState({ sessionId: SESSION_ID });
+
+  assert.equal(normalizeOpenCodeEvent(event("server.connected", {
+    sessionID: SESSION_ID,
+  })), null);
+  assert.equal(normalizeOpenCodeEvent(event("session.diff", {
+    sessionID: SESSION_ID,
+    diff: "not-an-array",
+  })), null);
+  assert.equal(applyOpenCodeEvent(base, null), base);
 });
 
 test("the reducer never mutates the input state", () => {
-  const base = createOpenCodeSessionState();
-  const frozen = Object.freeze(base);
-  const next = applyOpenCodeEvent(frozen, normalizeOpenCodeEvent({ type: "file.edited", properties: { path: "x.ts", added: 1, removed: 0 } }));
-  assert.notEqual(next, frozen);
-  assert.deepEqual(base.changedFiles, {}, "input unchanged");
+  const base = createOpenCodeSessionState({ sessionId: SESSION_ID });
+  Object.freeze(base);
+
+  const next = applyOpenCodeEvent(
+    base,
+    normalizeOpenCodeEvent(event("session.next.text.delta", {
+      sessionID: SESSION_ID,
+      assistantMessageID: "assistant-1",
+      textID: "text-1",
+      delta: "immutable",
+    })),
+  );
+
+  assert.notEqual(next, base);
+  assert.deepEqual(base.entries, []);
 });

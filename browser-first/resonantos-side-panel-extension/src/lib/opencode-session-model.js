@@ -1,183 +1,378 @@
-// Pure view-model reducer for a live OpenCode session (workspace Option A).
-//
-// OpenCode's `opencode serve` streams fine-grained events over its SSE bus
-// (verified against the live OpenAPI /doc): text/reasoning deltas, a tool
-// lifecycle (called -> progress -> success/failed), a dedicated file-edited
-// event, a rolling session diff, permission prompts, and todo updates. This
-// module turns that raw stream into an ordered transcript + a rolling
-// changed-files map + pending approvals + a plan/todo checklist, all as plain
-// immutable state so it's trivial to unit test and render.
-//
-// The exact wire `type` strings can drift between OpenCode versions, so the
-// normalizer matches on the meaningful suffix (tool.called, text.delta,
-// file.edited, …) rather than a brittle exact string — the precise names are
-// pinned at integration time against the running server's /doc.
+// Pure extension-side view model for the pinned OpenCode 1.18.4 v2 event
+// contract. Events are normalized from documented { type, data } payloads only.
 
-export function createOpenCodeSessionState() {
+export function createOpenCodeSessionState({ sessionId = "" } = {}) {
   return {
+    sessionId: stringValue(sessionId),
     title: "",
     agent: "build",
     model: "",
-    status: "idle", // idle | running | waiting-approval | done | error
-    seq: 0, // monotonic tick, used to mark the most-recently-touched file
-    entries: [], // ordered transcript: { type: "text"|"reasoning"|"tool", id, ... }
-    changedFiles: {}, // path -> { added, removed, status, touchedAt }
-    approvals: [], // { id, tool, title, detail }
-    todos: [], // { label, state }
-    context: { tokens: 0, cost: 0 }
+    status: "idle",
+    seq: 0,
+    entries: [],
+    changedFiles: {},
+    approvals: [],
+    todos: [],
+    context: { tokens: 0, cost: 0 },
   };
 }
 
-const has = (type, needle) => String(type ?? "").toLowerCase().includes(needle);
+function objectValue(value) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value
+    : null;
+}
 
-// Map a raw OpenCode event to a normalized { kind, ... } this reducer handles,
-// or null to ignore it. Tolerant of dot/dash/version variation in the type.
-export function normalizeOpenCodeEvent(raw) {
-  if (!raw || typeof raw !== "object") return null;
-  const type = raw.type ?? raw.kind ?? "";
-  const p = raw.properties ?? raw.payload ?? raw;
-  if (has(type, "text.delta") || has(type, "text-delta")) {
-    return { kind: "text-delta", messageId: p.messageID ?? p.messageId ?? p.id ?? "", text: p.text ?? p.delta ?? "" };
+function stringValue(value) {
+  return typeof value === "string" ? value : "";
+}
+
+function requiredString(value) {
+  const text = stringValue(value);
+  return text ? text : null;
+}
+
+function sessionMatches(data, activeSessionId) {
+  const sessionId = requiredString(data?.sessionID);
+  if (!sessionId) return null;
+  if (activeSessionId && sessionId !== activeSessionId) return null;
+  return sessionId;
+}
+
+function displayValue(value) {
+  if (typeof value === "string") return value;
+  if (value === undefined || value === null) return "";
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
   }
-  if (has(type, "reasoning.delta") || has(type, "reasoning-delta")) {
-    return { kind: "reasoning-delta", messageId: p.messageID ?? p.messageId ?? p.id ?? "", text: p.text ?? p.delta ?? "" };
+}
+
+function normalizeModel(model) {
+  const value = objectValue(model);
+  const providerID = requiredString(value?.providerID);
+  const id = requiredString(value?.id);
+  return providerID && id ? `${providerID}/${id}` : "";
+}
+
+function normalizeDiff(data, sessionId) {
+  if (!Array.isArray(data.diff)) return null;
+  const files = [];
+  for (const candidate of data.diff) {
+    const file = objectValue(candidate);
+    const path = requiredString(file?.file);
+    if (
+      !path
+      || !Number.isFinite(file.additions)
+      || !Number.isFinite(file.deletions)
+    ) {
+      return null;
+    }
+    files.push({
+      path,
+      added: file.additions,
+      removed: file.deletions,
+      status: stringValue(file.status) || "modified",
+    });
   }
-  if (has(type, "tool.called") || has(type, "tool-called") || has(type, "tool.input.ended")) {
-    return { kind: "tool-called", id: p.callID ?? p.id ?? p.toolCallID ?? "", tool: p.tool ?? p.name ?? "tool", input: p.input ?? p.args ?? p.title ?? "" };
+  return { kind: "session-diff", sessionId, files };
+}
+
+function normalizeToolEvent(type, data, sessionId) {
+  const id = requiredString(data.callID);
+  if (!id) return null;
+  if (type === "session.next.tool.called") {
+    const tool = requiredString(data.tool);
+    if (!tool || !objectValue(data.input)) return null;
+    return {
+      kind: "tool-called",
+      sessionId,
+      id,
+      tool,
+      input: displayValue(data.input),
+    };
   }
-  if (has(type, "tool.success") || has(type, "tool.completed") || has(type, "tool-completed")) {
-    return { kind: "tool-completed", id: p.callID ?? p.id ?? p.toolCallID ?? "", ok: true, output: p.output ?? p.result ?? "" };
+  if (type === "session.next.tool.success") {
+    return {
+      kind: "tool-completed",
+      sessionId,
+      id,
+      ok: true,
+      output: displayValue(data.result ?? data.content),
+    };
   }
-  if (has(type, "tool.failed") || has(type, "tool.error")) {
-    return { kind: "tool-completed", id: p.callID ?? p.id ?? p.toolCallID ?? "", ok: false, error: p.error ?? p.message ?? "failed" };
+  return {
+    kind: "tool-completed",
+    sessionId,
+    id,
+    ok: false,
+    error: displayValue(data.error) || "failed",
+  };
+}
+
+function normalizeSessionStatus(data, sessionId) {
+  const status = objectValue(data.status);
+  if (status?.type === "busy") {
+    return { kind: "session-status", sessionId, status: "running" };
   }
-  if (has(type, "file.edited") || has(type, "file-edited")) {
-    return { kind: "file-edited", path: p.path ?? p.file ?? "", added: Number(p.added ?? p.additions ?? 0), removed: Number(p.removed ?? p.deletions ?? 0) };
+  if (status?.type === "idle") {
+    return { kind: "session-status", sessionId, status: "idle" };
   }
-  if (has(type, "session.diff") || has(type, "session-diff")) {
-    const files = Array.isArray(p.files) ? p.files : (Array.isArray(p) ? p : []);
-    return { kind: "session-diff", files: files.map((f) => ({ path: f.path ?? f.file ?? "", added: Number(f.added ?? f.additions ?? 0), removed: Number(f.removed ?? f.deletions ?? 0) })) };
-  }
-  if (has(type, "permission") && (has(type, "asked") || has(type, "ask"))) {
-    return { kind: "permission-asked", id: p.id ?? p.permissionID ?? "", tool: p.tool ?? p.type ?? "action", title: p.title ?? p.tool ?? "Approval needed", detail: p.detail ?? p.description ?? p.command ?? "" };
-  }
-  if (has(type, "permission") && (has(type, "replied") || has(type, "reply"))) {
-    return { kind: "permission-replied", id: p.id ?? p.permissionID ?? "" };
-  }
-  if (has(type, "todo")) {
-    const todos = Array.isArray(p.todos) ? p.todos : (Array.isArray(p) ? p : []);
-    return { kind: "todos", todos: todos.map((t) => ({ label: t.content ?? t.text ?? t.label ?? "", state: t.status ?? t.state ?? "pending" })) };
-  }
-  if (has(type, "session.updated") || has(type, "session.status") || has(type, "session-meta")) {
-    return { kind: "session-meta", title: p.title, agent: p.agent, model: p.model, status: p.status };
+  if (status?.type === "retry") {
+    return { kind: "session-status", sessionId, status: "running" };
   }
   return null;
+}
+
+// Normalize a documented OpenCode v2 event. Passing activeSessionId adds an
+// early ownership check; the reducer performs the same check from state.
+export function normalizeOpenCodeEvent(raw, activeSessionId = "") {
+  const event = objectValue(raw);
+  const type = requiredString(event?.type);
+  if (!type || type === "file.edited") return null;
+
+  const data = objectValue(event.data);
+  if (!data) return null;
+  const sessionId = sessionMatches(data, stringValue(activeSessionId));
+  if (!sessionId) return null;
+
+  switch (type) {
+    case "session.next.text.delta": {
+      const messageId = requiredString(data.textID);
+      if (!messageId || typeof data.delta !== "string") return null;
+      return {
+        kind: "text-delta",
+        sessionId,
+        messageId,
+        text: data.delta,
+      };
+    }
+    case "session.next.reasoning.delta": {
+      const messageId = requiredString(data.reasoningID);
+      if (!messageId || typeof data.delta !== "string") return null;
+      return {
+        kind: "reasoning-delta",
+        sessionId,
+        messageId,
+        text: data.delta,
+      };
+    }
+    case "message.part.delta": {
+      const messageId = requiredString(data.partID);
+      if (!messageId || typeof data.delta !== "string") return null;
+      if (data.field !== "text" && data.field !== "reasoning") return null;
+      return {
+        kind: data.field === "reasoning" ? "reasoning-delta" : "text-delta",
+        sessionId,
+        messageId,
+        text: data.delta,
+      };
+    }
+    case "session.next.tool.called":
+    case "session.next.tool.success":
+    case "session.next.tool.failed":
+      return normalizeToolEvent(type, data, sessionId);
+    case "session.diff":
+      return normalizeDiff(data, sessionId);
+    case "permission.v2.asked": {
+      const id = requiredString(data.id);
+      const action = requiredString(data.action);
+      if (
+        !id
+        || !action
+        || !Array.isArray(data.resources)
+        || data.resources.some((resource) => typeof resource !== "string")
+      ) {
+        return null;
+      }
+      return {
+        kind: "permission-asked",
+        sessionId,
+        id,
+        tool: action,
+        title: action,
+        detail: data.resources.join("\n"),
+      };
+    }
+    case "permission.v2.replied": {
+      const id = requiredString(data.requestID);
+      if (!id) return null;
+      return { kind: "permission-replied", sessionId, id };
+    }
+    case "todo.updated": {
+      if (!Array.isArray(data.todos)) return null;
+      const todos = [];
+      for (const candidate of data.todos) {
+        const todo = objectValue(candidate);
+        const label = requiredString(todo?.content);
+        const state = requiredString(todo?.status);
+        if (!label || !state) return null;
+        todos.push({ label, state });
+      }
+      return { kind: "todos", sessionId, todos };
+    }
+    case "session.updated": {
+      const info = objectValue(data.info);
+      if (!info || requiredString(info.id) !== sessionId) return null;
+      return {
+        kind: "session-meta",
+        sessionId,
+        title: stringValue(info.title),
+        agent: stringValue(info.agent),
+        model: normalizeModel(info.model),
+      };
+    }
+    case "session.status":
+      return normalizeSessionStatus(data, sessionId);
+    case "session.idle":
+      return { kind: "session-status", sessionId, status: "idle" };
+    default:
+      return null;
+  }
 }
 
 function lastEntryOfType(entries, type, messageId) {
-  for (let i = entries.length - 1; i >= 0; i -= 1) {
-    const entry = entries[i];
-    if (entry.type === type && (!messageId || entry.id === messageId)) return entry;
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (entry.type === type && entry.id === messageId) return entry;
   }
   return null;
 }
 
-// Apply a normalized event, returning a new state (never mutates the input).
+// Apply a normalized event without mutating state. An owned state accepts only
+// events carrying that exact session identifier.
 export function applyOpenCodeEvent(state, event) {
-  if (!event) return state;
-  const next = { ...state, seq: state.seq + 1 };
+  if (!event || typeof event !== "object") return state;
+  if (state.sessionId && event.sessionId !== state.sessionId) return state;
 
   switch (event.kind) {
     case "text-delta":
     case "reasoning-delta": {
       const type = event.kind === "reasoning-delta" ? "reasoning" : "text";
+      const next = { ...state, seq: state.seq + 1 };
       const entries = [...state.entries];
       const current = lastEntryOfType(entries, type, event.messageId);
-      if (current && (!event.messageId || current.id === event.messageId)) {
-        const idx = entries.lastIndexOf(current);
-        entries[idx] = { ...current, text: (current.text ?? "") + (event.text ?? "") };
+      if (current) {
+        const index = entries.lastIndexOf(current);
+        entries[index] = {
+          ...current,
+          text: `${current.text ?? ""}${event.text ?? ""}`,
+        };
       } else {
-        entries.push({ type, id: event.messageId || `msg-${next.seq}`, text: event.text ?? "" });
+        entries.push({
+          type,
+          id: event.messageId,
+          text: event.text ?? "",
+        });
       }
       next.entries = entries;
       next.status = state.approvals.length ? "waiting-approval" : "running";
       return next;
     }
-    case "tool-called": {
-      next.entries = [...state.entries, { type: "tool", id: event.id || `tool-${next.seq}`, tool: event.tool, input: event.input, state: "running" }];
-      next.status = state.approvals.length ? "waiting-approval" : "running";
-      return next;
-    }
-    case "tool-completed": {
-      next.entries = state.entries.map((entry) =>
-        entry.type === "tool" && entry.id === event.id
-          ? { ...entry, state: event.ok ? "completed" : "error", output: event.output ?? "", error: event.error ?? "" }
-          : entry
-      );
-      return next;
-    }
-    case "file-edited": {
-      if (!event.path) return next;
-      const prev = state.changedFiles[event.path];
-      next.changedFiles = {
-        ...state.changedFiles,
-        [event.path]: {
-          added: (prev?.added ?? 0) + event.added,
-          removed: (prev?.removed ?? 0) + event.removed,
-          status: "edited",
-          touchedAt: next.seq
-        }
+    case "tool-called":
+      return {
+        ...state,
+        seq: state.seq + 1,
+        entries: [
+          ...state.entries,
+          {
+            type: "tool",
+            id: event.id,
+            tool: event.tool,
+            input: event.input,
+            state: "running",
+          },
+        ],
+        status: state.approvals.length ? "waiting-approval" : "running",
       };
-      return next;
-    }
+    case "tool-completed":
+      return {
+        ...state,
+        seq: state.seq + 1,
+        entries: state.entries.map((entry) => (
+          entry.type === "tool" && entry.id === event.id
+            ? {
+                ...entry,
+                state: event.ok ? "completed" : "error",
+                output: event.output ?? "",
+                error: event.error ?? "",
+              }
+            : entry
+        )),
+      };
     case "session-diff": {
+      const seq = state.seq + 1;
       const changedFiles = { ...state.changedFiles };
       for (const file of event.files) {
-        if (!file.path) continue;
         changedFiles[file.path] = {
           added: file.added,
           removed: file.removed,
-          status: "edited",
-          touchedAt: changedFiles[file.path]?.touchedAt ?? next.seq
+          status: file.status,
+          touchedAt: changedFiles[file.path]?.touchedAt ?? seq,
         };
       }
-      next.changedFiles = changedFiles;
-      return next;
+      return { ...state, seq, changedFiles };
     }
-    case "permission-asked": {
-      if (state.approvals.some((a) => a.id === event.id)) return next;
-      next.approvals = [...state.approvals, { id: event.id, tool: event.tool, title: event.title, detail: event.detail }];
-      next.status = "waiting-approval";
-      return next;
-    }
+    case "permission-asked":
+      if (state.approvals.some(({ id }) => id === event.id)) return state;
+      return {
+        ...state,
+        seq: state.seq + 1,
+        approvals: [
+          ...state.approvals,
+          {
+            id: event.id,
+            tool: event.tool,
+            title: event.title,
+            detail: event.detail,
+          },
+        ],
+        status: "waiting-approval",
+      };
     case "permission-replied": {
-      next.approvals = state.approvals.filter((a) => a.id !== event.id);
-      next.status = next.approvals.length ? "waiting-approval" : "running";
-      return next;
+      const approvals = state.approvals.filter(({ id }) => id !== event.id);
+      return {
+        ...state,
+        seq: state.seq + 1,
+        approvals,
+        status: approvals.length ? "waiting-approval" : "running",
+      };
     }
-    case "todos": {
-      next.todos = event.todos;
-      return next;
-    }
-    case "session-meta": {
-      if (event.title !== undefined) next.title = event.title;
-      if (event.agent !== undefined) next.agent = event.agent;
-      if (event.model !== undefined) next.model = event.model;
-      if (event.status !== undefined) next.status = event.status;
-      return next;
-    }
+    case "todos":
+      return {
+        ...state,
+        seq: state.seq + 1,
+        todos: event.todos,
+      };
+    case "session-meta":
+      return {
+        ...state,
+        seq: state.seq + 1,
+        title: event.title || state.title,
+        agent: event.agent || state.agent,
+        model: event.model || state.model,
+      };
+    case "session-status":
+      return {
+        ...state,
+        seq: state.seq + 1,
+        status: event.status,
+      };
     default:
-      return next;
+      return state;
   }
 }
 
-// Convenience: the changed files as a sorted array, most-recently-touched first,
-// with a `justTouched` flag on the single most-recent file (for a highlight pulse).
 export function changedFilesView(state) {
   const entries = Object.entries(state.changedFiles ?? {});
   if (!entries.length) return [];
-  const newestTouch = Math.max(...entries.map(([, f]) => f.touchedAt ?? 0));
+  const newestTouch = Math.max(...entries.map(([, file]) => file.touchedAt ?? 0));
   return entries
-    .map(([path, f]) => ({ path, ...f, justTouched: (f.touchedAt ?? 0) === newestTouch }))
-    .sort((a, b) => (b.touchedAt ?? 0) - (a.touchedAt ?? 0));
+    .map(([path, file]) => ({
+      path,
+      ...file,
+      justTouched: (file.touchedAt ?? 0) === newestTouch,
+    }))
+    .sort((left, right) => (right.touchedAt ?? 0) - (left.touchedAt ?? 0));
 }
