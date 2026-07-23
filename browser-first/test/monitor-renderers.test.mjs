@@ -318,9 +318,10 @@ test("monitor renderers render control steps, artifacts, and approval boundaries
   assert.match(harness.dom.window.document.querySelector(".control-step-detail").textContent, /Product page/);
   assert.match(harness.dom.window.document.querySelector("#control-artifacts").textContent, /report: \/tmp\/report\.md/);
   assert.equal(harness.dom.window.document.querySelector("#approval").hidden, false);
-  assert.equal(harness.dom.window.document.querySelector("#approval-approve").disabled, false);
+  assert.equal(harness.dom.window.document.querySelector("#approval-approve").disabled, true);
   assert.equal(harness.dom.window.document.querySelector("#approval-trust").disabled, true);
   assert.match(harness.dom.window.document.querySelector("#approval-reason").textContent, /Public-submit boundary/);
+  assert.match(harness.dom.window.document.querySelector("#approval-reason").textContent, /perform the action yourself/i);
 });
 
 test("a blocked step opens its detail by default so the human sees action/safety before approving", () => {
@@ -585,6 +586,49 @@ test("monitor renderers expose job-specific approval focus", () => {
     .find((button) => button.textContent === "Deny")
     .click();
   assert.deepEqual(harness.state.denied, ["job-approval"]);
+});
+
+test("monitor renderers never expose approve once for stale public-submit job state", () => {
+  const browserJobs = [{
+    id: "job-public-submit",
+    goal: "Submit reviewed form",
+    status: "approval",
+    updatedAt: "2026-05-26T10:01:00.000Z",
+    planner: "loop",
+    pendingApproval: {
+      reason: "Public-submit boundary.",
+      results: [],
+      history: [{
+        observation: {
+          title: "Public form",
+          url: "https://example.test/form"
+        }
+      }],
+      stepIndex: 1,
+      step: { type: "click", text: "Submit public form", boundary: "public-submit" }
+    },
+    pageLock: { tabId: 77, siteKey: "example.test", url: "https://example.test/form", reason: "Agent Control goal" },
+    steps: [{
+      state: "blocked",
+      label: "Submit public form",
+      type: "click",
+      details: { nextHumanAction: "Perform the public action yourself, then continue." }
+    }]
+  }];
+  const harness = createHarness({
+    activeJobId: "job-public-submit",
+    browserJobs,
+    jobMonitorCollapsed: false
+  });
+
+  harness.renderers.renderJobMonitor();
+
+  const text = harness.dom.window.document.querySelector("#jobs-list").textContent;
+  const labels = [...harness.dom.window.document.querySelectorAll(".job-actions button")].map((button) => button.textContent);
+  assert.match(text, /Human action required: Submit public form/);
+  assert.match(text, /perform the public action yourself/i);
+  assert.equal(labels.includes("Approve once"), false);
+  assert.equal(harness.state.approved.length, 0);
 });
 
 test("monitor renderers show and hide site permission panel", async () => {

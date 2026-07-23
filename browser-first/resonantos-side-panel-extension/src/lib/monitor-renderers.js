@@ -105,6 +105,10 @@ function pendingApprovalEvidence(job) {
   };
 }
 
+function isHumanOnlyApprovalBoundary(boundary) {
+  return boundary === "hard" || boundary === "public-submit";
+}
+
 function pageLockLabel(pageLock) {
   if (!pageLock) return "";
   return [
@@ -438,31 +442,40 @@ export function createMonitorRenderers({
     if (pendingApproval) {
       approvalCard.hidden = false;
       const boundary = approvalBoundaryForStep(pendingApproval.step, pendingApproval.reason);
-      approvalTitle.textContent = `Approval required: ${controlStepLabel(pendingApproval.step)}`;
+      const humanOnly = isHumanOnlyApprovalBoundary(boundary);
+      approvalTitle.textContent = `${humanOnly ? "Human action required" : "Approval required"}: ${controlStepLabel(pendingApproval.step)}`;
       approvalReason.textContent = [
         pendingApproval.reason,
         boundary === "hard"
-          ? "Hard boundary: wallet, payment, login, credential, signing, or irreversible value actions cannot be trusted by site."
+          ? "Hard boundary: perform the action yourself. Wallet, payment, login, credential, signing, or irreversible value actions cannot be automated."
           : boundary === "public-submit"
-            ? "Public-submit boundary: use approve once only when you have reviewed the page state."
+            ? "Public-submit boundary: review the visible page, perform the action yourself, then continue so Augmentor can freshly observe the result."
             : "Safe-action boundary: you may approve once or trust this task class for this site."
       ].filter(Boolean).join("\n");
-      approvalApproveButton.disabled = boundary === "hard";
+      approvalApproveButton.disabled = humanOnly;
+      approvalApproveButton.hidden = humanOnly;
       if (approvalAllowOnceButton) {
         approvalAllowOnceButton.disabled = boundary !== "safe";
+        approvalAllowOnceButton.hidden = humanOnly;
         approvalAllowOnceButton.title = boundary === "safe"
           ? "Allow this safe task class for this execution only. This does not persist."
           : "One-time task-class consent never bypasses wallet, payment, login, credential, or public-submit boundaries.";
       }
       approvalTrustSiteButton.disabled = boundary !== "safe";
+      approvalTrustSiteButton.hidden = humanOnly;
       approvalTrustSiteButton.title = boundary === "safe"
         ? "Trust safe non-sensitive actions for this task class on this site."
         : "Task trust never bypasses wallet, payment, login, credential, or public-submit boundaries.";
     } else {
       approvalCard.hidden = true;
       approvalApproveButton.disabled = false;
-      if (approvalAllowOnceButton) approvalAllowOnceButton.disabled = false;
+      approvalApproveButton.hidden = false;
+      if (approvalAllowOnceButton) {
+        approvalAllowOnceButton.disabled = false;
+        approvalAllowOnceButton.hidden = false;
+      }
       approvalTrustSiteButton.disabled = false;
+      approvalTrustSiteButton.hidden = false;
     }
     updateContextDockVisibility();
   }
@@ -680,6 +693,10 @@ export function createMonitorRenderers({
         return;
       }
       const details = document.createElement("div");
+      const pendingBoundary = job.status === "approval" && job.pendingApproval
+        ? approvalBoundaryForStep(job.pendingApproval.step, job.pendingApproval.reason)
+        : "";
+      const pendingHumanOnly = isHumanOnlyApprovalBoundary(pendingBoundary);
       const title = document.createElement("strong");
       title.textContent = job.goal;
       const meta = document.createElement("small");
@@ -701,8 +718,8 @@ export function createMonitorRenderers({
           : "Visible page owner: this job follows the active readable tab.";
       } else if (job.status === "approval" && job.pendingApproval) {
         ownership.textContent = job.pageLock?.tabId !== null && job.pageLock?.tabId !== undefined
-          ? `Background approval: Focus activates tab ${job.pageLock.tabId} before approve or deny.`
-          : "Background approval: Focus this job before approve or deny.";
+          ? `${pendingHumanOnly ? "Background human handoff" : "Background approval"}: Focus activates tab ${job.pageLock.tabId} before ${pendingHumanOnly ? "acting yourself or denying" : "approve or deny"}.`
+          : `${pendingHumanOnly ? "Background human handoff" : "Background approval"}: Focus this job before ${pendingHumanOnly ? "acting yourself or denying" : "approve or deny"}.`;
       } else if (["queued", "running", "paused"].includes(job.status)) {
         ownership.textContent = "Background job: focus it before inspecting or continuing this task.";
       }
@@ -746,7 +763,9 @@ export function createMonitorRenderers({
         item.dataset.attention = "stale";
         const stale = document.createElement("small");
         stale.className = "job-stale-guidance";
-        stale.textContent = `Attention: ${staleEvidence.reason} Last activity ${formatDurationMs(staleEvidence.ageMs)} ago. ${staleEvidence.nextHumanAction}`;
+        stale.textContent = pendingHumanOnly
+          ? `Attention: Human action has been waiting without recorded progress. Last activity ${formatDurationMs(staleEvidence.ageMs)} ago. Perform the action yourself, then continue for a fresh observation, or deny/cancel the job.`
+          : `Attention: ${staleEvidence.reason} Last activity ${formatDurationMs(staleEvidence.ageMs)} ago. ${staleEvidence.nextHumanAction}`;
         details.append(stale);
       }
       if (scheduler?.runnableQueued?.some((candidate) => candidate.id === job.id)) {
@@ -780,7 +799,7 @@ export function createMonitorRenderers({
         const approval = document.createElement("aside");
         approval.className = "job-approval-card";
         const approvalTitle = document.createElement("strong");
-        approvalTitle.textContent = `Approval needed: ${evidence.action}`;
+        approvalTitle.textContent = `${pendingHumanOnly ? "Human action required" : "Approval needed"}: ${evidence.action}`;
         const approvalReason = document.createElement("p");
         approvalReason.textContent = evidence.reason;
         const preview = document.createElement("dl");
@@ -796,7 +815,9 @@ export function createMonitorRenderers({
           preview.append(term, definition);
         });
         const hint = document.createElement("small");
-        hint.textContent = "Review the visible page state before approving. Public-submit, wallet, payment, login, signing, and credential boundaries stay human-gated.";
+        hint.textContent = pendingHumanOnly
+          ? "Review the visible page state, perform the action yourself, then continue so Augmentor can freshly observe the result."
+          : "Review the visible page state before approving. Public-submit, wallet, payment, login, signing, and credential boundaries stay human-gated.";
         approval.append(approvalTitle, approvalReason, preview, hint);
         details.append(approval);
       }
@@ -820,7 +841,9 @@ export function createMonitorRenderers({
         addJobButton("Focus", `Focus ${job.goal}`, onActivateBrowserJob);
       }
       if (job.status === "approval" && job.pendingApproval) {
-        addJobButton("Approve once", `Approve the pending action for ${job.goal}`, onApproveBrowserJob, { primary: true });
+        if (!pendingHumanOnly) {
+          addJobButton("Approve once", `Approve the pending action for ${job.goal}`, onApproveBrowserJob, { primary: true });
+        }
         addJobButton("Deny", `Deny the pending action for ${job.goal}`, onDenyBrowserJob);
       }
       if (["queued", "running", "approval"].includes(job.status)) {
