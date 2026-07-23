@@ -6,6 +6,7 @@ import {
   allocateLoopbackPort,
   createOpencodeSdkClient,
   createOpencodeServerLifecycle,
+  readOpencodeServerBaseUrl,
   splitOpencodeModelIdentifier,
 } from "../host/opencode-client.mjs";
 
@@ -14,7 +15,6 @@ const WORKSPACE = "/approved/workspace";
 const CONFIG_DIRECTORY = "/private/tmp/resonantos-opencode-config-test";
 const PASSWORD = "generated-server-password";
 const AUTHORIZATION = `Basic ${Buffer.from(`resonantos:${PASSWORD}`).toString("base64")}`;
-const FOREIGN_AUTHORIZATION = `Basic ${Buffer.from("resonantos:__invalid_resonantos_readiness_probe__").toString("base64")}`;
 
 function fakeChild({ exitOnKill = true } = {}) {
   const child = new EventEmitter();
@@ -59,10 +59,12 @@ function lifecycleHarness(overrides = {}) {
     return child;
   });
   const lifecycle = createOpencodeServerLifecycle({
-    allocatePort: overrides.allocatePort ?? (async () => PORT),
     createClient,
     createConfigDirectory: overrides.createConfigDirectory ?? (async () => CONFIG_DIRECTORY),
     fetchImpl,
+    readServerAddress: overrides.readServerAddress ?? (async () => (
+      `http://127.0.0.1:${PORT}`
+    )),
     randomPassword: overrides.randomPassword ?? (() => PASSWORD),
     removeConfigDirectory: overrides.removeConfigDirectory ?? (async (directory) => {
       removedDirectories.push(directory);
@@ -280,7 +282,7 @@ test("lifecycle starts one authenticated pure loopback child with scoped environ
   assert.deepEqual(lifecycle.status(), { state: "running" });
   assert.deepEqual(spawnCalls, [{
     command: "/fixed/bin/opencode",
-    args: ["serve", "--pure", "--hostname", "127.0.0.1", "--port", String(PORT)],
+    args: ["serve", "--pure", "--hostname", "127.0.0.1", "--port", "0"],
     options: {
       cwd: WORKSPACE,
       env: {
@@ -293,11 +295,11 @@ test("lifecycle starts one authenticated pure loopback child with scoped environ
         OPENCODE_SERVER_PASSWORD: PASSWORD,
       },
       shell: false,
-      stdio: "ignore",
+      stdio: ["ignore", "pipe", "ignore"],
     },
   }]);
-  assert.equal(fetchCalls[0].options.headers.Authorization, FOREIGN_AUTHORIZATION);
-  assert.equal(fetchCalls[1].options.headers.Authorization, AUTHORIZATION);
+  assert.equal(fetchCalls.length, 1);
+  assert.equal(fetchCalls[0].options.headers.Authorization, AUTHORIZATION);
   assert.equal(process.env.OPENCODE_SERVER_PASSWORD, originalPassword);
 
   assert.deepEqual(await lifecycle.createClient(handle), { sdk: true });
@@ -306,6 +308,29 @@ test("lifecycle starts one authenticated pure loopback child with scoped environ
     baseUrl: `http://127.0.0.1:${PORT}`,
     directory: WORKSPACE,
   }]);
+});
+
+test("lifecycle delegates port selection to its child and sends no fixed challenge probe", async () => {
+  const {
+    fetchCalls,
+    lifecycle,
+    spawnCalls,
+  } = lifecycleHarness();
+
+  const handle = await lifecycle.start({
+    command: "/fixed/bin/opencode",
+    cwd: WORKSPACE,
+    env: {},
+  });
+
+  assert.deepEqual(
+    spawnCalls[0].args,
+    ["serve", "--pure", "--hostname", "127.0.0.1", "--port", "0"],
+  );
+  assert.deepEqual(spawnCalls[0].options.stdio, ["ignore", "pipe", "ignore"]);
+  assert.equal(fetchCalls.length, 1);
+  assert.equal(fetchCalls[0].options.headers.Authorization, AUTHORIZATION);
+  await lifecycle.stop(handle);
 });
 
 test("lifecycle handle and public status expose no URL, credentials, config path, or workspace", async () => {
@@ -328,48 +353,45 @@ test("lifecycle handle and public status expose no URL, credentials, config path
   }
 });
 
-test("lifecycle refuses a listener that accepts the ownership-challenge credential", async () => {
-  const child = fakeChild();
-  const { lifecycle } = lifecycleHarness({
-    child,
-    fetchImpl: async () => response(true),
-    readinessTimeoutMs: 5,
+test("server address reader accepts only the owned child's strict loopback announcement", async () => {
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stdout.resume = () => {};
+  const reading = readOpencodeServerBaseUrl(child, { timeoutMs: 50 });
+  queueMicrotask(() => {
+    child.stdout.emit(
+      "data",
+      Buffer.from(`opencode server listening on http://127.0.0.1:${PORT}\n`),
+    );
   });
 
-  await assert.rejects(
-    lifecycle.start({
-      command: "/fixed/bin/opencode",
-      cwd: WORKSPACE,
-      env: {},
-    }),
-    /did not become ready/,
-  );
-  assert.equal(child.killCalls, 1);
-  assert.deepEqual(lifecycle.status(), { state: "stopped" });
+  assert.equal(await reading, `http://127.0.0.1:${PORT}`);
 });
 
-test("lifecycle refuses a listener that does not answer the ownership challenge with 401", async () => {
-  const child = fakeChild();
-  const { lifecycle } = lifecycleHarness({
-    child,
-    fetchImpl: async (_url, options) => (
-      options.headers.Authorization === AUTHORIZATION
-        ? response(true, 200)
-        : response(false, 403)
-    ),
-    readinessTimeoutMs: 5,
+test("server address reader rejects foreign and oversized announcements", async () => {
+  const foreignChild = new EventEmitter();
+  foreignChild.stdout = new EventEmitter();
+  foreignChild.stdout.resume = () => {};
+  const foreignReading = readOpencodeServerBaseUrl(foreignChild, { timeoutMs: 5 });
+  queueMicrotask(() => {
+    foreignChild.stdout.emit(
+      "data",
+      Buffer.from(`opencode server listening on http://0.0.0.0:${PORT}\n`),
+    );
   });
+  await assert.rejects(foreignReading, /did not announce/);
 
+  const noisyChild = new EventEmitter();
+  noisyChild.stdout = new EventEmitter();
+  noisyChild.stdout.resume = () => {};
+  const noisyReading = readOpencodeServerBaseUrl(noisyChild, { timeoutMs: 50 });
+  queueMicrotask(() => {
+    noisyChild.stdout.emit("data", Buffer.alloc(4_097, "x"));
+  });
   await assert.rejects(
-    lifecycle.start({
-      command: "/fixed/bin/opencode",
-      cwd: WORKSPACE,
-      env: {},
-    }),
-    /did not become ready/,
+    noisyReading,
+    /invalid address announcement/,
   );
-  assert.equal(child.killCalls, 1);
-  assert.deepEqual(lifecycle.status(), { state: "stopped" });
 });
 
 test("lifecycle timeout bounds a hanging authenticated readiness probe", async () => {
@@ -421,7 +443,7 @@ test("early child exit rejects startup and clears owned config state", async () 
   assert.deepEqual(lifecycle.status(), { state: "stopped" });
 });
 
-test("early candidate exit retries with a fresh loopback port", async () => {
+test("early candidate exit retries with a fresh child-owned loopback port", async () => {
   const ports = [PORT, PORT + 1];
   const configDirectories = [
     `${CONFIG_DIRECTORY}-1`,
@@ -434,12 +456,11 @@ test("early candidate exit retries with a fresh loopback port", async () => {
   const removedDirectories = [];
   const spawnCalls = [];
   const exitEvents = [];
-  let allocationIndex = 0;
+  let addressIndex = 0;
   let configIndex = 0;
   let spawnIndex = 0;
   let firstExited = false;
   const { lifecycle } = lifecycleHarness({
-    allocatePort: async () => ports[allocationIndex++],
     createConfigDirectory: async () => configDirectories[configIndex++],
     fetchImpl: async (url, options) => {
       if (url.includes(`:${PORT}/`)) {
@@ -458,6 +479,9 @@ test("early candidate exit retries with a fresh loopback port", async () => {
     removeConfigDirectory: async (directory) => {
       removedDirectories.push(directory);
     },
+    readServerAddress: async () => (
+      `http://127.0.0.1:${ports[addressIndex++]}`
+    ),
     spawnImpl: (command, args, options) => {
       spawnCalls.push({ command, args, options });
       return children[spawnIndex++];
@@ -474,8 +498,9 @@ test("early candidate exit retries with a fresh loopback port", async () => {
   assert.equal(handle.process, children[1]);
   assert.deepEqual(
     spawnCalls.map(({ args }) => args.at(-1)),
-    ports.map(String),
+    ["0", "0"],
   );
+  assert.equal(addressIndex, 2);
   assert.deepEqual(removedDirectories, [configDirectories[0]]);
   assert.deepEqual(exitEvents, []);
   assert.deepEqual(lifecycle.status(), { state: "running" });
@@ -489,12 +514,11 @@ test("early candidate exit retries only to the configured attempt bound", async 
   ];
   const removedDirectories = [];
   const spawnCalls = [];
-  let allocationIndex = 0;
+  let addressIndex = 0;
   let spawnIndex = 0;
   const exitedPorts = new Set();
   const { lifecycle } = lifecycleHarness({
-    allocatePort: async () => ports[allocationIndex++],
-    createConfigDirectory: async () => `${CONFIG_DIRECTORY}-${allocationIndex}`,
+    createConfigDirectory: async () => `${CONFIG_DIRECTORY}-${addressIndex + 1}`,
     fetchImpl: async (url) => {
       const port = Number(new URL(url).port);
       if (!exitedPorts.has(port)) {
@@ -509,6 +533,9 @@ test("early candidate exit retries only to the configured attempt bound", async 
     removeConfigDirectory: async (directory) => {
       removedDirectories.push(directory);
     },
+    readServerAddress: async () => (
+      `http://127.0.0.1:${ports[addressIndex++]}`
+    ),
     spawnImpl: (command, args, options) => {
       spawnCalls.push({ command, args, options });
       return children[spawnIndex++];

@@ -133,6 +133,14 @@ function redactEventText(value, attempt, limit = EVENT_TEXT_LIMIT) {
   );
   let text = value.slice(0, limit + lookahead);
 
+  const lifecycleRedactor = attempt.lifecycle?.redactSensitiveText;
+  if (typeof lifecycleRedactor === "function") {
+    try {
+      text = lifecycleRedactor.call(attempt.lifecycle, text, "[redacted]");
+    } catch {
+      return "[redacted]";
+    }
+  }
   for (const secret of secrets) {
     text = text.split(secret).join("[redacted]");
   }
@@ -149,6 +157,10 @@ function redactEventText(value, attempt, limit = EVENT_TEXT_LIMIT) {
     .replace(/api[_-]?key\s*[:=]\s*[^\s]+/gi, "api_key=[redacted]")
     .replace(/token\s*[:=]\s*[^\s]+/gi, "token=[redacted]")
     .replace(/secret\s*[:=]\s*[^\s]+/gi, "secret=[redacted]")
+    .replace(/password\s*[:=]\s*[^\s]+/gi, "password=[redacted]")
+    .replace(/credential\s*[:=]\s*[^\s]+/gi, "credential=[redacted]")
+    .replace(/authorization\s*[:=]\s*[^\s]+/gi, "authorization=[redacted]")
+    .replace(/basic\s+[a-z0-9+/=_-]+/gi, "Basic [redacted-token]")
     .replace(/\b[a-z]:[\\/][^\s"'`]+/gi, "[redacted-path]")
     .replace(/(^|[\s("'=])\/(?!\/)[^\s"'`]+/g, "$1[redacted-path]")
     .slice(0, limit);
@@ -542,6 +554,8 @@ export function createOpencodeSessionHandlers({
   let startInFlight = null;
   let cleanupBarrier = Promise.resolve();
   let cleanupFailure = null;
+  let shutdownGeneration = 0;
+  let shutdownInProgress = 0;
 
   async function disposeSdkClient(client) {
     if (!client) return;
@@ -902,9 +916,19 @@ export function createOpencodeSessionHandlers({
 
   async function executeOpenCodeSessionStart(request = {}) {
     const payload = requestBody(request);
+    const startGeneration = shutdownGeneration;
+    const assertStartStillAuthorized = () => {
+      if (
+        startGeneration !== shutdownGeneration
+        || shutdownInProgress > 0
+      ) {
+        throw new Error("OpenCode session start was cancelled by host shutdown.");
+      }
+    };
     let checked;
     try {
       checked = await runPreflight(payload, "start");
+      assertStartStillAuthorized();
     } catch (error) {
       if (currentAttempt && isExplicitRevocation(error)) {
         await disposeAttempt(currentAttempt, {
@@ -919,6 +943,7 @@ export function createOpencodeSessionHandlers({
     }
 
     await cleanupBarrier;
+    assertStartStillAuthorized();
     if (cleanupFailure) {
       throw new Error(
         "Previous OpenCode session cleanup failed; restart the bridge before starting another session.",
@@ -1052,24 +1077,30 @@ export function createOpencodeSessionHandlers({
   }
 
   async function shutdownOpenCodeSession() {
-    const attempt = currentAttempt;
-    const pendingStart = startInFlight?.attempt === attempt
-      ? startInFlight.promise
-      : null;
-    if (!attempt) {
-      await cleanupBarrier;
-      state = SESSION_STATE.STOPPED;
-      if (cleanupFailure) {
-        throw new Error("OpenCode session cleanup failed during bridge shutdown.");
+    shutdownGeneration += 1;
+    shutdownInProgress += 1;
+    try {
+      const attempt = currentAttempt;
+      const pendingStart = startInFlight?.attempt === attempt
+        ? startInFlight.promise
+        : null;
+      if (!attempt) {
+        await cleanupBarrier;
+        state = SESSION_STATE.STOPPED;
+        if (cleanupFailure) {
+          throw new Error("OpenCode session cleanup failed during bridge shutdown.");
+        }
+        return;
       }
-      return;
+      await disposeAttempt(attempt, {
+        reason: "bridge-shutdown",
+        terminalState: SESSION_STATE.STOPPED,
+        terminate: true,
+      });
+      if (pendingStart) await pendingStart.catch(() => undefined);
+    } finally {
+      shutdownInProgress -= 1;
     }
-    await disposeAttempt(attempt, {
-      reason: "bridge-shutdown",
-      terminalState: SESSION_STATE.STOPPED,
-      terminate: true,
-    });
-    if (pendingStart) await pendingStart.catch(() => undefined);
   }
 
   return {

@@ -13,9 +13,9 @@ const CLOSED_PERMISSION_POLICY = JSON.stringify({
   "*": "ask",
   external_directory: "deny",
 });
-const OWNERSHIP_CHALLENGE_AUTHORIZATION = basicAuthorization(
-  SERVER_USERNAME,
-  "__invalid_resonantos_readiness_probe__",
+const SERVER_ANNOUNCEMENT_LIMIT = 4_096;
+const SERVER_ANNOUNCEMENT_PATTERN = (
+  /(?:^|\r?\n)opencode server listening on (http:\/\/127\.0\.0\.1:([0-9]{1,5}))\r?(?:\n|$)/
 );
 
 function requireFunction(value, name) {
@@ -128,6 +128,61 @@ export async function allocateLoopbackPort({
   });
 }
 
+export async function readOpencodeServerBaseUrl(child, {
+  timeoutMs = 12_000,
+} = {}) {
+  const stdout = child?.stdout;
+  if (
+    !stdout
+    || typeof stdout.on !== "function"
+    || typeof stdout.removeListener !== "function"
+  ) {
+    throw new Error("OpenCode server did not expose its owned loopback address.");
+  }
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new Error("OpenCode server address timeout is invalid.");
+  }
+
+  return new Promise((resolve, reject) => {
+    let buffer = "";
+    let settled = false;
+    const timeout = setTimeout(() => {
+      finish(new Error("OpenCode server did not announce its loopback address in time."));
+    }, timeoutMs);
+    const onExit = () => {
+      finish(new Error("OpenCode server exited before announcing its loopback address."));
+    };
+    const onData = (chunk) => {
+      buffer += Buffer.from(chunk).toString("utf8");
+      if (Buffer.byteLength(buffer, "utf8") > SERVER_ANNOUNCEMENT_LIMIT) {
+        finish(new Error("OpenCode server emitted an invalid address announcement."));
+        return;
+      }
+      const match = SERVER_ANNOUNCEMENT_PATTERN.exec(buffer);
+      if (!match) return;
+      const port = Number(match[2]);
+      if (!Number.isSafeInteger(port) || port <= 0 || port > 65_535) {
+        finish(new Error("OpenCode server announced an invalid loopback port."));
+        return;
+      }
+      finish(null, match[1]);
+    };
+    const finish = (error, baseUrl = "") => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      stdout.removeListener("data", onData);
+      child.removeListener?.("exit", onExit);
+      stdout.resume?.();
+      if (error) reject(error);
+      else resolve(baseUrl);
+    };
+
+    stdout.on("data", onData);
+    child.once?.("exit", onExit);
+  });
+}
+
 export function splitOpencodeModelIdentifier(identifier) {
   const value = typeof identifier === "string" ? identifier : "";
   const separator = value.indexOf("/");
@@ -232,13 +287,13 @@ export async function createOpencodeSdkClient({
 }
 
 export function createOpencodeServerLifecycle({
-  allocatePort = allocateLoopbackPort,
   createClient = createOpencodeSdkClient,
   createConfigDirectory = () => mkdtemp(
     path.join(tmpdir(), "resonantos-opencode-config-"),
   ),
   fetchImpl = globalThis.fetch,
   randomPassword = () => randomBytes(32).toString("base64url"),
+  readServerAddress = readOpencodeServerBaseUrl,
   removeConfigDirectory = (directory) => rm(directory, {
     force: true,
     recursive: true,
@@ -254,11 +309,11 @@ export function createOpencodeServerLifecycle({
   terminationGraceMs = 1_500,
   terminationKillTimeoutMs = 1_000,
 } = {}) {
-  requireFunction(allocatePort, "port allocator");
   requireFunction(createClient, "client factory");
   requireFunction(createConfigDirectory, "config directory factory");
   requireFunction(fetchImpl, "fetch");
   requireFunction(randomPassword, "password generator");
+  requireFunction(readServerAddress, "server address reader");
   requireFunction(removeConfigDirectory, "config directory cleanup");
   requireFunction(sleep, "sleep");
   requireFunction(spawnImpl, "spawn");
@@ -424,15 +479,7 @@ export function createOpencodeServerLifecycle({
   }
 
   async function authenticatedReady(record, deadline) {
-    let remainingMs = deadline - Date.now();
-    if (remainingMs <= 0) return false;
-    const challengeStatus = await authenticatedProbe(
-      record,
-      OWNERSHIP_CHALLENGE_AUTHORIZATION,
-      remainingMs,
-    );
-    if (challengeStatus !== 401) return false;
-    remainingMs = deadline - Date.now();
+    const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) return false;
     const ownedStatus = await authenticatedProbe(
       record,
@@ -469,10 +516,6 @@ export function createOpencodeServerLifecycle({
     let configDirectory = "";
     let record = null;
     try {
-      const port = await allocatePort();
-      if (!Number.isSafeInteger(port) || port <= 0 || port > 65_535) {
-        throw new Error("OpenCode loopback port allocator returned an invalid port.");
-      }
       configDirectory = await createConfigDirectory();
       if (typeof configDirectory !== "string" || !path.isAbsolute(configDirectory)) {
         throw new Error("OpenCode config directory factory returned an invalid path.");
@@ -482,29 +525,41 @@ export function createOpencodeServerLifecycle({
         throw new Error("OpenCode password generator returned an invalid credential.");
       }
       const authorization = basicAuthorization(SERVER_USERNAME, password);
-      const baseUrl = `http://${LOOPBACK_HOSTNAME}:${port}`;
       const child = spawnImpl(command, [
         "serve",
         "--pure",
         "--hostname",
         LOOPBACK_HOSTNAME,
         "--port",
-        String(port),
+        "0",
       ], {
         cwd,
         env: childEnvironment(env, configDirectory, password),
         shell: false,
-        stdio: "ignore",
+        stdio: ["ignore", "pipe", "ignore"],
       });
       if (!child || typeof child !== "object") {
         throw new Error("OpenCode spawn did not return a child process.");
       }
-
-      const handle = Object.freeze({ process: child });
+      const handle = Object.freeze({
+        process: child,
+        redactSensitiveText(value, replacement = "[redacted]") {
+          let text = typeof value === "string" ? value : "";
+          const substitute = typeof replacement === "string"
+            ? replacement
+            : "[redacted]";
+          for (const secret of [record?.authorization, record?.password]) {
+            if (typeof secret === "string" && secret.length >= 4) {
+              text = text.split(secret).join(substitute);
+            }
+          }
+          return text;
+        },
+      });
       let resolveExit;
       record = {
         authorization,
-        baseUrl,
+        baseUrl: "",
         child,
         cleanupPromise: null,
         client: null,
@@ -531,6 +586,10 @@ export function createOpencodeServerLifecycle({
       child.once?.("exit", record.onChildExit);
       active = record;
 
+      record.baseUrl = await readServerAddress(child, {
+        timeoutMs: readinessTimeoutMs,
+      });
+      validateLoopbackBaseUrl(record.baseUrl);
       await waitUntilReady(record);
       if (record.exited) {
         throw earlyCandidateExitError();

@@ -290,7 +290,7 @@
           "--hostname",
           "127.0.0.1",
           "--port",
-          "<port>"
+          "0"
         ],
         "shell": false,
         "runtime": "opencode",

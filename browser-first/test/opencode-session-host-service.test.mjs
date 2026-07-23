@@ -680,6 +680,50 @@ test("the host drops unknown events and redacts known event payloads before buff
   await harness.handlers.executeOpenCodeSessionStop({ sessionId });
 });
 
+test("the host redacts the lifecycle service credential from allowed tool results", async () => {
+  const servicePassword = "generated-service-value";
+  const processHandle = createProcessHandle("owned-service");
+  const lifecycle = {
+    process: processHandle,
+    redactSensitiveText(value, replacement = "[redacted]") {
+      return typeof value === "string"
+        ? value.split(servicePassword).join(replacement)
+        : value;
+    },
+  };
+  const harness = createHarness({
+    startLifecycle: async () => lifecycle,
+  });
+  const { sessionId } = await harness.handlers.executeOpenCodeSessionStart({
+    workspacePath: ".",
+  });
+
+  harness.feeds[0].push({
+    type: "session.next.tool.success",
+    data: {
+      sessionID: sessionId,
+      assistantMessageID: "assistant-service",
+      callID: "call-service",
+      result: `OPENCODE_SERVER_PASSWORD=${servicePassword}`,
+    },
+  });
+  await waitFor(async () => (
+    await harness.handlers.executeOpenCodeSessionEvents({
+      sessionId,
+      after: 0,
+    })
+  ).nextCursor === 1);
+
+  const result = await harness.handlers.executeOpenCodeSessionEvents({
+    sessionId,
+    after: 0,
+  });
+  const serialized = JSON.stringify(result);
+  assert.equal(serialized.includes(servicePassword), false);
+  assert.match(serialized, /\[redacted\]/);
+  await harness.handlers.executeOpenCodeSessionStop({ sessionId });
+});
+
 test("the host bounds individual events and total buffered event bytes", async () => {
   const harness = createHarness();
   const { sessionId } = await harness.handlers.executeOpenCodeSessionStart({

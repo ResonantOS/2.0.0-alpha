@@ -791,7 +791,6 @@ test("OpenCode live-session registry descriptor matches the authenticated produc
       ...credentialKeys,
       ...OPENCODE_EXPLICIT_PROVIDER_ENV_KEYS,
     ].map((key) => [key, `fixture-${key.toLowerCase()}`]));
-    let probe = 0;
     const child = new EventEmitter();
     child.exitCode = null;
     child.kill = () => {
@@ -802,14 +801,11 @@ test("OpenCode live-session registry descriptor matches the authenticated produc
       return true;
     };
     const lifecycle = createOpencodeServerLifecycle({
-      allocatePort: async () => 43123,
       createClient: async () => ({}),
       createConfigDirectory: async () => configDirectory,
-      fetchImpl: async () => {
-        const owned = (probe += 1) % 2 === 0;
-        return { ok: owned, status: owned ? 200 : 401 };
-      },
+      fetchImpl: async () => ({ ok: true, status: 200 }),
       randomPassword: () => "generated-password",
+      readServerAddress: async () => "http://127.0.0.1:43123",
       removeConfigDirectory: async (directory) => {
         removedDirectories.push(directory);
       },
@@ -838,8 +834,6 @@ test("OpenCode live-session registry descriptor matches the authenticated produc
       candidates: productionOpenCodeCandidates(),
       resolution: normalizedResolution(runtime.opencode.resolution, runtime.root),
     });
-    captured.args = captured.args.with(5, "<port>");
-
     const registry = await readRegistry();
     const records = new Map(
       registry.recordSets[RECORD_SET].map((record) => [record.id, record]),
