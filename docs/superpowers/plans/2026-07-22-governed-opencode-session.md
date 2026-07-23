@@ -27,12 +27,19 @@ Node test runner, repository security and Alpha verification pipelines.
 - OpenCode remains optional and is not an Alpha runtime or release gate.
 - The session start request cannot override host-owned consent, grants,
   workspace, provider, model, command, environment, host, or port.
-- Required live-session grants are exactly `filesystem`, `shell`, `providers`,
-  and `ui-embedding`; all default denied.
+- Required live-session grants are exactly `filesystem`, `shell`, and
+  `providers`; all default denied. `ui-embedding` remains a separate future
+  grant for embedding OpenCode's web UI and is not required by this governance
+  view.
 - The selected workspace must resolve to the repository root or a descendant.
 - The OpenCode child uses loopback, an available bridge-selected port,
   `--pure`, a generated password, an explicit working directory, `shell: false`,
   and an allowlisted environment.
+- The live child sets generated `OPENCODE_SERVER_USERNAME` and
+  `OPENCODE_SERVER_PASSWORD` values instead of inheriting them, excludes every
+  `RESONANTOS_BROWSER_FIRST_*` value and unselected provider credential, and
+  applies `{"*":"ask","external_directory":"deny"}` with project config
+  disabled. This is governed execution, not an OS sandbox.
 - The bridge never reuses or kills a service it did not start.
 - The extension never receives the OpenCode URL, service password,
   Authorization header, provider credential, full environment, or unfiltered
@@ -40,6 +47,10 @@ Node test runner, repository security and Alpha verification pipelines.
 - Prompts use the host-selected model. Extension requests contain text only.
 - Permission replies are only `once` or `reject`; persistent approval is not
   exposed.
+- OpenCode operations use the 1.18.4 v2 session boundary:
+  `client.v2.session.create`, `client.v2.session.prompt`, and
+  `client.v2.session.permission.reply`. The permission reply always carries
+  both `sessionID` and `requestID`.
 - Every prompt, permission, event, and stop request must match the one active
   ResonantOS-created session.
 - The in-memory relay retains at most 500 session-attributable events and
@@ -95,6 +106,8 @@ Expected: both exit zero before Task 2.
 - Modify: `browser-first/test/addon-delegation-service.test.mjs`
 - Modify: `browser-first/resonantos-side-panel-extension/src/lib/settings/addons-section.js`
 - Modify: the existing focused Add-ons settings test under `browser-first/test/`
+- Modify: `public/addons/opencode.json`
+- Modify: `docs/architecture/ADR-021-opencode-addon-hosted-service.md`
 
 **Step 1: Write failing host-policy tests**
 
@@ -102,13 +115,15 @@ Add tests proving:
 
 - normalized settings default `liveSession.enabled` false, workspace empty, and
   grants empty;
-- update rejects unknown grants and stores only the four allowed grants;
+- update rejects unknown grants and stores only the three allowed grants;
 - update rejects live enablement without all required grants or a workspace;
 - preflight rejects disabled CLI execution, disabled live session, each missing
   grant, missing runtime, missing provider credential, and an out-of-repository
   workspace;
 - request fields and execution environment flags cannot bypass live-session
   consent;
+- preflight reads persisted OpenCode settings directly and never calls the
+  one-shot `addonLocalCliExecutionEnabled()` override path;
 - successful preflight returns internal command, workspace, model, and scoped
   environment while public status returns only a redacted workspace label and
   readiness reasons;
@@ -135,20 +150,32 @@ Extend only the OpenCode settings shape:
 Keep the file mode `0600`. Preserve legacy settings by normalizing absent
 fields to closed defaults. Export an in-process
 `executeOpenCodeLiveSessionPreflight()` from the add-on delegation service; do
-not register it as a bridge route.
+not register it as a bridge route. It must ignore
+`payload.enableOpenCodeExecution` and `RESONANTOS_OPENCODE_EXECUTION`. Remove
+`OPENCODE_SERVER_USERNAME` and `OPENCODE_SERVER_PASSWORD` from the existing
+one-shot `scopedOpenCodeEnv()` allowlist so CLI delegation can never inherit a
+live service credential. Update `executeOpenCodeStatus.requiredGrants` to
+exactly `filesystem`, `shell`, and `providers`.
 
 **Step 3: Add explicit Settings controls**
 
-For the OpenCode card only, render a workspace input, the four grant
+For the OpenCode card only, render a workspace input, the three grant
 checkboxes, and a live-session enable checkbox inside Runtime controls. Save
 one complete desired OpenCode setting through the existing capability-gated
 execution-settings route. Use labels and status text that state the preview is
 optional and that OpenCode receives scoped filesystem, shell, and provider
 authority.
 
+Update the OpenCode manifest and ADR-021 in this same task so the accepted
+authority model never contradicts the code: the governance session requires
+`filesystem`, `shell`, and `providers`; `ui-embedding` is reserved for a future
+OpenCode web-UI proxy. Mark `archive-read` and `archive-intake-write` as
+delegation-only authorities rather than live-session grants.
+
 **Step 4: Run focused tests**
 
-Run the host-policy and Add-ons settings tests. Expected: zero failures.
+Run the host-policy and Add-ons settings tests, then `npm run docs:check` and
+`npm run test:docs`. Expected: zero failures.
 
 **Step 5: Commit**
 
@@ -158,7 +185,12 @@ Commit message:
 feat(opencode): require host-owned live-session consent
 ```
 
-## Task 3: Replace The Raw HTTP Prototype With An Authenticated SDK Lifecycle
+## Task 3: Replace And Wire The Host Stack Atomically
+
+The OpenCode client, session controller, and bridge composition root are one
+coupled interface change. They must land in one task and one commit so no
+intermediate commit leaves `run-bridge-minimal.mjs` importing removed exports,
+forwarding `process.env`, or exposing the old raw service URL.
 
 **Files:**
 
@@ -166,13 +198,20 @@ feat(opencode): require host-owned live-session consent
 - Modify: `package-lock.json`
 - Rewrite: `browser-first/host/opencode-client.mjs`
 - Rewrite: `browser-first/test/opencode-client.test.mjs`
+- Rewrite: `browser-first/host/opencode-session-host-service.mjs`
+- Rewrite: `browser-first/test/opencode-session-host-service.test.mjs`
+- Modify: `browser-first/host/run-bridge-minimal.mjs`
+- Modify: `docs/architecture/MODULE-OWNERSHIP.md`
+- Modify: `browser-first/resonantos-side-panel-extension/src/lib/bridge-client.js`
+- Modify: `browser-first/test/bridge-capability-token-consistency.test.mjs`
+- Add or modify: focused bridge composition test under `browser-first/test/`
 
 **Step 1: Pin the SDK**
 
 Install exactly `@opencode-ai/sdk@1.18.4` as a runtime dependency. Confirm the
 lockfile resolves exactly 1.18.4.
 
-**Step 2: Write failing lifecycle and contract tests**
+**Step 2: Write failing lifecycle and SDK-contract tests**
 
 Cover:
 
@@ -180,60 +219,30 @@ Cover:
 - generated Basic Authorization without credential disclosure;
 - spawn arguments include `serve --pure --hostname 127.0.0.1 --port`;
 - `cwd`, `shell: false`, and the exact allowlisted environment reach spawn;
+- inherited `OPENCODE_SERVER_*`, `RESONANTOS_BROWSER_FIRST_*`, and unselected
+  provider credentials never reach spawn; generated server credentials do;
+- the child receives an isolated config directory,
+  `OPENCODE_DISABLE_PROJECT_CONFIG=1`, and
+  `OPENCODE_PERMISSION={"*":"ask","external_directory":"deny"}`;
 - readiness probes are authenticated;
 - an occupied or unauthenticated listener is never reused;
 - timeout and early child exit kill only the spawned child and clear state;
 - SDK creation receives base URL, directory, Authorization, and
   `throwOnError: true`;
-- session creation, prompt, permission reply, and event subscription use the
-  1.18.4 v2 SDK shapes;
-- model identifiers split once into `{ providerID, modelID }` and invalid
+- `client.v2.session.create` receives
+  `{ model: { providerID, id }, location: { directory } }`;
+- `client.v2.session.prompt` receives
+  `{ sessionID, prompt: { text }, delivery: "queue" }`;
+- `client.v2.session.permission.reply` receives
+  `{ sessionID, requestID, reply }` and never calls the global permission API;
+- `client.v2.event.subscribe` is consumed with an abort signal;
+- model identifiers split once into `{ providerID, id }` and invalid
   identifiers fail before a request;
 - public lifecycle results contain no base URL, credential, or absolute path.
 
-Run the focused test and confirm red.
+Run the client test and confirm the new assertions fail for missing behavior.
 
-**Step 3: Implement the bridge-owned lifecycle**
-
-Replace the dependency-free HTTP wrapper with:
-
-- a loopback port allocator;
-- a lifecycle that always starts a new authenticated `--pure` child;
-- an authenticated readiness probe;
-- a narrow SDK adapter injected for unit tests and backed by
-  `@opencode-ai/sdk/v2` in production;
-- idempotent cleanup for timeout, exit, stop, and event-pump failure.
-
-Do not add direct extension-facing URLs.
-
-**Step 4: Run focused tests and dependency audit**
-
-Run:
-
-```bash
-node --test browser-first/test/opencode-client.test.mjs
-npm audit --omit=dev
-```
-
-Record any advisory without suppressing it. Expected focused test: zero
-failures.
-
-**Step 5: Commit**
-
-Commit message:
-
-```text
-feat(opencode): own authenticated sdk lifecycle
-```
-
-## Task 4: Enforce Session Ownership And Relay Bounded Events
-
-**Files:**
-
-- Rewrite: `browser-first/host/opencode-session-host-service.mjs`
-- Rewrite: `browser-first/test/opencode-session-host-service.test.mjs`
-
-**Step 1: Write failing route and state-machine tests**
+**Step 3: Write failing controller, route, and composition tests**
 
 Prove:
 
@@ -245,50 +254,84 @@ Prove:
 - start returns only session ID and redacted workspace;
 - prompt, permission, events, and stop reject absent or non-owned sessions;
 - prompts send only host-selected model and validated text;
-- permission allows only `once` and `reject` with `requestID`;
-- events from other sessions and unattributable global events are discarded;
+- permission allows only `once` and `reject`, maps
+  `permission.v2.asked.data.id` to the SDK's `requestID`, and forwards the
+  active `sessionID`;
+- events whose `data.sessionID` belongs to another session, plus unattributable
+  global events such as `file.edited`, are discarded before buffering;
 - the 501st retained event evicts the oldest and reports `droppedBefore`;
 - cursors increase monotonically and polling after a cursor returns no
   duplicates;
 - child exit, pump failure, preflight revocation, and explicit stop clear all
   session, event, client, and credential state;
-- cleanup never kills an injected foreign process.
+- cleanup never kills an injected foreign process;
+- the production bridge injects preflight, lifecycle, a lazy SDK loader, and a
+  scoped child environment rather than `process.env`;
+- bridge shutdown kills the active bridge-owned child and clears in-memory
+  server and provider credentials;
+- route capability maps agree between extension and bridge.
 
-Run the focused test and confirm red.
+Run the focused tests and confirm the new assertions fail for missing behavior.
 
-**Step 2: Implement one active session per bridge**
+**Step 4: Implement the authenticated lifecycle and lazy SDK adapter**
+
+Replace the dependency-free HTTP wrapper with a loopback port allocator, a
+new authenticated `--pure` child for every owned lifecycle, authenticated
+readiness, and idempotent cleanup. Keep the SDK behind an injected adapter.
+The production adapter dynamically imports `@opencode-ai/sdk/v2` only after
+host preflight succeeds; unit-test imports remain independent of the SDK.
+The lifecycle overlays generated `OPENCODE_SERVER_USERNAME=resonantos` and a
+random `OPENCODE_SERVER_PASSWORD` onto a new environment object; neither value
+is written to `process.env`.
+
+**Step 5: Implement one active session and bounded relay**
 
 Create a controller with explicit states `stopped`, `starting`, `running`, and
-`failed`. Inject preflight, lifecycle start, clock, and buffer limit. Keep SDK
-client and credentials in closure state only. Extract session IDs from the
-documented 1.18.4 event property locations and enqueue only active-session
-events.
-
-**Step 3: Implement JSON polling route**
+`failed`. Keep SDK client, abort controller, process handle, and credentials in
+closure state only. Consume v2 events, enqueue only events whose
+`data.sessionID` equals the active session, apply that filter before buffering,
+and retain at most 500 entries.
 
 Add `POST /opencode/session/events`. Validate `after` as a non-negative safe
 integer. Return entries as `{ cursor, event }`, plus `nextCursor` and
 `droppedBefore`.
 
-**Step 4: Run focused tests**
+**Step 6: Update the production composition root in the same change**
+
+Use the fixed-root command resolver, in-process preflight, scoped environment,
+dynamic SDK factory, random credential generator, and process-shutdown cleanup.
+Remove the fixed 4231 port, old HTTP client, raw URL, and direct-event comments.
+Extend the ownership map in this same change so `opencode-client.mjs` and
+`opencode-session-host-service.mjs` are named as privileged bridge-owned
+lifecycle modules.
+
+**Step 7: Run focused, dependency, and complete browser-first gates**
 
 Run:
 
 ```bash
-node --test browser-first/test/opencode-session-host-service.test.mjs
+node --test \
+  browser-first/test/opencode-client.test.mjs \
+  browser-first/test/opencode-session-host-service.test.mjs \
+  browser-first/test/bridge-capability-token-consistency.test.mjs \
+  browser-first/test/<focused-bridge-composition-test>.test.mjs
+npm audit --omit=dev
+npm run test:browser-first
+npm run docs:check
+npm run test:module-ownership
 ```
 
-Expected: zero failures.
+Record any advisory without suppressing it. Expected tests: zero failures.
 
-**Step 5: Commit**
+**Step 8: Commit**
 
 Commit message:
 
 ```text
-feat(opencode): relay owned session events through bridge
+feat(opencode): own governed live session in bridge
 ```
 
-## Task 5: Correct The Extension Event And Permission Contracts
+## Task 4: Correct The Extension Event And Permission Contracts
 
 **Files:**
 
@@ -299,11 +342,11 @@ feat(opencode): relay owned session events through bridge
 
 **Step 1: Write failing OpenCode 1.18.4 event fixtures**
 
-Use fixtures matching the captured SDK declarations, including
-`properties.delta`, `properties.diff`, `properties.file`,
-`permission.v2.asked`, `permission.v2.replied`, nested `session.updated.info`,
-session status, idle, and message-part deltas. Prove cross-session events are
-ignored even if they reach the reducer.
+Use fixtures matching the captured v2 SDK declarations, including
+`data.delta`, `data.diff`, `permission.v2.asked`, `permission.v2.replied`,
+`session.updated.data.info`, session status, idle, and message-part deltas.
+Prove cross-session events are ignored even if they reach the reducer and that
+the unattributable `file.edited` event is ignored.
 
 **Step 2: Write failing polling-source tests**
 
@@ -336,7 +379,7 @@ Commit message:
 fix(opencode): consume session-bound 1.18.4 events
 ```
 
-## Task 6: Make The OpenCode Workspace Controls Truthful
+## Task 5: Make The OpenCode Workspace Controls Truthful
 
 **Files:**
 
@@ -379,48 +422,7 @@ Commit message:
 fix(opencode): expose only implemented session controls
 ```
 
-## Task 7: Wire Production Dependencies And Route Capabilities
-
-**Files:**
-
-- Modify: `browser-first/host/run-bridge-minimal.mjs`
-- Modify: `browser-first/resonantos-side-panel-extension/src/lib/bridge-client.js`
-- Modify: `browser-first/test/bridge-capability-token-consistency.test.mjs`
-- Add or modify: focused bridge wiring test under `browser-first/test/`
-
-**Step 1: Write failing wiring tests**
-
-Assert the production bridge injects the host preflight, scoped lifecycle, SDK
-factory, and random credential generator; it must not pass `process.env` as the
-OpenCode child environment. Assert the event route maps to
-`addon-runtime-read` in the extension and the bridge.
-
-**Step 2: Implement production wiring**
-
-Use the fixed-root command resolver, the in-process preflight, the exact SDK
-factory, and bridge token utilities. Register process-shutdown cleanup. Remove
-the fixed 4231 port, raw client, raw URL, and direct-event comments.
-
-**Step 3: Run focused and complete browser-first tests**
-
-Run:
-
-```bash
-node --test browser-first/test/bridge-capability-token-consistency.test.mjs
-npm run test:browser-first
-```
-
-Expected: zero failures.
-
-**Step 4: Commit**
-
-Commit message:
-
-```text
-feat(opencode): wire governed session into bridge
-```
-
-## Task 8: Update Canonical Ownership And Optional-Preview Documentation
+## Task 6: Update Canonical Ownership And Optional-Preview Documentation
 
 **Files:**
 
@@ -457,7 +459,7 @@ Commit message:
 docs(opencode): record governed preview contracts
 ```
 
-## Task 9: Live Contract, Security Mutations, And Full Certification
+## Task 7: Live Contract, Security Mutations, And Full Certification
 
 **Files:**
 

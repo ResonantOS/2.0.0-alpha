@@ -56,10 +56,11 @@ available as if it were governed.
 
 - Fail closed unless the OpenCode runtime is available and the user has
   explicitly enabled local execution and the live session.
-- Require a workspace selected under the repository root and bind the OpenCode
-  process to that workspace.
-- Require the manifest's live-session grants: `filesystem`, `shell`,
-  `providers`, and `ui-embedding`.
+- Require a workspace selected under the repository root, bind the OpenCode
+  process to that workspace, and deny OpenCode's `external_directory`
+  permission.
+- Require the live-session grants that match the authority actually exercised:
+  `filesystem`, `shell`, and `providers`.
 - Start a bridge-owned OpenCode server on loopback with generated Basic
   authentication and `--pure`.
 - Pass only allowlisted process variables and the selected provider credential
@@ -79,7 +80,9 @@ available as if it were governed.
 - Implementing the complete Resonant Apex conductor or OpenSpec lifecycle.
 - Treating OpenCode output as verified completion evidence.
 - Allowing OpenCode to write trusted Living Archive knowledge directly.
-- Granting filesystem or shell access outside the selected workspace.
+- Claiming that `cwd` is an operating-system sandbox. OpenCode's file tools are
+  denied external-directory access and every other tool action is approval
+  gated, but the optional preview still runs as the current OS user.
 - Reusing an arbitrary pre-existing OpenCode service.
 - Implementing automatic approval, persistent approval, or a fake revert.
 - Rebuilding OpenCode's full IDE inside ResonantOS.
@@ -139,8 +142,8 @@ session is authorized only when all of the following are true:
 1. `localCliExecution` is true.
 2. `liveSession.enabled` is true.
 3. `workspacePath` resolves to the repository root or one of its descendants.
-4. `grantedCapabilities` contains exactly the required authority for launch:
-   `filesystem`, `shell`, `providers`, and `ui-embedding`.
+4. `grantedCapabilities` contains exactly the required authority for the
+   governance session: `filesystem`, `shell`, and `providers`.
 5. The fixed-root OpenCode resolver finds an executable.
 6. The selected provider route is configured.
 
@@ -148,17 +151,28 @@ Request payloads cannot override these settings. Operator environment flags
 that enable one-shot delegation do not silently enable a live session.
 Revoking any required setting stops an active session.
 
-The Add-ons settings UI presents the four grants as explicit checkboxes, a
+The live-session preflight reads these persisted settings directly. It does
+not call the one-shot delegation override helper and ignores
+`payload.enableOpenCodeExecution` and `RESONANTOS_OPENCODE_EXECUTION`.
+
+The Add-ons settings UI presents the three grants as explicit checkboxes, a
 workspace field, and a separate live-session enable control. Local CLI
 execution remains its own control. The UI sends one complete desired OpenCode
 setting, and the host normalizes and validates it before persisting.
+
+`ui-embedding` is not a live-session grant. The current center panel is a
+ResonantOS governance and evidence view, not OpenCode's web UI. A future design
+that proxies and embeds OpenCode's web UI must request `ui-embedding`
+separately and pass its own security and platform review.
 
 ## Service Lifecycle
 
 1. The bridge performs the authorization preflight.
 2. It selects an available loopback port. It never accepts an already-running
    service as its own.
-3. It generates a high-entropy password and sets a fixed non-secret username.
+3. It generates a high-entropy password and sets the fixed non-secret username
+   `resonantos` through `OPENCODE_SERVER_USERNAME` and
+   `OPENCODE_SERVER_PASSWORD`.
 4. It starts:
 
    ```text
@@ -166,15 +180,25 @@ setting, and the host normalizes and validates it before persisting.
    ```
 
 5. The child working directory is the approved workspace.
-6. The child environment is built from an explicit system allowlist, the
-   selected provider variables, and the generated OpenCode server credentials.
-7. Readiness requires an authenticated request to `/doc`. An unauthenticated
+6. The child environment is built from an explicit system allowlist, only the
+   selected provider credential, and the generated OpenCode server
+   credentials. Inherited `OPENCODE_SERVER_USERNAME`,
+   `OPENCODE_SERVER_PASSWORD`, every `RESONANTOS_BROWSER_FIRST_*` value, and
+   unselected provider credentials are excluded. Generated server credentials
+   are overlaid in memory and are never placed in `process.env` or passed to
+   the one-shot CLI delegation path.
+7. The host sets an isolated OpenCode configuration directory, disables
+   project configuration, and supplies the closed permission policy
+   `{"*":"ask","external_directory":"deny"}`. This makes all executable
+   actions visible for one-time approval and denies file-tool traversal outside
+   the selected workspace. It does not claim OS-level process isolation.
+8. Readiness requires an authenticated request to `/doc`. An unauthenticated
    response is not accepted as proof of ownership.
-8. The bridge creates `@opencode-ai/sdk/v2` with the authenticated base URL and
+9. The bridge creates `@opencode-ai/sdk/v2` with the authenticated base URL and
    explicit workspace directory.
-9. The bridge creates one ResonantOS-owned OpenCode session and starts its event
+10. The bridge creates one ResonantOS-owned OpenCode session and starts its event
    subscription.
-10. Stop, bridge shutdown, child exit, authorization revocation, or event-pump
+11. Stop, bridge shutdown, child exit, authorization revocation, or event-pump
     failure closes the subscription, kills only the bridge-owned child, clears
     credentials, and discards the event buffer.
 
@@ -205,7 +229,7 @@ credential, or an absolute workspace path.
 
 ## Event Relay
 
-The bridge consumes OpenCode's authenticated event stream through the SDK and
+The bridge consumes OpenCode's authenticated v2 event stream through the SDK and
 places matching events in an in-memory ring buffer. Each accepted event gets a
 monotonic ResonantOS cursor. The buffer holds at most 500 events.
 
@@ -215,25 +239,26 @@ cursor still retained. If the caller has fallen behind, `droppedBefore`
 explicitly signals the gap rather than silently presenting an incomplete
 transcript.
 
-Events are accepted only when their session identifier equals the active
-session. The filter understands the OpenCode 1.18.4 locations for session IDs,
-including `properties.sessionID` and nested session information. Global events
-without an attributable active session are not relayed.
+Events are checked before buffering and accepted only when
+`event.data.sessionID` equals the active session.
+Global events without an attributable active session are not relayed. In
+particular, `file.edited` has no session identifier in OpenCode 1.18.4 and is
+discarded; attributable changed-file evidence comes from session diffs, step
+completion, and tool results.
 
 The extension normalizes these OpenCode 1.18.4 event shapes:
 
-- `session.next.text.delta.properties.delta`
-- `session.next.reasoning.delta.properties.delta`
+- `session.next.text.delta.data.delta`
+- `session.next.reasoning.delta.data.delta`
 - `session.next.tool.called|success|failed`
-- `session.diff.properties.diff`
-- `file.edited.properties.file`
-- `permission.v2.asked.properties.id`
-- `permission.v2.replied.properties.requestID`
-- `todo.updated.properties.todos`
-- `session.updated.properties.info`
-- `session.status.properties.status`
+- `session.diff.data.diff`
+- `permission.v2.asked.data.id`
+- `permission.v2.replied.data.requestID`
+- `todo.updated.data.todos`
+- `session.updated.data.info`
+- `session.status.data.status`
 - `session.idle`
-- `message.part.delta.properties.delta`
+- `message.part.delta.data.delta`
 
 Unknown events are ignored without widening access or failing the session.
 
@@ -243,10 +268,17 @@ The root dependency pins `@opencode-ai/sdk` to exact version `1.18.4`. The host
 uses the `@opencode-ai/sdk/v2` export and these operations:
 
 - `createOpencodeClient({ baseUrl, directory, headers, throwOnError: true })`
-- `client.session.create(...)`
-- `client.session.prompt(...)`
-- `client.permission.reply({ requestID, reply })`
-- `client.event.subscribe(...)`
+- `client.v2.session.create({ model: { providerID, id }, location: { directory } })`
+- `client.v2.session.prompt({ sessionID, prompt: { text }, delivery: "queue" })`
+- `client.v2.session.permission.reply({ sessionID, requestID, reply })`
+- `client.v2.event.subscribe()`
+
+The event pump consumes the SDK's async stream with an abort signal. The
+permission-request adapter deliberately maps
+`permission.v2.asked.data.id` to the v2 reply argument `requestID`; a request
+identifier is never forwarded through the global legacy permission endpoint.
+The production SDK module is loaded lazily only after host preflight succeeds;
+unit tests inject an adapter and do not need to start or import OpenCode.
 
 The dependency is pinned because the existing prototype already demonstrated
 that silently drifting API assumptions produce apparently functional but
@@ -305,11 +337,17 @@ verify completion before ResonantOS claims a coding task succeeded.
 - Preflight rejects every missing requirement and all out-of-scope paths.
 - Spawn uses loopback, `--pure`, a selected workspace, generated Basic auth,
   and an allowlisted environment.
+- Spawn replaces inherited OpenCode server credentials, excludes bridge and
+  unselected-provider secrets, isolates configuration, disables project
+  configuration, and installs the closed OpenCode permission policy.
+- The one-shot CLI environment does not inherit live server credentials.
 - A foreign or unauthenticated service is never reused.
-- SDK calls use the OpenCode 1.18.4 request shapes.
+- SDK calls use the OpenCode 1.18.4 v2 request shapes, including
+  session-scoped permission replies and `{ providerID, id }` model references.
 - Route capabilities distinguish event reads from runtime control.
 - Session ownership is enforced on prompt, permission, events, and stop.
-- Event relay filters other sessions, bounds memory, and reports cursor gaps.
+- Event relay filters other sessions before buffering, bounds memory, and
+  reports cursor gaps.
 - Reducer fixtures cover the exact 1.18.4 event schemas.
 - UI has no raw URL fetch, fake revert, or remembered approval.
 - Responses and diagnostics contain no URL credentials, provider secrets, or
