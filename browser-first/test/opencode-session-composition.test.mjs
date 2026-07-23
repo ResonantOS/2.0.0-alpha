@@ -334,6 +334,11 @@ test("run bridge uses the governed composition and removes the raw fixed-port pr
   assert.doesNotMatch(source, /process\.once\(signal/);
   assert.match(source, /executeAddonExecutionSettingsUpdate/);
   assert.doesNotMatch(source, /shutdownOpenCodeSession\(\)\.catch\(\(\) => undefined\)/);
+  assert.match(
+    source,
+    /flushPendingWrites:\s*flushPendingExtensionPrefs/,
+    "bridge shutdown must call the extension-prefs service's real flush method",
+  );
   assert.equal(
     source.match(/\bclearSessionProviderSecrets\b/g)?.length,
     2,

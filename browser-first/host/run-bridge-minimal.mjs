@@ -357,7 +357,10 @@ const { agentControlRoutes } = createAgentControlHostService({
   sanitizeAssistantContent,
 });
 
-const { extensionPrefsRoutes, flushPendingExtensionPrefs } = createExtensionPrefsHostService({ userRoot });
+const {
+  extensionPrefsRoutes,
+  flushPendingWrites: flushPendingExtensionPrefs,
+} = createExtensionPrefsHostService({ userRoot });
 
 const bridgeRoutes = [
   ...browserDiagnosticsRoutes,
