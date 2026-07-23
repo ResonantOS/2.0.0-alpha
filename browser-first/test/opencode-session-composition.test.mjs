@@ -86,7 +86,7 @@ test("production OpenCode composition uses persisted preflight and scoped lifecy
       return {
         childEnvironment: {
           HOME: "/Users/test",
-          MINIMAX_API_KEY: "host-selected-secret",
+          MINIMAX_API_KEY: "fixture-key",
         },
         command: "/fixed/bin/opencode",
         model: "minimax/MiniMax-M2.1",
@@ -120,7 +120,7 @@ test("production OpenCode composition uses persisted preflight and scoped lifecy
       cwd: "/approved/repository",
       env: {
         HOME: "/Users/test",
-        MINIMAX_API_KEY: "host-selected-secret",
+        MINIMAX_API_KEY: "fixture-key",
       },
     }],
     ["createClient", handle],
@@ -130,7 +130,7 @@ test("production OpenCode composition uses persisted preflight and scoped lifecy
     }],
   ]);
   assert.equal(JSON.stringify(started).includes("/approved/repository"), false);
-  assert.equal(JSON.stringify(started).includes("host-selected-secret"), false);
+  assert.equal(JSON.stringify(started).includes("fixture-key"), false);
 
   revoked = true;
   await assert.rejects(

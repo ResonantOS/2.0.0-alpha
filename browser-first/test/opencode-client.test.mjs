@@ -269,7 +269,7 @@ test("lifecycle starts one authenticated pure loopback child with scoped environ
     cwd: WORKSPACE,
     env: {
       HOME: "/Users/test",
-      MINIMAX_API_KEY: "selected-provider-secret",
+      MINIMAX_API_KEY: "fixture-key",
       OPENCODE_SERVER_PASSWORD: "foreign-password",
       OPENCODE_SERVER_USERNAME: "foreign-user",
       RESONANTOS_BROWSER_FIRST_TOKEN: "bridge-secret",
@@ -285,7 +285,7 @@ test("lifecycle starts one authenticated pure loopback child with scoped environ
       cwd: WORKSPACE,
       env: {
         HOME: "/Users/test",
-        MINIMAX_API_KEY: "selected-provider-secret",
+        MINIMAX_API_KEY: "fixture-key",
         OPENCODE_CONFIG_DIR: CONFIG_DIRECTORY,
         OPENCODE_DISABLE_PROJECT_CONFIG: "1",
         OPENCODE_PERMISSION: "{\"*\":\"ask\",\"external_directory\":\"deny\"}",
