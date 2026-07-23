@@ -380,6 +380,9 @@ test("malformed cursor responses fail closed without delivery, retry, or replay"
     { events: [], nextCursor: -1, droppedBefore: 0 },
     { events: [], nextCursor: 0, droppedBefore: -1 },
     { events: [], nextCursor: 1, droppedBefore: 2 },
+    { events: [event(1)], nextCursor: 0, droppedBefore: 0 },
+    { events: [], nextCursor: 1, droppedBefore: 0 },
+    { events: [event(1), event(2)], nextCursor: 1, droppedBefore: 0 },
   ];
 
   for (const malformedResponse of malformedResponses) {

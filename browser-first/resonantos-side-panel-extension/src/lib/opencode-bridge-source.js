@@ -47,6 +47,7 @@ function validatePollResponse(response, requestedAfter, sessionId) {
     || droppedBefore < 0
     || droppedBefore > nextCursor
     || !Array.isArray(events)
+    || events.length !== nextCursor - Math.max(requestedAfter, droppedBefore)
   ) {
     throw new Error("OpenCode event cursor response is malformed.");
   }
