@@ -1,86 +1,490 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import test from "node:test";
 
 import {
-  createOpencodeHttpClient,
-  ensureOpencodeServer,
-  opencodeServerHealthy
+  allocateLoopbackPort,
+  createOpencodeSdkClient,
+  createOpencodeServerLifecycle,
+  splitOpencodeModelIdentifier,
 } from "../host/opencode-client.mjs";
 
-const okRes = (body = "{}") => ({ ok: true, status: 200, text: async () => body });
-const errRes = (status = 500, body = "nope") => ({ ok: false, status, text: async () => body });
+const PORT = 43123;
+const WORKSPACE = "/approved/workspace";
+const CONFIG_DIRECTORY = "/private/tmp/resonantos-opencode-config-test";
+const PASSWORD = "generated-server-password";
+const AUTHORIZATION = `Basic ${Buffer.from(`resonantos:${PASSWORD}`).toString("base64")}`;
+const FOREIGN_AUTHORIZATION = `Basic ${Buffer.from("resonantos:__invalid_resonantos_readiness_probe__").toString("base64")}`;
 
-test("opencodeServerHealthy is true only when the /doc probe succeeds", async () => {
-  assert.equal(await opencodeServerHealthy({ fetchImpl: async () => okRes(), baseUrl: "http://x" }), true);
-  assert.equal(await opencodeServerHealthy({ fetchImpl: async () => errRes(503), baseUrl: "http://x" }), false);
-  assert.equal(await opencodeServerHealthy({ fetchImpl: async () => { throw new Error("conn refused"); }, baseUrl: "http://x" }), false);
-});
-
-test("ensureOpencodeServer reuses a healthy server and does not spawn", async () => {
-  let spawns = 0;
-  const result = await ensureOpencodeServer({
-    fetchImpl: async () => okRes(),
-    spawnImpl: () => { spawns += 1; return { kill() {} }; },
-    command: "/bin/opencode"
-  });
-  assert.equal(spawns, 0);
-  assert.equal(result.spawned, false);
-  assert.match(result.baseUrl, /^http:\/\/127\.0\.0\.1:4096$/);
-});
-
-test("ensureOpencodeServer spawns and waits for readiness when the server is down", async () => {
-  let health = 0;
-  let spawned = null;
-  const result = await ensureOpencodeServer({
-    // First probe (pre-spawn) fails; after spawn it becomes healthy on the 2nd poll.
-    fetchImpl: async () => (++health >= 3 ? okRes() : errRes(503)),
-    spawnImpl: (cmd, args) => { spawned = { cmd, args }; return { kill() {} }; },
-    command: "/bin/opencode",
-    sleep: async () => {},
-    pollMs: 1,
-    maxWaitMs: 1000
-  });
-  assert.ok(spawned, "spawned a server");
-  assert.deepEqual(spawned.args, ["serve", "--hostname", "127.0.0.1", "--port", "4096"]);
-  assert.equal(result.spawned, true);
-});
-
-test("ensureOpencodeServer refuses to start without a resolved command", async () => {
-  await assert.rejects(
-    () => ensureOpencodeServer({ fetchImpl: async () => errRes(503), command: "", spawnImpl: () => ({}) }),
-    /not available to start/
-  );
-});
-
-test("the http client shapes session/prompt/permission calls correctly", async () => {
-  const calls = [];
-  const fetchImpl = async (url, init) => {
-    calls.push({ url, method: init.method, body: init.body ? JSON.parse(init.body) : null });
-    if (url.endsWith("/session")) return okRes(JSON.stringify({ id: "s1" }));
-    return okRes("{}");
+function fakeChild() {
+  const child = new EventEmitter();
+  child.exitCode = null;
+  child.killCalls = 0;
+  child.kill = () => {
+    child.killCalls += 1;
   };
-  const client = createOpencodeHttpClient({ fetchImpl, baseUrl: "http://127.0.0.1:4096" });
+  return child;
+}
 
-  const session = await client.createSession("test");
-  assert.equal(session.id, "s1");
+function response(ok, status = ok ? 200 : 401) {
+  return { ok, status };
+}
 
-  await client.prompt("s1", "run tests", { agent: "build" });
-  await client.replyPermission("s1", "p1", { approved: true, remember: true });
-
-  assert.deepEqual(calls[0], { url: "http://127.0.0.1:4096/session", method: "POST", body: { title: "test" } });
-  assert.deepEqual(calls[1], {
-    url: "http://127.0.0.1:4096/session/s1/message",
-    method: "POST",
-    body: { parts: [{ type: "text", text: "run tests" }], agent: "build" }
+function lifecycleHarness(overrides = {}) {
+  const child = overrides.child ?? fakeChild();
+  const clients = [];
+  const removedDirectories = [];
+  const spawnCalls = [];
+  const fetchCalls = [];
+  const createClient = overrides.createClient ?? (async (options) => {
+    clients.push(options);
+    return { sdk: true };
   });
-  assert.deepEqual(calls[2], {
-    url: "http://127.0.0.1:4096/session/s1/permissions/p1",
-    method: "POST",
-    body: { response: true, remember: true }
+  const fetchImpl = overrides.fetchImpl ?? (async (url, options) => {
+    fetchCalls.push({ url, options });
+    return response(options.headers.Authorization === AUTHORIZATION);
   });
+  const spawnImpl = overrides.spawnImpl ?? ((command, args, options) => {
+    spawnCalls.push({ command, args, options });
+    return child;
+  });
+  const lifecycle = createOpencodeServerLifecycle({
+    allocatePort: overrides.allocatePort ?? (async () => PORT),
+    createClient,
+    createConfigDirectory: overrides.createConfigDirectory ?? (async () => CONFIG_DIRECTORY),
+    fetchImpl,
+    randomPassword: overrides.randomPassword ?? (() => PASSWORD),
+    removeConfigDirectory: overrides.removeConfigDirectory ?? (async (directory) => {
+      removedDirectories.push(directory);
+    }),
+    sleep: overrides.sleep ?? (async () => {}),
+    spawnImpl,
+    pollMs: overrides.pollMs ?? 1,
+    readinessProbeTimeoutMs: overrides.readinessProbeTimeoutMs ?? 10,
+    readinessTimeoutMs: overrides.readinessTimeoutMs ?? 50,
+  });
+  return {
+    child,
+    clients,
+    fetchCalls,
+    lifecycle,
+    removedDirectories,
+    spawnCalls,
+  };
+}
+
+test("allocateLoopbackPort binds loopback on an ephemeral exclusive port and closes the probe", async () => {
+  const calls = [];
+  const server = {
+    once(event, listener) {
+      calls.push(["once", event, listener]);
+    },
+    removeListener(event, listener) {
+      calls.push(["removeListener", event, listener]);
+    },
+    listen(options, listener) {
+      calls.push(["listen", options]);
+      listener();
+    },
+    address() {
+      return { address: "127.0.0.1", family: "IPv4", port: PORT };
+    },
+    close(listener) {
+      calls.push(["close"]);
+      listener();
+    },
+  };
+
+  const port = await allocateLoopbackPort({ createServerImpl: () => server });
+
+  assert.equal(port, PORT);
+  assert.deepEqual(calls.find(([name]) => name === "listen"), [
+    "listen",
+    { host: "127.0.0.1", port: 0, exclusive: true },
+  ]);
+  assert.equal(calls.some(([name]) => name === "close"), true);
 });
 
-test("the http client rejects on a non-ok response", async () => {
-  const client = createOpencodeHttpClient({ fetchImpl: async () => errRes(500, "boom"), baseUrl: "http://x" });
-  await assert.rejects(() => client.createSession(), /failed: 500/);
+test("splitOpencodeModelIdentifier splits once and rejects invalid identifiers", () => {
+  assert.deepEqual(splitOpencodeModelIdentifier("openai/gpt-5.4-mini"), {
+    providerID: "openai",
+    id: "gpt-5.4-mini",
+  });
+  assert.deepEqual(splitOpencodeModelIdentifier("openrouter/google/gemini-2.5-pro"), {
+    providerID: "openrouter",
+    id: "google/gemini-2.5-pro",
+  });
+  for (const value of ["", "openai", "/model", "openai/", " openai/model", "openai/model "]) {
+    assert.throws(() => splitOpencodeModelIdentifier(value), /provider\/model/);
+  }
+});
+
+test("SDK adapter uses the exact authenticated v2 client and session contracts", async () => {
+  const calls = [];
+  const stream = {
+    async *[Symbol.asyncIterator]() {
+      yield { type: "session.idle", data: { sessionID: "session-1" } };
+    },
+  };
+  const rawClient = {
+    v2: {
+      event: {
+        subscribe: async (input) => {
+          calls.push(["subscribe", input]);
+          return { stream };
+        },
+      },
+      session: {
+        create: async (input) => {
+          calls.push(["create", input]);
+          return { data: { data: { id: "session-1" } } };
+        },
+        permission: {
+          reply: async (input) => {
+            calls.push(["permission", input]);
+            return { data: { data: { accepted: true } } };
+          },
+        },
+        prompt: async (input) => {
+          calls.push(["prompt", input]);
+          return { data: { data: { accepted: true } } };
+        },
+      },
+    },
+  };
+  const createCalls = [];
+  const client = await createOpencodeSdkClient({
+    authorization: AUTHORIZATION,
+    baseUrl: `http://127.0.0.1:${PORT}`,
+    directory: WORKSPACE,
+    loadSdk: async () => ({
+      createOpencodeClient: (options) => {
+        createCalls.push(options);
+        return rawClient;
+      },
+    }),
+  });
+  const abortController = new AbortController();
+
+  assert.deepEqual(await client.createSession({ model: "openai/gpt-5.4-mini" }), {
+    sessionId: "session-1",
+  });
+  await client.prompt({ sessionID: "session-1", text: "Run tests." });
+  await client.replyPermission({
+    sessionID: "session-1",
+    requestID: "permission-1",
+    reply: "once",
+  });
+  assert.equal(await client.subscribeEvents({ signal: abortController.signal }), stream);
+
+  assert.deepEqual(createCalls, [{
+    baseUrl: `http://127.0.0.1:${PORT}`,
+    directory: WORKSPACE,
+    headers: { Authorization: AUTHORIZATION },
+    throwOnError: true,
+  }]);
+  assert.deepEqual(calls, [
+    ["create", {
+      model: { providerID: "openai", id: "gpt-5.4-mini" },
+      location: { directory: WORKSPACE },
+    }],
+    ["prompt", {
+      sessionID: "session-1",
+      prompt: { text: "Run tests." },
+      delivery: "queue",
+    }],
+    ["permission", {
+      sessionID: "session-1",
+      requestID: "permission-1",
+      reply: "once",
+    }],
+    ["subscribe", { signal: abortController.signal }],
+  ]);
+});
+
+test("SDK adapter rejects persistent permission replies and invalid models before an SDK request", async () => {
+  let createCalls = 0;
+  let permissionCalls = 0;
+  const client = await createOpencodeSdkClient({
+    authorization: AUTHORIZATION,
+    baseUrl: `http://127.0.0.1:${PORT}`,
+    directory: WORKSPACE,
+    loadSdk: async () => ({
+      createOpencodeClient: () => ({
+        v2: {
+          event: { subscribe: async () => ({ stream: [] }) },
+          session: {
+            create: async () => {
+              createCalls += 1;
+            },
+            permission: {
+              reply: async () => {
+                permissionCalls += 1;
+              },
+            },
+            prompt: async () => ({}),
+          },
+        },
+      }),
+    }),
+  });
+
+  await assert.rejects(client.createSession({ model: "missing-provider" }), /provider\/model/);
+  await assert.rejects(
+    client.replyPermission({
+      sessionID: "session-1",
+      requestID: "permission-1",
+      reply: "always",
+    }),
+    /once or reject/,
+  );
+  assert.equal(createCalls, 0);
+  assert.equal(permissionCalls, 0);
+});
+
+test("lifecycle starts one authenticated pure loopback child with scoped environment", async () => {
+  const originalPassword = process.env.OPENCODE_SERVER_PASSWORD;
+  const {
+    child,
+    clients,
+    fetchCalls,
+    lifecycle,
+    spawnCalls,
+  } = lifecycleHarness();
+  const handle = await lifecycle.start({
+    command: "/fixed/bin/opencode",
+    cwd: WORKSPACE,
+    env: {
+      HOME: "/Users/test",
+      MINIMAX_API_KEY: "selected-provider-secret",
+      OPENCODE_SERVER_PASSWORD: "foreign-password",
+      OPENCODE_SERVER_USERNAME: "foreign-user",
+      RESONANTOS_BROWSER_FIRST_TOKEN: "bridge-secret",
+    },
+  });
+
+  assert.equal(handle.process, child);
+  assert.deepEqual(lifecycle.status(), { state: "running" });
+  assert.deepEqual(spawnCalls, [{
+    command: "/fixed/bin/opencode",
+    args: ["serve", "--pure", "--hostname", "127.0.0.1", "--port", String(PORT)],
+    options: {
+      cwd: WORKSPACE,
+      env: {
+        HOME: "/Users/test",
+        MINIMAX_API_KEY: "selected-provider-secret",
+        OPENCODE_CONFIG_DIR: CONFIG_DIRECTORY,
+        OPENCODE_DISABLE_PROJECT_CONFIG: "1",
+        OPENCODE_PERMISSION: "{\"*\":\"ask\",\"external_directory\":\"deny\"}",
+        OPENCODE_SERVER_USERNAME: "resonantos",
+        OPENCODE_SERVER_PASSWORD: PASSWORD,
+      },
+      shell: false,
+      stdio: "ignore",
+    },
+  }]);
+  assert.equal(fetchCalls[0].options.headers.Authorization, FOREIGN_AUTHORIZATION);
+  assert.equal(fetchCalls[1].options.headers.Authorization, AUTHORIZATION);
+  assert.equal(process.env.OPENCODE_SERVER_PASSWORD, originalPassword);
+
+  assert.deepEqual(await lifecycle.createClient(handle), { sdk: true });
+  assert.deepEqual(clients, [{
+    authorization: AUTHORIZATION,
+    baseUrl: `http://127.0.0.1:${PORT}`,
+    directory: WORKSPACE,
+  }]);
+});
+
+test("lifecycle handle and public status expose no URL, credentials, config path, or workspace", async () => {
+  const { lifecycle } = lifecycleHarness();
+  const handle = await lifecycle.start({
+    command: "/fixed/bin/opencode",
+    cwd: WORKSPACE,
+    env: {},
+  });
+  const publicText = JSON.stringify({ handle, status: lifecycle.status() });
+
+  for (const value of [
+    `http://127.0.0.1:${PORT}`,
+    AUTHORIZATION,
+    PASSWORD,
+    CONFIG_DIRECTORY,
+    WORKSPACE,
+  ]) {
+    assert.equal(publicText.includes(value), false);
+  }
+});
+
+test("lifecycle refuses a listener that accepts the ownership-challenge credential", async () => {
+  const child = fakeChild();
+  const { lifecycle } = lifecycleHarness({
+    child,
+    fetchImpl: async () => response(true),
+    readinessTimeoutMs: 5,
+  });
+
+  await assert.rejects(
+    lifecycle.start({
+      command: "/fixed/bin/opencode",
+      cwd: WORKSPACE,
+      env: {},
+    }),
+    /did not become ready/,
+  );
+  assert.equal(child.killCalls, 1);
+  assert.deepEqual(lifecycle.status(), { state: "stopped" });
+});
+
+test("lifecycle timeout bounds a hanging authenticated readiness probe", async () => {
+  const child = fakeChild();
+  const { lifecycle } = lifecycleHarness({
+    child,
+    fetchImpl: async (_url, { signal }) => new Promise((resolve, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    }),
+    pollMs: 1,
+    readinessProbeTimeoutMs: 500,
+    readinessTimeoutMs: 20,
+  });
+  const startedAt = Date.now();
+
+  await assert.rejects(
+    lifecycle.start({
+      command: "/fixed/bin/opencode",
+      cwd: WORKSPACE,
+      env: {},
+    }),
+    /did not become ready/,
+  );
+  assert.equal(Date.now() - startedAt < 250, true);
+  assert.equal(child.killCalls, 1);
+});
+
+test("early child exit rejects startup and clears owned config state", async () => {
+  const child = fakeChild();
+  const { lifecycle, removedDirectories } = lifecycleHarness({
+    child,
+    fetchImpl: async () => response(false),
+    sleep: async () => {
+      child.exitCode = 17;
+      child.emit("exit", 17, null);
+    },
+  });
+
+  await assert.rejects(
+    lifecycle.start({
+      command: "/fixed/bin/opencode",
+      cwd: WORKSPACE,
+      env: {},
+    }),
+    /exited before becoming ready/,
+  );
+  assert.deepEqual(removedDirectories, [CONFIG_DIRECTORY]);
+  assert.deepEqual(lifecycle.status(), { state: "stopped" });
+});
+
+test("stop is ownership-bound, idempotent, and kills only the spawned child", async () => {
+  const child = fakeChild();
+  const foreignChild = fakeChild();
+  const { lifecycle, removedDirectories } = lifecycleHarness({ child });
+  const handle = await lifecycle.start({
+    command: "/fixed/bin/opencode",
+    cwd: WORKSPACE,
+    env: {},
+  });
+
+  await assert.rejects(
+    lifecycle.stop(Object.freeze({ process: foreignChild })),
+    /not owned/,
+  );
+  assert.deepEqual(await lifecycle.stop(handle), { state: "stopped" });
+  assert.deepEqual(await lifecycle.stop(handle), { state: "stopped" });
+  assert.equal(child.killCalls, 1);
+  assert.equal(foreignChild.killCalls, 0);
+  assert.deepEqual(removedDirectories, [CONFIG_DIRECTORY]);
+});
+
+test("unexpected child exit clears private state and notifies watchers without a second kill", async () => {
+  const child = fakeChild();
+  const observed = [];
+  const { lifecycle, removedDirectories } = lifecycleHarness({ child });
+  const unwatch = lifecycle.watch((event) => observed.push(event));
+
+  const handle = await lifecycle.start({
+    command: "/fixed/bin/opencode",
+    cwd: WORKSPACE,
+    env: {},
+  });
+  child.exitCode = 17;
+  child.emit("exit", 17, null);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(observed, [{ state: "stopped", reason: "child-exit" }]);
+  assert.deepEqual(lifecycle.status(), { state: "stopped" });
+  assert.deepEqual(removedDirectories, [CONFIG_DIRECTORY]);
+  assert.equal(child.killCalls, 0);
+  await assert.rejects(lifecycle.createClient(handle), /not owned/);
+  unwatch();
+  unwatch();
+});
+
+test("stop waits for in-progress unexpected-exit cleanup before reporting stopped", async () => {
+  const child = fakeChild();
+  let finishCleanup;
+  const cleanupStarted = new Promise((resolve) => {
+    finishCleanup = resolve;
+  });
+  let releaseCleanup;
+  const cleanupBlocked = new Promise((resolve) => {
+    releaseCleanup = resolve;
+  });
+  const { lifecycle } = lifecycleHarness({
+    child,
+    removeConfigDirectory: async () => {
+      finishCleanup();
+      await cleanupBlocked;
+    },
+  });
+  const handle = await lifecycle.start({
+    command: "/fixed/bin/opencode",
+    cwd: WORKSPACE,
+    env: {},
+  });
+
+  child.exitCode = 17;
+  child.emit("exit", 17, null);
+  await cleanupStarted;
+
+  let stopFinished = false;
+  const stopping = lifecycle.stop(handle).then((result) => {
+    stopFinished = true;
+    return result;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(stopFinished, false);
+
+  releaseCleanup();
+  assert.deepEqual(await stopping, { state: "stopped" });
+  assert.equal(child.killCalls, 0);
+});
+
+test("shutdown stops the active owned child and rejects concurrent lifecycle starts", async () => {
+  const child = fakeChild();
+  const { lifecycle } = lifecycleHarness({ child });
+  await lifecycle.start({
+    command: "/fixed/bin/opencode",
+    cwd: WORKSPACE,
+    env: {},
+  });
+
+  await assert.rejects(
+    lifecycle.start({
+      command: "/fixed/bin/opencode",
+      cwd: WORKSPACE,
+      env: {},
+    }),
+    /already active/,
+  );
+  assert.deepEqual(await lifecycle.shutdown(), { state: "stopped" });
+  assert.equal(child.killCalls, 1);
 });

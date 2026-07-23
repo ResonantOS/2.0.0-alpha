@@ -85,6 +85,7 @@ const BRIDGE_ROUTE_CAPABILITIES = Object.freeze({
   "POST /opencode/session/start": "addon-runtime-control",
   "POST /opencode/session/prompt": "addon-runtime-control",
   "POST /opencode/session/permission": "addon-runtime-control",
+  "POST /opencode/session/events": "addon-runtime-read",
   "POST /opencode/session/stop": "addon-runtime-control",
   "POST /addons/draft": "addon-record-write",
   "POST /addons/draft/list": "addon-record-read",

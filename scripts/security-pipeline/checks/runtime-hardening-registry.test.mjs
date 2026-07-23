@@ -11,6 +11,7 @@ import {
   createAddonDelegationService,
   OPENCODE_EXPLICIT_PROVIDER_ENV_KEYS,
 } from "../../../browser-first/host/addon-delegation-service.mjs";
+import { createOpencodeServerLifecycle } from "../../../browser-first/host/opencode-client.mjs";
 import {
   generateCa,
   generateLeaf,
@@ -92,6 +93,7 @@ const HERMES_CAPTURE_ENVIRONMENT = {
 const EXPECTED_OPERATION_IDS = [
   "addon-delegation:hermes-python-adapter",
   "addon-delegation:opencode-cli",
+  "opencode-session:authenticated-server",
   "addon-delegation:hermes-dashboard-start",
   "addon-delegation:hermes-dashboard-stop",
   "memory-source-browse:macos-picker",
@@ -116,6 +118,8 @@ const EXPECTED_SOURCE_PATHS = [
   "browser-first/host/browser-first-host-utils.mjs",
   "browser-first/host/browser-diagnostics-service.mjs",
   "browser-first/host/memory-source-settings-service.mjs",
+  "browser-first/host/opencode-client.mjs",
+  "browser-first/host/opencode-session-composition.mjs",
   "browser-first/host/opencode-runtime.mjs",
   "browser-first/host/bridge-tls.mjs",
 ];
@@ -559,6 +563,85 @@ test("delegated CLI registry descriptors match captured production invocations",
     assert.deepEqual(
       registryDescriptor(records.get("addon-delegation:hermes-python-adapter")),
       normalizedHermes,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("OpenCode live-session registry descriptor matches the authenticated production lifecycle", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "runtime-registry-opencode-live-"));
+  const calls = [];
+  const removedDirectories = [];
+  try {
+    const runtime = await createRuntimeFixture(root);
+    const configDirectory = path.join(root, "opencode-live-config");
+    const credentialKeys = [...new Set(
+      OPENCODE_PROVIDERS.flatMap(([, keys]) => keys),
+    )];
+    const systemKeys = [
+      "HOME",
+      "PATH",
+      "SHELL",
+      "TERM",
+      "TMPDIR",
+      "TEMP",
+      "TMP",
+      "LANG",
+      "LC_ALL",
+      "LC_CTYPE",
+    ];
+    const childEnvironment = Object.fromEntries([
+      ...systemKeys,
+      ...credentialKeys,
+      ...OPENCODE_EXPLICIT_PROVIDER_ENV_KEYS,
+    ].map((key) => [key, `fixture-${key.toLowerCase()}`]));
+    let probe = 0;
+    const child = new EventEmitter();
+    child.exitCode = null;
+    child.kill = () => undefined;
+    const lifecycle = createOpencodeServerLifecycle({
+      allocatePort: async () => 43123,
+      createClient: async () => ({}),
+      createConfigDirectory: async () => configDirectory,
+      fetchImpl: async () => ({ ok: (probe += 1) % 2 === 0 }),
+      randomPassword: () => "generated-password",
+      removeConfigDirectory: async (directory) => {
+        removedDirectories.push(directory);
+      },
+      sleep: async () => undefined,
+      spawnImpl(command, args, options) {
+        calls.push({ command, args, options });
+        return child;
+      },
+      pollMs: 1,
+      readinessProbeTimeoutMs: 10,
+      readinessTimeoutMs: 50,
+    });
+
+    const handle = await lifecycle.start({
+      command: runtime.opencode.command,
+      cwd: runtime.root,
+      env: childEnvironment,
+    });
+    await lifecycle.stop(handle);
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].options.cwd, runtime.root);
+    assert.deepEqual(removedDirectories, [configDirectory]);
+    const captured = capturedDescriptor(calls[0], {
+      command: normalizeRootPath(runtime.opencode.command, runtime.root),
+      resolution: normalizedResolution(runtime.opencode.resolution, runtime.root),
+    });
+    captured.args = captured.args.with(5, "<port>");
+
+    const registry = await readRegistry();
+    const records = new Map(
+      registry.recordSets[RECORD_SET].map((record) => [record.id, record]),
+    );
+    assert.deepEqual(
+      registryDescriptor(records.get("opencode-session:authenticated-server")),
+      captured,
     );
   } finally {
     await rm(root, { recursive: true, force: true });
