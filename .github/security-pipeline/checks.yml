@@ -331,6 +331,7 @@
           "ZAI_BASE_URL",
           "ZHIPUAI_BASE_URL",
           "OPENCODE_CONFIG_DIR",
+          "OPENCODE_DISABLE_LSP_DOWNLOAD",
           "OPENCODE_DISABLE_PROJECT_CONFIG",
           "OPENCODE_PERMISSION",
           "OPENCODE_SERVER_USERNAME",
@@ -368,6 +369,7 @@
           "ZAI_BASE_URL",
           "ZHIPUAI_BASE_URL",
           "OPENCODE_CONFIG_DIR",
+          "OPENCODE_DISABLE_LSP_DOWNLOAD",
           "OPENCODE_DISABLE_PROJECT_CONFIG",
           "OPENCODE_PERMISSION",
           "OPENCODE_SERVER_USERNAME",
@@ -413,7 +415,7 @@
           {"platform": "win32", "base": "install-prefix", "canonical_roots": ["C:\\Program Files\\OpenCode", "C:\\Program Files\\lib\\node_modules"], "path": "C:\\Program Files\\OpenCode\\opencode.exe", "source": "fixed-program-files-root", "validated_by": "opencodeRuntimeDiagnostics"},
           {"platform": "win32", "base": "install-prefix", "canonical_roots": ["C:\\Program Files\\OpenCode", "C:\\Program Files\\lib\\node_modules"], "path": "C:\\Program Files\\OpenCode\\opencode-ai.exe", "source": "fixed-program-files-root", "validated_by": "opencodeRuntimeDiagnostics"}
         ],
-        "approved_by": "explicit OpenCode live-session consent with filesystem, shell, and providers grants"
+        "approved_by": "explicit OpenCode live-session consent with filesystem and providers grants; shell and process tools remain denied"
       },
       {
         "id": "addon-delegation:hermes-dashboard-start",

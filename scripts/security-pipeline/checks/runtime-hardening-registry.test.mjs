@@ -768,6 +768,7 @@ test("OpenCode live-session registry descriptor matches the authenticated produc
   const root = await mkdtemp(path.join(os.tmpdir(), "runtime-registry-opencode-live-"));
   const calls = [];
   const removedDirectories = [];
+  const readinessProbes = [];
   try {
     const runtime = await createRuntimeFixture(root);
     const configDirectory = path.join(root, "opencode-live-config");
@@ -803,7 +804,14 @@ test("OpenCode live-session registry descriptor matches the authenticated produc
     const lifecycle = createOpencodeServerLifecycle({
       createClient: async () => ({}),
       createConfigDirectory: async () => configDirectory,
-      fetchImpl: async () => ({ ok: true, status: 200 }),
+      fetchImpl: async (_url, options) => {
+        const authenticated = Boolean(options.headers.Authorization);
+        readinessProbes.push(authenticated ? "owned" : "unowned");
+        return {
+          ok: authenticated,
+          status: authenticated ? 200 : 401,
+        };
+      },
       randomPassword: () => "generated-password",
       readServerAddress: async () => "http://127.0.0.1:43123",
       removeConfigDirectory: async (directory) => {
@@ -828,6 +836,7 @@ test("OpenCode live-session registry descriptor matches the authenticated produc
 
     assert.equal(calls.length, 1);
     assert.equal(calls[0].options.cwd, runtime.root);
+    assert.deepEqual(readinessProbes, ["owned", "unowned"]);
     assert.deepEqual(removedDirectories, [configDirectory]);
     const captured = capturedDescriptor(calls[0], {
       command: normalizeRootPath(runtime.opencode.command, runtime.root),
