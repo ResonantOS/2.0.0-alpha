@@ -1,6 +1,8 @@
 import { noteCard, safeErrorMessage, setStatus, settingsHeader } from "./settings-common.js";
 import { capabilityReviewElement, capabilityReviewState } from "../addon-capability-review.js";
 
+const OPEN_CODE_LIVE_GRANTS = ["filesystem", "shell", "providers"];
+
 function addonTone(addon) {
   if (addon.available || addon.enabled) return "success";
   return "warning";
@@ -46,6 +48,85 @@ function addonDisclosure(title, body, children = []) {
   return details;
 }
 
+function openCodeLiveSessionControls(addon, actions = {}) {
+  const liveSession = addon.execution?.liveSession ?? {};
+  const grantedCapabilities = Array.isArray(liveSession.grantedCapabilities)
+    ? liveSession.grantedCapabilities
+    : [];
+  const form = document.createElement("form");
+  form.className = "settings-opencode-live-session";
+
+  const heading = document.createElement("strong");
+  heading.textContent = "Optional developer preview";
+  const authority = document.createElement("small");
+  authority.textContent = "Scoped filesystem, shell, and provider authority is required before a live session can start.";
+
+  const workspaceField = document.createElement("label");
+  workspaceField.className = "settings-provider-field";
+  workspaceField.textContent = "Workspace inside this repository";
+  const workspaceInput = document.createElement("input");
+  workspaceInput.type = "text";
+  workspaceInput.autocomplete = "off";
+  workspaceInput.placeholder = ".";
+  workspaceInput.value = String(liveSession.workspacePath ?? "");
+  workspaceInput.setAttribute("aria-label", "OpenCode workspace");
+  workspaceField.append(workspaceInput);
+
+  const grants = document.createElement("fieldset");
+  grants.className = "settings-opencode-grants";
+  const grantsLegend = document.createElement("legend");
+  grantsLegend.textContent = "Live-session grants";
+  grants.append(grantsLegend);
+  const grantInputs = new Map();
+  for (const capability of OPEN_CODE_LIVE_GRANTS) {
+    const label = document.createElement("label");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = grantedCapabilities.includes(capability);
+    checkbox.setAttribute("aria-label", `Grant OpenCode ${capability}`);
+    label.append(checkbox, document.createTextNode(capability));
+    grants.append(label);
+    grantInputs.set(capability, checkbox);
+  }
+
+  const enableLabel = document.createElement("label");
+  enableLabel.className = "settings-opencode-live-toggle";
+  const enableInput = document.createElement("input");
+  enableInput.type = "checkbox";
+  enableInput.checked = Boolean(liveSession.enabled);
+  enableInput.setAttribute("aria-label", "Enable OpenCode live session");
+  enableLabel.append(enableInput, document.createTextNode("Enable governed live session"));
+
+  const readiness = document.createElement("small");
+  readiness.className = "settings-opencode-readiness";
+  readiness.dataset.ready = String(Boolean(liveSession.ready));
+  readiness.textContent = liveSession.ready
+    ? "Ready to start from the OpenCode workspace."
+    : "Not ready. Save valid consent and confirm the runtime and selected provider are available.";
+
+  const save = document.createElement("button");
+  save.type = "submit";
+  save.textContent = "Save OpenCode live session";
+
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const workspacePath = workspaceInput.value.trim();
+    const nextGrants = OPEN_CODE_LIVE_GRANTS.filter((capability) => grantInputs.get(capability)?.checked);
+    const hasRequiredAuthority = Boolean(workspacePath) && nextGrants.length === OPEN_CODE_LIVE_GRANTS.length;
+    void Promise.resolve(actions.onSaveOpenCode?.(addon, {
+      localCliExecution: Boolean(addon.execution?.localCliExecution),
+      liveSession: {
+        enabled: enableInput.checked && hasRequiredAuthority,
+        workspacePath,
+        grantedCapabilities: nextGrants,
+      },
+    })).catch(() => undefined);
+  });
+
+  form.append(heading, authority, workspaceField, grants, enableLabel, readiness, save);
+  return form;
+}
+
 function addonCard(addon, actions = {}) {
   const card = document.createElement("article");
   card.className = "settings-addon-card";
@@ -81,8 +162,13 @@ function addonCard(addon, actions = {}) {
     const toggle = document.createElement("button");
     toggle.type = "button";
     toggle.textContent = executionState ? "Disable local execution" : "Enable local execution";
-    toggle.addEventListener("click", () => actions.onToggleExecution?.(addon, !executionState));
+    toggle.addEventListener("click", () => {
+      void Promise.resolve(actions.onToggleExecution?.(addon, !executionState)).catch(() => undefined);
+    });
     executionPanel.append(text, toggle);
+    if (addon.id === "addon.opencode") {
+      executionPanel.append(openCodeLiveSessionControls(addon, actions));
+    }
   }
 
   const capabilities = addonDisclosure(
@@ -131,12 +217,42 @@ export function renderAddonsSection(container, { bridgeRequest, getBridgeRequest
       onToggleExecution: async (selected, enabled) => {
         const addon = selected.id === "addon.hermes" ? "hermes" : "opencode";
         setStatus(statusNode, `${enabled ? "Enabling" : "Disabling"} ${selected.name} local execution...`);
-        await bridge()("/addons/execution-settings", {
-          method: "POST",
-          capability: "addon-execution-settings-write",
-          body: { addon, localCliExecution: enabled }
-        });
-        await load();
+        const liveSession = selected.execution?.liveSession ?? {};
+        try {
+          await bridge()("/addons/execution-settings", {
+            method: "POST",
+            capability: "addon-execution-settings-write",
+            body: {
+              addon,
+              localCliExecution: enabled,
+              ...(addon === "opencode" ? {
+                liveSession: {
+                  enabled: enabled ? Boolean(liveSession.enabled) : false,
+                  workspacePath: String(liveSession.workspacePath ?? ""),
+                  grantedCapabilities: Array.isArray(liveSession.grantedCapabilities)
+                    ? [...liveSession.grantedCapabilities]
+                    : []
+                }
+              } : {})
+            }
+          });
+          await load();
+        } catch (error) {
+          setStatus(statusNode, `Could not update ${selected.name} local execution: ${safeErrorMessage(error)}`, "error");
+        }
+      },
+      onSaveOpenCode: async (_selected, desired) => {
+        setStatus(statusNode, "Saving OpenCode live-session consent...");
+        try {
+          await bridge()("/addons/execution-settings", {
+            method: "POST",
+            capability: "addon-execution-settings-write",
+            body: { addon: "opencode", ...desired }
+          });
+          await load();
+        } catch (error) {
+          setStatus(statusNode, `Could not save OpenCode live-session consent: ${safeErrorMessage(error)}`, "error");
+        }
       }
     })));
     setStatus(statusNode, addons.length

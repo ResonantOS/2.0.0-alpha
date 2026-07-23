@@ -16,6 +16,11 @@ test("provider host service owns provider and Augmentor bridge routes", () => {
   assert.equal(typeof service.executeProviderStatus, "function");
   assert.equal(typeof service.executeBridgeChat, "function");
   assert.equal(typeof service.executeInlineAssistant, "function");
+  assert.equal(typeof service.clearSessionProviderSecrets, "function");
+  assert.equal(
+    service.providerBridgeRoutes.some(({ handler }) => handler === service.clearSessionProviderSecrets),
+    false,
+  );
 
   assert.equal(typeof routes.get("GET /providers/status")?.handler, "function");
   assert.equal(typeof routes.get("POST /providers/health")?.handler, "function");

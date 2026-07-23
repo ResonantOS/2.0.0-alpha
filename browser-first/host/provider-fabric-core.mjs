@@ -245,14 +245,15 @@ export function resolveRoutingStrategies({
 }
 
 export function providerRouteForModel(model, { localRuntimeUrl = "", catalog = modelCatalog, profiles = providerProfiles } = {}) {
-  if (model === "__auto__" || model === "auto") {
+  const requestedModel = String(model ?? "").trim();
+  if (requestedModel === "__auto__" || requestedModel === "auto") {
     return null;
   }
   // A model contributed by a custom (non-built-in) provider account routes to
   // that provider's own endpoint. Checked before the built-in prefix rules so a
   // custom model whose name resembles a built-in (e.g. "gpt-*") is not hijacked
   // to a shared endpoint. Built-in providers fall through to the rules below.
-  const dynamicEntry = catalog.find((candidate) => candidate.model === model);
+  const dynamicEntry = catalog.find((candidate) => candidate.model === requestedModel);
   if (dynamicEntry && !providerProfiles.some((builtIn) => builtIn.id === dynamicEntry.providerId)) {
     const profile = profiles.find((candidate) => candidate.id === dynamicEntry.providerId);
     if (profile?.apiBaseUrl) {
@@ -260,43 +261,95 @@ export function providerRouteForModel(model, { localRuntimeUrl = "", catalog = m
         providerId: dynamicEntry.providerId,
         providerType: dynamicEntry.providerType ?? profile.providerType ?? "openai-compatible",
         apiBaseUrl: profile.apiBaseUrl,
-        wireModel: dynamicEntry.wireModel ?? model,
+        wireModel: dynamicEntry.wireModel ?? requestedModel,
         label: profile.label ?? dynamicEntry.providerLabel ?? "Provider",
       };
     }
   }
-  if (model?.startsWith("batiai/")) {
-    return {
-      providerId: "desktop-local",
-      providerType: "openai-compatible",
-      apiBaseUrl: localRuntimeUrl || "http://127.0.0.1:11434/v1",
-      wireModel: model,
-      label: "Desktop Local",
-    };
+  const qualifiedSeparator = requestedModel.indexOf("/");
+  const qualifiedProvider = qualifiedSeparator > 0
+    ? requestedModel.slice(0, qualifiedSeparator).toLowerCase()
+    : "";
+  const qualifiedWireModel = qualifiedSeparator > 0
+    ? requestedModel.slice(qualifiedSeparator + 1)
+    : "";
+  if (qualifiedProvider && qualifiedWireModel) {
+    const qualifiedEntry = catalog.find((candidate) => {
+      const candidateModel = String(candidate?.model ?? "");
+      const candidateWireModel = String(candidate?.wireModel ?? candidateModel);
+      if (![requestedModel, qualifiedWireModel].includes(candidateModel)
+        && ![requestedModel, qualifiedWireModel].includes(candidateWireModel)) {
+        return false;
+      }
+      if (candidateModel === requestedModel || candidateWireModel === requestedModel) {
+        return true;
+      }
+      const profile = profiles.find((candidateProfile) => candidateProfile.id === candidate.providerId);
+      const aliases = [
+        candidate?.providerType,
+        profile?.providerType,
+        profile?.templateId,
+        profile?.id,
+        String(profile?.id ?? "").replace(/^shared-/, ""),
+      ].map((value) => String(value ?? "").trim().toLowerCase()).filter(Boolean);
+      return aliases.includes(qualifiedProvider);
+    });
+    const qualifiedProfile = profiles.find((profile) => profile.id === qualifiedEntry?.providerId);
+    if (!qualifiedEntry) {
+      return null;
+    }
+    if (qualifiedEntry && qualifiedProfile?.apiBaseUrl) {
+      return {
+        providerId: qualifiedEntry.providerId,
+        providerType: qualifiedEntry.providerType ?? qualifiedProfile.providerType ?? qualifiedProvider,
+        apiBaseUrl: qualifiedProfile.apiBaseUrl,
+        wireModel: qualifiedEntry.wireModel
+          ?? (qualifiedEntry.model === requestedModel ? requestedModel : qualifiedWireModel),
+        label: qualifiedProfile.label ?? qualifiedEntry.providerLabel ?? qualifiedEntry.providerId,
+      };
+    }
+    if (qualifiedProvider === "batiai" && qualifiedEntry.providerId === "desktop-local") {
+      return {
+        providerId: "desktop-local",
+        providerType: "openai-compatible",
+        apiBaseUrl: localRuntimeUrl || "http://127.0.0.1:11434/v1",
+        wireModel: qualifiedEntry.wireModel ?? requestedModel,
+        label: qualifiedProfile?.label ?? qualifiedEntry.providerLabel ?? "Desktop Local",
+      };
+    }
+    if (!["openai", "minimax"].includes(qualifiedProvider)) {
+      return null;
+    }
   }
-  if (model?.startsWith("gpt-")) {
+  const openAiModel = requestedModel.startsWith("openai/")
+    ? requestedModel.slice("openai/".length)
+    : requestedModel;
+  if (openAiModel.startsWith("gpt-")) {
     return {
       providerId: "shared-openai",
       providerType: "openai",
       apiBaseUrl: "https://api.openai.com/v1",
-      wireModel: model,
+      wireModel: openAiModel,
       label: "Shared OpenAI",
     };
   }
-  if (model === "zai/glm-5.2" || model?.toLowerCase().startsWith("zai/glm")) {
+  if (requestedModel === "zai/glm-5.2" || requestedModel.toLowerCase().startsWith("zai/glm")) {
     return {
       providerId: "shared-zai-glm",
       providerType: "openai-compatible",
       apiBaseUrl: "http://127.0.0.1:18789/v1",
-      wireModel: model || "zai/glm-5.2",
+      wireModel: requestedModel || "zai/glm-5.2",
       label: "Shared Z.AI GLM",
     };
   }
+  const minimaxModel = requestedModel.startsWith("minimax/")
+    ? requestedModel.slice("minimax/".length)
+    : requestedModel;
   return {
     providerId: "shared-minimax",
     providerType: "minimax",
     apiBaseUrl: "https://api.minimax.io/v1",
-    wireModel: model === "MiniMax-M3" ? "MiniMax-M3" : model || "MiniMax-M3",
+    wireModel: minimaxModel === "MiniMax-M3" ? "MiniMax-M3" : minimaxModel || "MiniMax-M3",
     label: "Shared MiniMax",
   };
 }

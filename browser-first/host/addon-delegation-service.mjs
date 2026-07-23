@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { spawn } from "node:child_process";
@@ -16,6 +16,24 @@ const DEFAULT_HERMES_PROVIDER = "openai-api";
 const DEFAULT_HERMES_MODEL = "gpt-5.4-mini";
 const DEFAULT_HERMES_MINIMAX_MODEL = "MiniMax-M3";
 const MINIMAX_OPENAI_COMPAT_BASE_URL = "https://api.minimax.io/v1";
+const OPENCODE_LIVE_SESSION_GRANTS = Object.freeze(["filesystem", "shell", "providers"]);
+const OPENCODE_DECLARED_CAPABILITIES = Object.freeze([
+  ...OPENCODE_LIVE_SESSION_GRANTS,
+  "archive-read",
+  "archive-intake-write",
+]);
+const OPENCODE_LIVE_SYSTEM_ENV_KEYS = Object.freeze([
+  "HOME",
+  "PATH",
+  "SHELL",
+  "TERM",
+  "TMPDIR",
+  "TEMP",
+  "TMP",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+]);
 
 const providerEnvKeyDefaults = Object.freeze({
   anthropic: ["ANTHROPIC_API_KEY"],
@@ -26,6 +44,7 @@ const providerEnvKeyDefaults = Object.freeze({
   google: ["GOOGLE_GENERATIVE_AI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"],
   minimax: ["MINIMAX_API_KEY"],
   openai: ["OPENAI_API_KEY"],
+  "openai-compatible": ["OPENAI_API_KEY"],
   "openai-api": ["OPENAI_API_KEY"],
   openrouter: ["OPENROUTER_API_KEY"],
   xai: ["XAI_API_KEY"],
@@ -47,6 +66,21 @@ export const OPENCODE_EXPLICIT_PROVIDER_ENV_KEYS = Object.freeze([
   "ZAI_BASE_URL",
   "ZHIPUAI_BASE_URL",
 ]);
+
+const openCodeProviderBaseUrlKeys = Object.freeze({
+  anthropic: ["ANTHROPIC_BASE_URL"],
+  deepseek: ["DEEPSEEK_BASE_URL"],
+  gemini: ["GEMINI_BASE_URL", "GOOGLE_GENERATIVE_AI_BASE_URL", "GOOGLE_API_BASE_URL"],
+  glm: ["GLM_BASE_URL", "ZAI_BASE_URL", "ZHIPUAI_BASE_URL"],
+  google: ["GOOGLE_GENERATIVE_AI_BASE_URL", "GOOGLE_API_BASE_URL", "GEMINI_BASE_URL"],
+  minimax: ["MINIMAX_BASE_URL"],
+  openai: ["OPENAI_BASE_URL"],
+  "openai-compatible": ["OPENAI_BASE_URL"],
+  openrouter: ["OPENROUTER_BASE_URL"],
+  xai: ["XAI_BASE_URL"],
+  zai: ["ZAI_BASE_URL", "GLM_BASE_URL", "ZHIPUAI_BASE_URL"],
+  zhipuai: ["ZHIPUAI_BASE_URL", "ZAI_BASE_URL", "GLM_BASE_URL"],
+});
 
 const providerSecretIdDefaults = Object.freeze({
   anthropic: ["shared-anthropic", "anthropic"],
@@ -176,6 +210,7 @@ export function createAddonDelegationService(dependencies) {
     platform = process.platform,
     redactPathForDiagnostics,
     readProviderSecrets = async () => ({}),
+    resolveOpenCodeProviderRoute,
     repoRoot,
     safeFileSlug,
     spawnProcess = spawn,
@@ -402,15 +437,37 @@ export function createAddonDelegationService(dependencies) {
   function defaultAddonExecutionSettings() {
     return {
       hermes: { localCliExecution: false },
-      opencode: { localCliExecution: false },
+      opencode: {
+        localCliExecution: false,
+        liveSession: {
+          enabled: false,
+          workspacePath: "",
+          grantedCapabilities: [],
+        },
+      },
+    };
+  }
+
+  function normalizeOpenCodeLiveSession(value = {}) {
+    const requestedGrants = Array.isArray(value?.grantedCapabilities)
+      ? value.grantedCapabilities.map((grant) => String(grant ?? "").trim().toLowerCase())
+      : [];
+    const grantedCapabilities = OPENCODE_LIVE_SESSION_GRANTS.filter((grant) => requestedGrants.includes(grant));
+    return {
+      enabled: value?.enabled === true,
+      workspacePath: String(value?.workspacePath ?? "").trim(),
+      grantedCapabilities,
     };
   }
 
   function normalizeAddonExecutionSettings(value = {}) {
     const defaults = defaultAddonExecutionSettings();
     return {
-      hermes: { localCliExecution: Boolean(value?.hermes?.localCliExecution ?? defaults.hermes.localCliExecution) },
-      opencode: { localCliExecution: Boolean(value?.opencode?.localCliExecution ?? defaults.opencode.localCliExecution) },
+      hermes: { localCliExecution: value?.hermes?.localCliExecution === true },
+      opencode: {
+        localCliExecution: value?.opencode?.localCliExecution === true,
+        liveSession: normalizeOpenCodeLiveSession(value?.opencode?.liveSession ?? defaults.opencode.liveSession),
+      },
     };
   }
 
@@ -439,6 +496,213 @@ export function createAddonDelegationService(dependencies) {
     if (addon === "hermes" && /^enabled|true|1$/i.test(String(process.env.RESONANTOS_HERMES_EXECUTION ?? ""))) return true;
     if (addon === "opencode" && /^enabled|true|1$/i.test(String(process.env.RESONANTOS_OPENCODE_EXECUTION ?? ""))) return true;
     return Boolean(settings?.[addon]?.localCliExecution);
+  }
+
+  async function resolveOpenCodeLiveWorkspace(workspacePath) {
+    const raw = String(workspacePath ?? "").trim();
+    if (!raw) {
+      throw new Error("OpenCode live-session workspace is required.");
+    }
+    const expanded = path.isAbsolute(raw) || raw === "~" || raw.startsWith(`~${path.sep}`) || raw.startsWith("~/")
+      ? expandUserPath(raw)
+      : path.resolve(repoRoot, raw);
+    let allowedRoot;
+    let resolved;
+    try {
+      [allowedRoot, resolved] = await Promise.all([realpath(repoRoot), realpath(expanded)]);
+    } catch {
+      throw new Error("OpenCode live-session workspace is unavailable or outside the ResonantOS repository.");
+    }
+    if (resolved !== allowedRoot && !resolved.startsWith(`${allowedRoot}${path.sep}`)) {
+      throw new Error("OpenCode live-session workspace is outside the ResonantOS repository.");
+    }
+    const workspaceStat = await stat(resolved);
+    if (!workspaceStat.isDirectory()) {
+      throw new Error("OpenCode live-session workspace must be a directory.");
+    }
+    return {
+      workspacePath: resolved,
+      workspaceLabel: path.relative(allowedRoot, resolved) || ".",
+    };
+  }
+
+  function liveSessionPreflightError(code, message, { activeSession = false } = {}) {
+    const error = new Error(`OpenCode live-session preflight failed: ${message}`);
+    error.code = code;
+    error.readinessReasons = [code];
+    error.stopRequired = Boolean(activeSession);
+    return error;
+  }
+
+  async function resolvedOpenCodeProviderRoute(model) {
+    if (typeof resolveOpenCodeProviderRoute === "function") {
+      const route = await resolveOpenCodeProviderRoute(model);
+      if (route?.providerId && route?.providerType && route?.wireModel) {
+        return route;
+      }
+      return null;
+    }
+    const providerType = openCodeProviderForModel(model);
+    return {
+      providerId: providerSecretCandidates(providerType)[0] ?? `shared-${providerType}`,
+      providerType,
+      apiBaseUrl: "",
+      wireModel: String(model ?? "").split("/").slice(-1)[0],
+    };
+  }
+
+  function selectedOpenCodeProviderCredential(route, secrets = {}) {
+    const providerId = String(route?.providerId ?? "").trim();
+    const providerType = String(route?.providerType ?? "").trim().toLowerCase();
+    const value = String(secrets?.[providerId] ?? "").trim();
+    const key = providerEnvKeysForProvider(providerType)[0];
+    return value && key ? { key, value } : null;
+  }
+
+  function scopedOpenCodeLiveSessionEnv(route, credential) {
+    const providerType = String(route?.providerType ?? "").trim().toLowerCase();
+    const providerBaseUrlKey = openCodeProviderBaseUrlKeys[providerType]?.[0];
+    const inherited = Object.fromEntries(
+      OPENCODE_LIVE_SYSTEM_ENV_KEYS
+        .map((key) => [key, process.env[key]])
+        .filter(([, value]) => value !== undefined),
+    );
+    return {
+      ...inherited,
+      ...(credential ? { [credential.key]: credential.value } : {}),
+      ...(providerBaseUrlKey && route?.apiBaseUrl
+        ? { [providerBaseUrlKey]: String(route.apiBaseUrl) }
+        : {}),
+      OPENCODE_DISABLE_PROJECT_CONFIG: "1",
+      OPENCODE_PERMISSION: JSON.stringify({ "*": "ask", external_directory: "deny" }),
+    };
+  }
+
+  async function executeOpenCodeLiveSessionPreflight(options = {}) {
+    const activeSession = Boolean(options.activeSession);
+    const settings = await readAddonExecutionSettings();
+    const liveSession = settings.opencode.liveSession;
+    if (!settings.opencode.localCliExecution) {
+      throw liveSessionPreflightError("local-cli-disabled", "local CLI execution is disabled.", { activeSession });
+    }
+    if (!liveSession.enabled) {
+      throw liveSessionPreflightError("live-session-disabled", "the live session is disabled.", { activeSession });
+    }
+    if (!liveSession.workspacePath) {
+      throw liveSessionPreflightError("workspace-required", "a workspace is required.", { activeSession });
+    }
+    for (const grant of OPENCODE_LIVE_SESSION_GRANTS) {
+      if (!liveSession.grantedCapabilities.includes(grant)) {
+        throw liveSessionPreflightError(
+          `capability-${grant}-required`,
+          `the ${grant} capability is required.`,
+          { activeSession },
+        );
+      }
+    }
+    let workspace;
+    try {
+      workspace = await resolveOpenCodeLiveWorkspace(liveSession.workspacePath);
+    } catch (error) {
+      throw liveSessionPreflightError(
+        "workspace-invalid",
+        error instanceof Error ? error.message : "the workspace is invalid.",
+        { activeSession },
+      );
+    }
+    const runtime = currentOpenCodeRuntime();
+    if (!runtime.command) {
+      throw liveSessionPreflightError("runtime-unavailable", "the OpenCode runtime is unavailable.", { activeSession });
+    }
+    const secrets = await readProviderSecrets();
+    const model = openCodeModel({}, secrets);
+    const route = await resolvedOpenCodeProviderRoute(model);
+    if (!route) {
+      throw liveSessionPreflightError(
+        "provider-route-unavailable",
+        `the selected provider route is unavailable for ${model}.`,
+        { activeSession },
+      );
+    }
+    const credential = selectedOpenCodeProviderCredential(route, secrets);
+    if (!credential) {
+      throw liveSessionPreflightError(
+        "provider-credential-unavailable",
+        `the selected provider credential is unavailable for ${route.providerId} / ${model}.`,
+        { activeSession },
+      );
+    }
+    const provider = openCodeProviderForModel(model);
+    return {
+      command: runtime.command,
+      workspacePath: workspace.workspacePath,
+      workspaceLabel: workspace.workspaceLabel,
+      model,
+      provider,
+      providerProfileId: route.providerId,
+      grantedCapabilities: [...liveSession.grantedCapabilities],
+      childEnvironment: scopedOpenCodeLiveSessionEnv(route, credential),
+    };
+  }
+
+  async function publicOpenCodeLiveSessionStatus(settings = null) {
+    const executionSettings = settings ?? await readAddonExecutionSettings();
+    const liveSession = executionSettings.opencode.liveSession;
+    let workspacePath = "";
+    let workspaceConfigured = Boolean(liveSession.workspacePath);
+    if (workspaceConfigured) {
+      try {
+        workspacePath = (await resolveOpenCodeLiveWorkspace(liveSession.workspacePath)).workspaceLabel;
+      } catch {
+        workspacePath = "";
+      }
+    }
+    try {
+      const ready = await executeOpenCodeLiveSessionPreflight();
+      return {
+        enabled: liveSession.enabled,
+        workspaceConfigured,
+        workspacePath: ready.workspaceLabel,
+        grantedCapabilities: [...liveSession.grantedCapabilities],
+        ready: true,
+        readinessReasons: [],
+      };
+    } catch (error) {
+      return {
+        enabled: liveSession.enabled,
+        workspaceConfigured,
+        workspacePath,
+        grantedCapabilities: [...liveSession.grantedCapabilities],
+        ready: false,
+        readinessReasons: Array.isArray(error?.readinessReasons)
+          ? [...error.readinessReasons]
+          : ["preflight-failed"],
+      };
+    }
+  }
+
+  async function publicAddonExecutionSettings(settings = null) {
+    const executionSettings = settings ?? await readAddonExecutionSettings();
+    const liveSession = executionSettings.opencode.liveSession;
+    let workspacePath = "";
+    if (liveSession.workspacePath) {
+      try {
+        workspacePath = (await resolveOpenCodeLiveWorkspace(liveSession.workspacePath)).workspaceLabel;
+      } catch {
+        workspacePath = "";
+      }
+    }
+    return {
+      hermes: { localCliExecution: Boolean(executionSettings.hermes.localCliExecution) },
+      opencode: {
+        localCliExecution: Boolean(executionSettings.opencode.localCliExecution),
+        liveSession: {
+          enabled: Boolean(liveSession.enabled),
+          workspacePath,
+          grantedCapabilities: [...liveSession.grantedCapabilities],
+        },
+      },
+    };
   }
 
   function resolveDraftPath(relativePath) {
@@ -1186,6 +1450,7 @@ except BaseException as exc:
 
   async function executeOpenCodeStatus(payload = {}) {
     const executionSettings = await readAddonExecutionSettings();
+    const liveSession = await publicOpenCodeLiveSessionStatus(executionSettings);
     const runtime = currentOpenCodeRuntime();
     const command = runtime.command;
     const secrets = await readProviderSecrets();
@@ -1224,7 +1489,8 @@ except BaseException as exc:
       overrideFound: runtime.overrideFound,
       taskCounts: statusCounts,
       delegationPackets: tasks.length,
-      requiredGrants: ["filesystem", "shell", "providers", "ui-embedding"],
+      requiredGrants: [...OPENCODE_LIVE_SESSION_GRANTS],
+      liveSession,
       boundary: "OpenCode is an add-on agent. Filesystem, shell, provider secrets, wallet actions, and trusted memory writes remain mediated by ResonantOS.",
     };
   }
@@ -1341,8 +1607,6 @@ except BaseException as exc:
       "OPENCODE_CONFIG",
       "OPENCODE_DATA",
       "OPENCODE_CACHE",
-      "OPENCODE_SERVER_USERNAME",
-      "OPENCODE_SERVER_PASSWORD",
       ...openCodeProviderEnvKeys(model),
     ];
     const inherited = Object.fromEntries(
@@ -1710,6 +1974,7 @@ except BaseException as exc:
 
   async function executeAddonsStatus() {
     const executionSettings = await readAddonExecutionSettings();
+    const openCodeLiveSession = await publicOpenCodeLiveSessionStatus(executionSettings);
     return {
       addons: [
         {
@@ -1733,12 +1998,15 @@ except BaseException as exc:
           available: existsSync(path.join(repoRoot, "src", "modules", "opencode")),
           mode: "coding-addon",
           trust: "add-on agent",
-          requestedCapabilities: ["agent-delegation", "filesystem-scoped", "shell", "providers"],
-          grantedCapabilities: ["agent-delegation"],
-          deniedCapabilities: executionSettings.opencode.localCliExecution ? [] : ["shell"],
+          requestedCapabilities: [...OPENCODE_DECLARED_CAPABILITIES],
+          grantedCapabilities: [...executionSettings.opencode.liveSession.grantedCapabilities],
+          deniedCapabilities: OPENCODE_DECLARED_CAPABILITIES.filter(
+            (grant) => !executionSettings.opencode.liveSession.grantedCapabilities.includes(grant),
+          ),
           execution: {
             localCliExecution: Boolean(executionSettings.opencode.localCliExecution),
             mode: opencodeCommand() ? "local-cli-detected" : "packet-only",
+            liveSession: openCodeLiveSession,
           },
         },
         {
@@ -1782,7 +2050,7 @@ except BaseException as exc:
   async function executeAddonExecutionSettingsGet() {
     const settings = await readAddonExecutionSettings();
     return {
-      settings,
+      settings: await publicAddonExecutionSettings(settings),
       boundary: "Local CLI execution is disabled by default. Enabling it lets a configured add-on runtime execute through host-mediated adapters while preserving scoped task packets and artifact review.",
     };
   }
@@ -1793,16 +2061,89 @@ except BaseException as exc:
     if (!["hermes", "opencode"].includes(addon)) {
       throw new Error("Execution settings can only be updated for Hermes or OpenCode.");
     }
+    if (typeof payload.localCliExecution !== "boolean") {
+      throw new Error("localCliExecution must be a boolean.");
+    }
     const next = normalizeAddonExecutionSettings(current);
-    next[addon] = {
-      ...next[addon],
-      localCliExecution: Boolean(payload.localCliExecution),
-    };
+    const wasOpenCodeLive = Boolean(current.opencode.liveSession.enabled);
+    if (addon === "hermes") {
+      next.hermes = {
+        localCliExecution: Boolean(payload.localCliExecution),
+      };
+    } else {
+      if (payload.liveSession !== undefined) {
+        if (!payload.liveSession || typeof payload.liveSession !== "object" || Array.isArray(payload.liveSession)) {
+          throw new Error("OpenCode liveSession must be an object.");
+        }
+        if (typeof payload.liveSession.enabled !== "boolean") {
+          throw new Error("OpenCode liveSession.enabled must be a boolean.");
+        }
+        if (typeof payload.liveSession.workspacePath !== "string") {
+          throw new Error("OpenCode liveSession.workspacePath must be a string.");
+        }
+        if (!Array.isArray(payload.liveSession.grantedCapabilities)
+          || payload.liveSession.grantedCapabilities.some((grant) => typeof grant !== "string")) {
+          throw new Error("OpenCode liveSession.grantedCapabilities must be an array of strings.");
+        }
+      }
+      const requestedLiveSession = payload.liveSession === undefined
+        ? {
+            ...current.opencode.liveSession,
+            enabled: Boolean(payload.localCliExecution) && current.opencode.liveSession.enabled,
+          }
+        : payload.liveSession;
+      let currentWorkspaceLabel = current.opencode.liveSession.workspacePath;
+      if (currentWorkspaceLabel) {
+        try {
+          currentWorkspaceLabel = (await resolveOpenCodeLiveWorkspace(currentWorkspaceLabel)).workspaceLabel;
+        } catch {
+          // An invalid active scope is still different from any valid replacement.
+        }
+      }
+      const requestedGrants = Array.isArray(requestedLiveSession.grantedCapabilities)
+        ? requestedLiveSession.grantedCapabilities.map((grant) => String(grant ?? "").trim().toLowerCase())
+        : [];
+      const unknownGrant = requestedGrants.find((grant) => grant && !OPENCODE_LIVE_SESSION_GRANTS.includes(grant));
+      if (unknownGrant) {
+        throw new Error(`Unsupported OpenCode live-session capability: ${unknownGrant}.`);
+      }
+      const liveSession = normalizeOpenCodeLiveSession(requestedLiveSession);
+      if (liveSession.workspacePath) {
+        try {
+          liveSession.workspacePath = (await resolveOpenCodeLiveWorkspace(liveSession.workspacePath)).workspaceLabel;
+        } catch (error) {
+          if (liveSession.enabled) throw error;
+          liveSession.workspacePath = "";
+        }
+      }
+      const missingGrant = OPENCODE_LIVE_SESSION_GRANTS.find(
+        (grant) => !liveSession.grantedCapabilities.includes(grant),
+      );
+      const missingRequiredAuthority = !Boolean(payload.localCliExecution)
+        || !liveSession.workspacePath
+        || Boolean(missingGrant);
+      const activeWorkspaceChanged = wasOpenCodeLive
+        && liveSession.workspacePath !== currentWorkspaceLabel;
+      if (liveSession.enabled && (missingRequiredAuthority || activeWorkspaceChanged) && wasOpenCodeLive) {
+        liveSession.enabled = false;
+      } else if (liveSession.enabled && !Boolean(payload.localCliExecution)) {
+        throw new Error("OpenCode live-session enablement requires local CLI execution.");
+      } else if (liveSession.enabled && !liveSession.workspacePath) {
+        throw new Error("OpenCode live-session workspace is required before enablement.");
+      } else if (liveSession.enabled && missingGrant) {
+        throw new Error(`OpenCode live-session ${missingGrant} capability is required before enablement.`);
+      }
+      next.opencode = {
+        localCliExecution: Boolean(payload.localCliExecution),
+        liveSession,
+      };
+    }
     const settings = await writeAddonExecutionSettings(next);
     return {
       addon,
-      settings,
+      settings: await publicAddonExecutionSettings(settings),
       status: settings[addon].localCliExecution ? "enabled" : "disabled",
+      stopRequired: addon === "opencode" && wasOpenCodeLive && !settings.opencode.liveSession.enabled,
     };
   }
 
@@ -1905,6 +2246,7 @@ except BaseException as exc:
     executeHermesDelegationArtifact,
     executeHermesDelegationCancel,
     executeOpenCodeStatus,
+    executeOpenCodeLiveSessionPreflight,
     executeOpenCodeDelegationStart,
     executeOpenCodeDelegationStatus,
     executeOpenCodeDelegationArtifact,

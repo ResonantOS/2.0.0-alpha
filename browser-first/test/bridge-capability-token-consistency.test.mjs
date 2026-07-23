@@ -7,7 +7,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { BRIDGE_CAPABILITIES, buildBridgeCapabilityTokens } from "../host/bridge-capability-tokens.mjs";
-import { RUNTIME_CAPABILITY_ALLOWLIST } from "../resonantos-side-panel-extension/src/lib/bridge-client.js";
+import {
+  RUNTIME_CAPABILITY_ALLOWLIST,
+  capabilityForBridgeRoute,
+} from "../resonantos-side-panel-extension/src/lib/bridge-client.js";
 
 test("launcher capability set exactly matches the extension allowlist (#200)", () => {
   const missingInLauncher = RUNTIME_CAPABILITY_ALLOWLIST.filter((cap) => !BRIDGE_CAPABILITIES.includes(cap));
@@ -42,4 +45,23 @@ test("buildBridgeCapabilityTokens honors arg > env > mint precedence", () => {
 
 test("buildBridgeCapabilityTokens requires a mint function", () => {
   assert.throws(() => buildBridgeCapabilityTokens({}), /requires a mint/);
+});
+
+test("OpenCode session event reads and mutations use separate capabilities", () => {
+  assert.equal(
+    capabilityForBridgeRoute("/opencode/session/events", "POST"),
+    "addon-runtime-read",
+  );
+  for (const route of [
+    "/opencode/session/start",
+    "/opencode/session/prompt",
+    "/opencode/session/permission",
+    "/opencode/session/stop",
+  ]) {
+    assert.equal(
+      capabilityForBridgeRoute(route, "POST"),
+      "addon-runtime-control",
+      route,
+    );
+  }
 });

@@ -40,6 +40,11 @@ const includeDocs = new Set([
   "docs/augmentor-tester-runbook.md",
 ]);
 
+const governedBrowserFirstDocs = new Set([
+  "docs/superpowers/specs/2026-07-22-governed-opencode-session-design.md",
+  "docs/superpowers/plans/2026-07-22-governed-opencode-session.md",
+]);
+
 function readOptionValue(argv, index, name) {
   const value = argv[index + 1];
   if (!value || value.startsWith("--")) {
@@ -240,6 +245,12 @@ function classify(changedPath, state) {
     return {
       bucket: "include",
       reason: "browser-first release documentation",
+    };
+  }
+  if (governedBrowserFirstDocs.has(changedPath)) {
+    return {
+      bucket: "include",
+      reason: "canonical governed browser-first implementation design",
     };
   }
   if (canonicalRootFiles.has(changedPath) || changedPath === "public/icons/README.md") {

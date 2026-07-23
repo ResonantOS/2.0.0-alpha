@@ -552,7 +552,7 @@ export const executeChatTurn = async ({
       const packet = createOpenCodeDelegationPacket(nextState, {
         mission: trimmed,
         context:
-          "The human asked Augmentor to delegate this coding or workspace task to OpenCode. Create a bounded workspace, open the visible OpenCode surface, and submit the task there so the human can watch or intervene. OpenCode must return reviewable artifacts.",
+          "The human asked Augmentor to delegate this coding or workspace task to OpenCode. Create a bounded workspace and submit it only through the host-governed local service after explicit consent and preflight. OpenCode must return reviewable artifacts.",
       });
       const workspace = await requestCreateTaskWorkspace(packet);
       if (!isRunCurrent(runToken)) {

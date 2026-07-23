@@ -1733,10 +1733,17 @@ export function App() {
       installation.status = "enabled";
       const existingGrants = new Map(installation.grantedCapabilities.map((grant) => [grant.capability, grant]));
       const missingRequestedGrants = opencodeManifest.requestedCapabilities.filter((grant) => !existingGrants.has(grant.capability));
+      const embeddedUiRequested = opencodeManifest.surfaces.some((surface) => surface.type === "embedded-pane")
+        && opencodeManifest.requestedCapabilities.some((grant) => grant.capability === "ui-embedding");
+      const workspaceCapabilities = embeddedUiRequested
+        ? ["filesystem", "shell", "ui-embedding"]
+        : ["filesystem", "shell", "providers"];
       installation.grantedCapabilities = [...installation.grantedCapabilities, ...missingRequestedGrants].map((grant) =>
-        ["filesystem", "shell", "ui-embedding"].includes(grant.capability) ? { ...grant, granted: true } : grant,
+        workspaceCapabilities.includes(grant.capability) ? { ...grant, granted: true } : grant,
       );
-      installation.notes = ["Installed, enabled, and granted scoped filesystem, shell, and UI embedding for OpenCode workspace spike."];
+      installation.notes = [embeddedUiRequested
+        ? "Installed, enabled, and granted scoped filesystem, shell, and UI embedding for the legacy OpenCode workspace spike."
+        : "Installed, enabled, and granted scoped filesystem, shell, and provider access for the governed OpenCode session."];
       draft.uiPreferences.activeSection = "opencode";
       return draft;
     });

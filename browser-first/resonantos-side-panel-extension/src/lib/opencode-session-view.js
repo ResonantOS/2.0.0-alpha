@@ -8,8 +8,8 @@ const view = (doc) => doc ?? (typeof document !== "undefined" ? document : null)
 
 // Changed-files / diff pane. `files` is changedFilesView(state): newest first,
 // with `justTouched` on the most-recent edit (borrowed "rolling highlight").
-// Each row carries a revert control (borrowed checkpoint pattern).
-export function renderChangedFiles(listEl, titleEl, files = [], { document: doc, onRevert } = {}) {
+// This is evidence only; mutation controls stay outside the Alpha preview.
+export function renderChangedFiles(listEl, titleEl, files = [], { document: doc } = {}) {
   const d = view(doc);
   if (!listEl || !d) return 0;
   if (titleEl) titleEl.textContent = files.length ? `Changed files · ${files.length}` : "No changes yet";
@@ -31,12 +31,7 @@ export function renderChangedFiles(listEl, titleEl, files = [], { document: doc,
     del.className = "oc-del";
     del.textContent = `−${file.removed ?? 0}`;
     stat.append(add, del);
-    const revert = d.createElement("button");
-    revert.type = "button";
-    revert.className = "oc-revert";
-    revert.textContent = "Revert";
-    revert.addEventListener("click", () => onRevert?.(file.path));
-    row.append(name, stat, revert);
+    row.append(name, stat);
     listEl.append(row);
   }
   return files.length;
@@ -74,9 +69,8 @@ export function renderApprovals(container, approvals = [], { document: doc, onRe
       return b;
     };
     actions.append(
-      make("Approve", { approved: true }, "oc-go"),
-      make("Approve + remember", { approved: true, remember: true }, ""),
-      make("Deny", { approved: false }, "oc-no")
+      make("Approve once", "once", "oc-go"),
+      make("Deny", "reject", "oc-no")
     );
     card.append(head, actions);
     container.append(card);

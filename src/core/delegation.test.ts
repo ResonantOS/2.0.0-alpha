@@ -156,12 +156,16 @@ describe("OpenCode delegation packet factory", () => {
     });
 
     expect(packet.targetAgentId).toBe("opencode.runtime");
-    expect(packet.targetRuntime).toBe("embedded-workspace");
+    expect(packet.targetRuntime).toBe("local-service");
     expect(packet.taskType).toBe("system-diagnosis");
     expect(packet.allowedTools).toContain("filesystem.search");
+    expect(packet.capabilityGrants.map((grant) => grant.capability)).toEqual(["filesystem", "shell", "providers"]);
+    expect(packet.capabilityGrants.every((grant) => !grant.granted)).toBe(true);
     expect(packet.humanApprovalRequired).toBe(true);
     expect(packet.forbiddenActions.join("\n")).toContain("Do not run destructive commands");
-    expect(validateDelegationPacket(packet).valid).toBe(true);
+    const validation = validateDelegationPacket(packet);
+    expect(validation.valid).toBe(true);
+    expect(validation.issues.some((entry) => entry.code === "no-capability-grants")).toBe(true);
   });
 
   it("detects explicit OpenCode delegation requests and formats the workspace reply", () => {

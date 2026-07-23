@@ -11,6 +11,7 @@ import {
   createAddonDelegationService,
   OPENCODE_EXPLICIT_PROVIDER_ENV_KEYS,
 } from "../../../browser-first/host/addon-delegation-service.mjs";
+import { createOpencodeServerLifecycle } from "../../../browser-first/host/opencode-client.mjs";
 import {
   generateCa,
   generateLeaf,
@@ -27,7 +28,10 @@ import {
 import * as hostUtils from "../../../browser-first/host/browser-first-host-utils.mjs";
 import * as hermesRuntime from "../../../browser-first/host/hermes-runtime.mjs";
 import { createMemorySourceSettingsService } from "../../../browser-first/host/memory-source-settings-service.mjs";
-import { opencodeRuntimeDiagnostics } from "../../../browser-first/host/opencode-runtime.mjs";
+import {
+  opencodeCandidatePaths,
+  opencodeRuntimeDiagnostics,
+} from "../../../browser-first/host/opencode-runtime.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "..", "..", "..");
@@ -57,6 +61,141 @@ const OPENCODE_PROVIDERS = [
   ["xai/grok-4", ["XAI_API_KEY"]],
   ["zai/glm-4.5", ["ZAI_API_KEY", "GLM_API_KEY", "ZHIPUAI_API_KEY"]],
   ["zhipuai/glm-4.5", ["ZHIPUAI_API_KEY", "ZAI_API_KEY", "GLM_API_KEY"]],
+];
+const OPENCODE_PLATFORM_RESOLUTION_CLASSES = [
+  {
+    platform: "darwin",
+    homeDir: "/Users/reviewer",
+    classes: [
+      {
+        base: "install-prefix",
+        root: "<home>/.opencode/bin",
+        canonicalRoots: ["<home>/.opencode/bin", "<home>/.opencode/lib/node_modules"],
+        commands: ["opencode", "opencode-ai"],
+        source: "fixed-user-install-root",
+      },
+      {
+        base: "install-prefix",
+        root: "<home>/.local/bin",
+        canonicalRoots: ["<home>/.local/bin", "<home>/.local/lib/node_modules"],
+        commands: ["opencode", "opencode-ai"],
+        source: "fixed-user-install-root",
+      },
+      {
+        base: "system-bin",
+        root: "/opt/homebrew/bin",
+        canonicalRoots: ["/opt/homebrew/bin", "/opt/homebrew/lib/node_modules", "/opt/homebrew/Cellar"],
+        commands: ["opencode", "opencode-ai"],
+        source: "fixed-system-root",
+      },
+      {
+        base: "system-bin",
+        root: "/usr/local/bin",
+        canonicalRoots: ["/usr/local/bin", "/usr/local/lib/node_modules", "/usr/local/Cellar"],
+        commands: ["opencode", "opencode-ai"],
+        source: "fixed-system-root",
+      },
+      {
+        base: "system-bin",
+        root: "/usr/bin",
+        canonicalRoots: ["/usr/bin", "/usr/lib/node_modules"],
+        commands: ["opencode", "opencode-ai"],
+        source: "fixed-system-root",
+      },
+      {
+        base: "system-bin",
+        root: "/bin",
+        canonicalRoots: ["/bin", "/lib/node_modules"],
+        commands: ["opencode", "opencode-ai"],
+        source: "fixed-system-root",
+      },
+      {
+        base: "install-prefix",
+        root: "/Applications/OpenCode.app/Contents/MacOS",
+        canonicalRoots: ["/Applications/OpenCode.app/Contents/MacOS"],
+        commands: ["opencode-cli"],
+        source: "fixed-application-root",
+      },
+      {
+        base: "install-prefix",
+        root: "/Applications/OpenCode Desktop.app/Contents/MacOS",
+        canonicalRoots: ["/Applications/OpenCode Desktop.app/Contents/MacOS"],
+        commands: ["opencode-cli"],
+        source: "fixed-application-root",
+      },
+    ],
+  },
+  {
+    platform: "linux",
+    homeDir: "/home/reviewer",
+    classes: [
+      {
+        base: "install-prefix",
+        root: "<home>/.opencode/bin",
+        canonicalRoots: ["<home>/.opencode/bin", "<home>/.opencode/lib/node_modules"],
+        commands: ["opencode", "opencode-ai"],
+        source: "fixed-user-install-root",
+      },
+      {
+        base: "install-prefix",
+        root: "<home>/.local/bin",
+        canonicalRoots: ["<home>/.local/bin", "<home>/.local/lib/node_modules"],
+        commands: ["opencode", "opencode-ai"],
+        source: "fixed-user-install-root",
+      },
+      {
+        base: "system-bin",
+        root: "/usr/local/bin",
+        canonicalRoots: ["/usr/local/bin", "/usr/local/lib/node_modules", "/usr/local/Cellar"],
+        commands: ["opencode", "opencode-ai"],
+        source: "fixed-system-root",
+      },
+      {
+        base: "system-bin",
+        root: "/usr/bin",
+        canonicalRoots: ["/usr/bin", "/usr/lib/node_modules"],
+        commands: ["opencode", "opencode-ai"],
+        source: "fixed-system-root",
+      },
+      {
+        base: "system-bin",
+        root: "/bin",
+        canonicalRoots: ["/bin", "/lib/node_modules"],
+        commands: ["opencode", "opencode-ai"],
+        source: "fixed-system-root",
+      },
+    ],
+  },
+  {
+    platform: "win32",
+    homeDir: "C:\\Users\\reviewer",
+    classes: [
+      {
+        base: "install-prefix",
+        root: "<home>\\.opencode\\bin",
+        canonicalRoots: ["<home>\\.opencode\\bin", "<home>\\.opencode\\lib\\node_modules"],
+        commands: ["opencode.exe", "opencode-ai.exe"],
+        source: "fixed-user-install-root",
+      },
+      {
+        base: "install-prefix",
+        root: "<home>\\scoop\\apps\\opencode\\current",
+        canonicalRoots: [
+          "<home>\\scoop\\apps\\opencode\\current",
+          "<home>\\scoop\\apps\\opencode\\lib\\node_modules",
+        ],
+        commands: ["opencode.exe", "opencode-ai.exe"],
+        source: "fixed-user-install-root",
+      },
+      {
+        base: "install-prefix",
+        root: "C:\\Program Files\\OpenCode",
+        canonicalRoots: ["C:\\Program Files\\OpenCode", "C:\\Program Files\\lib\\node_modules"],
+        commands: ["opencode.exe", "opencode-ai.exe"],
+        source: "fixed-program-files-root",
+      },
+    ],
+  },
 ];
 const HERMES_CAPTURE_ENVIRONMENT = {
   HOME: "/Users/reviewer",
@@ -92,6 +231,7 @@ const HERMES_CAPTURE_ENVIRONMENT = {
 const EXPECTED_OPERATION_IDS = [
   "addon-delegation:hermes-python-adapter",
   "addon-delegation:opencode-cli",
+  "opencode-session:authenticated-server",
   "addon-delegation:hermes-dashboard-start",
   "addon-delegation:hermes-dashboard-stop",
   "memory-source-browse:macos-picker",
@@ -116,6 +256,8 @@ const EXPECTED_SOURCE_PATHS = [
   "browser-first/host/browser-first-host-utils.mjs",
   "browser-first/host/browser-diagnostics-service.mjs",
   "browser-first/host/memory-source-settings-service.mjs",
+  "browser-first/host/opencode-client.mjs",
+  "browser-first/host/opencode-session-composition.mjs",
   "browser-first/host/opencode-runtime.mjs",
   "browser-first/host/bridge-tls.mjs",
 ];
@@ -271,6 +413,62 @@ function normalizeTempArg(value, basename) {
 function normalizeRootPath(value, root) {
   assert.ok(String(value).startsWith(root), `${value} must be inside ${root}`);
   return path.posix.join("<home>", path.relative(root, String(value)).split(path.sep).join("/"));
+}
+
+function normalizePlatformPath(value, { homeDir, platform }) {
+  const pathApi = platform === "win32" ? path.win32 : path.posix;
+  const relative = pathApi.relative(homeDir, value);
+  if (relative === "") return "<home>";
+  if (!relative.startsWith("..") && !pathApi.isAbsolute(relative)) {
+    return pathApi.join("<home>", relative);
+  }
+  return pathApi.normalize(value);
+}
+
+function explicitOpenCodeCandidates() {
+  return OPENCODE_PLATFORM_RESOLUTION_CLASSES.flatMap(({ classes, platform }) => {
+    const pathApi = platform === "win32" ? path.win32 : path.posix;
+    return classes.flatMap(({ base, canonicalRoots, commands, root, source }) =>
+      commands.map((command) => ({
+        platform,
+        base,
+        canonical_roots: canonicalRoots,
+        path: pathApi.join(root, command),
+        source,
+        validated_by: "opencodeRuntimeDiagnostics",
+      }))
+    );
+  });
+}
+
+function productionOpenCodeCandidates() {
+  const candidates = OPENCODE_PLATFORM_RESOLUTION_CLASSES.flatMap(({ homeDir, platform }) =>
+    opencodeCandidatePaths({
+      env: {
+        OPENCODE_COMMAND: "",
+        PATH: platform === "win32" ? "C:\\attacker-bin" : "/attacker-bin",
+      },
+      homeDir,
+      platform,
+    }).map((candidate) => ({
+      platform,
+      base: candidate.base,
+      canonical_roots: candidate.canonicalRoots.map((root) =>
+        normalizePlatformPath(root, { homeDir, platform })
+      ),
+      path: normalizePlatformPath(candidate.path, { homeDir, platform }),
+      source: candidate.source,
+      validated_by: candidate.validated_by,
+    }))
+  );
+  assert.deepEqual(
+    candidates,
+    explicitOpenCodeCandidates(),
+    "production OpenCode fixed-root resolution classes drifted",
+  );
+  assert.ok(candidates.every(({ base }) => ["install-prefix", "system-bin"].includes(base)));
+  assert.ok(candidates.every(({ path: candidatePath }) => !candidatePath.includes("attacker-bin")));
+  return candidates;
 }
 
 function normalizedResolution(resolution, root, overrides = {}) {
@@ -532,6 +730,7 @@ test("delegated CLI registry descriptors match captured production invocations",
     normalizedOpenCodeArgs[5] = "/repo";
     const normalizedOpenCode = capturedDescriptor({ ...openCodeCall, args: normalizedOpenCodeArgs }, {
       command: normalizeRootPath(runtime.opencode.command, runtime.root),
+      candidates: productionOpenCodeCandidates(),
       resolution: normalizedResolution(runtime.opencode.resolution, runtime.root),
     });
     normalizedOpenCode.envKeys = [...new Set(openCodeCalls.flatMap(({ options }) => Object.keys(options.env)))].sort();
@@ -562,6 +761,112 @@ test("delegated CLI registry descriptors match captured production invocations",
     );
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("OpenCode live-session registry descriptor matches the authenticated production lifecycle", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "runtime-registry-opencode-live-"));
+  const calls = [];
+  const removedDirectories = [];
+  try {
+    const runtime = await createRuntimeFixture(root);
+    const configDirectory = path.join(root, "opencode-live-config");
+    const credentialKeys = [...new Set(
+      OPENCODE_PROVIDERS.flatMap(([, keys]) => keys),
+    )];
+    const systemKeys = [
+      "HOME",
+      "PATH",
+      "SHELL",
+      "TERM",
+      "TMPDIR",
+      "TEMP",
+      "TMP",
+      "LANG",
+      "LC_ALL",
+      "LC_CTYPE",
+    ];
+    const childEnvironment = Object.fromEntries([
+      ...systemKeys,
+      ...credentialKeys,
+      ...OPENCODE_EXPLICIT_PROVIDER_ENV_KEYS,
+    ].map((key) => [key, `fixture-${key.toLowerCase()}`]));
+    const child = new EventEmitter();
+    child.exitCode = null;
+    child.kill = () => {
+      queueMicrotask(() => {
+        child.exitCode = 0;
+        child.emit("exit", 0, null);
+      });
+      return true;
+    };
+    const lifecycle = createOpencodeServerLifecycle({
+      createClient: async () => ({}),
+      createConfigDirectory: async () => configDirectory,
+      fetchImpl: async () => ({ ok: true, status: 200 }),
+      randomPassword: () => "generated-password",
+      readServerAddress: async () => "http://127.0.0.1:43123",
+      removeConfigDirectory: async (directory) => {
+        removedDirectories.push(directory);
+      },
+      sleep: async () => undefined,
+      spawnImpl(command, args, options) {
+        calls.push({ command, args, options });
+        return child;
+      },
+      pollMs: 1,
+      readinessProbeTimeoutMs: 10,
+      readinessTimeoutMs: 50,
+    });
+
+    const handle = await lifecycle.start({
+      command: runtime.opencode.command,
+      cwd: runtime.root,
+      env: childEnvironment,
+    });
+    await lifecycle.stop(handle);
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].options.cwd, runtime.root);
+    assert.deepEqual(removedDirectories, [configDirectory]);
+    const captured = capturedDescriptor(calls[0], {
+      command: normalizeRootPath(runtime.opencode.command, runtime.root),
+      candidates: productionOpenCodeCandidates(),
+      resolution: normalizedResolution(runtime.opencode.resolution, runtime.root),
+    });
+    const registry = await readRegistry();
+    const records = new Map(
+      registry.recordSets[RECORD_SET].map((record) => [record.id, record]),
+    );
+    assert.deepEqual(
+      registryDescriptor(records.get("opencode-session:authenticated-server")),
+      captured,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("OpenCode subprocess records certify every production fixed-root resolution class", async () => {
+  const registry = await readRegistry();
+  const records = new Map(
+    registry.recordSets[RECORD_SET].map((record) => [record.id, record]),
+  );
+  const expectedCandidates = productionOpenCodeCandidates();
+  assert.equal(expectedCandidates.length, 30);
+  assert.deepEqual(
+    [...new Set(expectedCandidates.map(({ platform }) => platform))],
+    ["darwin", "linux", "win32"],
+  );
+  for (const id of [
+    "addon-delegation:opencode-cli",
+    "opencode-session:authenticated-server",
+  ]) {
+    assert.deepEqual(
+      records.get(id)?.candidates,
+      expectedCandidates,
+      `${id} must certify the complete production OpenCode resolution matrix`,
+    );
   }
 });
 

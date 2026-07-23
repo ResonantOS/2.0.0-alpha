@@ -34,8 +34,7 @@ import { createAgentControlHostService } from "./agent-control-host-service.mjs"
 import { buildBridgeCapabilityTokens } from "./bridge-capability-tokens.mjs";
 import { createAddonDelegationHostService } from "./addon-delegation-host-service.mjs";
 import { createAddonDelegationService } from "./addon-delegation-service.mjs";
-import { createOpencodeHttpClient, ensureOpencodeServer } from "./opencode-client.mjs";
-import { createOpencodeSessionHandlers, createOpencodeSessionHostService } from "./opencode-session-host-service.mjs";
+import { createOpencodeSessionBridgeComposition } from "./opencode-session-composition.mjs";
 import { createArchiveReviewHostService } from "./archive-review-host-service.mjs";
 import { createBrowserDiagnosticsHostService } from "./browser-diagnostics-host-service.mjs";
 import { createExtensionPrefsHostService } from "./extension-prefs-host-service.mjs";
@@ -144,6 +143,7 @@ const {
   providerRouteForModel,
   allModelCatalog,
   allProviderProfiles,
+  clearSessionProviderSecrets,
   readProviderSecrets,
   runArchiveIngestWriter,
   runArchiveSemanticVerifier,
@@ -169,6 +169,10 @@ const addonDelegationService = createAddonDelegationService({
   opencodeRuntimeDiagnostics: resolveOpenCodeRuntimeDiagnostics,
   redactPathForDiagnostics,
   readProviderSecrets,
+  resolveOpenCodeProviderRoute: async (model) => providerRouteForModel(model, {
+    catalog: await allModelCatalog(),
+    profiles: await allProviderProfiles(),
+  }),
   repoRoot,
   safeFileSlug,
   socketOpen,
@@ -177,24 +181,23 @@ const addonDelegationService = createAddonDelegationService({
 });
 
 const { executeAddonsStatus } = addonDelegationService;
-const { addonDelegationRoutes } = createAddonDelegationHostService(addonDelegationService);
 
-// Live OpenCode session: the bridge starts (reuses) `opencode serve` on a
-// ResonantOS-dedicated port and proxies session/prompt/permission; the extension
-// streams the server's /event bus directly (host_permissions cover 127.0.0.1).
-const opencodeSessionPort = Number(process.env.RESONANTOS_OPENCODE_PORT ?? 4231);
-const opencodeSessionHandlers = createOpencodeSessionHandlers({
-  ensureServer: () => ensureOpencodeServer({
-    fetchImpl: (...args) => fetch(...args),
-    spawnImpl: (cmd, cmdArgs, opts) => spawn(cmd, cmdArgs, opts),
-    command: resolveOpenCodeCommand(),
-    hostname: "127.0.0.1",
-    port: opencodeSessionPort,
-    env: process.env,
-  }),
-  createClient: (baseUrl) => createOpencodeHttpClient({ fetchImpl: (...args) => fetch(...args), baseUrl }),
+const {
+  executeAddonExecutionSettingsUpdate,
+  opencodeSessionRoutes,
+  shutdownOpenCodeSession,
+} = createOpencodeSessionBridgeComposition({
+  addonDelegationService,
+  spawnImpl: (command, commandArgs, options) => spawn(
+    command,
+    commandArgs,
+    options,
+  ),
 });
-const { opencodeSessionRoutes } = createOpencodeSessionHostService(opencodeSessionHandlers);
+const { addonDelegationRoutes } = createAddonDelegationHostService({
+  ...addonDelegationService,
+  executeAddonExecutionSettingsUpdate,
+});
 
 const memorySourceSettingsService = createMemorySourceSettingsService({
   memoryRoot,
@@ -447,12 +450,25 @@ console.log(JSON.stringify({
 console.log("Load browser-first/resonantos-side-panel-extension in Chrome as an unpacked extension.");
 
 const shutdown = async () => {
-  await flushPendingExtensionPrefs().catch(() => undefined);
-  await new Promise((resolve) => bridgeInfo.server.close(resolve));
+  try {
+    await shutdownOpenCodeSession();
+  } finally {
+    clearSessionProviderSecrets();
+    await flushPendingExtensionPrefs().catch(() => undefined);
+    await new Promise((resolve) => bridgeInfo.server.close(resolve));
+  }
 };
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
-  process.on(signal, () => {
-    void shutdown().finally(() => process.exit(0));
+  process.once(signal, () => {
+    void shutdown().then(
+      () => process.exit(0),
+      (error) => {
+        console.error(redactDiagnosticText(
+          error instanceof Error ? error.message : String(error),
+        ));
+        process.exit(1);
+      },
+    );
   });
 }

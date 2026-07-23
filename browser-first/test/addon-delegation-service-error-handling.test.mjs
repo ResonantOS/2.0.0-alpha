@@ -527,6 +527,8 @@ test("OpenCode provider matrix scopes explicit provider environment keys", async
     ...providerApiKeys.map((key) => [key, `synthetic-${key.toLowerCase()}`]),
     ...explicitProviderKeys.map((key) => [key, `https://${key.toLowerCase().replaceAll("_", "-")}.example/v1`]),
     ["AWS_SECRET_ACCESS_KEY", "must-not-reach-opencode"],
+    ["OPENCODE_SERVER_USERNAME", "must-not-reach-one-shot-opencode"],
+    ["OPENCODE_SERVER_PASSWORD", "must-not-reach-one-shot-opencode"],
     ["RESONANTOS_OPENCODE_EXECUTION", "enabled"],
     ["RESONANTOS_OPENCODE_PROVIDER_ENV", [...explicitProviderKeys, "AWS_SECRET_ACCESS_KEY", "RESONANTOS_PROVIDER_SECRETS_JSON"].join(",")],
     ["RESONANTOS_PROVIDER_SECRETS_JSON", "must-not-reach-opencode"],
@@ -570,6 +572,8 @@ test("OpenCode provider matrix scopes explicit provider environment keys", async
         assert.ok(expectedApiKeys.every((key) => envKeys.includes(key)));
         assert.ok(explicitProviderKeys.every((key) => envKeys.includes(key)));
         assert.ok(!envKeys.includes("AWS_SECRET_ACCESS_KEY"));
+        assert.ok(!envKeys.includes("OPENCODE_SERVER_USERNAME"));
+        assert.ok(!envKeys.includes("OPENCODE_SERVER_PASSWORD"));
         assert.ok(!envKeys.includes("RESONANTOS_PROVIDER_SECRETS_JSON"));
       }
     });

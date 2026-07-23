@@ -14,6 +14,7 @@ import type {
 } from "./core/contracts";
 import { buildDefaultState } from "./core/defaults";
 import { ArchiveReviewDesk } from "./modules/archive/ArchiveReviewDesk";
+import openCodeProductionManifest from "../public/addons/opencode.json";
 
 const manifests: AddOnManifest[] = [
   createManifest("addon.telegram-channel", "Telegram Channel", "channel"),
@@ -3386,6 +3387,41 @@ describe("App boot flow", () => {
     expect(await screen.findByText(/trust_kernel\/runs\/test-opencode\/agent_packet.md/i)).toBeTruthy();
   });
 
+  it("does not launch the retired embedded OpenCode host for the production page manifest", async () => {
+    const index = manifests.findIndex((manifest) => manifest.id === "addon.opencode");
+    const previous = manifests[index];
+    manifests[index] = structuredClone(openCodeProductionManifest) as AddOnManifest;
+    try {
+      const state = buildDefaultState(manifests);
+      const installation = state.installations["addon.opencode"];
+      installation.installed = true;
+      installation.enabled = true;
+      installation.status = "enabled";
+      installation.config = { workspacePath: "/Users/augmentor/Documents/ResonantVault" };
+      installation.grantedCapabilities = installation.grantedCapabilities.map((grant) => ({ ...grant, granted: true }));
+      hydrateStateMock.mockResolvedValueOnce(state);
+      requestOpenCodeStatusMock.mockResolvedValue({
+        installed: true,
+        version: "0.0.0-test",
+        binaryPath: "/usr/local/bin/opencode",
+        installHint: "OpenCode is installed.",
+        supportsWebUi: true,
+        supportsServerApi: true,
+      } as unknown as Awaited<ReturnType<typeof requestOpenCodeStatusMock>>);
+
+      render(<App />);
+      expect((await screen.findAllByText("Launch your AI tools from one workbench.")).length).toBeGreaterThan(0);
+      fireEvent.click(screen.getAllByRole("button", { name: "OpenCode" })[0]);
+
+      expect(await screen.findByText(/browser-first Chrome extension/i)).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Launch" })).toBeNull();
+      expect(requestOpenCodeStartServiceMock).not.toHaveBeenCalled();
+      expect(screen.queryByLabelText("OpenCode embedded workspace")).toBeNull();
+    } finally {
+      manifests[index] = previous;
+    }
+  });
+
   it("opens Paperclip as an optional embedded organizational runtime", async () => {
     const state = buildDefaultState(manifests);
     const paperclipInstallation = state.installations["addon.paperclip"];
@@ -3554,7 +3590,7 @@ describe("App boot flow", () => {
         createdByAgentId: "strategist.core",
         workspaceId: "workspace-opencode-create-folder-20260517180000",
         targetAgentId: "opencode.runtime",
-        targetRuntime: "embedded-workspace",
+        targetRuntime: "local-service",
         taskType: "system-diagnosis",
         mission: "Use OpenCode to create folder ~/Desktop/OpenCodeTest",
         context: "Visible OpenCode handoff.",
@@ -3654,7 +3690,7 @@ describe("App boot flow", () => {
     expect(requestCreateTaskWorkspaceMock).toHaveBeenCalledWith(
       expect.objectContaining({
         targetAgentId: "opencode.runtime",
-        targetRuntime: "embedded-workspace",
+        targetRuntime: "local-service",
         taskType: "system-diagnosis",
       }),
     );
@@ -3687,11 +3723,11 @@ describe("App boot flow", () => {
     expect(requestCreateTaskWorkspaceMock).toHaveBeenCalledWith(
       expect.objectContaining({
         targetAgentId: "opencode.runtime",
-        targetRuntime: "embedded-workspace",
+        targetRuntime: "local-service",
       }),
     );
     expect(await screen.findByText(/I created an OpenCode delegation workspace/i)).toBeTruthy();
-    expect(await screen.findByText(/submit the task into a visible OpenCode session/i)).toBeTruthy();
+    expect(await screen.findByText(/governed local OpenCode session/i)).toBeTruthy();
     await waitFor(() => expect(screen.getByTestId("opencode-workspace").getAttribute("aria-hidden")).toBe("false"));
     await waitFor(() =>
       expect(requestReadTaskWorkspaceMock).toHaveBeenCalledWith(

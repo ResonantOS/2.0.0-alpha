@@ -134,6 +134,10 @@ export function createProviderBridgeService({
     sessionProviderSecrets.delete(providerId);
   }
 
+  function clearSessionProviderSecrets() {
+    sessionProviderSecrets.clear();
+  }
+
   function credentialStoreStatus(secrets) {
     return {
       configured: Object.keys(secrets).length > 0,
@@ -1359,6 +1363,7 @@ export function createProviderBridgeService({
   return {
     allModelCatalog,
     allProviderProfiles,
+    clearSessionProviderSecrets,
     executeBridgeChat,
     executeInlineAssistant,
     executeProviderAccountSave,
