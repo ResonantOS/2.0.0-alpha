@@ -39,41 +39,33 @@ function validatePollResponse(response, requestedAfter, sessionId) {
   if (!response || typeof response !== "object" || Array.isArray(response)) {
     throw new Error("OpenCode event cursor response must be an object.");
   }
-  const { droppedBefore, entries, nextCursor } = response;
+  const { droppedBefore, events, nextCursor } = response;
   if (
     !Number.isSafeInteger(nextCursor)
     || nextCursor < requestedAfter
     || !Number.isSafeInteger(droppedBefore)
     || droppedBefore < 0
     || droppedBefore > nextCursor
-    || !Array.isArray(entries)
+    || !Array.isArray(events)
   ) {
     throw new Error("OpenCode event cursor response is malformed.");
   }
 
-  let previousCursor = requestedAfter;
-  const events = [];
-  for (const entry of entries) {
+  const attributableEvents = [];
+  for (const event of events) {
     if (
-      !entry
-      || typeof entry !== "object"
-      || Array.isArray(entry)
-      || !Number.isSafeInteger(entry.cursor)
-      || entry.cursor <= previousCursor
-      || entry.cursor > nextCursor
-      || !entry.event
-      || typeof entry.event !== "object"
-      || Array.isArray(entry.event)
+      !event
+      || typeof event !== "object"
+      || Array.isArray(event)
     ) {
-      throw new Error("OpenCode event cursor entries are malformed.");
+      throw new Error("OpenCode event cursor events are malformed.");
     }
-    if (sessionIdFrom(entry.event?.data?.sessionID) !== sessionId) {
-      throw new Error("OpenCode event entry does not belong to the active session.");
+    if (sessionIdFrom(event?.data?.sessionID) !== sessionId) {
+      throw new Error("OpenCode event does not belong to the active session.");
     }
-    previousCursor = entry.cursor;
-    events.push(entry.event);
+    attributableEvents.push(event);
   }
-  return { droppedBefore, events, nextCursor };
+  return { droppedBefore, events: attributableEvents, nextCursor };
 }
 
 export function createOpenCodeBridgeSource({
@@ -216,18 +208,18 @@ export function createOpenCodeBridgeSource({
       });
     },
 
-    async replyPermission(permissionId, reply) {
+    async replyPermission(requestId, reply) {
       if (reply !== "once" && reply !== "reject") {
         throw new Error("OpenCode permission reply must be once or reject.");
       }
-      const id = sessionIdFrom(permissionId);
+      const id = sessionIdFrom(requestId);
       if (!id) {
-        throw new Error("OpenCode permission reply requires a permissionId.");
+        throw new Error("OpenCode permission reply requires a requestId.");
       }
       const ownedSession = await ensureSession();
       return postBridgeJson("/opencode/session/permission", {
         sessionId: ownedSession.sessionId,
-        permissionId: id,
+        requestId: id,
         reply,
       });
     },

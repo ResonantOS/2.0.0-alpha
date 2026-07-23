@@ -64,24 +64,21 @@ function createControlledSleeper() {
 function pollResponse({
   cursor = 0,
   droppedBefore = 0,
-  entries = [],
+  events = [],
 } = {}) {
   return {
     droppedBefore,
-    entries,
+    events,
     nextCursor: cursor,
   };
 }
 
-function entry(cursor, sessionId = "session-1", type = "session.idle") {
+function event(id, sessionId = "session-1", type = "session.idle") {
   const data = sessionId === null ? {} : { sessionID: sessionId };
   return {
-    cursor,
-    event: {
-      id: `event-${cursor}`,
-      type,
-      data,
-    },
+    id: `event-${id}`,
+    type,
+    data,
   };
 }
 
@@ -164,7 +161,7 @@ test("one shared poll loop prevents duplicate or concurrent event requests", asy
 
   pollGate.resolve(pollResponse({
     cursor: 1,
-    entries: [entry(1)],
+    events: [event(1)],
   }));
   await waitFor(() => firstEvents.length === 1 && secondEvents.length === 1);
   assert.equal(sleeper.pendingCount, 1, "one loop owns one polling delay");
@@ -180,8 +177,8 @@ test("polls the authenticated bridge with a monotonic after cursor", async () =>
   const delivered = [];
   const sleeper = createControlledSleeper();
   const responses = [
-    pollResponse({ cursor: 1, entries: [entry(1)] }),
-    pollResponse({ cursor: 3, entries: [entry(2), entry(3)] }),
+    pollResponse({ cursor: 1, events: [event(1)] }),
+    pollResponse({ cursor: 3, events: [event(2), event(3)] }),
   ];
   const source = createOpenCodeBridgeSource({
     startSession: async () => ({ sessionId: "session-1", workspace: "repo/task" }),
@@ -203,6 +200,35 @@ test("polls the authenticated bridge with a monotonic after cursor", async () =>
     { sessionId: "session-1", after: 1 },
   ]);
   assert.deepEqual(delivered.map(({ id }) => id), ["event-1", "event-2", "event-3"]);
+  unsubscribe();
+});
+
+test("fails closed when nextCursor moves behind the requested after cursor", async () => {
+  const delivered = [];
+  const errors = [];
+  const sleeper = createControlledSleeper();
+  let polls = 0;
+  const source = createOpenCodeBridgeSource({
+    onPollingError: (error) => errors.push(error),
+    startSession: async () => ({ sessionId: "session-1" }),
+    postJson: async () => {
+      polls += 1;
+      if (polls === 1) {
+        return pollResponse({ cursor: 1, events: [event(1)] });
+      }
+      return pollResponse({ cursor: 0 });
+    },
+    sleep: sleeper.sleep,
+  });
+
+  const unsubscribe = source.subscribe((eventValue) => delivered.push(eventValue));
+  await waitFor(() => delivered.length === 1 && sleeper.pendingCount === 1);
+  sleeper.releaseNext();
+  await waitFor(() => errors.length === 1, "backward cursor was not rejected");
+
+  assert.deepEqual(delivered.map(({ id }) => id), ["event-1"]);
+  assert.equal(polls, 2);
+  assert.match(errors[0].message, /cursor/i);
   unsubscribe();
 });
 
@@ -309,16 +335,16 @@ test("prompt and valid once/reject permission replies carry the owned session id
     ],
     [
       "/opencode/session/permission",
-      { sessionId: "session-1", permissionId: "permission-1", reply: "once" },
+      { sessionId: "session-1", requestId: "permission-1", reply: "once" },
     ],
     [
       "/opencode/session/permission",
-      { sessionId: "session-1", permissionId: "permission-2", reply: "reject" },
+      { sessionId: "session-1", requestId: "permission-2", reply: "reject" },
     ],
   ]);
 });
 
-test("discloses a cursor gap before delivering the remaining attributable entries", async () => {
+test("discloses a cursor gap before delivering the remaining attributable events once", async () => {
   const gaps = [];
   const delivered = [];
   const sleeper = createControlledSleeper();
@@ -328,7 +354,7 @@ test("discloses a cursor gap before delivering the remaining attributable entrie
     postJson: async () => pollResponse({
       cursor: 5,
       droppedBefore: 3,
-      entries: [entry(4), entry(5)],
+      events: [event(4), event(5)],
     }),
     sleep: sleeper.sleep,
   });
@@ -346,35 +372,44 @@ test("discloses a cursor gap before delivering the remaining attributable entrie
 });
 
 test("malformed cursor responses fail closed without delivery, retry, or replay", async () => {
-  const delivered = [];
-  const errors = [];
-  const posts = [];
-  const sleeper = createControlledSleeper();
-  const source = createOpenCodeBridgeSource({
-    onPollingError: (error) => errors.push(error),
-    startSession: async () => ({ sessionId: "session-1" }),
-    postJson: async (path, body) => {
-      posts.push([path, body]);
-      return pollResponse({
-        cursor: 1,
-        entries: [entry(2)],
-      });
-    },
-    sleep: sleeper.sleep,
-  });
+  const malformedResponses = [
+    null,
+    [],
+    { events: [], nextCursor: 0 },
+    { events: {}, nextCursor: 0, droppedBefore: 0 },
+    { events: [], nextCursor: -1, droppedBefore: 0 },
+    { events: [], nextCursor: 0, droppedBefore: -1 },
+    { events: [], nextCursor: 1, droppedBefore: 2 },
+  ];
 
-  const unsubscribe = source.subscribe((eventValue) => delivered.push(eventValue));
-  await waitFor(() => errors.length === 1, "malformed response was not rejected");
-  await Promise.resolve();
+  for (const malformedResponse of malformedResponses) {
+    const delivered = [];
+    const errors = [];
+    const posts = [];
+    const sleeper = createControlledSleeper();
+    const source = createOpenCodeBridgeSource({
+      onPollingError: (error) => errors.push(error),
+      startSession: async () => ({ sessionId: "session-1" }),
+      postJson: async (path, body) => {
+        posts.push([path, body]);
+        return malformedResponse;
+      },
+      sleep: sleeper.sleep,
+    });
 
-  assert.deepEqual(delivered, []);
-  assert.equal(posts.length, 1);
-  assert.equal(sleeper.pendingCount, 0, "failed polling must not schedule a retry");
-  assert.match(errors[0].message, /cursor/i);
-  unsubscribe();
+    const unsubscribe = source.subscribe((eventValue) => delivered.push(eventValue));
+    await waitFor(() => errors.length === 1, "malformed response was not rejected");
+    await Promise.resolve();
+
+    assert.deepEqual(delivered, []);
+    assert.equal(posts.length, 1);
+    assert.equal(sleeper.pendingCount, 0, "failed polling must not schedule a retry");
+    assert.match(errors[0].message, /cursor|response/i);
+    unsubscribe();
+  }
 });
 
-test("wrong-session or missing-session bridge entries fail closed", async () => {
+test("wrong-session or missing-session bridge events fail closed", async () => {
   for (const sessionId of ["session-other", null]) {
     const delivered = [];
     const errors = [];
@@ -383,7 +418,7 @@ test("wrong-session or missing-session bridge entries fail closed", async () => 
       startSession: async () => ({ sessionId: "session-1" }),
       postJson: async () => pollResponse({
         cursor: 1,
-        entries: [entry(1, sessionId)],
+        events: [event(1, sessionId)],
       }),
       sleep: createControlledSleeper().sleep,
     });
