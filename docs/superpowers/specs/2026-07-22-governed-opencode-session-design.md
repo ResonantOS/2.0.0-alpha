@@ -208,10 +208,13 @@ separately and pass its own security and platform review.
    are overlaid in memory and are never placed in `process.env` or passed to
    the one-shot CLI delegation path.
 7. The host sets an isolated OpenCode configuration directory, disables
-   project configuration, and supplies the closed permission policy
-   `{"*":"ask","external_directory":"deny"}`. This makes all executable
-   actions visible for one-time approval and denies file-tool traversal outside
-   the selected workspace. It does not claim OS-level process isolation.
+   project configuration and LSP downloads, and supplies a default-deny
+   permission policy. Only workspace `read`, `edit`, `glob`, `grep`, and
+   `list` operations may ask for one-time approval; `.env` credential reads,
+   shell, task, LSP, network, skill, and external-directory actions remain
+   denied. The bridge independently refuses a `once` reply for every action
+   outside that filesystem allowlist. These controls do not claim OS-level
+   process isolation.
 8. Readiness requires an authenticated request to `/doc`. An unauthenticated
    response is not accepted as proof of ownership.
 9. The bridge creates `@opencode-ai/sdk/v2` with the authenticated base URL and

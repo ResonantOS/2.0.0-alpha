@@ -68,10 +68,10 @@ export function renderApprovals(container, approvals = [], { document: doc, onRe
       b.addEventListener("click", () => onReply?.(approval.id, decision));
       return b;
     };
-    actions.append(
-      make("Approve once", "once", "oc-go"),
-      make("Deny", "reject", "oc-no")
-    );
+    if (approval.approvable !== false) {
+      actions.append(make("Approve once", "once", "oc-go"));
+    }
+    actions.append(make("Deny", "reject", "oc-no"));
     card.append(head, actions);
     container.append(card);
   }

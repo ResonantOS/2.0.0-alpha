@@ -58,13 +58,19 @@ This keeps OpenCode powerful without making it a trusted core memory writer.
   Revoking any requirement hard-stops an active session.
 - Shell and process tools are denied in the live preview. A separate,
   human-approved one-shot coding handoff may request scoped shell authority.
+- The OpenCode child defaults every permission to `deny`. Only workspace
+  `read`, `edit`, `glob`, `grep`, and `list` operations may ask for one-time
+  approval; reads of `.env` credential files remain denied. ResonantOS checks
+  the same allowlist before forwarding a `once` reply, so a misbehaving child
+  cannot turn a denied shell, process, network, skill, or external-directory
+  request into approved authority.
 - Launch requires a host-selected workspace path that resolves to the
   repository root or a descendant after symlinks are resolved.
 - Request fields and one-shot execution environment flags cannot override live
   consent, grants, workspace, provider, model, command, host, or port.
 - The bridge starts a new loopback child with generated Basic authentication,
   `--pure`, `shell: false`, an allowlisted environment, project configuration
-  disabled, and external-directory access denied.
+  disabled, LSP downloads disabled, and external-directory access denied.
 - Provider credentials and generated OpenCode server credentials remain in
   bridge memory and are never returned to the extension.
 - OpenCode still runs as the current OS user. Workspace selection and OpenCode

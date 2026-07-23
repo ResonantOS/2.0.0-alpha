@@ -9,6 +9,7 @@ import {
   parseDraftPacketMarkdown,
 } from "./addon-draft-connectors.mjs";
 import { dashboardProxyUrl } from "./bridge-server.mjs";
+import { OPENCODE_LIVE_PERMISSION_POLICY_JSON } from "./opencode-client.mjs";
 
 const DEFAULT_OPENCODE_MODEL = "openai/gpt-5.4-mini";
 const MINIMAX_OPENCODE_MODEL = "minimax/MiniMax-M3";
@@ -577,13 +578,7 @@ export function createAddonDelegationService(dependencies) {
         : {}),
       OPENCODE_DISABLE_LSP_DOWNLOAD: "1",
       OPENCODE_DISABLE_PROJECT_CONFIG: "1",
-      OPENCODE_PERMISSION: JSON.stringify({
-        "*": "ask",
-        bash: "deny",
-        task: "deny",
-        lsp: "deny",
-        external_directory: "deny",
-      }),
+      OPENCODE_PERMISSION: OPENCODE_LIVE_PERMISSION_POLICY_JSON,
     };
   }
 

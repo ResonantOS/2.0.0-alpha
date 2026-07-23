@@ -190,6 +190,7 @@ export function normalizeOpenCodeEvent(raw, activeSessionId = "") {
         kind: "permission-asked",
         sessionId,
         id,
+        approvable: data.approvable !== false,
         tool: action,
         title: action,
         detail: data.resources.join("\n"),
@@ -323,6 +324,7 @@ export function applyOpenCodeEvent(state, event) {
           ...state.approvals,
           {
             id: event.id,
+            approvable: event.approvable,
             tool: event.tool,
             title: event.title,
             detail: event.detail,

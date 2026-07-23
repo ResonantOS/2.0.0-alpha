@@ -9,13 +9,34 @@ const SERVER_USERNAME = "resonantos";
 const MAX_START_ATTEMPTS = 5;
 const MAX_TERMINATION_WAIT_MS = 30_000;
 const EARLY_CANDIDATE_EXIT_CODE = "OPENCODE_EARLY_CANDIDATE_EXIT";
-const CLOSED_PERMISSION_POLICY = JSON.stringify({
-  "*": "ask",
+export const OPENCODE_LIVE_APPROVABLE_PERMISSION_ACTIONS = Object.freeze([
+  "edit",
+  "glob",
+  "grep",
+  "list",
+  "read",
+]);
+export const OPENCODE_LIVE_PERMISSION_POLICY = Object.freeze({
+  "*": "deny",
+  read: Object.freeze({
+    "*": "ask",
+    "*.env": "deny",
+    "*.env.*": "deny",
+    "*.env.example": "ask",
+  }),
+  edit: "ask",
+  glob: "ask",
+  grep: "ask",
+  list: "ask",
+  todowrite: "allow",
   bash: "deny",
   task: "deny",
   lsp: "deny",
   external_directory: "deny",
 });
+export const OPENCODE_LIVE_PERMISSION_POLICY_JSON = JSON.stringify(
+  OPENCODE_LIVE_PERMISSION_POLICY,
+);
 const SERVER_ANNOUNCEMENT_LIMIT = 4_096;
 const SERVER_ANNOUNCEMENT_PATTERN = (
   /(?:^|\r?\n)opencode server listening on (http:\/\/127\.0\.0\.1:([0-9]{1,5}))\r?(?:\n|$)/
@@ -128,7 +149,7 @@ function childEnvironment(environment, configDirectory, password) {
     OPENCODE_CONFIG_DIR: configDirectory,
     OPENCODE_DISABLE_LSP_DOWNLOAD: "1",
     OPENCODE_DISABLE_PROJECT_CONFIG: "1",
-    OPENCODE_PERMISSION: CLOSED_PERMISSION_POLICY,
+    OPENCODE_PERMISSION: OPENCODE_LIVE_PERMISSION_POLICY_JSON,
     OPENCODE_SERVER_USERNAME: SERVER_USERNAME,
     OPENCODE_SERVER_PASSWORD: password,
   };

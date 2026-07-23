@@ -528,7 +528,18 @@ test("OpenCode live-session preflight returns scoped internals while public stat
       assert.equal(
         preflight.childEnvironment.OPENCODE_PERMISSION,
         JSON.stringify({
-          "*": "ask",
+          "*": "deny",
+          read: {
+            "*": "ask",
+            "*.env": "deny",
+            "*.env.*": "deny",
+            "*.env.example": "ask",
+          },
+          edit: "ask",
+          glob: "ask",
+          grep: "ask",
+          list: "ask",
+          todowrite: "allow",
           bash: "deny",
           task: "deny",
           lsp: "deny",

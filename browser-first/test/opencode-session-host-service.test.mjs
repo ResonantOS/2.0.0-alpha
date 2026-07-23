@@ -454,8 +454,8 @@ test("permission replies allow only once or reject and use an attributed request
     data: {
       id: "request-once",
       sessionID: sessionId,
-      action: "bash",
-      resources: ["npm test"],
+      action: "edit",
+      resources: ["src/index.js"],
     },
   });
   harness.feeds[0].push({
@@ -467,9 +467,18 @@ test("permission replies allow only once or reject and use an attributed request
       resources: ["src/index.js"],
     },
   });
+  harness.feeds[0].push({
+    type: "permission.v2.asked",
+    data: {
+      id: "request-shell",
+      sessionID: sessionId,
+      action: "bash",
+      resources: ["npm test"],
+    },
+  });
   await waitFor(async () => {
     const result = await harness.handlers.executeOpenCodeSessionEvents({ sessionId, after: 0 });
-    return result.events.length === 2;
+    return result.events.length === 3;
   });
 
   await harness.handlers.executeOpenCodeSessionPermission({
@@ -483,11 +492,25 @@ test("permission replies allow only once or reject and use an attributed request
     requestId: "request-reject",
     reply: "reject",
   });
+  await assert.rejects(
+    () => harness.handlers.executeOpenCodeSessionPermission({
+      sessionId,
+      requestId: "request-shell",
+      reply: "once",
+    }),
+    /not eligible for approval/i,
+  );
+  await harness.handlers.executeOpenCodeSessionPermission({
+    sessionId,
+    requestId: "request-shell",
+    reply: "reject",
+  });
   assert.deepEqual(
     callsNamed(harness, "replyPermission").map(([, input]) => input),
     [
       { sessionID: sessionId, requestID: "request-once", reply: "once" },
       { sessionID: sessionId, requestID: "request-reject", reply: "reject" },
+      { sessionID: sessionId, requestID: "request-shell", reply: "reject" },
     ],
   );
 
@@ -527,8 +550,8 @@ test("an attributed permission request can have only one reply in flight", async
     data: {
       id: "request-single-flight",
       sessionID: sessionId,
-      action: "bash",
-      resources: ["npm test"],
+      action: "edit",
+      resources: ["src/index.js"],
     },
   });
   await waitFor(async () => {
@@ -569,8 +592,8 @@ test("the canonical bridge contract returns events and accepts requestId", async
     data: {
       id: "request-canonical",
       sessionID: sessionId,
-      action: "bash",
-      resources: ["npm test"],
+      action: "edit",
+      resources: ["src/index.js"],
       metadata: { apiKey: "sk-must-not-cross" },
     },
   });
@@ -594,8 +617,9 @@ test("the canonical bridge contract returns events and accepts requestId", async
       data: {
         id: "request-canonical",
         sessionID: sessionId,
-        action: "bash",
-        resources: ["npm test"],
+        action: "edit",
+        approvable: true,
+        resources: ["src/index.js"],
       },
     }],
     nextCursor: 1,

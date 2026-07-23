@@ -133,6 +133,23 @@ test("a failed permission reply preserves the pending approval and fails closed 
   assert.doesNotMatch(d.querySelector(".oc-session-notice").textContent, /private bridge failure/i);
 });
 
+test("a host-denied permission offers only rejection", () => {
+  const { d, emit, calls } = mount();
+  emit(event("permission.v2.asked", {
+    id: "p-denied",
+    sessionID: SESSION_ID,
+    action: "bash",
+    approvable: false,
+    resources: ["npm test"]
+  }));
+
+  const card = d.querySelector(".oc-approvals .oc-approve");
+  assert.equal(card.dataset.id, "p-denied");
+  assert.equal(card.querySelector(".oc-go"), null);
+  card.querySelector(".oc-no").dispatchEvent(new d.defaultView.Event("click"));
+  assert.deepEqual(calls.replies, [["p-denied", "reject"]]);
+});
+
 test("the composer sends a prompt and clears", () => {
   const { d, calls } = mount();
   const input = d.querySelector(".oc-composer textarea");

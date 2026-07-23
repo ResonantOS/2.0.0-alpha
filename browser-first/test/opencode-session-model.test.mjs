@@ -266,6 +266,7 @@ test("maps permission.v2 request ids and clears only the matching approval", () 
       id: "permission-1",
       sessionID: SESSION_ID,
       action: "bash",
+      approvable: false,
       resources: ["npm test", "src/**"],
     }),
     event("permission.v2.asked", {
@@ -279,6 +280,7 @@ test("maps permission.v2 request ids and clears only the matching approval", () 
   assert.equal(state.status, "waiting-approval");
   assert.deepEqual(state.approvals[0], {
     id: "permission-1",
+    approvable: false,
     tool: "bash",
     title: "bash",
     detail: "npm test\nsrc/**",

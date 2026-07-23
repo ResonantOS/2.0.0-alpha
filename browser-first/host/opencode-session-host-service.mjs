@@ -1,3 +1,7 @@
+import {
+  OPENCODE_LIVE_APPROVABLE_PERMISSION_ACTIONS,
+} from "./opencode-client.mjs";
+
 const EVENT_BUFFER_LIMIT = 500;
 const EVENT_BUFFER_BYTES_LIMIT = 1_048_576;
 const EVENT_PAYLOAD_BYTES_LIMIT = 32_768;
@@ -447,6 +451,7 @@ function sanitizeOpenCodeEvent(event, attempt) {
           id,
           sessionID,
           action,
+          approvable: OPENCODE_LIVE_APPROVABLE_PERMISSION_ACTIONS.includes(action),
           resources: data.resources
             .slice(0, EVENT_COLLECTION_LIMIT)
             .map((resource) => redactEventText(resource, attempt, 1_024)),
@@ -866,6 +871,7 @@ export function createOpencodeSessionHandlers({
     const requestID = permissionRequestId(sanitizedEvent);
     if (requestID) {
       attempt.permissionRequests.set(requestID, {
+        action: sanitizedEvent.data.action,
         cursor: entry.cursor,
         requestID,
       });
@@ -1262,6 +1268,14 @@ export function createOpencodeSessionHandlers({
     const mapped = attempt.permissionRequests.get(requestId);
     if (!mapped) {
       throw new Error("OpenCode requestId is not an active session permission request.");
+    }
+    if (
+      payload.reply === "once"
+      && !OPENCODE_LIVE_APPROVABLE_PERMISSION_ACTIONS.includes(mapped.action)
+    ) {
+      throw new Error(
+        `OpenCode ${mapped.action || "unknown"} permission is not eligible for approval.`,
+      );
     }
     attempt.permissionRequests.delete(requestId);
     try {

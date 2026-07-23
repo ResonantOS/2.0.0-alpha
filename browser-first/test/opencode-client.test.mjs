@@ -294,7 +294,7 @@ test("lifecycle starts one authenticated pure loopback child with scoped environ
         OPENCODE_CONFIG_DIR: CONFIG_DIRECTORY,
         OPENCODE_DISABLE_LSP_DOWNLOAD: "1",
         OPENCODE_DISABLE_PROJECT_CONFIG: "1",
-        OPENCODE_PERMISSION: "{\"*\":\"ask\",\"bash\":\"deny\",\"task\":\"deny\",\"lsp\":\"deny\",\"external_directory\":\"deny\"}",
+        OPENCODE_PERMISSION: "{\"*\":\"deny\",\"read\":{\"*\":\"ask\",\"*.env\":\"deny\",\"*.env.*\":\"deny\",\"*.env.example\":\"ask\"},\"edit\":\"ask\",\"glob\":\"ask\",\"grep\":\"ask\",\"list\":\"ask\",\"todowrite\":\"allow\",\"bash\":\"deny\",\"task\":\"deny\",\"lsp\":\"deny\",\"external_directory\":\"deny\"}",
         OPENCODE_SERVER_USERNAME: "resonantos",
         OPENCODE_SERVER_PASSWORD: PASSWORD,
       },

@@ -39,15 +39,19 @@ Node test runner, repository security and Alpha verification pipelines.
 - The live child sets generated `OPENCODE_SERVER_USERNAME` and
   `OPENCODE_SERVER_PASSWORD` values instead of inheriting them, excludes every
   `RESONANTOS_BROWSER_FIRST_*` value and unselected provider credential, and
-  applies `{"*":"ask","external_directory":"deny"}` with project config
-  disabled. This is governed execution, not an OS sandbox.
+  applies a default-deny permission policy with only workspace `read`, `edit`,
+  `glob`, `grep`, and `list` operations eligible for one-time approval.
+  Credential-file reads, shell, process, network, skill, LSP, and
+  external-directory operations remain denied. Project config and LSP
+  downloads are disabled. This is governed execution, not an OS sandbox.
 - The bridge never reuses or kills a service it did not start.
 - The extension never receives the OpenCode URL, service password,
   Authorization header, provider credential, full environment, or unfiltered
   event stream.
 - Prompts use the host-selected model. Extension requests contain text only.
 - Permission replies are only `once` or `reject`; persistent approval is not
-  exposed.
+  exposed. The host accepts `once` only for the filesystem action allowlist
+  above, while `reject` remains available for every attributed request.
 - OpenCode operations use the 1.18.4 v2 session boundary:
   `client.v2.session.create`, `client.v2.session.prompt`, and
   `client.v2.session.permission.reply`. The permission reply always carries
