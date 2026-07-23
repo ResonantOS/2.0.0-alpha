@@ -6,6 +6,9 @@ import path from "node:path";
 
 const LOOPBACK_HOSTNAME = "127.0.0.1";
 const SERVER_USERNAME = "resonantos";
+const MAX_START_ATTEMPTS = 5;
+const MAX_TERMINATION_WAIT_MS = 30_000;
+const EARLY_CANDIDATE_EXIT_CODE = "OPENCODE_EARLY_CANDIDATE_EXIT";
 const CLOSED_PERMISSION_POLICY = JSON.stringify({
   "*": "ask",
   external_directory: "deny",
@@ -24,6 +27,16 @@ function requireFunction(value, name) {
 
 function publicState(state) {
   return Object.freeze({ state });
+}
+
+function earlyCandidateExitError() {
+  const error = new Error("OpenCode server exited before becoming ready.");
+  error.code = EARLY_CANDIDATE_EXIT_CODE;
+  return error;
+}
+
+function isEarlyCandidateExitError(error) {
+  return error?.code === EARLY_CANDIDATE_EXIT_CODE;
 }
 
 function basicAuthorization(username, password) {
@@ -234,9 +247,12 @@ export function createOpencodeServerLifecycle({
     setTimeout(resolve, milliseconds);
   }),
   spawnImpl,
+  maxStartAttempts = 3,
   pollMs = 100,
   readinessTimeoutMs = 12_000,
   readinessProbeTimeoutMs = 1_000,
+  terminationGraceMs = 1_500,
+  terminationKillTimeoutMs = 1_000,
 } = {}) {
   requireFunction(allocatePort, "port allocator");
   requireFunction(createClient, "client factory");
@@ -247,14 +263,27 @@ export function createOpencodeServerLifecycle({
   requireFunction(sleep, "sleep");
   requireFunction(spawnImpl, "spawn");
   if (
+    !Number.isSafeInteger(maxStartAttempts)
+    || maxStartAttempts <= 0
+    || maxStartAttempts > MAX_START_ATTEMPTS
+  ) {
+    throw new Error("OpenCode lifecycle start-attempt bound is invalid.");
+  }
+  if (
     !Number.isFinite(pollMs)
     || pollMs <= 0
     || !Number.isFinite(readinessTimeoutMs)
     || readinessTimeoutMs < 0
     || !Number.isFinite(readinessProbeTimeoutMs)
     || readinessProbeTimeoutMs <= 0
+    || !Number.isFinite(terminationGraceMs)
+    || terminationGraceMs <= 0
+    || terminationGraceMs > MAX_TERMINATION_WAIT_MS
+    || !Number.isFinite(terminationKillTimeoutMs)
+    || terminationKillTimeoutMs <= 0
+    || terminationKillTimeoutMs > MAX_TERMINATION_WAIT_MS
   ) {
-    throw new Error("OpenCode readiness timing values are invalid.");
+    throw new Error("OpenCode lifecycle timing values are invalid.");
   }
 
   const records = new WeakMap();
@@ -281,6 +310,50 @@ export function createOpencodeServerLifecycle({
     }
   }
 
+  async function waitForExit(record, timeoutMs) {
+    if (record.exited) return true;
+    let timeout;
+    try {
+      return await Promise.race([
+        record.exitPromise.then(() => true),
+        new Promise((resolve) => {
+          timeout = setTimeout(() => resolve(false), timeoutMs);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  async function terminate(record) {
+    if (!record.child || record.exited) return;
+    if (active === record) state = "stopping";
+
+    try {
+      requireFunction(record.child.kill, "child-process kill").call(
+        record.child,
+        "SIGTERM",
+      );
+    } catch (error) {
+      if (record.exited) return;
+      state = "failed";
+      throw new Error("OpenCode server SIGTERM request failed.", { cause: error });
+    }
+    if (await waitForExit(record, terminationGraceMs)) return;
+
+    try {
+      record.child.kill("SIGKILL");
+    } catch (error) {
+      if (record.exited) return;
+      state = "failed";
+      throw new Error("OpenCode server SIGKILL request failed.", { cause: error });
+    }
+    if (await waitForExit(record, terminationKillTimeoutMs)) return;
+
+    state = "failed";
+    throw new Error("OpenCode server did not terminate after SIGKILL.");
+  }
+
   async function cleanup(record, { kill = false, notify = false } = {}) {
     if (!record) {
       if (!active) state = "stopped";
@@ -290,7 +363,13 @@ export function createOpencodeServerLifecycle({
       await record.cleanupPromise;
       return;
     }
-    record.cleanupPromise = (async () => {
+    const cleanupPromise = (async () => {
+      if (kill && record.child && !record.exited) {
+        await terminate(record);
+      }
+      if (record.child && !record.exited) {
+        await record.exitPromise;
+      }
       if (active === record) active = null;
       state = "stopped";
       if (record.child && record.onChildExit) {
@@ -298,14 +377,6 @@ export function createOpencodeServerLifecycle({
           record.child.off("exit", record.onChildExit);
         } else {
           record.child.removeListener?.("exit", record.onChildExit);
-        }
-      }
-      if (kill && record.child && !record.exited && !record.killRequested) {
-        record.killRequested = true;
-        try {
-          record.child.kill?.();
-        } catch {
-          // The owned process may already be gone.
         }
       }
       try {
@@ -322,7 +393,15 @@ export function createOpencodeServerLifecycle({
       }
       if (notify) notifyExit(record);
     })();
-    await record.cleanupPromise;
+    record.cleanupPromise = cleanupPromise;
+    try {
+      await cleanupPromise;
+    } catch (error) {
+      if (record.cleanupPromise === cleanupPromise && !record.exited) {
+        record.cleanupPromise = null;
+      }
+      throw error;
+    }
   }
 
   async function authenticatedProbe(record, authorization, remainingMs) {
@@ -336,9 +415,9 @@ export function createOpencodeServerLifecycle({
         headers: { Authorization: authorization },
         signal: controller.signal,
       });
-      return Boolean(result?.ok);
+      return Number.isInteger(result?.status) ? result.status : null;
     } catch {
-      return false;
+      return null;
     } finally {
       clearTimeout(timeout);
     }
@@ -347,23 +426,27 @@ export function createOpencodeServerLifecycle({
   async function authenticatedReady(record, deadline) {
     let remainingMs = deadline - Date.now();
     if (remainingMs <= 0) return false;
-    if (await authenticatedProbe(
+    const challengeStatus = await authenticatedProbe(
       record,
       OWNERSHIP_CHALLENGE_AUTHORIZATION,
       remainingMs,
-    )) {
-      return false;
-    }
+    );
+    if (challengeStatus !== 401) return false;
     remainingMs = deadline - Date.now();
     if (remainingMs <= 0) return false;
-    return authenticatedProbe(record, record.authorization, remainingMs);
+    const ownedStatus = await authenticatedProbe(
+      record,
+      record.authorization,
+      remainingMs,
+    );
+    return ownedStatus !== null && ownedStatus >= 200 && ownedStatus < 300;
   }
 
   async function waitUntilReady(record) {
     const deadline = Date.now() + readinessTimeoutMs;
     while (true) {
       if (record.exited) {
-        throw new Error("OpenCode server exited before becoming ready.");
+        throw earlyCandidateExitError();
       }
       if (await authenticatedReady(record, deadline)) return;
       const remainingMs = deadline - Date.now();
@@ -371,37 +454,17 @@ export function createOpencodeServerLifecycle({
       await sleep(Math.min(pollMs, remainingMs));
     }
     if (record.exited) {
-      throw new Error("OpenCode server exited before becoming ready.");
+      throw earlyCandidateExitError();
     }
     throw new Error("OpenCode server did not become ready in time.");
   }
 
-  async function start({
+  async function startAttempt({
     command,
     cwd,
-    env = {},
+    env,
     onExit,
-  } = {}) {
-    if (state !== "stopped" || active) {
-      throw new Error("OpenCode server lifecycle is already active.");
-    }
-    if (
-      typeof command !== "string"
-      || !command.trim()
-      || !path.isAbsolute(command)
-    ) {
-      throw new Error("OpenCode runtime is not available to start.");
-    }
-    if (typeof cwd !== "string" || !path.isAbsolute(cwd)) {
-      throw new Error("OpenCode server requires an approved absolute working directory.");
-    }
-    if (!env || typeof env !== "object" || Array.isArray(env)) {
-      throw new Error("OpenCode server requires a scoped environment object.");
-    }
-    if (onExit !== undefined && typeof onExit !== "function") {
-      throw new Error("OpenCode lifecycle onExit must be a function.");
-    }
-
+  }) {
     state = "starting";
     let configDirectory = "";
     let record = null;
@@ -438,6 +501,7 @@ export function createOpencodeServerLifecycle({
       }
 
       const handle = Object.freeze({ process: child });
+      let resolveExit;
       record = {
         authorization,
         baseUrl,
@@ -447,16 +511,20 @@ export function createOpencodeServerLifecycle({
         configDirectory,
         directory: cwd,
         exited: false,
+        exitPromise: new Promise((resolve) => {
+          resolveExit = resolve;
+        }),
         handle,
-        killRequested: false,
         onChildExit: null,
         onExit,
         password,
+        ready: false,
       };
       records.set(handle, record);
       record.onChildExit = () => {
         record.exited = true;
-        void cleanup(record, { notify: true }).catch(() => {
+        resolveExit();
+        void cleanup(record, { notify: record.ready }).catch(() => {
           state = "failed";
         });
       };
@@ -465,8 +533,9 @@ export function createOpencodeServerLifecycle({
 
       await waitUntilReady(record);
       if (record.exited) {
-        throw new Error("OpenCode server exited before becoming ready.");
+        throw earlyCandidateExitError();
       }
+      record.ready = true;
       state = "running";
       return handle;
     } catch (error) {
@@ -479,6 +548,49 @@ export function createOpencodeServerLifecycle({
       }
       throw error;
     }
+  }
+
+  async function start({
+    command,
+    cwd,
+    env = {},
+    onExit,
+  } = {}) {
+    if (state !== "stopped" || active) {
+      throw new Error("OpenCode server lifecycle is already active.");
+    }
+    if (
+      typeof command !== "string"
+      || !command.trim()
+      || !path.isAbsolute(command)
+    ) {
+      throw new Error("OpenCode runtime is not available to start.");
+    }
+    if (typeof cwd !== "string" || !path.isAbsolute(cwd)) {
+      throw new Error("OpenCode server requires an approved absolute working directory.");
+    }
+    if (!env || typeof env !== "object" || Array.isArray(env)) {
+      throw new Error("OpenCode server requires a scoped environment object.");
+    }
+    if (onExit !== undefined && typeof onExit !== "function") {
+      throw new Error("OpenCode lifecycle onExit must be a function.");
+    }
+
+    for (let attempt = 1; attempt <= maxStartAttempts; attempt += 1) {
+      try {
+        return await startAttempt({ command, cwd, env, onExit });
+      } catch (error) {
+        if (!isEarlyCandidateExitError(error) || attempt === maxStartAttempts) {
+          throw error;
+        }
+        if (state !== "stopped" || active) {
+          throw new Error("OpenCode candidate cleanup did not permit a safe retry.", {
+            cause: error,
+          });
+        }
+      }
+    }
+    throw new Error("OpenCode server lifecycle exhausted its start-attempt bound.");
   }
 
   async function createOwnedClient(handle) {

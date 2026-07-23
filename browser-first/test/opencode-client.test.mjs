@@ -16,12 +16,22 @@ const PASSWORD = "generated-server-password";
 const AUTHORIZATION = `Basic ${Buffer.from(`resonantos:${PASSWORD}`).toString("base64")}`;
 const FOREIGN_AUTHORIZATION = `Basic ${Buffer.from("resonantos:__invalid_resonantos_readiness_probe__").toString("base64")}`;
 
-function fakeChild() {
+function fakeChild({ exitOnKill = true } = {}) {
   const child = new EventEmitter();
   child.exitCode = null;
   child.killCalls = 0;
-  child.kill = () => {
+  child.killSignals = [];
+  child.kill = (signal) => {
     child.killCalls += 1;
+    child.killSignals.push(signal);
+    if (exitOnKill) {
+      queueMicrotask(() => {
+        if (child.exitCode !== null) return;
+        child.exitCode = 0;
+        child.emit("exit", 0, null);
+      });
+    }
+    return true;
   };
   return child;
 }
@@ -62,6 +72,9 @@ function lifecycleHarness(overrides = {}) {
     pollMs: overrides.pollMs ?? 1,
     readinessProbeTimeoutMs: overrides.readinessProbeTimeoutMs ?? 10,
     readinessTimeoutMs: overrides.readinessTimeoutMs ?? 50,
+    maxStartAttempts: overrides.maxStartAttempts ?? 3,
+    terminationGraceMs: overrides.terminationGraceMs ?? 10,
+    terminationKillTimeoutMs: overrides.terminationKillTimeoutMs ?? 10,
   });
   return {
     child,
@@ -335,6 +348,30 @@ test("lifecycle refuses a listener that accepts the ownership-challenge credenti
   assert.deepEqual(lifecycle.status(), { state: "stopped" });
 });
 
+test("lifecycle refuses a listener that does not answer the ownership challenge with 401", async () => {
+  const child = fakeChild();
+  const { lifecycle } = lifecycleHarness({
+    child,
+    fetchImpl: async (_url, options) => (
+      options.headers.Authorization === AUTHORIZATION
+        ? response(true, 200)
+        : response(false, 403)
+    ),
+    readinessTimeoutMs: 5,
+  });
+
+  await assert.rejects(
+    lifecycle.start({
+      command: "/fixed/bin/opencode",
+      cwd: WORKSPACE,
+      env: {},
+    }),
+    /did not become ready/,
+  );
+  assert.equal(child.killCalls, 1);
+  assert.deepEqual(lifecycle.status(), { state: "stopped" });
+});
+
 test("lifecycle timeout bounds a hanging authenticated readiness probe", async () => {
   const child = fakeChild();
   const { lifecycle } = lifecycleHarness({
@@ -365,6 +402,7 @@ test("early child exit rejects startup and clears owned config state", async () 
   const { lifecycle, removedDirectories } = lifecycleHarness({
     child,
     fetchImpl: async () => response(false),
+    maxStartAttempts: 1,
     sleep: async () => {
       child.exitCode = 17;
       child.emit("exit", 17, null);
@@ -380,6 +418,116 @@ test("early child exit rejects startup and clears owned config state", async () 
     /exited before becoming ready/,
   );
   assert.deepEqual(removedDirectories, [CONFIG_DIRECTORY]);
+  assert.deepEqual(lifecycle.status(), { state: "stopped" });
+});
+
+test("early candidate exit retries with a fresh loopback port", async () => {
+  const ports = [PORT, PORT + 1];
+  const configDirectories = [
+    `${CONFIG_DIRECTORY}-1`,
+    `${CONFIG_DIRECTORY}-2`,
+  ];
+  const children = [
+    fakeChild({ exitOnKill: false }),
+    fakeChild(),
+  ];
+  const removedDirectories = [];
+  const spawnCalls = [];
+  const exitEvents = [];
+  let allocationIndex = 0;
+  let configIndex = 0;
+  let spawnIndex = 0;
+  let firstExited = false;
+  const { lifecycle } = lifecycleHarness({
+    allocatePort: async () => ports[allocationIndex++],
+    createConfigDirectory: async () => configDirectories[configIndex++],
+    fetchImpl: async (url, options) => {
+      if (url.includes(`:${PORT}/`)) {
+        if (!firstExited) {
+          firstExited = true;
+          children[0].exitCode = 98;
+          children[0].emit("exit", 98, null);
+        }
+        return response(false, 503);
+      }
+      return response(
+        options.headers.Authorization === AUTHORIZATION,
+        options.headers.Authorization === AUTHORIZATION ? 200 : 401,
+      );
+    },
+    removeConfigDirectory: async (directory) => {
+      removedDirectories.push(directory);
+    },
+    spawnImpl: (command, args, options) => {
+      spawnCalls.push({ command, args, options });
+      return children[spawnIndex++];
+    },
+  });
+
+  const handle = await lifecycle.start({
+    command: "/fixed/bin/opencode",
+    cwd: WORKSPACE,
+    env: {},
+    onExit: (event) => exitEvents.push(event),
+  });
+
+  assert.equal(handle.process, children[1]);
+  assert.deepEqual(
+    spawnCalls.map(({ args }) => args.at(-1)),
+    ports.map(String),
+  );
+  assert.deepEqual(removedDirectories, [configDirectories[0]]);
+  assert.deepEqual(exitEvents, []);
+  assert.deepEqual(lifecycle.status(), { state: "running" });
+});
+
+test("early candidate exit retries only to the configured attempt bound", async () => {
+  const ports = [PORT, PORT + 1];
+  const children = [
+    fakeChild({ exitOnKill: false }),
+    fakeChild({ exitOnKill: false }),
+  ];
+  const removedDirectories = [];
+  const spawnCalls = [];
+  let allocationIndex = 0;
+  let spawnIndex = 0;
+  const exitedPorts = new Set();
+  const { lifecycle } = lifecycleHarness({
+    allocatePort: async () => ports[allocationIndex++],
+    createConfigDirectory: async () => `${CONFIG_DIRECTORY}-${allocationIndex}`,
+    fetchImpl: async (url) => {
+      const port = Number(new URL(url).port);
+      if (!exitedPorts.has(port)) {
+        exitedPorts.add(port);
+        const child = children[ports.indexOf(port)];
+        child.exitCode = 98;
+        child.emit("exit", 98, null);
+      }
+      return response(false, 503);
+    },
+    maxStartAttempts: 2,
+    removeConfigDirectory: async (directory) => {
+      removedDirectories.push(directory);
+    },
+    spawnImpl: (command, args, options) => {
+      spawnCalls.push({ command, args, options });
+      return children[spawnIndex++];
+    },
+  });
+
+  await assert.rejects(
+    lifecycle.start({
+      command: "/fixed/bin/opencode",
+      cwd: WORKSPACE,
+      env: {},
+    }),
+    /exited before becoming ready/,
+  );
+  assert.equal(spawnCalls.length, 2);
+  assert.deepEqual(removedDirectories, [
+    `${CONFIG_DIRECTORY}-1`,
+    `${CONFIG_DIRECTORY}-2`,
+  ]);
   assert.deepEqual(lifecycle.status(), { state: "stopped" });
 });
 
@@ -401,6 +549,135 @@ test("stop is ownership-bound, idempotent, and kills only the spawned child", as
   assert.deepEqual(await lifecycle.stop(handle), { state: "stopped" });
   assert.equal(child.killCalls, 1);
   assert.equal(foreignChild.killCalls, 0);
+  assert.deepEqual(removedDirectories, [CONFIG_DIRECTORY]);
+});
+
+test("stop does not report stopped until the owned child exits", async () => {
+  const child = fakeChild({ exitOnKill: false });
+  const { lifecycle } = lifecycleHarness({ child });
+  const handle = await lifecycle.start({
+    command: "/fixed/bin/opencode",
+    cwd: WORKSPACE,
+    env: {},
+  });
+
+  let stopFinished = false;
+  const stopping = lifecycle.stop(handle).then((result) => {
+    stopFinished = true;
+    return result;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(stopFinished, false);
+  child.exitCode = 0;
+  child.emit("exit", 0, null);
+  assert.deepEqual(await stopping, { state: "stopped" });
+});
+
+test("stop escalates to SIGKILL and succeeds only after the forced exit", async () => {
+  const child = fakeChild({ exitOnKill: false });
+  child.kill = (signal) => {
+    child.killCalls += 1;
+    child.killSignals.push(signal);
+    if (signal === "SIGKILL") {
+      queueMicrotask(() => {
+        child.exitCode = 137;
+        child.emit("exit", null, "SIGKILL");
+      });
+    }
+    return true;
+  };
+  const { lifecycle, removedDirectories } = lifecycleHarness({
+    child,
+    terminationGraceMs: 1,
+  });
+  const handle = await lifecycle.start({
+    command: "/fixed/bin/opencode",
+    cwd: WORKSPACE,
+    env: {},
+  });
+
+  assert.deepEqual(await lifecycle.stop(handle), { state: "stopped" });
+  assert.deepEqual(child.killSignals, ["SIGTERM", "SIGKILL"]);
+  assert.deepEqual(removedDirectories, [CONFIG_DIRECTORY]);
+  assert.deepEqual(lifecycle.status(), { state: "stopped" });
+});
+
+test("stop escalates and retains blocking ownership when the child will not terminate", async () => {
+  const child = fakeChild({ exitOnKill: false });
+  const { lifecycle, removedDirectories } = lifecycleHarness({
+    child,
+    terminationGraceMs: 1,
+    terminationKillTimeoutMs: 1,
+  });
+  const handle = await lifecycle.start({
+    command: "/fixed/bin/opencode",
+    cwd: WORKSPACE,
+    env: {},
+  });
+
+  const outcome = await Promise.race([
+    lifecycle.stop(handle).then(
+      (value) => ({ kind: "resolved", value }),
+      (error) => ({ error, kind: "rejected" }),
+    ),
+    new Promise((resolve) => {
+      setTimeout(() => resolve({ kind: "timeout" }), 50);
+    }),
+  ]);
+
+  assert.equal(outcome.kind, "rejected");
+  assert.match(outcome.error.message, /did not terminate/i);
+  assert.deepEqual(child.killSignals, ["SIGTERM", "SIGKILL"]);
+  assert.deepEqual(lifecycle.status(), { state: "failed" });
+  assert.deepEqual(removedDirectories, []);
+  await assert.rejects(
+    lifecycle.start({
+      command: "/fixed/bin/opencode",
+      cwd: WORKSPACE,
+      env: {},
+    }),
+    /already active/,
+  );
+
+  child.exitCode = 137;
+  child.emit("exit", null, "SIGKILL");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(lifecycle.status(), { state: "stopped" });
+  assert.deepEqual(removedDirectories, [CONFIG_DIRECTORY]);
+});
+
+test("stop surfaces a signal failure without releasing owned process authority", async () => {
+  const child = fakeChild({ exitOnKill: false });
+  child.kill = () => {
+    throw new Error("signal denied");
+  };
+  const { lifecycle, removedDirectories } = lifecycleHarness({ child });
+  const handle = await lifecycle.start({
+    command: "/fixed/bin/opencode",
+    cwd: WORKSPACE,
+    env: {},
+  });
+
+  await assert.rejects(
+    lifecycle.stop(handle),
+    /SIGTERM request failed/,
+  );
+  assert.deepEqual(lifecycle.status(), { state: "failed" });
+  assert.deepEqual(removedDirectories, []);
+  await assert.rejects(
+    lifecycle.start({
+      command: "/fixed/bin/opencode",
+      cwd: WORKSPACE,
+      env: {},
+    }),
+    /already active/,
+  );
+
+  child.exitCode = 1;
+  child.emit("exit", 1, null);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(lifecycle.status(), { state: "stopped" });
   assert.deepEqual(removedDirectories, [CONFIG_DIRECTORY]);
 });
 
