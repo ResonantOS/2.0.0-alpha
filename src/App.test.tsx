@@ -14,6 +14,7 @@ import type {
 } from "./core/contracts";
 import { buildDefaultState } from "./core/defaults";
 import { ArchiveReviewDesk } from "./modules/archive/ArchiveReviewDesk";
+import openCodeProductionManifest from "../public/addons/opencode.json";
 
 const manifests: AddOnManifest[] = [
   createManifest("addon.telegram-channel", "Telegram Channel", "channel"),
@@ -3389,27 +3390,7 @@ describe("App boot flow", () => {
   it("does not launch the retired embedded OpenCode host for the production page manifest", async () => {
     const index = manifests.findIndex((manifest) => manifest.id === "addon.opencode");
     const previous = manifests[index];
-    manifests[index] = {
-      ...previous,
-      runtimeType: "local-service",
-      surfaces: [{
-        id: "opencode-workspace",
-        type: "page",
-        label: "OpenCode Workspace",
-        description: "Review the governed OpenCode session.",
-      }],
-      requestedCapabilities: [
-        { capability: "filesystem", granted: false, scope: "workspace", revocationBehavior: "hard-stop" },
-        { capability: "shell", granted: false, scope: "workspace", revocationBehavior: "hard-stop" },
-        { capability: "providers", granted: false, scope: "shared", revocationBehavior: "hard-stop" },
-      ],
-      service: {
-        protocol: "http-json",
-        entrypoint: "browser-first/host/run-bridge-minimal.mjs",
-        healthCommand: "/opencode/status",
-        shutdownCommand: "/opencode/session/stop",
-      },
-    };
+    manifests[index] = structuredClone(openCodeProductionManifest) as AddOnManifest;
     try {
       const state = buildDefaultState(manifests);
       const installation = state.installations["addon.opencode"];
