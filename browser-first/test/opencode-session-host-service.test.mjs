@@ -704,7 +704,7 @@ test("the host redacts the lifecycle service credential from allowed tool result
       sessionID: sessionId,
       assistantMessageID: "assistant-service",
       callID: "call-service",
-      result: `OPENCODE_SERVER_PASSWORD=${servicePassword}`,
+      result: `tool output echoed ${servicePassword} without a credential label`,
     },
   });
   await waitFor(async () => (
