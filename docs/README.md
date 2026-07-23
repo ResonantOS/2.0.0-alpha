@@ -71,6 +71,10 @@ and [Module Ownership](architecture/MODULE-OWNERSHIP.md). For the separate
 controlled Chromium package, use its
 [component README](../addons/resonant-browser-host/README.md).
 
+For the optional OpenCode developer preview, also read
+[ADR-021: OpenCode Add-on Hosted Service](architecture/ADR-021-opencode-addon-hosted-service.md)
+and the [governed OpenCode session design](superpowers/specs/2026-07-22-governed-opencode-session-design.md).
+
 ## Change Documentation
 
 Keep current status in [Status](STATUS.md), future scope in
