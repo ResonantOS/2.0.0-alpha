@@ -79,6 +79,37 @@ test("provider credentials saved through the alpha host are session-only", async
   }
 });
 
+test("host cleanup clears session provider credentials without altering process credentials", async () => {
+  const restoreEnv = withProviderEnv({
+    OPENAI_API_KEY: "openai-env-credential",
+  });
+  const root = await mkdtemp(path.join(os.tmpdir(), "resonantos-provider-session-cleanup-"));
+  const service = createService(root);
+  try {
+    await service.executeProviderCredentialSave({
+      providerId: "shared-openai",
+      credential: "openai-session-credential",
+    });
+    await service.executeProviderCredentialSave({
+      providerId: "shared-minimax",
+      credential: "minimax-session-credential",
+    });
+
+    assert.deepEqual(await service.readProviderSecrets(), {
+      "shared-openai": "openai-session-credential",
+      "shared-minimax": "minimax-session-credential",
+    });
+
+    service.clearSessionProviderSecrets();
+    assert.deepEqual(await service.readProviderSecrets(), {
+      "shared-openai": "openai-env-credential",
+    });
+  } finally {
+    restoreEnv();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("legacy plaintext provider secret files are detected but ignored", async () => {
   const restoreEnv = withProviderEnv();
   const root = await mkdtemp(path.join(os.tmpdir(), "resonantos-provider-legacy-"));
