@@ -724,6 +724,52 @@ test("the host redacts the lifecycle service credential from allowed tool result
   await harness.handlers.executeOpenCodeSessionStop({ sessionId });
 });
 
+test("the host redacts the lifecycle service credential from structured result keys", async () => {
+  const servicePassword = "generated-structured-service-value";
+  const processHandle = createProcessHandle("owned-structured-service");
+  const lifecycle = {
+    process: processHandle,
+    redactSensitiveText(value, replacement = "[redacted]") {
+      return typeof value === "string"
+        ? value.split(servicePassword).join(replacement)
+        : value;
+    },
+  };
+  const harness = createHarness({
+    startLifecycle: async () => lifecycle,
+  });
+  const { sessionId } = await harness.handlers.executeOpenCodeSessionStart({
+    workspacePath: ".",
+  });
+
+  harness.feeds[0].push({
+    type: "session.next.tool.success",
+    data: {
+      sessionID: sessionId,
+      assistantMessageID: "assistant-structured-service",
+      callID: "call-structured-service",
+      result: {
+        [servicePassword]: "ordinary value",
+      },
+    },
+  });
+  await waitFor(async () => (
+    await harness.handlers.executeOpenCodeSessionEvents({
+      sessionId,
+      after: 0,
+    })
+  ).nextCursor === 1);
+
+  const result = await harness.handlers.executeOpenCodeSessionEvents({
+    sessionId,
+    after: 0,
+  });
+  const serialized = JSON.stringify(result);
+  assert.equal(serialized.includes(servicePassword), false);
+  assert.match(serialized, /\[redacted\]/);
+  await harness.handlers.executeOpenCodeSessionStop({ sessionId });
+});
+
 test("the host bounds individual events and total buffered event bytes", async () => {
   const harness = createHarness();
   const { sessionId } = await harness.handlers.executeOpenCodeSessionStart({
@@ -1149,5 +1195,59 @@ test("host shutdown has a private cleanup path that does not weaken route owners
   await assert.rejects(
     () => harness.handlers.executeOpenCodeSessionStop({ sessionId }),
     /no active OpenCode session/,
+  );
+});
+
+test("host shutdown rejects starts begun during cleanup and remains permanently closed", async () => {
+  const stopEntered = deferred();
+  const releaseStop = deferred();
+  const delayedPreflight = deferred();
+  let preflightCalls = 0;
+  const harness = createHarness({
+    preflight: async () => {
+      preflightCalls += 1;
+      if (preflightCalls === 1) {
+        return {
+          workspace: PRIVATE_WORKSPACE,
+          model: HOST_MODEL,
+          scopedEnvironment: { OPENAI_API_KEY: "host-only" },
+        };
+      }
+      return delayedPreflight.promise;
+    },
+    stopLifecycle: async (lifecycle, context) => {
+      harness.calls.push(["stopLifecycle", lifecycle, context]);
+      stopEntered.resolve();
+      await releaseStop.promise;
+      lifecycle.process?.kill();
+    },
+  });
+  await harness.handlers.executeOpenCodeSessionStart({ workspacePath: "." });
+
+  const shutdown = harness.handlers.shutdownOpenCodeSession();
+  await stopEntered.promise;
+  const duringShutdown = harness.handlers.executeOpenCodeSessionStart({
+    workspacePath: ".",
+  }).then(
+    () => null,
+    (error) => error,
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+
+  releaseStop.resolve();
+  await shutdown;
+  delayedPreflight.resolve({
+    workspace: PRIVATE_WORKSPACE,
+    model: HOST_MODEL,
+    scopedEnvironment: { OPENAI_API_KEY: "host-only" },
+  });
+
+  const error = await duringShutdown;
+  assert.ok(error instanceof Error);
+  assert.match(error.message, /host shutdown|shutting down/i);
+  assert.equal(callsNamed(harness, "startLifecycle").length, 1);
+  await assert.rejects(
+    () => harness.handlers.executeOpenCodeSessionStart({ workspacePath: "." }),
+    /host shutdown|shutting down/i,
   );
 });

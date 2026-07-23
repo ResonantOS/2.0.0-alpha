@@ -71,7 +71,7 @@ export function createOpencodeSessionBridgeComposition({
   async function executeAddonExecutionSettingsUpdate(payload) {
     const result = await executeSettingsUpdate.call(addonDelegationService, payload);
     if (result?.stopRequired) {
-      await handlers.shutdownOpenCodeSession();
+      await handlers.shutdownOpenCodeSession({ permanent: false });
     }
     return result;
   }

@@ -152,6 +152,12 @@ export async function readOpencodeServerBaseUrl(child, {
     const onExit = () => {
       finish(new Error("OpenCode server exited before announcing its loopback address."));
     };
+    const onError = (cause) => {
+      finish(new Error(
+        "OpenCode server process failed before announcing its loopback address.",
+        { cause },
+      ));
+    };
     const onData = (chunk) => {
       buffer += Buffer.from(chunk).toString("utf8");
       if (Buffer.byteLength(buffer, "utf8") > SERVER_ANNOUNCEMENT_LIMIT) {
@@ -173,6 +179,7 @@ export async function readOpencodeServerBaseUrl(child, {
       clearTimeout(timeout);
       stdout.removeListener("data", onData);
       child.removeListener?.("exit", onExit);
+      child.removeListener?.("error", onError);
       stdout.resume?.();
       if (error) reject(error);
       else resolve(baseUrl);
@@ -180,6 +187,7 @@ export async function readOpencodeServerBaseUrl(child, {
 
     stdout.on("data", onData);
     child.once?.("exit", onExit);
+    child.once?.("error", onError);
   });
 }
 
@@ -434,6 +442,13 @@ export function createOpencodeServerLifecycle({
           record.child.removeListener?.("exit", record.onChildExit);
         }
       }
+      if (record.child && record.onChildError) {
+        if (typeof record.child.off === "function") {
+          record.child.off("error", record.onChildError);
+        } else {
+          record.child.removeListener?.("error", record.onChildError);
+        }
+      }
       try {
         if (record.configDirectory) {
           await removeConfigDirectory(record.configDirectory);
@@ -571,19 +586,24 @@ export function createOpencodeServerLifecycle({
         }),
         handle,
         onChildExit: null,
+        onChildError: null,
         onExit,
         password,
         ready: false,
       };
       records.set(handle, record);
-      record.onChildExit = () => {
+      const settleChild = () => {
+        if (record.exited) return;
         record.exited = true;
         resolveExit();
         void cleanup(record, { notify: record.ready }).catch(() => {
           state = "failed";
         });
       };
+      record.onChildExit = settleChild;
+      record.onChildError = settleChild;
       child.once?.("exit", record.onChildExit);
+      child.once?.("error", record.onChildError);
       active = record;
 
       record.baseUrl = await readServerAddress(child, {

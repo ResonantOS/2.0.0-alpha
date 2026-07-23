@@ -212,12 +212,26 @@ function sanitizeJsonValue(value, attempt, depth = 0) {
     0,
     EVENT_COLLECTION_LIMIT,
   )) {
+    const sanitizedKey = redactEventText(key, attempt, 256).trim()
+      || "[redacted-key]";
     if (/(?:api.?key|authorization|credential|password|secret|token)/i.test(key)) {
-      sanitized[key] = "[redacted]";
+      Object.defineProperty(sanitized, sanitizedKey, {
+        configurable: true,
+        enumerable: true,
+        value: "[redacted]",
+        writable: true,
+      });
       continue;
     }
     const next = sanitizeJsonValue(nestedValue, attempt, depth + 1);
-    if (next !== undefined) sanitized[key] = next;
+    if (next !== undefined) {
+      Object.defineProperty(sanitized, sanitizedKey, {
+        configurable: true,
+        enumerable: true,
+        value: next,
+        writable: true,
+      });
+    }
   }
   return sanitized;
 }
@@ -556,6 +570,7 @@ export function createOpencodeSessionHandlers({
   let cleanupFailure = null;
   let shutdownGeneration = 0;
   let shutdownInProgress = 0;
+  let bridgeShutdownRequested = false;
 
   async function disposeSdkClient(client) {
     if (!client) return;
@@ -915,6 +930,9 @@ export function createOpencodeSessionHandlers({
   }
 
   async function executeOpenCodeSessionStart(request = {}) {
+    if (bridgeShutdownRequested || shutdownInProgress > 0) {
+      throw new Error("OpenCode session host is shutting down.");
+    }
     const payload = requestBody(request);
     const startGeneration = shutdownGeneration;
     const assertStartStillAuthorized = () => {
@@ -1076,7 +1094,8 @@ export function createOpencodeSessionHandlers({
     return { stopped: true };
   }
 
-  async function shutdownOpenCodeSession() {
+  async function shutdownOpenCodeSession({ permanent = true } = {}) {
+    if (permanent) bridgeShutdownRequested = true;
     shutdownGeneration += 1;
     shutdownInProgress += 1;
     try {

@@ -394,6 +394,44 @@ test("server address reader rejects foreign and oversized announcements", async 
   );
 });
 
+test("asynchronous child spawn errors reject startup and clear owned state", async () => {
+  const child = fakeChild({ exitOnKill: false });
+  child.stdout = new EventEmitter();
+  child.stdout.resume = () => {};
+  const removedDirectories = [];
+  const { lifecycle } = lifecycleHarness({
+    child,
+    maxStartAttempts: 1,
+    readServerAddress: (ownedChild) => readOpencodeServerBaseUrl(
+      ownedChild,
+      { timeoutMs: 50 },
+    ),
+    removeConfigDirectory: async (directory) => {
+      removedDirectories.push(directory);
+    },
+    spawnImpl: () => {
+      queueMicrotask(() => {
+        child.emit("error", Object.assign(
+          new Error("spawn /missing/opencode ENOENT"),
+          { code: "ENOENT" },
+        ));
+      });
+      return child;
+    },
+  });
+
+  await assert.rejects(
+    lifecycle.start({
+      command: "/missing/opencode",
+      cwd: WORKSPACE,
+      env: {},
+    }),
+    /process failed|spawn failed/i,
+  );
+  assert.deepEqual(removedDirectories, [CONFIG_DIRECTORY]);
+  assert.deepEqual(lifecycle.status(), { state: "stopped" });
+});
+
 test("lifecycle timeout bounds a hanging authenticated readiness probe", async () => {
   const child = fakeChild();
   const { lifecycle } = lifecycleHarness({
