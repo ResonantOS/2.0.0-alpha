@@ -7,10 +7,10 @@ on:
   workflow_dispatch:
     inputs:
       public_submit_contract:
-        description: Require the #240 human-only public-submit handoff or auto-detect it.
+        description: Require the #240 human-only public-submit handoff or explicitly run legacy auto-detection.
         required: false
         type: choice
-        default: auto
+        default: required
         options:
           - auto
           - required
@@ -72,7 +72,7 @@ jobs:
           RESONANTOS_LIVE_PROFILE: agent-control
           RESONANTOS_LIVE_CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
           RESONANTOS_LIVE_ARTIFACT_DIR: ${{ runner.temp }}/agent-control-live/${{ github.run_id }}-${{ github.run_attempt }}
-          RESONANTOS_PUBLIC_SUBMIT_CONTRACT: ${{ github.event_name == 'workflow_dispatch' && inputs.public_submit_contract || 'auto' }}
+          RESONANTOS_PUBLIC_SUBMIT_CONTRACT: ${{ github.event_name == 'workflow_dispatch' && inputs.public_submit_contract || 'required' }}
         run: xvfb-run -a npm run test:browser-first:live
 
       - name: Upload live certification evidence

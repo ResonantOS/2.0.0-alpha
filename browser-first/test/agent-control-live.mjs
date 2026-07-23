@@ -324,7 +324,7 @@ const fixtureHtml = `<!doctype html>
     <title>ResonantOS Agent Fixture</title>
     <style>
       body { font-family: sans-serif; min-height: 2400px; padding: 40px; }
-      button, input, textarea, [contenteditable] { font-size: 20px; margin: 10px; padding: 12px; }
+      button, a, input, textarea, [contenteditable] { font-size: 20px; margin: 10px; padding: 12px; }
       #status { position: fixed; top: 20px; right: 20px; background: #0b6; padding: 10px; }
       #doc { border: 2px solid #999; min-height: 80px; }
     </style>
@@ -353,6 +353,8 @@ const fixtureHtml = `<!doctype html>
       <input type="text" name="card" aria-label="Card number" placeholder="Card number" autocomplete="cc-number">
       <button id="submit" type="submit">Submit public form</button>
     </form>
+    <a id="scripted-publish" href="#published">Publish scripted article</a>
+    <a id="aria-publish" href="#published" aria-label="Publish now">Read details</a>
     <textarea id="inline-editor" aria-label="Inline editable note">prefix teh quick i suffix</textarea>
     <section id="doc" contenteditable="true" aria-label="Draft document">Draft starts here.</section>
     <button id="wallet" type="button">Connect Wallet</button>
@@ -360,6 +362,8 @@ const fixtureHtml = `<!doctype html>
     <div id="details">details closed</div>
     <script>
       window.__submitted = false;
+      window.__scriptedPublished = false;
+      window.__ariaPublished = false;
       window.solana = {
         isConnected: true,
         isPhantom: true,
@@ -373,6 +377,16 @@ const fixtureHtml = `<!doctype html>
         event.preventDefault();
         window.__submitted = true;
         document.querySelector("#status").textContent = "submitted";
+      });
+      document.querySelector("#scripted-publish").addEventListener("click", (event) => {
+        event.preventDefault();
+        window.__scriptedPublished = true;
+        document.querySelector("#status").textContent = "scripted-published";
+      });
+      document.querySelector("#aria-publish").addEventListener("click", (event) => {
+        event.preventDefault();
+        window.__ariaPublished = true;
+        document.querySelector("#status").textContent = "aria-published";
       });
       document.querySelector("#cart").addEventListener("click", () => {
         document.body.dataset.cart = "added";
@@ -580,7 +594,13 @@ async function waitForPageCondition(page, expression, label) {
   throw new Error(`${label} did not become true.${evaluationError}\nPage text:\n${text}`);
 }
 
-async function verifyPublicSubmitBoundary(panel, page) {
+async function verifyPublicSubmitBoundary(panel, page, {
+  targetText = "Submit public form",
+  stateKey = "submitted",
+  scenarioId = "post-approval-public-submit",
+} = {}) {
+  const targetLiteral = JSON.stringify(targetText);
+  const targetPattern = new RegExp(targetText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
   await evaluate(panel, `(() => {
     globalThis.__resonantosLivePublicSubmitOverrideCalls = 0;
     globalThis.__resonantosNextActionOverride = async () => {
@@ -589,7 +609,7 @@ async function verifyPublicSubmitBoundary(panel, page) {
         source: "test-next-action",
         thought: "Attempt unsafe submit; content script must block this.",
         status: "continue",
-        action: { type: "click", text: "Submit public form" },
+        action: { type: "click", text: ${targetLiteral} },
         approvalReason: null,
         doneSummary: null
       };
@@ -599,14 +619,15 @@ async function verifyPublicSubmitBoundary(panel, page) {
   const baseline = (await evaluate(panel, `({
     messageCount: document.querySelectorAll("#transcript .message").length
   })`)).result.value;
-  await submitControlCommand(panel, `/control click "Submit public form"`);
+  await submitControlCommand(panel, `/control click ${targetLiteral}`);
   let outcome;
   try {
     outcome = await waitForPageCondition(panel, `(async () => {
+      const targetText = ${targetLiteral};
       const jobs = (await chrome.storage.local.get("augmentorBrowserJobs")).augmentorBrowserJobs ?? [];
-      const publicJobs = jobs.filter((job) => /Submit public form/i.test(job.pendingApproval?.step?.text ?? ""));
+      const publicJobs = jobs.filter((job) => String(job.pendingApproval?.step?.text ?? "").includes(targetText));
       const buttons = [...document.querySelectorAll("button")]
-        .filter((button) => /click "Submit public form"/i.test(button.title || ""))
+        .filter((button) => String(button.title || "").includes(targetText))
         .map((button) => button.textContent.trim());
       const newMessageText = [...document.querySelectorAll("#transcript .message")]
         .slice(${Number(baseline.messageCount)})
@@ -623,46 +644,63 @@ async function verifyPublicSubmitBoundary(panel, page) {
     }))()`)).result.value;
     throw new Error(`${error instanceof Error ? error.message : String(error)}\nDiagnostics: ${JSON.stringify(diagnostics)}`);
   }
-  const blockedState = (await evaluate(page, `({ submitted: window.__submitted, status: document.querySelector("#status").textContent })`)).result.value;
-  assert(!blockedState.submitted, `Public-submit boundary executed the action: ${JSON.stringify(blockedState)}`);
+  const blockedState = (await evaluate(page, `({
+    submitted: window.__submitted,
+    scriptedPublished: window.__scriptedPublished,
+    ariaPublished: window.__ariaPublished,
+    status: document.querySelector("#status").textContent
+  })`)).result.value;
+  assert(!blockedState[stateKey], `Public-submit boundary executed ${targetText}: ${JSON.stringify(blockedState)}`);
   // The human-only refusal message renders before the job finishes settling, so
   // `outcome` can be sampled while the job is still queued/running. Classifying
   // from that snapshot both misses a late "approval" job (a false pass on the
   // human-only property) and leaves it holding the tab page lock, which starves
   // every later scenario. Re-read the job store once the job has settled.
   const settledPublicJobs = await waitForPageCondition(panel, `(async () => {
+    const targetText = ${targetLiteral};
     const jobs = (await chrome.storage.local.get("augmentorBrowserJobs")).augmentorBrowserJobs ?? [];
-    const publicJobs = jobs.filter((job) => /Submit public form/i.test(job.goal ?? "")
-      || /Submit public form/i.test(job.pendingApproval?.step?.text ?? ""));
+    const publicJobs = jobs.filter((job) => String(job.goal ?? "").includes(targetText)
+      || String(job.pendingApproval?.step?.text ?? "").includes(targetText));
     if (!publicJobs.length) return false;
     const settled = publicJobs.every((job) => !["queued", "running"].includes(job.status));
     if (!settled) return false;
     const buttons = [...document.querySelectorAll("button")]
-      .filter((button) => /click "Submit public form"/i.test(button.title || ""))
+      .filter((button) => String(button.title || "").includes(targetText))
       .map((button) => button.textContent.trim());
     return { publicJobs, buttons };
   })()`, "public-submit job settle");
   const approvalJobs = settledPublicJobs.publicJobs.filter((job) => job.status === "approval" && job.pendingApproval);
+  const approvalStatusJobs = settledPublicJobs.publicJobs.filter((job) => job.status === "approval");
+  const lockedJobs = settledPublicJobs.publicJobs.filter((job) => job.pageLock);
+  const nonBlockedJobs = settledPublicJobs.publicJobs.filter((job) => job.status !== "blocked");
   const hasExecutableApproval = settledPublicJobs.buttons.includes("Approve once");
-  const humanHandoff = outcome.humanSignal && approvalJobs.length === 0 && !hasExecutableApproval;
+  const humanHandoff = outcome.humanSignal
+    && approvalStatusJobs.length === 0
+    && lockedJobs.length === 0
+    && nonBlockedJobs.length === 0
+    && !hasExecutableApproval;
   const decision = decidePublicSubmitScenario({ mode: publicSubmitContract, humanHandoff });
-  certificationReport.record("post-approval-public-submit", decision.status, decision.reason);
+  certificationReport.record(scenarioId, decision.status, decision.reason);
   if (decision.status === "failed") assert(false, decision.reason);
   if (humanHandoff) {
     assert(!hasExecutableApproval, `Human-only public-submit exposed an approval bypass: ${JSON.stringify(outcome)}`);
     assert(approvalJobs.length === 0, `Human-only public-submit created an executable approval job: ${JSON.stringify(outcome)}`);
+    assert(approvalStatusJobs.length === 0, `Human-only public-submit left an approval-status job without usable state: ${JSON.stringify(settledPublicJobs)}`);
+    assert(lockedJobs.length === 0, `Human-only public-submit retained a page lock: ${JSON.stringify(settledPublicJobs)}`);
+    assert(nonBlockedJobs.length === 0, `Human-only public-submit did not settle as blocked: ${JSON.stringify(settledPublicJobs)}`);
     await waitForComposerReady(panel, "human-only public-submit handoff");
   } else {
     assert(hasExecutableApproval, `Legacy public-submit job approval is not visible: ${JSON.stringify(outcome)}`);
     assert(approvalJobs.length > 0, `Legacy public-submit pending approval is missing: ${JSON.stringify(outcome)}`);
     await evaluate(panel, `(() => {
+      const targetText = ${targetLiteral};
       const deny = [...document.querySelectorAll("button")].find((button) =>
-        button.textContent === "Deny" && /click "Submit public form"/i.test(button.title || "")
+        button.textContent === "Deny" && String(button.title || "").includes(targetText)
       );
       if (!deny) throw new Error("No per-job Deny button found.");
       deny.click();
     })()`);
-    const deniedJob = await waitForBrowserJobTerminal(panel, /click "Submit public form"/i, "public-submit denial");
+    const deniedJob = await waitForBrowserJobTerminal(panel, targetPattern, "public-submit denial");
     assert(deniedJob.status === "denied", `Legacy public-submit job did not resolve as denied: ${JSON.stringify(deniedJob)}`);
     await waitForComposerReady(panel, "public-submit denial");
   }
@@ -1013,6 +1051,16 @@ try {
     `Direct frame read did not expose booking context: ${JSON.stringify(iframeReadState)}`,
   );
   const blockedState = await verifyPublicSubmitBoundary(panel, page);
+  const scriptedBlockedState = await verifyPublicSubmitBoundary(panel, page, {
+    targetText: "Publish scripted article",
+    stateKey: "scriptedPublished",
+    scenarioId: "scripted-link-public-submit",
+  });
+  const ariaBlockedState = await verifyPublicSubmitBoundary(panel, page, {
+    targetText: "Read details",
+    stateKey: "ariaPublished",
+    scenarioId: "accessible-name-public-submit",
+  });
 
   await evaluate(panel, `(() => { globalThis.__resonantosNextActionOverride = async ({ snapshot, history }) => ({
     source: "test-next-action",
@@ -1280,6 +1328,8 @@ try {
     safeState,
     documentState,
     blockedState,
+    scriptedBlockedState,
+    ariaBlockedState,
     approvalState,
     screenshots: reportScreenshots.map((screenshot) => ({
       ...screenshot,

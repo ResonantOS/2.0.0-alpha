@@ -59,6 +59,13 @@ test("approval policy sanitizes planner plans and next-action decisions", () => 
   assert.deepEqual(sanitizePlannerPlan({ needsApproval: true, approvalReason: "Wallet action" }).steps, []);
   assert.equal(sanitizeNextActionDecision({ status: "done", thought: "finished" }).doneSummary, "finished");
   assert.equal(sanitizeNextActionDecision({ status: "blocked", thought: "unsafe" }).approvalReason, "unsafe");
+  const approvalDecision = sanitizeNextActionDecision({
+    status: "needs_approval",
+    approvalReason: "Public action requires a human.",
+    proposedAction: { type: "click", text: "Submit public form" },
+  });
+  assert.equal(approvalDecision.action, null);
+  assert.deepEqual(approvalDecision.proposedAction, { type: "click", text: "Submit public form", ref: "" });
   const decision = sanitizeNextActionDecision({
     status: "continue",
     action: { type: "scroll", direction: "sideways" },

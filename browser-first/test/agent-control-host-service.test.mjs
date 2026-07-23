@@ -77,13 +77,34 @@ test("Agent Control host sanitizer blocks restricted browser actions", () => {
     () => sanitizeControlStep({ type: "click", text: "Approve Phantom wallet transaction" }),
     /restricted click/,
   );
-  assert.equal(
-    sanitizeNextActionDecision({
+  const restrictedDecision = sanitizeNextActionDecision({
+    status: "continue",
+    action: { type: "type", field: "Password", text: "secret" },
+  });
+  assert.equal(restrictedDecision.status, "needs_approval");
+  assert.equal(restrictedDecision.action, null);
+  assert.deepEqual(restrictedDecision.proposedAction, {
+    type: "type",
+    field: "Password",
+    submit: false,
+  });
+  assert.doesNotMatch(JSON.stringify(restrictedDecision), /secret/);
+  const approvalDecision = sanitizeNextActionDecision({
+    status: "needs_approval",
+    approvalReason: "Public action requires a human.",
+    action: { type: "click", text: "Submit public form" },
+  });
+  assert.equal(approvalDecision.action, null);
+  assert.deepEqual(approvalDecision.proposedAction, { type: "click", text: "Submit public form", ref: "" });
+  for (const verb of ["send", "save", "share", "reserve", "book", "order", "apply", "vote", "subscribe", "register", "comment"]) {
+    const publicDecision = sanitizeNextActionDecision({
       status: "continue",
-      action: { type: "type", field: "Password", text: "secret" },
-    }).status,
-    "blocked",
-  );
+      action: { type: "click", text: `${verb} now` },
+    });
+    assert.equal(publicDecision.status, "needs_approval", `${verb} must stop before execution`);
+    assert.equal(publicDecision.action, null);
+    assert.equal(publicDecision.proposedAction.text, `${verb} now`);
+  }
   assert.equal(sanitizeControlPlan({ steps: [{ type: "stop", reason: "Needs human approval" }] }).needsApproval, true);
 });
 

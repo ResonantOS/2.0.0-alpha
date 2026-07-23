@@ -34,7 +34,7 @@ export function sanitizeControlUrl(value) {
 
 export function stepRequiresHumanApproval(step) {
   const combined = `${step.type ?? ""} ${step.text ?? ""} ${step.field ?? ""} ${step.target ?? ""} ${step.query ?? ""}`.toLowerCase();
-  return /\b(seed|private key|password|passphrase|wallet|phantom|sign|signature|approve|confirm|buy|sell|swap|stake|unstake|bridge|mint|claim|pay|payment|checkout|login|submit|publish|post|delete|remove|transfer)\b/.test(combined);
+  return /\b(seed|private key|password|passphrase|wallet|phantom|sign|signature|approve|confirm|buy|sell|swap|stake|unstake|bridge|mint|claim|pay|payment|checkout|login|submit|send|post|publish|save|share|connect|reserve|book|order|apply|vote|subscribe|register|comment|delete|remove|transfer)\b/.test(combined);
 }
 
 export function sanitizeControlStep(step) {
@@ -116,6 +116,32 @@ export function sanitizeControlStep(step) {
   throw new Error(`Unsupported planner step type: ${type || "missing"}.`);
 }
 
+function sanitizeProposedControlAction(step) {
+  if (!step || typeof step !== "object") return null;
+  const type = String(step.type ?? "").trim().toLowerCase();
+  if (!["click", "type", "open", "search", "switch_tab", "read", "forms", "tabs", "scroll", "wait"].includes(type)) {
+    return null;
+  }
+  const proposed = { type };
+  for (const [key, max] of [["text", 280], ["field", 160], ["ref", 80], ["target", 900], ["query", 220]]) {
+    if (type === "type" && key === "text") continue;
+    if (step[key]) proposed[key] = String(step[key]).trim().slice(0, max);
+  }
+  if (type === "click") {
+    proposed.text ??= "";
+    proposed.ref ??= "";
+  }
+  if (type === "type") proposed.submit = Boolean(step.submit);
+  if (type === "switch_tab") {
+    const tabId = Number(step.tabId ?? step.id);
+    if (Number.isInteger(tabId) && tabId >= 0) proposed.tabId = tabId;
+  }
+  if (type === "scroll") {
+    proposed.direction = ["up", "down", "top", "bottom"].includes(step.direction) ? step.direction : "down";
+  }
+  return proposed;
+}
+
 export function sanitizeNextActionDecision(decision) {
   if (!decision || typeof decision !== "object") {
     throw new Error("Next-action response must be an object.");
@@ -134,6 +160,7 @@ export function sanitizeNextActionDecision(decision) {
     strategyRationale: decision.strategyRationale ? String(decision.strategyRationale).trim().slice(0, 500) : null,
     completionCheck: decision.completionCheck ? String(decision.completionCheck).trim().slice(0, 500) : null,
     action: null,
+    proposedAction: null,
   };
   if (status === "done") {
     return {
@@ -145,6 +172,16 @@ export function sanitizeNextActionDecision(decision) {
     return {
       ...base,
       approvalReason: base.approvalReason || base.thought || "The browser task cannot continue safely.",
+      proposedAction: sanitizeProposedControlAction(decision.proposedAction ?? decision.action),
+    };
+  }
+  const proposedAction = sanitizeProposedControlAction(decision.action);
+  if (proposedAction && stepRequiresHumanApproval(proposedAction)) {
+    return {
+      ...base,
+      status: "needs_approval",
+      approvalReason: base.approvalReason || "This browser action requires direct human action.",
+      proposedAction,
     };
   }
   let action = null;

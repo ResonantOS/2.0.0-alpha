@@ -132,6 +132,34 @@ test("control planning service requests next actions and falls back deterministi
   assert.equal(fallbackDecision.scenarioName, "generic page control");
 });
 
+test("control planning service preserves only non-executable proposed action metadata for human handoff", async () => {
+  const harness = createHarness({
+    decisionResponse: {
+      decision: {
+        status: "needs_approval",
+        thought: "Stop before the public action.",
+        approvalReason: "Publishing requires direct human action.",
+        action: null,
+        proposedAction: { type: "click", text: "Publish scripted article" }
+      }
+    }
+  });
+
+  const decision = await harness.service.requestNextControlAction({
+    goal: "publish this article",
+    snapshot: { title: "Draft" },
+    history: []
+  });
+
+  assert.equal(decision.status, "needs_approval");
+  assert.equal(decision.action, null);
+  assert.deepEqual(decision.proposedAction, {
+    type: "click",
+    text: "Publish scripted article",
+    ref: ""
+  });
+});
+
 test("control planning service converts unsafe next-action override failures into blocked decisions", async () => {
   const harness = createHarness({
     globalScope: {

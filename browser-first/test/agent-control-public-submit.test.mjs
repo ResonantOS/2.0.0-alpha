@@ -38,9 +38,13 @@ async function loadContentScript(html) {
   // jsdom runs "outside-only", so page scripts are inert — wire up observable state here.
   win.eval(`
     window.__submitted = false;
+    window.__scriptedPublished = false;
+    window.__ariaPublished = false;
     window.__searchSubmitted = false;
     window.__safeClicked = false;
     document.querySelector("#public").addEventListener("submit", (e) => { e.preventDefault(); window.__submitted = true; });
+    document.querySelector("#scriptedpublish").addEventListener("click", (e) => { e.preventDefault(); window.__scriptedPublished = true; });
+    document.querySelector("#arialabelpublish").addEventListener("click", (e) => { e.preventDefault(); window.__ariaPublished = true; });
     document.querySelector("#searchonly").addEventListener("submit", (e) => { e.preventDefault(); window.__searchSubmitted = true; });
     document.querySelector("#safe").addEventListener("click", () => { window.__safeClicked = true; });
   `);
@@ -70,8 +74,10 @@ const PAGE = `<!doctype html>
   <button id="safe">Safe Details</button>
   <button id="sign" type="submit">Sign transaction</button>
   <div id="divpublish" onclick="window.__divClicked = true">Publish article</div>
-  <a id="navlink" href="#orders">Order History</a>
+  <a id="navlink" href="#details">Product Details</a>
   <a id="linkbtn" role="button" onclick="window.__linkClicked = true">Reserve seat</a>
+  <a id="scriptedpublish" href="#published">Publish scripted article</a>
+  <a id="arialabelpublish" href="#published" aria-label="Publish now">Read details</a>
   <div id="status">idle</div>`;
 
 test("#240: approved click of a public submit button is denied and does not submit", async () => {
@@ -162,10 +168,26 @@ test("#240: an <a role=button onclick> commit is denied", async () => {
   assert.notEqual(win.__linkClicked, true);
 });
 
-test("#240 non-breaking: a plain navigation link with a commit-word is still clickable", async () => {
+test("#240: a scripted plain anchor carrying a commit verb is denied", async () => {
+  const { win, send } = await loadContentScript(PAGE);
+  const res = await send({ type: "click_text", text: "Publish scripted article", userApproved: true });
+  assert.equal(res.ok, false);
+  assert.equal(res.deniedToAutomation, true);
+  assert.equal(win.__scriptedPublished, false);
+});
+
+test("#240: a scripted anchor with a public-commit accessible name is denied", async () => {
+  const { win, send } = await loadContentScript(PAGE);
+  const res = await send({ type: "click_text", text: "Read details", userApproved: true });
+  assert.equal(res.ok, false);
+  assert.equal(res.deniedToAutomation, true);
+  assert.equal(win.__ariaPublished, false);
+});
+
+test("#240 non-breaking: a benign plain navigation link is still clickable", async () => {
   const { send } = await loadContentScript(PAGE);
-  const res = await send({ type: "click_text", text: "Order History" });
-  assert.equal(res.ok, true, "a plain <a href> nav link (no button semantics) must not be blocked by #240");
+  const res = await send({ type: "click_text", text: "Product Details" });
+  assert.equal(res.ok, true, "a benign plain <a href> navigation link must not be blocked by #240");
 });
 
 test("#240: the runner boundary classifier agrees with the widened commit verbs", () => {

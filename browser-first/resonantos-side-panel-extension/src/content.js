@@ -430,16 +430,21 @@ const isSubmitLikeElement = (element) => {
   const type = String(element.getAttribute("type") || "").toLowerCase();
   const role = String(element.getAttribute("role") || "").toLowerCase();
   const tag = element.tagName ? element.tagName.toLowerCase() : "";
-  const label = `${visibleText(element)} ${element.getAttribute("value") || ""}`.toLowerCase();
+  const label = [
+    visibleText(element),
+    accessibleLabelText(element),
+    element.getAttribute("value")
+  ].filter(Boolean).join(" ").toLowerCase();
   // Native form-submit controls are always human-only.
   if (type === "submit" || type === "image") return true;
   if (element instanceof HTMLButtonElement && (!type || type === "submit") && Boolean(element.closest("form"))) return true;
-  // A control that BEHAVES like a button (incl. input[type=button] and scripted
-  // <a onclick>/<div onclick>) AND carries a public-commit verb is human-only.
-  // Plain navigation links (<a href> without button semantics) stay clickable so
-  // safe reads like "Order History" or "How to apply" are not blocked.
+  // A clickable control carrying a public-commit verb is human-only. Plain
+  // anchors are included because addEventListener handlers are not observable
+  // from the DOM; treating commit-labelled links as safe would permit scripted
+  // public actions to bypass the terminal content-script guard.
   const behavesLikeButton =
     tag === "button" ||
+    tag === "a" ||
     role === "button" ||
     (tag === "input" && ["button", "reset"].includes(type)) ||
     (typeof element.hasAttribute === "function" && element.hasAttribute("onclick"));

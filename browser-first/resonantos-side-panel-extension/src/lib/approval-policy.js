@@ -93,6 +93,32 @@ export function sanitizePlannerStep(step) {
   throw new Error(`Unsupported planner step type: ${type || "missing"}.`);
 }
 
+function sanitizeProposedPlannerAction(step) {
+  if (!step || typeof step !== "object") return null;
+  const type = String(step.type ?? "").trim().toLowerCase();
+  if (!["click", "type", "open", "search", "switch_tab", "read", "forms", "tabs", "scroll", "wait"].includes(type)) {
+    return null;
+  }
+  const proposed = { type };
+  for (const [key, max] of [["text", 280], ["field", 160], ["ref", 80], ["target", 900], ["query", 220]]) {
+    if (type === "type" && key === "text") continue;
+    if (step[key]) proposed[key] = String(step[key]).trim().slice(0, max);
+  }
+  if (type === "click") {
+    proposed.text ??= "";
+    proposed.ref ??= "";
+  }
+  if (type === "type") proposed.submit = Boolean(step.submit);
+  if (type === "switch_tab") {
+    const tabId = Number(step.tabId ?? step.id);
+    if (Number.isInteger(tabId) && tabId >= 0) proposed.tabId = tabId;
+  }
+  if (type === "scroll") {
+    proposed.direction = ["up", "down", "top", "bottom"].includes(step.direction) ? step.direction : "down";
+  }
+  return proposed;
+}
+
 export function sanitizePlannerPlan(plan, { dedupeControlSteps = (steps) => steps } = {}) {
   if (!plan || typeof plan !== "object") {
     throw new Error("Planner response must be an object.");
@@ -136,6 +162,7 @@ export function sanitizeNextActionDecision(decision) {
     thought: String(decision.thought ?? "").trim().slice(0, 500),
     status,
     action: null,
+    proposedAction: null,
     approvalReason: decision.approvalReason ? String(decision.approvalReason).trim().slice(0, 700) : null,
     doneSummary: decision.doneSummary ? String(decision.doneSummary).trim().slice(0, 700) : null,
     strategyPhase: decision.strategyPhase ? String(decision.strategyPhase).trim().slice(0, 300) : null,
@@ -156,7 +183,11 @@ export function sanitizeNextActionDecision(decision) {
     return { ...base, doneSummary: base.doneSummary || base.thought || "The browser task is complete." };
   }
   if (status === "needs_approval" || status === "blocked") {
-    return { ...base, approvalReason: base.approvalReason || base.thought || "The browser task cannot continue safely." };
+    return {
+      ...base,
+      approvalReason: base.approvalReason || base.thought || "The browser task cannot continue safely.",
+      proposedAction: sanitizeProposedPlannerAction(decision.proposedAction ?? decision.action)
+    };
   }
   return {
     ...base,

@@ -504,9 +504,10 @@ export function createAgentControlRunner(deps) {
           return { ok: true, results };
         }
         if (decision.status === "needs_approval" || decision.status === "blocked" || !decision.action) {
-          const requestedApproval = decision.status === "needs_approval" && Boolean(decision.action);
+          const proposedAction = decision.proposedAction ?? decision.action;
+          const requestedApproval = decision.status === "needs_approval" && Boolean(proposedAction);
           const boundary = requestedApproval
-            ? approvalBoundaryForStep(decision.action, decision.approvalReason)
+            ? approvalBoundaryForStep(proposedAction, decision.approvalReason)
             : "safe";
           const humanOnlyHandoff = requestedApproval && isHumanOnlyBoundary(boundary);
           const isApproval = requestedApproval && !humanOnlyHandoff;
@@ -517,7 +518,7 @@ export function createAgentControlRunner(deps) {
                 approvalRequired: true,
                 error: decision.approvalReason ?? decision.thought
               },
-              step: decision.action
+              step: proposedAction
             })
             : null;
           if (humanOnlyHandoff) {
@@ -527,7 +528,7 @@ export function createAgentControlRunner(deps) {
               humanHandoff: true,
               ok: false
             };
-            const stepIndex = appendControlStep(decision.action);
+            const stepIndex = appendControlStep(proposedAction);
             updateControlStep(stepIndex, "blocked", "human-only action", {
               phase: "human-handoff",
               observation: {
@@ -535,7 +536,7 @@ export function createAgentControlRunner(deps) {
                 url: snapshot?.url ?? null
               },
               decision: decision.thought ?? null,
-              action: controlStepLabel(decision.action),
+              action: controlStepLabel(proposedAction),
               result: blockedResult.error,
               safetyClass: boundary,
               ...strategyDetails(decision),
@@ -546,8 +547,44 @@ export function createAgentControlRunner(deps) {
                 status: "blocked"
               })
             });
-            results.push({ step: decision.action, result: blockedResult });
+            results.push({ step: proposedAction, result: blockedResult });
             setPendingApproval(null);
+            renderControlMonitor();
+          }
+          if (isApproval) {
+            const approvalResult = {
+              approvalRequired: true,
+              error: decision.approvalReason ?? decision.thought ?? "This action requires human approval.",
+              humanHandoff: false,
+              ok: false
+            };
+            const stepIndex = appendControlStep(proposedAction);
+            updateControlStep(stepIndex, "blocked", "waiting for human approval", {
+              phase: "waiting-for-human",
+              observation: {
+                title: snapshot?.title ?? null,
+                url: snapshot?.url ?? null
+              },
+              decision: decision.thought ?? null,
+              action: controlStepLabel(proposedAction),
+              result: approvalResult.error,
+              safetyClass: boundary,
+              ...strategyDetails(decision),
+              ...controlStepEvidence({
+                boundary,
+                decision,
+                result: approvalResult,
+                status: "approval"
+              })
+            });
+            results.push({ step: proposedAction, result: approvalResult });
+            setPendingApproval({
+              step: { ...proposedAction },
+              stepIndex,
+              reason: approvalResult.error,
+              results,
+              history
+            });
             renderControlMonitor();
           }
           finishControlRun(isApproval ? "approval" : "blocked");
@@ -976,8 +1013,15 @@ export function createAgentControlRunner(deps) {
     const result = await executeControlStep(step);
     results.push({ step, result });
     if (!result?.ok) {
+      const refusalBoundary = approvalBoundaryForStep(step, result?.error);
+      const humanOnlyHandoff = Boolean(result?.approvalRequired) && isHumanOnlyBoundary(refusalBoundary);
+      const humanState = humanInterventionState({
+        boundary: refusalBoundary,
+        result,
+        step
+      });
       updateControlStep(approval.stepIndex, result?.approvalRequired ? "blocked" : "failed", controlResultSummary(result), {
-        phase: result?.approvalRequired ? "waiting-for-human" : "blocked",
+        phase: humanOnlyHandoff ? "human-handoff" : result?.approvalRequired ? "blocked-after-approval" : "blocked",
         observation: {
           title: getLastSnapshot()?.title ?? null,
           url: getLastSnapshot()?.url ?? null
@@ -986,20 +1030,36 @@ export function createAgentControlRunner(deps) {
         action: controlStepLabel(step),
         approvalDecision: "approved-once",
         result: controlResultSummary(result),
-        safetyClass: approvalBoundaryForStep(step, result?.error),
+        safetyClass: refusalBoundary,
         ...controlStepEvidence({
-          boundary: approvalBoundaryForStep(step, result?.error),
+          boundary: refusalBoundary,
           decision: { uncertainty: "The approved browser action did not complete safely." },
           result,
-          status: result?.approvalRequired ? "approval" : "blocked"
-        })
+          status: "blocked"
+        }),
+        ...(result?.approvalRequired ? {
+          nextHumanAction: humanOnlyHandoff
+            ? humanState.action
+            : "The one-time approval was consumed. Complete this step manually, cancel it, or retarget the task; do not approve the same failed action again."
+        } : {})
       });
-      finishControlRun(result?.approvalRequired ? "approval" : "blocked");
-      setStatus(result?.approvalRequired ? "Needs approval" : "Control blocked");
-      setActivity("failed", "Control mode blocked", controlStepLabel(step));
+      finishControlRun("blocked");
+      setPendingApproval(null);
+      renderControlMonitor();
+      setStatus(humanOnlyHandoff ? "Human action required" : "Control blocked");
+      setActivity("failed", humanOnlyHandoff ? "Human-only handoff" : "Control mode blocked", controlStepLabel(step));
       await addMessage("system", `Agent Control Mode blocked after approval: ${controlStepLabel(step)}\n${result?.error ?? "unknown error"}`);
-      await saveControlReportToArchive(results, result?.approvalRequired ? "approval-required" : "blocked");
-      return;
+      const archiveStatus = humanOnlyHandoff
+        ? "blocked-human-handoff"
+        : result?.approvalRequired
+          ? "blocked-after-approval"
+          : "blocked";
+      await saveControlReportToArchive(results, archiveStatus);
+      return {
+        ok: false,
+        approvalRequired: false,
+        humanHandoff: humanOnlyHandoff
+      };
     }
     updateControlStep(approval.stepIndex, "completed", controlResultSummary(result), {
       phase: "verified",

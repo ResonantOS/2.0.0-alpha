@@ -122,6 +122,7 @@ test("live Agent Control workflow is dedicated, pinned, path-filtered, nightly, 
   assert.ok(trigger.pull_request.paths.includes("browser-first/resonantos-side-panel-extension/src/lib/content-field-safety.js"));
   assert.ok(trigger.pull_request.paths.includes("browser-first/test/agent-control-live.mjs"));
   assert.equal(trigger.schedule.length, 1);
+  assert.equal(trigger.workflow_dispatch.inputs.public_submit_contract.default, "required");
 
   const uses = job.steps.filter((step) => step.uses).map((step) => step.uses);
   assert.ok(uses.length >= 3);
@@ -131,6 +132,7 @@ test("live Agent Control workflow is dedicated, pinned, path-filtered, nightly, 
   assert.equal(runStep["continue-on-error"], true);
   assert.match(runStep.run, /xvfb-run -a npm run test:browser-first:live/);
   assert.equal(runStep.env.CI, "true");
+  assert.match(runStep.env.RESONANTOS_PUBLIC_SUBMIT_CONTRACT, /\|\| 'required'/);
 
   const upload = job.steps.find((step) => /upload-artifact/.test(step.uses ?? ""));
   assert.equal(upload.if, "always()");
