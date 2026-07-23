@@ -341,3 +341,33 @@ test("known canonical, ADR, icon, and deleted documentation pass strict audit", 
   assert.match(stdout, /deleted\s+docs\/retired\/legacy-release-notes\.html/);
   assert.match(stdout, /deleted\s+CODEBASE-EVALUATION-OLD\.md/);
 });
+
+test("governed browser-first implementation specs pass strict audit", () => {
+  const main = requireExport("main");
+  let stdout = "";
+  let stderr = "";
+  const processRef = { exitCode: undefined };
+  const hashes = ["a".repeat(40), "b".repeat(40)];
+  const nameStatus = [
+    "A",
+    "docs/superpowers/specs/2026-07-22-governed-opencode-session-design.md",
+    "A",
+    "docs/superpowers/plans/2026-07-22-governed-opencode-session.md",
+    "",
+  ].join("\0");
+
+  const result = main({
+    argv: ["--committed", "--strict"],
+    gitRunner: (args) => args[0] === "rev-parse"
+      ? `${hashes.shift()}\n`
+      : nameStatus,
+    processRef,
+    stderr: { write: (chunk) => { stderr += chunk; } },
+    stdout: { write: (chunk) => { stdout += chunk; } },
+  });
+
+  assert.equal(result, 0);
+  assert.equal(processRef.exitCode, undefined);
+  assert.equal(stderr, "");
+  assert.match(stdout, /Needs manual review: 0/);
+});
