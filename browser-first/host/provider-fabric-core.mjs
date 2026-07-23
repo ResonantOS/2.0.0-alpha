@@ -266,15 +266,6 @@ export function providerRouteForModel(model, { localRuntimeUrl = "", catalog = m
       };
     }
   }
-  if (requestedModel.startsWith("batiai/")) {
-    return {
-      providerId: "desktop-local",
-      providerType: "openai-compatible",
-      apiBaseUrl: localRuntimeUrl || "http://127.0.0.1:11434/v1",
-      wireModel: requestedModel,
-      label: "Desktop Local",
-    };
-  }
   const qualifiedSeparator = requestedModel.indexOf("/");
   const qualifiedProvider = qualifiedSeparator > 0
     ? requestedModel.slice(0, qualifiedSeparator).toLowerCase()
@@ -290,6 +281,9 @@ export function providerRouteForModel(model, { localRuntimeUrl = "", catalog = m
         && ![requestedModel, qualifiedWireModel].includes(candidateWireModel)) {
         return false;
       }
+      if (candidateModel === requestedModel || candidateWireModel === requestedModel) {
+        return true;
+      }
       const profile = profiles.find((candidateProfile) => candidateProfile.id === candidate.providerId);
       const aliases = [
         candidate?.providerType,
@@ -301,6 +295,9 @@ export function providerRouteForModel(model, { localRuntimeUrl = "", catalog = m
       return aliases.includes(qualifiedProvider);
     });
     const qualifiedProfile = profiles.find((profile) => profile.id === qualifiedEntry?.providerId);
+    if (!qualifiedEntry) {
+      return null;
+    }
     if (qualifiedEntry && qualifiedProfile?.apiBaseUrl) {
       return {
         providerId: qualifiedEntry.providerId,
@@ -311,7 +308,16 @@ export function providerRouteForModel(model, { localRuntimeUrl = "", catalog = m
         label: qualifiedProfile.label ?? qualifiedEntry.providerLabel ?? qualifiedEntry.providerId,
       };
     }
-    if (!["openai", "minimax", "zai"].includes(qualifiedProvider)) {
+    if (qualifiedProvider === "batiai" && qualifiedEntry.providerId === "desktop-local") {
+      return {
+        providerId: "desktop-local",
+        providerType: "openai-compatible",
+        apiBaseUrl: localRuntimeUrl || "http://127.0.0.1:11434/v1",
+        wireModel: qualifiedEntry.wireModel ?? requestedModel,
+        label: qualifiedProfile?.label ?? qualifiedEntry.providerLabel ?? "Desktop Local",
+      };
+    }
+    if (!["openai", "minimax"].includes(qualifiedProvider)) {
       return null;
     }
   }

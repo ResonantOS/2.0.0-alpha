@@ -14,6 +14,12 @@ import {
   shouldDeregisterMovedSourceAfterRollback,
 } from "../host/memory-source-move.mjs";
 
+const openCodeManifest = JSON.parse(
+  await readFile(new URL("../../public/addons/opencode.json", import.meta.url), "utf8"),
+);
+const openCodeDeclaredCapabilities = openCodeManifest.requestedCapabilities
+  .map((entry) => entry.capability);
+
 function memoryStorage(initial = {}) {
   const state = { ...initial };
   return {
@@ -2136,9 +2142,9 @@ test("settings workspace renders add-on status and capability boundaries", async
             available: false,
             mode: "coding-addon",
             trust: "add-on agent",
-            requestedCapabilities: ["agent-delegation", "filesystem", "shell", "providers"],
-            grantedCapabilities: ["agent-delegation", ...openCodeSetting.liveSession.grantedCapabilities],
-            deniedCapabilities: ["filesystem", "shell", "providers"]
+            requestedCapabilities: [...openCodeDeclaredCapabilities],
+            grantedCapabilities: [...openCodeSetting.liveSession.grantedCapabilities],
+            deniedCapabilities: openCodeDeclaredCapabilities
               .filter((capability) => !openCodeSetting.liveSession.grantedCapabilities.includes(capability)),
             execution: {
               ...openCodeSetting,
@@ -2190,7 +2196,7 @@ test("settings workspace renders add-on status and capability boundaries", async
     assert.match(container.textContent, /OpenCode/);
     assert.match(container.textContent, /2 granted · 1 denied/);
     assert.match(container.textContent, /2 granted · 1 denied/);
-    assert.match(container.textContent, /1 granted · 3 denied/);
+    assert.match(container.textContent, /5 denied/);
     assert.deepEqual(
       [...container.querySelectorAll(".settings-addon-disclosure")].map((details) => details.open),
       [false, false, false, false, false]
@@ -2256,7 +2262,7 @@ test("settings workspace renders add-on status and capability boundaries", async
     ));
     assert.match(container.textContent, /Optional developer preview/);
     assert.match(container.textContent, /Scoped filesystem, shell, and provider authority/);
-    assert.match(container.textContent, /4 granted/);
+    assert.match(container.textContent, /3 granted/);
 
     const providerGrant = container.querySelector('[aria-label="Grant OpenCode providers"]');
     providerGrant.checked = false;
@@ -2330,9 +2336,9 @@ test("settings add-ons section surfaces redacted execution-setting write failure
           available: true,
           mode: "coding-addon",
           trust: "add-on agent",
-          requestedCapabilities: ["agent-delegation", "filesystem", "shell", "providers"],
-          grantedCapabilities: ["agent-delegation"],
-          deniedCapabilities: ["filesystem", "shell", "providers"],
+          requestedCapabilities: [...openCodeDeclaredCapabilities],
+          grantedCapabilities: [],
+          deniedCapabilities: [...openCodeDeclaredCapabilities],
           execution: {
             localCliExecution: true,
             liveSession: { enabled: false, workspacePath: "", grantedCapabilities: [] },

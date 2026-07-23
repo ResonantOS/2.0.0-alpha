@@ -501,19 +501,19 @@ export const createOpenCodeDelegationPacket = (
       : [
           {
             capability: "filesystem",
-            granted: true,
+            granted: false,
             scope: "workspace",
             revocationBehavior: "hard-stop",
           },
           {
             capability: "shell",
-            granted: true,
+            granted: false,
             scope: "workspace",
             revocationBehavior: "hard-stop",
           },
           {
             capability: "providers",
-            granted: true,
+            granted: false,
             scope: "shared",
             revocationBehavior: "hard-stop",
           },

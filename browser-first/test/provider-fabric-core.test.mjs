@@ -133,6 +133,13 @@ test("provider fabric routes provider-qualified OpenCode models to the matching 
   assert.equal(minimax.wireModel, "MiniMax-M3");
 });
 
+test("provider fabric rejects unknown provider-qualified models instead of crossing credential boundaries", () => {
+  assert.equal(providerRouteForModel("openai/unknown-model"), null);
+  assert.equal(providerRouteForModel("minimax/unknown-model"), null);
+  assert.equal(providerRouteForModel("zai/unknown-model"), null);
+  assert.equal(providerRouteForModel("batiai/unknown-model"), null);
+});
+
 test("provider fabric resolves qualified custom-provider models without falling through to MiniMax", () => {
   const profiles = [
     ...providerProfiles,
