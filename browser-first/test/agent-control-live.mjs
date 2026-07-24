@@ -1088,7 +1088,7 @@ try {
     stateKey: "anchorFormSubmitted",
     scenarioId: "scripted-anchor-form-submit",
     action: { type: "type", field: "Anchor order search", text: "widget", submit: true },
-    command: "/control type Anchor order search",
+    command: "/control click Anchor order search",
   });
 
   await evaluate(panel, `(() => { globalThis.__resonantosNextActionOverride = async ({ snapshot, history }) => ({
