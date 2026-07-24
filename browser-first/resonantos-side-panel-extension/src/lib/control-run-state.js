@@ -183,6 +183,7 @@ export function createControlRunState({
     const preservedHumanStopStatus = ["cancelled", "paused"].includes(persistedJob?.status) && !["cancelled", "paused"].includes(status)
       ? persistedJob.status
       : "";
+    const effectivePendingApproval = preservedHumanStopStatus ? null : nextPendingApproval;
     const completedRun = {
       ...currentControlRun,
       status: preservedHumanStopStatus || status,
@@ -190,10 +191,11 @@ export function createControlRunState({
       completedAt,
       timing: runTiming,
       artifacts: artifact ? [...currentControlRun.artifacts, artifact] : currentControlRun.artifacts,
-      pendingApproval: nextPendingApproval
+      pageLock: preservedHumanStopStatus ? (persistedJob?.pageLock ?? null) : currentControlRun.pageLock,
+      pendingApproval: effectivePendingApproval
     };
     setCurrentControlRun(completedRun);
-    setPendingApproval(nextPendingApproval);
+    setPendingApproval(effectivePendingApproval);
     const finishGeneration = overlayGeneration;
     const elapsedMs = Math.max(0, nowMs() - overlayStartedAtMs);
     const remainingMs = Math.max(0, minimumOverlayMs - elapsedMs);
@@ -211,18 +213,60 @@ export function createControlRunState({
       status: completedRun.status,
       artifacts: completedRun.artifacts,
       pageLock: completedRun.pageLock,
-      pendingApproval: nextPendingApproval,
+      pendingApproval: effectivePendingApproval,
       summary: completedRun.summary,
       planner: completedRun.planner,
       steps: completedRun.steps,
       timing: completedRun.timing
     });
+    return completedRun;
+  };
+
+  const transitionControlRun = async (status, nextPendingApproval = null, { expectedStatus = "" } = {}) => {
+    const currentControlRun = getCurrentControlRun();
+    if (!currentControlRun) return { ok: false, run: null };
+    const persistedJob = typeof browserJobStore.findJob === "function"
+      ? browserJobStore.findJob(currentControlRun.id)
+      : null;
+    const observedStatus = persistedJob?.status ?? currentControlRun.status ?? "";
+    if (expectedStatus && observedStatus !== expectedStatus) {
+      const staleRun = {
+        ...currentControlRun,
+        status: observedStatus || currentControlRun.status,
+        pageLock: persistedJob ? (persistedJob.pageLock ?? null) : currentControlRun.pageLock,
+        pendingApproval: null
+      };
+      setCurrentControlRun(staleRun);
+      setPendingApproval(null);
+      renderControlMonitor();
+      return { ok: false, run: staleRun };
+    }
+    const updated = await updateBrowserJob(currentControlRun.id, {
+      status,
+      pendingApproval: nextPendingApproval
+    });
+    const actualStatus = updated?.status ?? status;
+    const accepted = actualStatus === status;
+    const effectivePendingApproval = accepted && status === "approval"
+      ? nextPendingApproval
+      : null;
+    const transitionedRun = {
+      ...currentControlRun,
+      status: actualStatus,
+      pageLock: updated ? (updated.pageLock ?? null) : currentControlRun.pageLock,
+      pendingApproval: effectivePendingApproval
+    };
+    setCurrentControlRun(transitionedRun);
+    setPendingApproval(effectivePendingApproval);
+    renderControlMonitor();
+    return { ok: accepted, run: transitionedRun };
   };
 
   return {
     appendControlStep,
     finishControlRun,
     startControlRun,
+    transitionControlRun,
     updateControlRunArtifacts,
     updateControlStep
   };

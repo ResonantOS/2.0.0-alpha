@@ -363,6 +363,7 @@ export function createBrowserJobStore({
   let jobs = [];
   let activeJobId = null;
   let monitorCollapsed = true;
+  let persistTail = Promise.resolve();
 
   function compact(nextJobs = jobs) {
     jobs = nextJobs
@@ -377,11 +378,14 @@ export function createBrowserJobStore({
 
   async function persist() {
     compact();
-    await storage?.set?.({
+    const payload = JSON.parse(JSON.stringify({
       [storageKeys.activeBrowserJob]: activeJobId,
       [storageKeys.browserJobs]: jobs,
       [storageKeys.jobMonitorCollapsed]: monitorCollapsed
-    }).catch(() => undefined);
+    }));
+    const write = persistTail.then(() => storage?.set?.(payload));
+    persistTail = write.catch(() => undefined);
+    await write.catch(() => undefined);
     return snapshot();
   }
 

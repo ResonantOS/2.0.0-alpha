@@ -106,6 +106,8 @@ export function createSidePanelScheduledBrowserJobRunner({
       };
       await updateBrowserJob(job.id, {
         artifacts: localRun.artifacts,
+        pageLock: localRun.pageLock,
+        pendingApproval: localRun.pendingApproval ?? null,
         planner: localRun.planner,
         status: localRun.status ?? "running",
         steps: localRun.steps,
@@ -179,7 +181,6 @@ export function createSidePanelScheduledBrowserJobRunner({
       },
       setPendingApproval: (approval) => {
         localApproval = approval;
-        void updateBrowserJob(job.id, { pendingApproval: approval, status: approval ? "approval" : localRun.status });
         if (browserJobStore.getActiveJobId() === job.id) {
           setPendingApproval(approval);
         }
@@ -213,6 +214,23 @@ export function createSidePanelScheduledBrowserJobRunner({
           });
         }
         return consent;
+      },
+      transitionControlRun: async (status, nextPendingApproval = null, { expectedStatus = "" } = {}) => {
+        const persisted = browserJobStore.findJob(job.id);
+        const observedStatus = persisted?.status ?? localRun.status;
+        if (expectedStatus && observedStatus !== expectedStatus) {
+          localApproval = null;
+          localRun = { ...localRun, status: observedStatus, pendingApproval: null };
+          syncFocusedLocalRun();
+          return { ok: false, run: localRun };
+        }
+        localApproval = status === "approval" ? nextPendingApproval : null;
+        await persistLocalRun({
+          status,
+          pendingApproval: localApproval
+        });
+        syncFocusedLocalRun();
+        return { ok: localRun.status === status, run: localRun };
       },
       updateBrowserJob,
       updateControlRunArtifacts: (artifacts) => {

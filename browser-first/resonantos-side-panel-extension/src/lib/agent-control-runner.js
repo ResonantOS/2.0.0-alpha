@@ -385,6 +385,12 @@ function repeatedNoChangeActionEvidence(history = [], action = {}) {
   };
 }
 
+function pendingApprovalMatches(currentRun, approval) {
+  if (currentRun?.status !== "approval" || !currentRun.pendingApproval || !approval) return false;
+  if (Number(currentRun.pendingApproval.stepIndex) !== Number(approval.stepIndex)) return false;
+  return browserActionSignature(currentRun.pendingApproval.step) === browserActionSignature(approval.step);
+}
+
 export function createAgentControlRunner(deps) {
   const {
     addMessage,
@@ -407,6 +413,15 @@ export function createAgentControlRunner(deps) {
     sleep,
     startControlRun,
     taskConsentForStep = async () => null,
+    transitionControlRun = async (status, nextPendingApproval = null, { expectedStatus = "" } = {}) => {
+      const run = getCurrentControlRun();
+      if (!run) return { ok: false, run: null };
+      if (expectedStatus && run.status !== expectedStatus) {
+        return { ok: false, run };
+      }
+      const updated = await updateBrowserJob(run.id, { status, pendingApproval: nextPendingApproval });
+      return { ok: (updated?.status ?? status) === status, run: updated ?? { ...run, status, pendingApproval: nextPendingApproval } };
+    },
     updateBrowserJob,
     updateControlRunArtifacts,
     updateControlStep
@@ -955,7 +970,13 @@ export function createAgentControlRunner(deps) {
   }
 
   async function approvePendingControlStep(approval) {
-    if (!approval || !getCurrentControlRun()) return;
+    const currentControlRun = getCurrentControlRun();
+    if (!pendingApprovalMatches(currentControlRun, approval)) {
+      setPendingApproval(null);
+      renderControlMonitor();
+      await addMessage("system", "Ignored a stale browser approval because the job is no longer waiting for that action.");
+      return { ok: false, staleApproval: true };
+    }
     const boundary = approvalBoundaryForStep(approval.step, approval.reason);
     if (isHumanOnlyBoundary(boundary)) {
       const humanState = humanInterventionState({
@@ -975,7 +996,6 @@ export function createAgentControlRunner(deps) {
         uncertainty: approval.reason ?? "This action must remain under direct human control."
       });
       finishControlRun("blocked");
-      setPendingApproval(null);
       renderControlMonitor();
       setStatus("Human action required");
       setActivity("failed", "Human-only handoff", controlStepLabel(approval.step));
@@ -989,7 +1009,13 @@ export function createAgentControlRunner(deps) {
       await saveControlReportToArchive(approval.results ?? [], "blocked-human-handoff");
       return { ok: false, approvalRequired: false, humanHandoff: true };
     }
-    setPendingApproval(null);
+    const transition = await transitionControlRun("running", null, { expectedStatus: "approval" });
+    if (!transition?.ok) {
+      setPendingApproval(null);
+      renderControlMonitor();
+      await addMessage("system", "Ignored a stale browser approval because the job was stopped before the action could run.");
+      return { ok: false, staleApproval: true };
+    }
     renderControlMonitor();
     setStatus("Approved once");
     setActivity("tool-running", "Executing approved browser step", controlStepLabel(approval.step));
@@ -1040,7 +1066,6 @@ export function createAgentControlRunner(deps) {
         } : {})
       });
       finishControlRun("blocked");
-      setPendingApproval(null);
       renderControlMonitor();
       setStatus(humanOnlyHandoff ? "Human action required" : "Control blocked");
       setActivity("failed", humanOnlyHandoff ? "Human-only handoff" : "Control mode blocked", controlStepLabel(step));
@@ -1097,8 +1122,13 @@ export function createAgentControlRunner(deps) {
   }
 
   async function denyPendingControlStep(denied) {
-    if (!denied || !getCurrentControlRun()) return;
-    setPendingApproval(null);
+    const currentControlRun = getCurrentControlRun();
+    if (!pendingApprovalMatches(currentControlRun, denied)) {
+      setPendingApproval(null);
+      renderControlMonitor();
+      await addMessage("system", "Ignored a stale browser approval denial because the job is no longer waiting for that action.");
+      return { ok: false, staleApproval: true };
+    }
     updateControlStep(denied.stepIndex, "blocked", "denied by human", {
       phase: "blocked",
       decision: "Human denied this browser action.",
@@ -1125,6 +1155,7 @@ export function createAgentControlRunner(deps) {
         }
       }
     ], "denied");
+    return { ok: true };
   }
 
   return {

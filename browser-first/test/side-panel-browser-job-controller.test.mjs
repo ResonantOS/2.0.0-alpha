@@ -163,6 +163,7 @@ test("side panel browser job controller focuses jobs into current control run st
 
   assert.equal(result.id, "job-focus");
   assert.equal(harness.getCurrentControlRun().goal, "find booking slot");
+  assert.equal(harness.getCurrentControlRun().pendingApproval.step.action, "click");
   assert.equal(harness.getPendingApproval().step.action, "click");
   assert.ok(harness.events.some((event) => event[0] === "activate-tab" && event[1] === "job-focus"));
   assert.ok(harness.events.some((event) => event[0] === "render-control"));

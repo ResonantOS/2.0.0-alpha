@@ -110,6 +110,20 @@ function createHarness(overrides = {}) {
       events.push(["start", goal]);
     },
     taskConsentForStep: async () => taskConsents.shift() ?? null,
+    transitionControlRun: overrides.transitionControlRun ?? (async (status, nextPendingApproval = null, { expectedStatus = "" } = {}) => {
+      if (expectedStatus && controlRun.status !== expectedStatus) {
+        pendingApproval = null;
+        controlRun = { ...controlRun, pendingApproval: null };
+        return { ok: false, run: controlRun };
+      }
+      pendingApproval = status === "approval" ? nextPendingApproval : null;
+      controlRun = {
+        ...controlRun,
+        status,
+        pendingApproval
+      };
+      return { ok: true, run: controlRun };
+    }),
     updateBrowserJob: async (jobId, patch) => events.push(["job", jobId, patch]),
     updateControlRunArtifacts: (artifacts) => {
       controlRun = { ...controlRun, artifacts };
@@ -695,7 +709,11 @@ test("agent control runner can approve or deny a pending step through injected s
     results: [{ step: { type: "click", text: "Details" }, result: { ok: false, approvalRequired: true } }],
     history: []
   };
-  approvalHarness.getControlRun().steps.push({ type: "click", text: "Details", state: "blocked" });
+  Object.assign(approvalHarness.getControlRun(), {
+    status: "approval",
+    pendingApproval: approval,
+    steps: [{ type: "click", text: "Details", state: "blocked" }]
+  });
 
   await approvalHarness.runner.approvePendingControlStep(approval);
 
@@ -705,7 +723,11 @@ test("agent control runner can approve or deny a pending step through injected s
   assert.equal(approvalHarness.getControlRun().steps[0].details.approvalDecision, "approved-once");
 
   const denyHarness = createHarness();
-  denyHarness.getControlRun().steps.push({ type: "click", text: "Submit", state: "blocked" });
+  Object.assign(denyHarness.getControlRun(), {
+    status: "approval",
+    pendingApproval: approval,
+    steps: [{ type: "click", text: "Submit", state: "blocked" }]
+  });
   await denyHarness.runner.denyPendingControlStep({ ...approval, results: [] });
 
   assert.equal(denyHarness.getControlRun().status, "denied");
@@ -713,6 +735,10 @@ test("agent control runner can approve or deny a pending step through injected s
   assert.equal(denyHarness.getControlRun().steps[0].details.approvalDecision, "denied");
   assert.equal(denyHarness.getSavedReports().at(-1).status, "denied");
   assert.equal(denyHarness.getSavedReports().at(-1).results.at(-1).result.error, "denied by human");
+  assert.equal(
+    denyHarness.events.filter((event) => event[0] === "pending" && event[1] === null).length,
+    1
+  );
 });
 
 test("agent control runner terminally blocks a safe step refused again after one-time approval", async () => {
@@ -726,7 +752,11 @@ test("agent control runner terminally blocks a safe step refused again after one
     results: [{ step: { type: "click", text: "Details" }, result: { ok: false, approvalRequired: true } }],
     history: []
   };
-  harness.getControlRun().steps.push({ type: "click", text: "Details", state: "blocked" });
+  Object.assign(harness.getControlRun(), {
+    status: "approval",
+    pendingApproval: approval,
+    steps: [{ type: "click", text: "Details", state: "blocked" }]
+  });
 
   const result = await harness.runner.approvePendingControlStep(approval);
 
@@ -749,7 +779,11 @@ test("agent control runner defensively rejects stale public-submit approval stat
     results: [{ step: { type: "click", text: "Submit public form" }, result: { ok: false, approvalRequired: true } }],
     history: []
   };
-  harness.getControlRun().steps.push({ type: "click", text: "Submit public form", state: "blocked" });
+  Object.assign(harness.getControlRun(), {
+    status: "approval",
+    pendingApproval: approval,
+    steps: [{ type: "click", text: "Submit public form", state: "blocked" }]
+  });
 
   const result = await harness.runner.approvePendingControlStep(approval);
 
@@ -761,4 +795,31 @@ test("agent control runner defensively rejects stale public-submit approval stat
   assert.equal(harness.getPendingApproval(), null);
   assert.match(harness.getControlRun().steps[0].details.nextHumanAction, /perform the public action yourself/i);
   assert.ok(harness.events.some((event) => event[0] === "message" && /cannot be approved for automation/i.test(event[2])));
+});
+
+test("agent control runner rejects an approval after the run was cancelled", async () => {
+  const harness = createHarness({
+    approvalBoundaryForStep: () => "safe",
+    stepResults: [{ ok: true, clickedText: "Details" }],
+    transitionControlRun: async () => ({ ok: true })
+  });
+  const approval = {
+    step: { type: "click", text: "Details" },
+    stepIndex: 0,
+    results: [{ step: { type: "click", text: "Details" }, result: { ok: false, approvalRequired: true } }],
+    history: []
+  };
+  Object.assign(harness.getControlRun(), {
+    status: "cancelled",
+    pendingApproval: approval,
+    steps: [{ type: "click", text: "Details", state: "blocked" }]
+  });
+
+  const result = await harness.runner.approvePendingControlStep(approval);
+
+  assert.equal(result?.ok, false);
+  assert.equal(result?.staleApproval, true);
+  assert.equal(harness.events.filter((event) => event[0] === "execute").length, 0);
+  assert.equal(harness.getControlRun().status, "cancelled");
+  assert.equal(harness.getPendingApproval(), null);
 });

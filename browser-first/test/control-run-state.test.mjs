@@ -32,7 +32,7 @@ function createHarness(overrides = {}) {
       timers.push({ callback, delay });
       return timers.length;
     },
-    updateBrowserJob: async (id, patch) => events.push(["job", id, patch])
+    updateBrowserJob: overrides.updateBrowserJob ?? (async (id, patch) => events.push(["job", id, patch]))
   });
   return {
     events,
@@ -303,6 +303,114 @@ test("control run state preserves a human-stopped durable job from stale runner 
     event[1] === "job-a" &&
     event[2].status === "cancelled"
   ));
+});
+
+test("control run state rejects a stale approval after a human stop", async () => {
+  const staleApproval = {
+    step: { type: "click", text: "Details" },
+    stepIndex: 0,
+    results: [],
+    history: []
+  };
+  const harness = createHarness({
+    minimumOverlayMs: 0,
+    persistedJobs: {
+      "job-a": { id: "job-a", status: "cancelled" }
+    },
+    currentControlRun: {
+      id: "job-a",
+      planner: "planner",
+      summary: "summary",
+      pageLock: { tabId: 9, siteKey: "example.test", url: "https://example.test/", reason: "cancelled target" },
+      steps: [{ type: "click", text: "Details", state: "blocked" }],
+      artifacts: []
+    }
+  });
+
+  harness.state.finishControlRun("approval", null, staleApproval);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(harness.getCurrentControlRun().status, "cancelled");
+  assert.equal(harness.getCurrentControlRun().pendingApproval, null);
+  assert.equal(harness.getCurrentControlRun().pageLock, null);
+  assert.equal(harness.getPendingApproval(), null);
+  assert.ok(harness.events.some((event) =>
+    event[0] === "job" &&
+    event[1] === "job-a" &&
+    event[2].status === "cancelled" &&
+    event[2].pendingApproval === null
+  ));
+});
+
+test("control run state refuses to consume approval after durable cancellation", async () => {
+  const approval = {
+    step: { type: "click", text: "Details" },
+    stepIndex: 0,
+    results: [],
+    history: []
+  };
+  const harness = createHarness({
+    persistedJobs: {
+      "job-a": { id: "job-a", status: "cancelled", pageLock: null }
+    },
+    currentControlRun: {
+      id: "job-a",
+      status: "approval",
+      pendingApproval: approval,
+      pageLock: { tabId: 9, siteKey: "example.test", url: "https://example.test/" },
+      steps: [{ type: "click", text: "Details", state: "blocked" }],
+      artifacts: []
+    }
+  });
+
+  const transition = await harness.state.transitionControlRun("running", null, {
+    expectedStatus: "approval"
+  });
+
+  assert.equal(transition.ok, false);
+  assert.equal(harness.getCurrentControlRun().status, "cancelled");
+  assert.equal(harness.getCurrentControlRun().pendingApproval, null);
+  assert.equal(harness.getCurrentControlRun().pageLock, null);
+  assert.equal(harness.getPendingApproval(), null);
+  assert.equal(harness.events.some((event) => event[0] === "job"), false);
+});
+
+test("control run state reflects a cancellation that wins during approval consumption", async () => {
+  const approval = {
+    step: { type: "click", text: "Details" },
+    stepIndex: 0,
+    results: [],
+    history: []
+  };
+  const harness = createHarness({
+    persistedJobs: {
+      "job-a": { id: "job-a", status: "approval", pageLock: { tabId: 9 } }
+    },
+    updateBrowserJob: async () => ({
+      id: "job-a",
+      status: "cancelled",
+      pageLock: null,
+      pendingApproval: null
+    }),
+    currentControlRun: {
+      id: "job-a",
+      status: "approval",
+      pendingApproval: approval,
+      pageLock: { tabId: 9, siteKey: "example.test", url: "https://example.test/" },
+      steps: [{ type: "click", text: "Details", state: "blocked" }],
+      artifacts: []
+    }
+  });
+
+  const transition = await harness.state.transitionControlRun("running", null, {
+    expectedStatus: "approval"
+  });
+
+  assert.equal(transition.ok, false);
+  assert.equal(harness.getCurrentControlRun().status, "cancelled");
+  assert.equal(harness.getCurrentControlRun().pendingApproval, null);
+  assert.equal(harness.getCurrentControlRun().pageLock, null);
+  assert.equal(harness.getPendingApproval(), null);
 });
 
 test("control run state keeps short runs visibly active before clearing overlay", async () => {

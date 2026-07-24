@@ -76,6 +76,7 @@ export function createSidePanelBrowserJobController({
       goal: focusedJob.goal,
       id: focusedJob.id,
       pageLock: focusedJob.pageLock ?? null,
+      pendingApproval: focusedJob.pendingApproval ?? null,
       planner: focusedJob.planner,
       startedAt: focusedJob.timing?.startedAt ?? focusedJob.createdAt,
       status: focusedJob.status,

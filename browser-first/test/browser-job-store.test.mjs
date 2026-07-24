@@ -312,6 +312,67 @@ test("browser job store hydrates, compacts, and persists browser jobs", async ()
   assert.equal(harness.writes.at(-1).active, "new");
 });
 
+test("browser job store serializes durable writes in transition order", async () => {
+  let releaseFirstWrite;
+  let writeCount = 0;
+  let activeWrites = 0;
+  let maxActiveWrites = 0;
+  const persisted = {};
+  const firstWriteBlocked = new Promise((resolve) => {
+    releaseFirstWrite = resolve;
+  });
+  const storageKeys = {
+    activeBrowserJob: "active",
+    browserJobs: "jobs",
+    jobMonitorCollapsed: "collapsed"
+  };
+  const storage = {
+    get: async () => persisted,
+    set: async (payload) => {
+      writeCount += 1;
+      activeWrites += 1;
+      maxActiveWrites = Math.max(maxActiveWrites, activeWrites);
+      if (writeCount === 1) {
+        await firstWriteBlocked;
+      }
+      Object.assign(persisted, structuredClone(payload));
+      activeWrites -= 1;
+    }
+  };
+  const store = createBrowserJobStore({
+    storage,
+    storageKeys,
+    now: () => "2026-07-23T12:00:00.000Z",
+    createId: () => "job-serialized"
+  });
+
+  const createPromise = store.createJob({
+    goal: "open details",
+    status: "running",
+    pageLock: { tabId: 12, siteKey: "example.test", url: "https://example.test/" }
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  const updatePromise = store.updateJob("job-serialized", {
+    status: "approval",
+    pendingApproval: {
+      step: { type: "click", text: "Details" },
+      stepIndex: 0,
+      results: [],
+      history: []
+    }
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(writeCount, 1);
+  releaseFirstWrite();
+  await Promise.all([createPromise, updatePromise]);
+
+  assert.equal(maxActiveWrites, 1);
+  const durable = persisted[storageKeys.browserJobs].find((job) => job.id === "job-serialized");
+  assert.equal(durable.status, "approval");
+  assert.equal(durable.pendingApproval.step.text, "Details");
+});
+
 test("browser job store creates active jobs and finds by active, id, or goal", async () => {
   const harness = createHarness();
 

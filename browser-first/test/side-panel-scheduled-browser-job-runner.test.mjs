@@ -199,3 +199,54 @@ test("scheduled browser job runner delegates scheduled work through injected Age
   assert.ok(harness.events.some((event) => event[0] === "overlay" && event[1] === false));
   assert.ok(harness.events.some((event) => event[0] === "store-update" && event[2].status === "completed"));
 });
+
+test("scheduled browser job runner durably persists an approval and page lock together", async () => {
+  const approval = {
+    step: { type: "click", text: "Details" },
+    stepIndex: 0,
+    reason: "Review this safe action.",
+    results: [],
+    history: []
+  };
+  const harness = createHarness({
+    jobs: [{
+      id: "job-a",
+      goal: "open details",
+      status: "running",
+      pageLock: { siteKey: "example.com", tabId: 10 }
+    }],
+    runnerFactory: (deps) => ({
+      async continueControlLoop() {
+        deps.startControlRun({
+          goal: "open details",
+          plan: {
+            source: "observe-act-verify-loop",
+            summary: "Waiting for approval",
+            pageLock: { siteKey: "example.com", tabId: 10 },
+            steps: [{ type: "click", text: "Details", state: "blocked" }],
+            artifacts: []
+          }
+        });
+        deps.finishControlRun("approval", null, approval);
+        return { ok: false, approvalRequired: true };
+      }
+    })
+  });
+
+  await harness.runner.runScheduledBrowserJob({
+    goal: "open details",
+    id: "job-a",
+    pageLock: { siteKey: "example.com", tabId: 10 },
+    planner: "observe-act-verify-loop",
+    status: "running",
+    summary: "Queued",
+    steps: []
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const durable = harness.store.findJob("job-a");
+  assert.equal(durable.status, "approval");
+  assert.equal(durable.pendingApproval.step.text, "Details");
+  assert.equal(durable.pendingApproval.stepIndex, 0);
+  assert.equal(durable.pageLock.tabId, 10);
+});
