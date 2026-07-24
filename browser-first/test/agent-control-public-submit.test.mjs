@@ -40,11 +40,13 @@ async function loadContentScript(html) {
     window.__submitted = false;
     window.__scriptedPublished = false;
     window.__ariaPublished = false;
+    window.__anchorFormSubmitted = false;
     window.__searchSubmitted = false;
     window.__safeClicked = false;
     document.querySelector("#public").addEventListener("submit", (e) => { e.preventDefault(); window.__submitted = true; });
     document.querySelector("#scriptedpublish").addEventListener("click", (e) => { e.preventDefault(); window.__scriptedPublished = true; });
     document.querySelector("#arialabelpublish").addEventListener("click", (e) => { e.preventDefault(); window.__ariaPublished = true; });
+    document.querySelector("#anchorcommitform").addEventListener("submit", (e) => { e.preventDefault(); window.__anchorFormSubmitted = true; });
     document.querySelector("#searchonly").addEventListener("submit", (e) => { e.preventDefault(); window.__searchSubmitted = true; });
     document.querySelector("#safe").addEventListener("click", () => { window.__safeClicked = true; });
   `);
@@ -69,6 +71,10 @@ const PAGE = `<!doctype html>
   <form id="commitform">
     <input name="ordersearch" aria-label="Order search" placeholder="Order search">
     <button type="submit">Place order</button>
+  </form>
+  <form id="anchorcommitform">
+    <input name="anchorcataloglookup" aria-label="Anchor catalog lookup" placeholder="Anchor catalog lookup">
+    <a href="#published" aria-label="Publish order">Review order details</a>
   </form>
   <button id="publishit">Publish now</button>
   <button id="safe">Safe Details</button>
@@ -150,6 +156,14 @@ test("#240: typing+submit is denied when the form holds a public-commit button (
   assert.equal(res.ok, false, "a form with a 'Place order' button must not be auto-submitted via a search field");
   assert.equal(res.deniedToAutomation, true);
   assert.notEqual(win.__orderSubmitted, true);
+});
+
+test("#240: typing+submit is denied when the form holds a scripted public-commit anchor", async () => {
+  const { win, send } = await loadContentScript(PAGE);
+  const res = await send({ type: "type_text", field: "Anchor catalog lookup", text: "widget", submit: true, userApproved: true });
+  assert.equal(res.ok, false, "a form with a scripted Publish anchor must not be auto-submitted");
+  assert.equal(res.deniedToAutomation, true);
+  assert.equal(win.__anchorFormSubmitted, false);
 });
 
 test("#240: an onclick commit control (div) is denied", async () => {

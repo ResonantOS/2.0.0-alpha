@@ -511,6 +511,7 @@ export function createAgentControlRunner(deps) {
             : "safe";
           const humanOnlyHandoff = requestedApproval && isHumanOnlyBoundary(boundary);
           const isApproval = requestedApproval && !humanOnlyHandoff;
+          let pendingApprovalState = null;
           const humanState = humanOnlyHandoff
             ? humanInterventionState({
               boundary,
@@ -578,16 +579,15 @@ export function createAgentControlRunner(deps) {
               })
             });
             results.push({ step: proposedAction, result: approvalResult });
-            setPendingApproval({
+            pendingApprovalState = {
               step: { ...proposedAction },
               stepIndex,
               reason: approvalResult.error,
               results,
               history
-            });
-            renderControlMonitor();
+            };
           }
-          finishControlRun(isApproval ? "approval" : "blocked");
+          finishControlRun(isApproval ? "approval" : "blocked", null, pendingApprovalState);
           setStatus(isApproval ? "Needs approval" : humanOnlyHandoff ? "Human action required" : "Control blocked");
           setActivity(
             "failed",
@@ -826,23 +826,19 @@ export function createAgentControlRunner(deps) {
               verification: finalVerification
             })
           });
-          finishControlRun(status);
-          setStatus(canRequestHumanApproval ? "Needs approval" : humanOnlyHandoff ? "Human action required" : "Control blocked");
-          setActivity("failed", humanOnlyHandoff ? "Human-only handoff" : "Control mode blocked", controlStepLabel(step));
-          await addMessage("system", `Agent Control Mode blocked at action ${stepIndex + 1}: ${controlStepLabel(step)}\n${reason}`);
-          if (canRequestHumanApproval) {
-            setPendingApproval({
+          const pendingApprovalState = canRequestHumanApproval
+            ? {
               step: { ...step },
               stepIndex,
               reason: executedResult?.error ?? "This browser action requires human approval.",
               results,
               history
-            });
-            renderControlMonitor();
-          } else if (humanOnlyHandoff) {
-            setPendingApproval(null);
-            renderControlMonitor();
-          }
+            }
+            : null;
+          finishControlRun(status, null, pendingApprovalState);
+          setStatus(canRequestHumanApproval ? "Needs approval" : humanOnlyHandoff ? "Human action required" : "Control blocked");
+          setActivity("failed", humanOnlyHandoff ? "Human-only handoff" : "Control mode blocked", controlStepLabel(step));
+          await addMessage("system", `Agent Control Mode blocked at action ${stepIndex + 1}: ${controlStepLabel(step)}\n${reason}`);
           const archiveStatus = canRequestHumanApproval
             ? "approval-required"
             : humanOnlyHandoff

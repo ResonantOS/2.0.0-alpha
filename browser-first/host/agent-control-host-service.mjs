@@ -193,6 +193,7 @@ export function sanitizeNextActionDecision(decision) {
       status: "blocked",
       approvalReason: error instanceof Error ? error.message : String(error),
       action: null,
+      proposedAction,
     };
   }
   if (action.type === "stop") {

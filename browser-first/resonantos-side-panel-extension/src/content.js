@@ -426,15 +426,16 @@ const ambiguousTargetResponse = (kind, target, candidates) => ({
 // public submit even without a <form> (SPA buttons, links, type="button" that
 // wire up JS submit) — it is a human-only handoff, never auto-clicked.
 const PUBLIC_COMMIT_VERBS = /\b(submit|send|post|publish|save|share|buy|pay|confirm|connect|sign|reserve|book|order|checkout|apply|vote|subscribe|register|comment)\b/i;
+const hasPublicCommitLabel = (element) => PUBLIC_COMMIT_VERBS.test([
+  visibleText(element),
+  accessibleLabelText(element),
+  element?.getAttribute?.("value")
+].filter(Boolean).join(" "));
+
 const isSubmitLikeElement = (element) => {
   const type = String(element.getAttribute("type") || "").toLowerCase();
   const role = String(element.getAttribute("role") || "").toLowerCase();
   const tag = element.tagName ? element.tagName.toLowerCase() : "";
-  const label = [
-    visibleText(element),
-    accessibleLabelText(element),
-    element.getAttribute("value")
-  ].filter(Boolean).join(" ").toLowerCase();
   // Native form-submit controls are always human-only.
   if (type === "submit" || type === "image") return true;
   if (element instanceof HTMLButtonElement && (!type || type === "submit") && Boolean(element.closest("form"))) return true;
@@ -448,7 +449,7 @@ const isSubmitLikeElement = (element) => {
     role === "button" ||
     (tag === "input" && ["button", "reset"].includes(type)) ||
     (typeof element.hasAttribute === "function" && element.hasAttribute("onclick"));
-  return behavesLikeButton && PUBLIC_COMMIT_VERBS.test(label);
+  return behavesLikeButton && hasPublicCommitLabel(element);
 };
 
 const isHardRestrictedElement = (element, fallbackText = "") => {
@@ -728,9 +729,8 @@ const formIsSafeToAutoSubmit = (form) => {
   // A public-commit control anywhere in the form (e.g. "Place order", "Publish")
   // makes the whole form human-only, even if every data field is a search box.
   // A plain search submit ("Go"/"Search") carries no commit verb, so it stays safe.
-  for (const control of form.querySelectorAll("button, input[type=submit], input[type=image], input[type=button], [role=button]")) {
-    const controlLabel = `${visibleText(control)} ${control.getAttribute("value") || ""}`.toLowerCase();
-    if (PUBLIC_COMMIT_VERBS.test(controlLabel)) return false;
+  for (const control of form.querySelectorAll("button, a, [role=button], input[type=submit], input[type=image], input[type=button], [onclick]")) {
+    if (hasPublicCommitLabel(control)) return false;
   }
   return true;
 };

@@ -353,6 +353,10 @@ const fixtureHtml = `<!doctype html>
       <input type="text" name="card" aria-label="Card number" placeholder="Card number" autocomplete="cc-number">
       <button id="submit" type="submit">Submit public form</button>
     </form>
+    <form id="anchor-commit-form">
+      <input type="search" name="anchorordersearch" aria-label="Anchor order search" placeholder="Anchor order search">
+      <a href="#published" aria-label="Publish order">Review order details</a>
+    </form>
     <a id="scripted-publish" href="#published">Publish scripted article</a>
     <a id="aria-publish" href="#published" aria-label="Publish now">Read details</a>
     <textarea id="inline-editor" aria-label="Inline editable note">prefix teh quick i suffix</textarea>
@@ -364,6 +368,7 @@ const fixtureHtml = `<!doctype html>
       window.__submitted = false;
       window.__scriptedPublished = false;
       window.__ariaPublished = false;
+      window.__anchorFormSubmitted = false;
       window.solana = {
         isConnected: true,
         isPhantom: true,
@@ -387,6 +392,11 @@ const fixtureHtml = `<!doctype html>
         event.preventDefault();
         window.__ariaPublished = true;
         document.querySelector("#status").textContent = "aria-published";
+      });
+      document.querySelector("#anchor-commit-form").addEventListener("submit", (event) => {
+        event.preventDefault();
+        window.__anchorFormSubmitted = true;
+        document.querySelector("#status").textContent = "anchor-form-submitted";
       });
       document.querySelector("#cart").addEventListener("click", () => {
         document.body.dataset.cart = "added";
@@ -598,8 +608,12 @@ async function verifyPublicSubmitBoundary(panel, page, {
   targetText = "Submit public form",
   stateKey = "submitted",
   scenarioId = "post-approval-public-submit",
+  action = null,
+  command = null,
 } = {}) {
   const targetLiteral = JSON.stringify(targetText);
+  const actionLiteral = JSON.stringify(action ?? { type: "click", text: targetText });
+  const commandLiteral = command ?? `/control click ${targetText}`;
   const targetPattern = new RegExp(targetText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
   await evaluate(panel, `(() => {
     globalThis.__resonantosLivePublicSubmitOverrideCalls = 0;
@@ -609,7 +623,7 @@ async function verifyPublicSubmitBoundary(panel, page, {
         source: "test-next-action",
         thought: "Attempt unsafe submit; content script must block this.",
         status: "continue",
-        action: { type: "click", text: ${targetLiteral} },
+        action: ${actionLiteral},
         approvalReason: null,
         doneSummary: null
       };
@@ -619,7 +633,7 @@ async function verifyPublicSubmitBoundary(panel, page, {
   const baseline = (await evaluate(panel, `({
     messageCount: document.querySelectorAll("#transcript .message").length
   })`)).result.value;
-  await submitControlCommand(panel, `/control click ${targetLiteral}`);
+  await submitControlCommand(panel, commandLiteral);
   let outcome;
   try {
     outcome = await waitForPageCondition(panel, `(async () => {
@@ -648,6 +662,7 @@ async function verifyPublicSubmitBoundary(panel, page, {
     submitted: window.__submitted,
     scriptedPublished: window.__scriptedPublished,
     ariaPublished: window.__ariaPublished,
+    anchorFormSubmitted: window.__anchorFormSubmitted,
     status: document.querySelector("#status").textContent
   })`)).result.value;
   assert(!blockedState[stateKey], `Public-submit boundary executed ${targetText}: ${JSON.stringify(blockedState)}`);
@@ -1061,6 +1076,13 @@ try {
     stateKey: "ariaPublished",
     scenarioId: "accessible-name-public-submit",
   });
+  const anchorFormBlockedState = await verifyPublicSubmitBoundary(panel, page, {
+    targetText: "Anchor order search",
+    stateKey: "anchorFormSubmitted",
+    scenarioId: "scripted-anchor-form-submit",
+    action: { type: "type", field: "Anchor order search", text: "widget", submit: true },
+    command: "/control test Anchor order search form safety",
+  });
 
   await evaluate(panel, `(() => { globalThis.__resonantosNextActionOverride = async ({ snapshot, history }) => ({
     source: "test-next-action",
@@ -1330,6 +1352,7 @@ try {
     blockedState,
     scriptedBlockedState,
     ariaBlockedState,
+    anchorFormBlockedState,
     approvalState,
     screenshots: reportScreenshots.map((screenshot) => ({
       ...screenshot,

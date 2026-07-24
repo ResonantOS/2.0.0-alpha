@@ -134,19 +134,23 @@ export function createSidePanelScheduledBrowserJobRunner({
           setLastSnapshot(null);
         }
       }),
-      finishControlRun: (status, artifact = null) => {
+      finishControlRun: (status, artifact = null, nextPendingApproval = null) => {
+        localApproval = nextPendingApproval;
         localRun = {
           ...localRun,
           status,
           completedAt: new Date().toISOString(),
-          artifacts: artifact ? [...localRun.artifacts, artifact] : localRun.artifacts
+          artifacts: artifact ? [...localRun.artifacts, artifact] : localRun.artifacts,
+          pendingApproval: nextPendingApproval
         };
         void persistLocalRun({
           status,
-          artifacts: localRun.artifacts
+          artifacts: localRun.artifacts,
+          pendingApproval: nextPendingApproval
         });
         if (browserJobStore.getActiveJobId() === job.id) {
           void setPageControlOverlay(false, "", "returning");
+          setPendingApproval(nextPendingApproval);
         }
         syncFocusedLocalRun();
       },

@@ -424,6 +424,13 @@ const createBrowserJob = browserJobController.createBrowserJob;
 const focusBrowserJobRun = browserJobController.focusBrowserJobRun;
 const loadBrowserJobs = browserJobController.loadBrowserJobs;
 const updateBrowserJob = browserJobController.updateBrowserJob;
+const setForegroundPendingApproval = (approval) => {
+  pendingApproval = approval;
+  void updateBrowserJob(browserJobStore.getActiveJobId(), {
+    pendingApproval: approval,
+    ...(approval ? { status: "approval" } : {})
+  });
+};
 
 const persistChatState = () => chatSessionStore.persist();
 
@@ -792,7 +799,6 @@ const controlRunState = createControlRunState({
   setPageControlOverlay,
   setPendingApproval: (approval) => {
     pendingApproval = approval;
-    void updateBrowserJob(browserJobStore.getActiveJobId(), { pendingApproval: approval });
   },
   updateBrowserJob
 });
@@ -831,10 +837,7 @@ const agentControlRunner = createAgentControlRunner({
   saveControlReportToArchive,
   setActivity,
   setPageControlOverlay,
-  setPendingApproval: (approval) => {
-    pendingApproval = approval;
-    void updateBrowserJob(browserJobStore.getActiveJobId(), { pendingApproval: approval });
-  },
+  setPendingApproval: setForegroundPendingApproval,
   setStatus,
   sleep,
   startControlRun,

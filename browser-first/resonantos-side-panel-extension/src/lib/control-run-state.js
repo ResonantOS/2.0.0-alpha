@@ -146,7 +146,7 @@ export function createControlRunState({
     setCurrentControlRun({ ...currentControlRun, artifacts });
   };
 
-  const finishControlRun = (status, artifact = null) => {
+  const finishControlRun = (status, artifact = null, nextPendingApproval = null) => {
     const currentControlRun = getCurrentControlRun();
     if (!currentControlRun) return;
     const completedAt = nowIso();
@@ -189,9 +189,11 @@ export function createControlRunState({
       steps,
       completedAt,
       timing: runTiming,
-      artifacts: artifact ? [...currentControlRun.artifacts, artifact] : currentControlRun.artifacts
+      artifacts: artifact ? [...currentControlRun.artifacts, artifact] : currentControlRun.artifacts,
+      pendingApproval: nextPendingApproval
     };
     setCurrentControlRun(completedRun);
+    setPendingApproval(nextPendingApproval);
     const finishGeneration = overlayGeneration;
     const elapsedMs = Math.max(0, nowMs() - overlayStartedAtMs);
     const remainingMs = Math.max(0, minimumOverlayMs - elapsedMs);
@@ -209,7 +211,7 @@ export function createControlRunState({
       status: completedRun.status,
       artifacts: completedRun.artifacts,
       pageLock: completedRun.pageLock,
-      pendingApproval: null,
+      pendingApproval: nextPendingApproval,
       summary: completedRun.summary,
       planner: completedRun.planner,
       steps: completedRun.steps,

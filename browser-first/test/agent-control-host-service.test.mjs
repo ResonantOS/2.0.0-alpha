@@ -89,6 +89,18 @@ test("Agent Control host sanitizer blocks restricted browser actions", () => {
     submit: false,
   });
   assert.doesNotMatch(JSON.stringify(restrictedDecision), /secret/);
+  const textOnlyRestrictedDecision = sanitizeNextActionDecision({
+    status: "continue",
+    action: { type: "type", field: "Notes", text: "private key material" },
+  });
+  assert.equal(textOnlyRestrictedDecision.status, "blocked");
+  assert.equal(textOnlyRestrictedDecision.action, null);
+  assert.deepEqual(textOnlyRestrictedDecision.proposedAction, {
+    type: "type",
+    field: "Notes",
+    submit: false,
+  });
+  assert.doesNotMatch(JSON.stringify(textOnlyRestrictedDecision), /private key material/);
   const approvalDecision = sanitizeNextActionDecision({
     status: "needs_approval",
     approvalReason: "Public action requires a human.",

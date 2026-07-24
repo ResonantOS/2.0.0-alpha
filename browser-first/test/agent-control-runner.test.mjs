@@ -7,6 +7,8 @@ import {
   controlResultSummary,
   createAgentControlRunner
 } from "../resonantos-side-panel-extension/src/lib/agent-control-runner.js";
+import { createBrowserJobStore } from "../resonantos-side-panel-extension/src/lib/browser-job-store.js";
+import { createControlRunState } from "../resonantos-side-panel-extension/src/lib/control-run-state.js";
 
 function createHarness(overrides = {}) {
   const events = [];
@@ -57,13 +59,16 @@ function createHarness(overrides = {}) {
       events.push(["execute", step]);
       return stepResults[stepResultIndex++] ?? { ok: true };
     },
-    finishControlRun: (status, artifact = null) => {
+    finishControlRun: (status, artifact = null, nextPendingApproval = null) => {
       controlRun = {
         ...controlRun,
         status,
-        artifacts: artifact ? [...controlRun.artifacts, artifact] : controlRun.artifacts
+        artifacts: artifact ? [...controlRun.artifacts, artifact] : controlRun.artifacts,
+        pendingApproval: nextPendingApproval
       };
+      pendingApproval = nextPendingApproval;
       events.push(["finish", status]);
+      events.push(["pending", nextPendingApproval?.step?.type ?? null]);
     },
     getActiveJobId: () => activeJobId,
     getCurrentControlRun: () => controlRun,
@@ -531,6 +536,133 @@ test("agent control runner creates pending state for a safe planner approval", a
   assert.equal(harness.getPendingApproval().stepIndex, 0);
   assert.equal(harness.getControlRun().steps[0].state, "blocked");
   assert.equal(harness.getSavedReports().at(-1).status, "approval-required");
+});
+
+test("foreground safe planner approval survives out-of-order delayed storage writes", async () => {
+  const storageState = {};
+  const queuedWrites = [];
+  const storageKeys = {
+    activeBrowserJob: "active",
+    browserJobs: "jobs",
+    jobMonitorCollapsed: "collapsed"
+  };
+  const storage = {
+    get: async () => structuredClone(storageState),
+    set: async (payload) => {
+      const snapshot = structuredClone(payload);
+      const persistedJob = snapshot[storageKeys.browserJobs]?.find((item) => item.id === "job-durable-approval");
+      if (persistedJob?.status !== "approval") {
+        Object.assign(storageState, snapshot);
+        return;
+      }
+      await new Promise((resolve) => {
+        queuedWrites.push({
+          apply: () => {
+            Object.assign(storageState, snapshot);
+            resolve();
+          }
+        });
+      });
+    }
+  };
+  const store = createBrowserJobStore({
+    storage,
+    storageKeys,
+    now: () => "2026-07-23T12:00:00.000Z",
+    createId: () => "job-durable-approval"
+  });
+  const job = await store.createJob({
+    goal: "open details",
+    status: "running",
+    pageLock: {
+      type: "tab",
+      tabId: 12,
+      siteKey: "example.test",
+      url: "https://example.test/",
+      reason: "Agent Control goal"
+    }
+  });
+  let currentRun = {
+    ...job,
+    artifacts: [],
+    steps: []
+  };
+  let pendingApproval = null;
+  const updateBrowserJob = (jobId, patch) => store.updateJob(jobId, patch);
+  const setPendingApproval = (approval) => {
+    pendingApproval = approval;
+  };
+  const state = createControlRunState({
+    browserJobStore: store,
+    getCurrentControlRun: () => currentRun,
+    minimumOverlayMs: 0,
+    renderControlMonitor: () => undefined,
+    setCurrentControlRun: (run) => {
+      currentRun = run;
+    },
+    setPageControlOverlay: async () => undefined,
+    setPendingApproval,
+    updateBrowserJob
+  });
+  const runner = createAgentControlRunner({
+    addMessage: async () => undefined,
+    appendControlStep: state.appendControlStep,
+    approvalBoundaryForStep: () => "safe",
+    controlStepLabel,
+    createBrowserJob: async () => job,
+    executeControlStep: async () => ({ ok: true }),
+    finishControlRun: state.finishControlRun,
+    getActiveJobId: () => store.getActiveJobId(),
+    getCurrentControlRun: () => currentRun,
+    getLastSnapshot: () => ({ title: "Fixture", url: "https://example.test/" }),
+    observeControlPage: async () => ({ title: "Fixture", url: "https://example.test/" }),
+    renderControlMonitor: () => undefined,
+    requestNextControlAction: async () => ({
+      status: "needs_approval",
+      thought: "review details",
+      approvalReason: "Opening details requires review.",
+      action: null,
+      proposedAction: { type: "click", text: "Details" }
+    }),
+    saveControlReportToArchive: async () => null,
+    setActivity: () => undefined,
+    setPageControlOverlay: async () => undefined,
+    setPendingApproval,
+    setStatus: () => undefined,
+    sleep: async () => undefined,
+    startControlRun: state.startControlRun,
+    taskConsentForStep: async () => null,
+    updateBrowserJob,
+    updateControlRunArtifacts: state.updateControlRunArtifacts,
+    updateControlStep: state.updateControlStep
+  });
+
+  await runner.continueControlLoop({ goal: "open details" });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.ok(queuedWrites.length >= 1);
+  queuedWrites.toReversed().forEach((write) => write.apply());
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const inMemory = store.findJob(job.id);
+  assert.equal(inMemory.status, "approval");
+  assert.equal(inMemory.pendingApproval.step.text, "Details");
+  assert.equal(inMemory.pendingApproval.stepIndex, 0);
+  assert.equal(pendingApproval.step.text, "Details");
+  assert.equal(inMemory.pageLock.tabId, 12);
+
+  const rehydratedStore = createBrowserJobStore({
+    storage,
+    storageKeys,
+    now: () => "2026-07-23T12:00:00.000Z",
+    createId: () => "unused"
+  });
+  await rehydratedStore.hydrate();
+  const durable = rehydratedStore.findJob(job.id);
+  assert.equal(durable.status, "approval");
+  assert.equal(durable.pendingApproval.step.text, "Details");
+  assert.equal(durable.pendingApproval.stepIndex, 0);
+  assert.equal(durable.pageLock.tabId, 12);
 });
 
 test("agent control runner blocks hard human-only boundaries without pending approval", async () => {
