@@ -615,6 +615,13 @@ async function verifyPublicSubmitBoundary(panel, page, {
   const actionLiteral = JSON.stringify(action ?? { type: "click", text: targetText });
   const commandLiteral = command ?? `/control click ${targetText}`;
   const targetPattern = new RegExp(targetText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+  await evaluate(panel, `(async () => {
+    const tabs = await chrome.tabs.query({});
+    const fixtureTab = tabs.find((candidate) => candidate.url === ${JSON.stringify(`http://127.0.0.1:${fixturePort}/`)});
+    if (!fixtureTab?.id) throw new Error("Root fixture tab not found before public-submit verification.");
+    await chrome.tabs.update(fixtureTab.id, { active: true });
+    return fixtureTab.id;
+  })()`);
   await evaluate(panel, `(() => {
     globalThis.__resonantosLivePublicSubmitOverrideCalls = 0;
     globalThis.__resonantosNextActionOverride = async () => {
@@ -1081,7 +1088,7 @@ try {
     stateKey: "anchorFormSubmitted",
     scenarioId: "scripted-anchor-form-submit",
     action: { type: "type", field: "Anchor order search", text: "widget", submit: true },
-    command: "/control test Anchor order search form safety",
+    command: "/control type Anchor order search",
   });
 
   await evaluate(panel, `(() => { globalThis.__resonantosNextActionOverride = async ({ snapshot, history }) => ({
