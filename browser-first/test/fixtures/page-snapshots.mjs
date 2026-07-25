@@ -1,6 +1,3 @@
-export const DEFAULT_TITLE = "Example Page";
-export const DEFAULT_URL = "https://example.com/article";
-
 export function articleSnapshot(overrides = {}) {
   return {
     title: "The Art of Resonant Context",
