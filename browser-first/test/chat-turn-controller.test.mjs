@@ -8,6 +8,14 @@ import {
   runtimeContextForAttachments
 } from "../resonantos-side-panel-extension/src/lib/chat-turn-controller.js";
 
+import {
+  articleSnapshot,
+  mixedMediaPageSnapshot,
+  pdfSnapshot,
+  mediaSnapshot,
+  secretLadenSnapshot
+} from "./fixtures/page-snapshots.mjs";
+
 test("chat turn controller builds compact page and runtime context", () => {
   assert.equal(pageContextForSnapshot(null), null);
   assert.equal(pageContextForSnapshot({ title: "Page", url: "https://example.com/", text: "Visible" }), "Title: Page\n\nURL: https://example.com/\n\nVisible text:\nVisible");
@@ -167,4 +175,56 @@ test("chat turn controller replaces raw fetch failures with bridge setup guidanc
   assert.match(message, /ResonantOS bridge is unreachable/);
   assert.match(message, /Settings > Bridge Target/);
   assert.doesNotMatch(message, /Failed to fetch/);
+});
+
+test("pageContextForSnapshot includes title, URL, and bounded excerpt for article pages", () => {
+  const context = pageContextForSnapshot(articleSnapshot());
+  assert.match(context, /Title: The Art of Resonant Context/);
+  assert.match(context, /URL: https:\/\/example\.com\/article\/resonant-context/);
+  assert.match(context, /Visible text:\n/);
+  assert.equal(context.includes("Skipped content:"), false);
+  const visibleTextStart = context.indexOf("Visible text:\n");
+  const visibleTextEnd = context.indexOf("\n\nVisible sections:", visibleTextStart);
+  const visibleText = context.slice(visibleTextStart + "Visible text:\n".length, visibleTextEnd > 0 ? visibleTextEnd : undefined);
+  assert.equal(visibleText.length, 7000);
+});
+
+test("pageContextForSnapshot surfaces skip reason for PDF pages", () => {
+  const context = pageContextForSnapshot(pdfSnapshot());
+  assert.match(context, /Title: Annual Report 2026/);
+  assert.match(context, /URL: https:\/\/example\.com\/reports\/annual\.pdf/);
+  assert.match(context, /Skipped content: PDF viewer — text extraction is not available\./);
+  assert.equal(context.includes("Visible text:"), false);
+});
+
+test("pageContextForSnapshot surfaced skip reason for media pages", () => {
+  const context = pageContextForSnapshot(mediaSnapshot());
+  assert.match(context, /URL: https:\/\/example\.com\/watch/);
+  assert.match(context, /Skipped content: Media player — no readable transcript available\./);
+  assert.equal(context.includes("Visible text:"), false);
+});
+
+test("pageContextForSnapshot keeps readable text on mixed-media pages", () => {
+  const context = pageContextForSnapshot(mixedMediaPageSnapshot());
+  assert.match(context, /Visible text:\n/);
+  assert.equal(context.includes("Skipped content:"), false);
+});
+
+test("pageContextForSnapshot adds a default skip reason when no readable text exists", () => {
+  const context = pageContextForSnapshot({
+    title: "Empty",
+    url: "https://example.com/empty",
+    text: "   "
+  });
+  assert.match(context, /Skipped content: page has no readable text to include as context\./);
+});
+
+test("pageContextForSnapshot still redacts secrets on skipped pages", () => {
+  const context = pageContextForSnapshot(secretLadenSnapshot());
+  assert.match(context, /Title: PDF with token in title \[redacted\]/);
+  assert.match(context, /URL: https:\/\/example\.com\/reports\/secret\.pdf/);
+  assert.equal(context.includes("sk-ant-ABCDEFGHIJKLMNOP"), false);
+  assert.equal(context.includes("sk-live-ABCDEFGHIJKLMNOP"), false);
+  assert.equal(context.includes("1234-5678-9012-3456"), false);
+  assert.equal(/token=|#card=/.test(context), false);
 });

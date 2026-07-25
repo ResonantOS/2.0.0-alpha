@@ -68,17 +68,26 @@ function formatClickTrail(clickTrail) {
 
 export function pageContextForSnapshot(snapshot) {
   if (!snapshot) return null;
+
   const text = safeContextText(snapshot.text ?? snapshot.page?.visibleText ?? "", 7000);
   const summary = safeContextText(snapshot.summary, 1600);
   const headings = Array.isArray(snapshot.page?.headings)
     ? snapshot.page.headings.slice(0, 8).map((heading) => safeContextText(heading, 120)).filter(Boolean)
     : [];
+
+  const skipReason = safeContextText(snapshot.skipReason, 240);
+  const hasReadableText = text.length > 0;
+  const defaultSkipReason = !hasReadableText && snapshot.url
+    ? "Skipped content: page has no readable text to include as context."
+    : "";
+
   return [
     `Title: ${safeContextText(snapshot.title || snapshot.page?.title || "Untitled", 160)}`,
     `URL: ${safeContextUrl(snapshot.url) || "unknown"}`,
     snapshot.domain ? `Domain plugin: ${safeContextText(snapshot.domain, 120)}` : "",
     summary ? `Summary:\n${summary}` : "",
     headings.length ? `Headings:\n${headings.map((heading) => `- ${heading}`).join("\n")}` : "",
+    skipReason ? `Skipped content: ${skipReason}` : defaultSkipReason,
     text ? `Visible text:\n${text}` : "",
     formatVisibleSections(snapshot),
     snapshot.viewport?.activeOverlay ? `Active overlay: ${safeContextText(snapshot.viewport.activeOverlay.content || snapshot.viewport.activeOverlay.id, 500)}` : "",

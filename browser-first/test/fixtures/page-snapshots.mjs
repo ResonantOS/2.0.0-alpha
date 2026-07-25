@@ -85,7 +85,7 @@ export function mixedMediaPageSnapshot(overrides = {}) {
 
 export function secretLadenSnapshot(overrides = {}) {
   return {
-    title: "PDF with token in title sk_live_ABCDEFGHIJKLMNOP",
+    title: "PDF with token in title sk-live-ABCDEFGHIJKLMNOP",
     url: "https://example.com/reports/secret.pdf?token=sk-ant-ABCDEFGHIJKLMNOP#card=1234-5678-9012-3456",
     domain: "example.com",
     summary: "",
