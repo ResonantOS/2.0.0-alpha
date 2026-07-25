@@ -228,5 +228,6 @@ export function sanitizeResonantContextSnapshot(snapshot, { tabId = null, title 
     domain_data: safeObject(source.domain_data, 20, 0) ?? {},
     sections,
     receivedAt: new Date().toISOString(),
+    skipReason: safeText(source.skipReason, 240) || null,
   };
 }

@@ -116,3 +116,25 @@ test("background policy preserves rich context while redacting nested secrets", 
   assert.equal(snapshot.forms[0].fields[1].value, "resonantos");
   assert.equal(snapshot.domain_data.token, "[redacted]");
 });
+
+test("background policy preserves bounded skipReason on Resonant Context snapshots", () => {
+  const withReason = sanitizeResonantContextSnapshot({
+    title: "PDF",
+    url: "https://example.com/file.pdf",
+    skipReason: "PDF viewer — text extraction is not available."
+  });
+  assert.equal(withReason.skipReason, "PDF viewer — text extraction is not available.");
+
+  const withoutReason = sanitizeResonantContextSnapshot({
+    title: "Page",
+    url: "https://example.com/"
+  });
+  assert.equal(withoutReason.skipReason, null);
+
+  const longReason = sanitizeResonantContextSnapshot({
+    title: "Media",
+    url: "https://example.com/video",
+    skipReason: `No readable text. ${"x".repeat(400)}`
+  });
+  assert.equal(longReason.skipReason.length, 240);
+});
