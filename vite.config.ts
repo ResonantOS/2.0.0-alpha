@@ -1,8 +1,22 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
+const WORKER_RUNTIME_DEPS = ["parakeet.js", "onnxruntime-web", "@huggingface/transformers"];
+
+function externalWorkerRuntimeDeps() {
+  return {
+    name: "external-worker-runtime-deps",
+    resolveId(id: string) {
+      if (WORKER_RUNTIME_DEPS.some((dep) => id === dep || id.startsWith(`${dep}/`))) {
+        return { id, external: true };
+      }
+      return undefined;
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), externalWorkerRuntimeDeps()],
   build: {
     rollupOptions: {
       output: {
@@ -29,6 +43,7 @@ export default defineConfig({
   },
   worker: {
     format: "es",
+    plugins: () => [externalWorkerRuntimeDeps()],
   },
   server: {
     host: "127.0.0.1",

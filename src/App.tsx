@@ -104,7 +104,6 @@ import {
   DEFAULT_ENGINE_WASM_PATHS,
   isDictationEngineAvailable,
   preload as preloadDictationEngine,
-  subscribeDictationEngine,
   type DictationController,
 } from "./dictation";
 import DictationWorker from "./dictation/worker.js?worker";
@@ -370,7 +369,6 @@ export function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const dictationControllerRef = useRef<DictationController | null>(null);
-  const [dictationReady, setDictationReady] = useState(false);
   const activeChatRunTokenRef = useRef<string | null>(null);
   const deferredSearch = useDeferredValue(search);
   const activeProviderForSelection = resolveActiveProviderForSelection(
@@ -558,10 +556,6 @@ export function App() {
       return;
     }
 
-    const unsubscribe = subscribeDictationEngine((state) => {
-      setDictationReady(state === "ready");
-    });
-
     const controller = createDictationController({
       input: () => composerRef.current,
       button: null,
@@ -625,7 +619,6 @@ export function App() {
     window.addEventListener("keyup", handleKeyUp, true);
 
     return () => {
-      unsubscribe();
       window.removeEventListener("keydown", handleKeyDown, true);
       window.removeEventListener("keyup", handleKeyUp, true);
       controller.dispose();
@@ -2592,12 +2585,6 @@ export function App() {
                   setSection("addons");
                   setSelectedAddonId("addon.logician");
                 }}
-                onUpdateDictation={(patch) =>
-                  commitReadyState({
-                    ...state,
-                    dictation: { ...state.dictation, ...patch },
-                  })
-                }
               />
             </Suspense>
           )}
@@ -2659,7 +2646,6 @@ export function App() {
         attachments={attachments}
         dictating={dictating}
         dictationAvailable={dictationAvailable}
-        dictationReady={dictationReady}
         activeChatModel={activeChatModel}
         availableModels={selectableChatModels.length ? selectableChatModels : activeProvider?.allowedModels ?? []}
         thinkingDepth={thinkingDepth}
@@ -2685,7 +2671,6 @@ export function App() {
         }
         chatScrollAnchorRef={chatScrollAnchorRef}
         fileInputRef={fileInputRef}
-        composerRef={composerRef}
         onCreateNewChat={(agentId, projectId) =>
           createAgentChatThreadAction({
             agentId,

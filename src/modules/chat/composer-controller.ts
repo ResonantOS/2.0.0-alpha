@@ -3,20 +3,9 @@
 
 import type { MutableRefObject } from "react";
 
-import { canUseDictation, requestMicrophoneAccess, resolveSpeechRecognitionCtor } from "./dictation";
+import type { DictationController } from "../../dictation";
 import type { ComposerAttachment } from "./types";
 import { isTextLikeFile } from "./utils";
-
-export type BrowserSpeechRecognition = {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  onresult: ((event: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null;
-  onerror: ((event: { error: string }) => void) | null;
-  onend: (() => void) | null;
-  start: () => void;
-  stop: () => void;
-};
 
 type SetState<T> = (value: T | ((current: T) => T)) => void;
 
@@ -62,68 +51,24 @@ export const removeComposerAttachment = (
 };
 
 type ToggleDictationInput = {
-  dictating: boolean;
-  speechRecognitionRef: MutableRefObject<BrowserSpeechRecognition | null>;
-  setDictating: SetState<boolean>;
-  setComposer: SetState<string>;
+  controller: DictationController | null;
   setChatNotice: SetState<string | null>;
-  errorMessageOf: (error: unknown, fallback: string) => string;
 };
 
 export const toggleComposerDictation = ({
-  dictating,
-  speechRecognitionRef,
-  setDictating,
-  setComposer,
+  controller,
   setChatNotice,
-  errorMessageOf,
 }: ToggleDictationInput): void => {
-  if (!canUseDictation()) {
+  if (!controller) {
     setChatNotice("Audio dictate is not available in this browser context.");
     return;
   }
 
-  if (dictating) {
-    speechRecognitionRef.current?.stop();
-    setDictating(false);
-    return;
-  }
-
-  void (async () => {
-    const Recognition = resolveSpeechRecognitionCtor() as (new () => BrowserSpeechRecognition) | null;
-    if (!Recognition) {
-      setChatNotice("Audio dictate is not available in this browser context.");
-      return;
-    }
-    try {
-      await requestMicrophoneAccess();
-    } catch (error) {
-      setChatNotice(errorMessageOf(error, "Audio dictate failed: microphone permission was not granted."));
-      return;
-    }
-    const recognition = new Recognition();
-    recognition.continuous = false;
-    recognition.interimResults = true;
-    recognition.lang = "en-US";
-    recognition.onresult = (event) => {
-      const transcript = Array.from(event.results)
-        .map((result) => result[0]?.transcript ?? "")
-        .join(" ")
-        .trim();
-      if (transcript) {
-        setComposer((current) => `${current}${current ? " " : ""}${transcript}`.trim());
-      }
-    };
-    recognition.onerror = (event) => {
-      setChatNotice(`Audio dictate failed: ${event.error}`);
-      setDictating(false);
-    };
-    recognition.onend = () => {
-      setDictating(false);
-    };
-    speechRecognitionRef.current = recognition;
-    setChatNotice(null);
-    setDictating(true);
-    recognition.start();
-  })();
+  void controller.toggle().catch((error: unknown) => {
+    setChatNotice(
+      error instanceof Error
+        ? `Audio dictate failed: ${error.message}`
+        : "Audio dictate failed.",
+    );
+  });
 };
