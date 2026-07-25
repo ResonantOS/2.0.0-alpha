@@ -197,7 +197,7 @@ test("pageContextForSnapshot surfaces skip reason for PDF pages", () => {
   assert.equal(context.includes("Visible text:"), false);
 });
 
-test("pageContextForSnapshot surfaced skip reason for media pages", () => {
+test("pageContextForSnapshot surfaces skip reason for media pages", () => {
   const context = pageContextForSnapshot(mediaSnapshot());
   assert.match(context, /URL: https:\/\/example\.com\/watch/);
   assert.match(context, /Skipped content: Media player — no readable transcript available\./);
