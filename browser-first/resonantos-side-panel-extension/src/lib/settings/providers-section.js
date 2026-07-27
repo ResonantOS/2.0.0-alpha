@@ -1,5 +1,6 @@
 import { metricCard, noteCard, safeErrorMessage, setStatus, settingsHeader } from "./settings-common.js";
 import {
+  allowsCustomProviderEndpoint,
   formatLabel,
   modelLabel,
   modelValue,
@@ -19,7 +20,7 @@ function labeledField({ label, input }) {
   return wrapper;
 }
 
-function providerAccountPayload(form, provider = {}) {
+export function providerAccountPayload(form, provider = {}) {
   const FormDataCtor = form.ownerDocument?.defaultView?.FormData ?? FormData;
   const data = new FormDataCtor(form);
   const templateId = String(data.get("templateId") ?? provider.templateId ?? provider.providerType ?? "minimax").trim();
@@ -38,7 +39,7 @@ function providerAccountPayload(form, provider = {}) {
   };
 }
 
-function providerAccountForm(provider = {}) {
+export function providerAccountForm(provider = {}) {
   const form = document.createElement("form");
   form.className = "settings-provider-account-form";
 
@@ -88,11 +89,21 @@ function providerAccountForm(provider = {}) {
   credential.autocomplete = "off";
   credential.placeholder = provider.id ? "Leave blank to keep current credential" : "Paste account API key";
 
+  function lockUrlForTemplate(templateId) {
+    const preset = providerTypePresets[templateId] ?? providerTypePresets.minimax;
+    const editable = allowsCustomProviderEndpoint(templateId);
+    apiBaseUrl.disabled = !editable;
+    apiBaseUrl.title = editable ? "" : "This provider requires its built-in endpoint URL.";
+    apiBaseUrl.value = preset.apiBaseUrl;
+  }
+
+  lockUrlForTemplate(template.value);
+
   template.addEventListener("change", () => {
     const preset = providerTypePresets[template.value] ?? providerTypePresets.minimax;
     name.placeholder = `${preset.label} account`;
-    apiBaseUrl.value = preset.apiBaseUrl;
     models.value = preset.models.join("\n");
+    lockUrlForTemplate(template.value);
   });
 
   const grid = document.createElement("div");
@@ -128,13 +139,17 @@ export function openProviderAccountModal({ bridgeRequest, getBridgeRequest, stat
   close.textContent = "Close";
   heading.append(title, close);
   const form = providerAccountForm();
+  const errorNode = document.createElement("p");
+  errorNode.className = "settings-provider-modal-error";
+  errorNode.setAttribute("role", "alert");
+  errorNode.hidden = true;
   const actions = document.createElement("div");
   actions.className = "settings-provider-modal-actions";
   const save = document.createElement("button");
   save.type = "submit";
   save.textContent = "Save account";
   actions.append(save);
-  form.append(actions);
+  form.append(errorNode, actions);
   // Status lives INSIDE the modal so save progress and — critically — save
   // failures are shown to the user while the dialog is still open. Writing them
   // to the settings page behind the modal (the old behavior) hid the error and
@@ -153,6 +168,8 @@ export function openProviderAccountModal({ bridgeRequest, getBridgeRequest, stat
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     save.disabled = true;
+    setStatus(errorNode, "", "");
+    errorNode.hidden = true;
     setStatus(modalStatus, "Saving provider account…");
     try {
       await bridge()("/providers/accounts", {
@@ -167,7 +184,10 @@ export function openProviderAccountModal({ bridgeRequest, getBridgeRequest, stat
     } catch (error) {
       // Failure: keep the dialog open and show the reason in the dialog so the
       // user can correct the input and retry — do not write it behind the modal.
-      setStatus(modalStatus, `Save failed: ${safeErrorMessage(error)}`, "error");
+      const message = safeErrorMessage(error);
+      setStatus(modalStatus, `Save failed: ${message}`, "error");
+      setStatus(errorNode, `Provider account save failed: ${message}`, "error");
+      errorNode.hidden = false;
     } finally {
       save.disabled = false;
     }
