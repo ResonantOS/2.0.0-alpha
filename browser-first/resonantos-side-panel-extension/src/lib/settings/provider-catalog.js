@@ -251,6 +251,16 @@ export function providerTypeLabel(provider) {
   return providerTypePresets[type]?.label ?? formatLabel(type);
 }
 
+export function allowsCustomProviderEndpoint(templateId) {
+  const preset = providerTypePresets[String(templateId ?? "minimax")];
+  return ["custom", "local", "openai-compatible"].includes(preset?.providerType);
+}
+
+export function providerRequiresCredential(templateId) {
+  const preset = providerTypePresets[String(templateId ?? "minimax")];
+  return preset?.providerType !== "local";
+}
+
 export function providerModelsText(provider) {
   return (provider.models ?? [])
     .map((model) => modelValue(model))
