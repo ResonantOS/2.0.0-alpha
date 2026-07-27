@@ -27,6 +27,11 @@ import { createControlRunState } from "./lib/control-run-state.js";
 import { createControlStepExecutor } from "./lib/control-step-executor.js";
 import { createControlTabTargets } from "./lib/control-tab-targets.js";
 import { createControlApprovalActions } from "./lib/control-approval-actions.js";
+import { createDockTabs } from "./lib/dock-tabs.js";
+import { createSidePanelChatsTree } from "./lib/side-panel-chats-tree.js";
+import { isRailVisibleChatSession } from "./lib/main-workspace-rail.js";
+import { shouldSyncChatChange } from "./lib/chat-sync.js";
+import { createMainWorkspaceToggle } from "./lib/main-workspace-toggle.js";
 import { createMessageActionController } from "./lib/message-action-controller.js";
 import { createMonitorRenderers } from "./lib/monitor-renderers.js";
 import { createSidePanelBrowserActionController } from "./lib/side-panel-browser-action-controller.js";
@@ -35,6 +40,7 @@ import { createSidePanelBrowserJobController } from "./lib/side-panel-browser-jo
 import { createSidePanelChatHydration } from "./lib/side-panel-chat-hydration.js";
 import { createSidePanelCommandRouter } from "./lib/side-panel-command-router.js";
 import { createSidePanelControlCommandController } from "./lib/side-panel-control-command-controller.js";
+import { isControllableTabUrl } from "./lib/control-target-classification.js";
 import { createSidePanelControlPreflightController } from "./lib/side-panel-control-preflight-controller.js";
 import {
   getSidePanelElements,
@@ -77,6 +83,23 @@ const {
   controlMonitor,
   controlMonitorStatus,
   controlMonitorTitle,
+  dockTabSite,
+  dockTabControl,
+  dockTabJobs,
+  dockTabChats,
+  dockTabPermissions,
+  dockDotSite,
+  dockDotControl,
+  dockDotJobs,
+  dockDotChats,
+  dockDotPermissions,
+  dockNewChat,
+  chatsPanel,
+  chatsTree,
+  dockPopout,
+  dockPopoutTitle,
+  dockPopoutClose,
+  dockPopoutBody,
   controlPreflightApproveButton,
   controlPreflightBody,
   controlPreflightCard,
@@ -91,6 +114,7 @@ const {
   fileInput,
   jobList,
   jobMonitor,
+  jobMonitorClear,
   jobMonitorTitle,
   jobMonitorToggle,
   modelSelect,
@@ -98,6 +122,7 @@ const {
   permissionManagerPanel,
   permissionManagerTitle,
   readButton,
+  workspaceToggle,
   regenerationModeSelect,
   saveIntakeButton,
   saveSelectionButton,
@@ -210,6 +235,31 @@ async function setRegenerationModePreference(mode) {
 
 const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
 const { withBrowserActionLock } = createBrowserActionLock();
+const mainWorkspaceToggle = createMainWorkspaceToggle();
+
+// Top-of-sidecar tabs: relocate the Site / Agent Control / Jobs / Permissions
+// panels into a full-size popout overlay, hidden until their link is clicked.
+// Approval and consent panels stay in the inline context-dock so they
+// auto-surface.
+dockPopoutBody.append(sitePermissionPanel, controlMonitor, jobMonitor, permissionManagerPanel);
+// chatsTreeRenderer is assigned after the chat store + renderers exist below;
+// onOpen reads it lazily so the Chats tree refreshes each time the tab opens.
+let chatsTreeRenderer = null;
+const dockTabs = createDockTabs({
+  tabs: [
+    { name: "site", button: dockTabSite, dot: dockDotSite, panel: sitePermissionPanel },
+    { name: "control", button: dockTabControl, dot: dockDotControl, panel: controlMonitor },
+    { name: "jobs", button: dockTabJobs, dot: dockDotJobs, panel: jobMonitor },
+    { name: "chats", button: dockTabChats, dot: dockDotChats, panel: chatsPanel },
+    { name: "permissions", button: dockTabPermissions, dot: dockDotPermissions, panel: permissionManagerPanel }
+  ],
+  popout: dockPopout,
+  popoutTitle: dockPopoutTitle,
+  closeButton: dockPopoutClose,
+  titles: { site: "Site", control: "Control", jobs: "Jobs", chats: "Chats", permissions: "Permissions" },
+  onOpen: (name) => { if (name === "chats") chatsTreeRenderer?.render(); }
+});
+dockTabs.bind();
 const composerController = createComposerController({
   commandForm,
   commandInput,
@@ -217,9 +267,11 @@ const composerController = createComposerController({
   navigator
 });
 
+const chatInstanceId = `sidecar-${Math.random().toString(36).slice(2, 10)}`;
 const chatSessionStore = createChatSessionStore({
   storage: chrome.storage?.local,
   storageKeys: STORAGE_KEYS,
+  instanceId: chatInstanceId,
   getModel: () => modelSelect.value,
   getThinkingDepth: () => thinkingDepthSelect.value,
   setModel: (model) => {
@@ -236,7 +288,7 @@ const browserJobStore = createBrowserJobStore({
   storageKeys: STORAGE_KEYS
 });
 
-const isReadableBrowserTab = (tab) => typeof tab?.url === "string" && /^https?:\/\//i.test(tab.url);
+const isReadableBrowserTab = (tab) => isControllableTabUrl(tab?.url);
 const sidePanelUi = createSidePanelUiController({
   activityDetail,
   activityLabel,
@@ -405,13 +457,61 @@ const {
   window
 });
 
+// The sidecar "Chats" tab: a mirror of the main-workspace rail from the shared
+// store. Opening a chat switches the shared active session and reveals its
+// transcript (both surfaces stay in sync via the same storage keys).
+chatsTreeRenderer = createSidePanelChatsTree({
+  container: chatsTree,
+  document,
+  chatSessionStore,
+  isVisibleSession: isRailVisibleChatSession,
+  orderItems: (items) => [...items].sort((left, right) => (
+    left.pinned !== right.pinned
+      ? (left.pinned ? -1 : 1)
+      : new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
+  )),
+  onOpenSession: async (sessionId) => {
+    await chatSessionStore.switchSession(sessionId);
+    renderMessages();
+    renderAttachments();
+    chatsTreeRenderer.render();
+    dockTabs.close();
+  }
+});
+
+// New-chat "+" in the dock (mirrors the main panel): create a fresh session and
+// reveal its empty transcript, ready to type.
+dockNewChat?.addEventListener("click", async () => {
+  await chatSessionStore.createSession({ workspaceId: "answer" });
+  renderMessages();
+  renderAttachments();
+  chatsTreeRenderer.render();
+  dockTabs.close();
+  commandInput?.focus();
+});
+
 const addMessage = async (role, content, { persist = true, usage = null } = {}) => {
   const message = await chatSessionStore.addMessage(role, content, { persist, usage });
   if (!message) return null;
   renderMessages();
+  chatsTreeRenderer.render();
   setContextMeter(lastSnapshot);
   return message;
 };
+
+// Live tandem sync: when the main workspace (or any other surface) changes the
+// shared chats/folders/projects/active session, re-hydrate and re-render so the
+// sidecar stays in lockstep. Our own writes carry our instanceId and are skipped.
+const CHAT_SYNC_KEYS = [STORAGE_KEYS.sessions, STORAGE_KEYS.folders, STORAGE_KEYS.projects, STORAGE_KEYS.activeSessionId];
+chrome?.storage?.onChanged?.addListener?.((changes, area) => {
+  if (area !== "local") return;
+  if (!shouldSyncChatChange(changes, { keys: CHAT_SYNC_KEYS, writerKey: STORAGE_KEYS.writer, instanceId: chatInstanceId })) return;
+  void chatSessionStore.hydrate().then(() => {
+    renderMessages();
+    renderAttachments();
+    chatsTreeRenderer.render();
+  });
+});
 
 const dictationController = createDictationController({
   addMessage,
@@ -833,6 +933,7 @@ const controlCommandController = createSidePanelControlCommandController({
   ensureControlTabForUrl,
   getBrowserJobScheduler: () => browserJobScheduler,
   getCurrentControlRun: () => currentControlRun,
+  getRawActiveTab: async () => (await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []))[0] ?? null,
   permissionForUrl,
   persistContextDockExpanded,
   renderControlMonitor: () => renderControlMonitor(),
@@ -1006,6 +1107,16 @@ controlStopButton.addEventListener("click", () => {
   void cancelBrowserJob(currentControlRun?.id ?? browserJobStore.getActiveJobId() ?? "");
 });
 
+// A bare "summarize"/"tldr"/"recap" means "summarize the page I'm looking at":
+// read it silently to populate the snapshot, then let the chat turn summarize
+// with that page context (runChatTurn already injects pageContextForSnapshot).
+// This yields an LLM summary that matches the inline floating-panel Summarize,
+// without requiring /control.
+const summarizeActivePage = async () => {
+  await readActivePage({ announce: false });
+  return runChatTurn();
+};
+
 const commandRouter = createSidePanelCommandRouter({
   allowControlPreflightOnceForTaskClass,
   bindMentionedTab,
@@ -1020,6 +1131,9 @@ const commandRouter = createSidePanelCommandRouter({
   cancelBrowserJob,
   approveControlPreflight,
   continueBrowserJob,
+  // A bare "try again"/"continue" only continues a run when one exists to
+  // continue; otherwise it stays a normal chat turn.
+  hasResumableControlRun: () => browserJobStore.getJobs().length > 0,
   denyControlPreflight,
   runBrowserCommand,
   runCapabilitiesCommand,
@@ -1041,6 +1155,7 @@ const commandRouter = createSidePanelCommandRouter({
   saveIntake,
   scrollActivePage,
   searchBrowser,
+  summarizeActivePage,
   summarizeSnapshot,
   typeIntoActivePage
 });
@@ -1112,7 +1227,11 @@ const lifecycleController = createSidePanelLifecycleController({
   getPendingControlPreflight: () => pendingControlPreflight,
   getStatusLabel: () => statusLabel,
   getTurnBusy: () => turnBusy,
+  jobMonitorClear,
   jobMonitorToggle,
+  workspaceToggle,
+  toggleMainWorkspace: () => mainWorkspaceToggle.toggle(),
+  getMainWorkspaceVisible: () => mainWorkspaceToggle.isVisible(),
   messageActions,
   modelSelect,
   persistChatState,
@@ -1165,6 +1284,7 @@ try {
 
 hydrateChatSettings().then(async () => {
   await hydrateRegenerationModePreference();
+  chatsTreeRenderer.render();
   await loadBrowserJobs();
   await tabContextController.hydrateInitialContext();
   await consumePendingSidebarPrompt();

@@ -32,6 +32,7 @@ async function loadContentScript(html) {
     storage: { onChanged: { addListener() {} } },
   };
   win.HTMLElement.prototype.scrollIntoView = function scrollIntoView() {};
+  win.__resonantosControlDwellMs = 0; // no spotlight dwell in tests
   for (const scriptPath of scripts) win.eval(await readFile(scriptPath, "utf8"));
   assert.equal(typeof listener, "function", "content.js should register a message listener");
   // jsdom runs "outside-only", so page scripts are inert — wire up observable state here.
@@ -43,11 +44,11 @@ async function loadContentScript(html) {
     document.querySelector("#searchonly").addEventListener("submit", (e) => { e.preventDefault(); window.__searchSubmitted = true; });
     document.querySelector("#safe").addEventListener("click", () => { window.__safeClicked = true; });
   `);
-  const send = (message) => {
-    let response = null;
-    listener({ channel: "resonantos.browser_first.content", ...message }, {}, (payload) => { response = payload; });
-    return response;
-  };
+  // clickElement is async (spotlight dwell before the click), so responses can
+  // arrive after a microtask — resolve a promise from sendResponse.
+  const send = (message) => new Promise((resolve) => {
+    listener({ channel: "resonantos.browser_first.content", ...message }, {}, resolve);
+  });
   return { win, send };
 }
 
@@ -75,7 +76,7 @@ const PAGE = `<!doctype html>
 
 test("#240: approved click of a public submit button is denied and does not submit", async () => {
   const { win, send } = await loadContentScript(PAGE);
-  const res = send({ type: "click_text", text: "Submit public form", userApproved: true });
+  const res = await send({ type: "click_text", text: "Submit public form", userApproved: true });
   assert.equal(res.ok, false, "must not click a public submit");
   assert.equal(res.deniedToAutomation, true);
   assert.equal(res.humanHandoff, true);
@@ -84,14 +85,14 @@ test("#240: approved click of a public submit button is denied and does not subm
 
 test("#240: approved click of a formless commit button (Publish) is denied", async () => {
   const { send } = await loadContentScript(PAGE);
-  const res = send({ type: "click_text", text: "Publish now", userApproved: true });
+  const res = await send({ type: "click_text", text: "Publish now", userApproved: true });
   assert.equal(res.ok, false);
   assert.equal(res.deniedToAutomation, true, "formless Publish must be human-only even with approval");
 });
 
 test("#240: typing+submit on a search field inside a public form is denied (requestSubmit hole)", async () => {
   const { win, send } = await loadContentScript(PAGE);
-  const res = send({ type: "type_text", field: "Search field", text: "hello", submit: true, userApproved: true });
+  const res = await send({ type: "type_text", field: "Search field", text: "hello", submit: true, userApproved: true });
   assert.equal(res.ok, false, "must not submit a form that also carries a password field");
   assert.equal(res.deniedToAutomation, true);
   assert.equal(win.__submitted, false, "the public form must NOT have been submitted via requestSubmit");
@@ -99,21 +100,37 @@ test("#240: typing+submit on a search field inside a public form is denied (requ
 
 test("#240 non-breaking: typing+submit on a search-only form still works", async () => {
   const { send } = await loadContentScript(PAGE);
-  const res = send({ type: "type_text", field: "Query", text: "cats", submit: true });
+  const res = await send({ type: "type_text", field: "Query", text: "cats", submit: true });
   assert.equal(res.ok, true, "a search-only form remains auto-submittable");
   assert.equal(res.submitted, true);
 });
 
 test("#240 non-breaking: a benign non-submit button is still clickable", async () => {
   const { win, send } = await loadContentScript(PAGE);
-  const res = send({ type: "click_text", text: "Safe Details" });
+  const res = await send({ type: "click_text", text: "Safe Details" });
   assert.equal(res.ok, true, "safe reads/clicks must not be blocked by #240");
   assert.equal(win.__safeClicked, true);
 });
 
+test("agent control spotlights the target before clicking and dwells so it is visible", async () => {
+  const { win, send } = await loadContentScript(PAGE);
+  win.__resonantosControlDwellMs = 40; // a real (short) dwell for this assertion
+  const safe = win.document.querySelector("#safe");
+
+  const pending = send({ type: "click_text", text: "Safe Details" });
+  // Synchronously after dispatch: the target is spotlighted, but the click has
+  // NOT fired yet — it waits for the dwell so the human can see the highlight.
+  assert.equal(safe.classList.contains("resonantos-control-target"), true, "target must be spotlighted before the click");
+  assert.equal(win.__safeClicked, false, "click must wait for the spotlight dwell");
+
+  const res = await pending;
+  assert.equal(res.ok, true);
+  assert.equal(win.__safeClicked, true, "click fires after the dwell");
+});
+
 test("#240: a hard-boundary control (Sign) is denied by the hard check, ahead of submit", async () => {
   const { win, send } = await loadContentScript(PAGE);
-  const res = send({ type: "click_text", text: "Sign transaction", userApproved: true });
+  const res = await send({ type: "click_text", text: "Sign transaction", userApproved: true });
   assert.equal(res.ok, false);
   assert.equal(res.deniedToAutomation, true);
   assert.match(res.error, /wallet\/payment\/login\/credential/, "hard boundary error, checked before submit-like");
@@ -123,7 +140,7 @@ test("#240: a hard-boundary control (Sign) is denied by the hard check, ahead of
 test("#240: typing+submit is denied when the form holds a public-commit button (no sensitive field)", async () => {
   const { win, send } = await loadContentScript(PAGE);
   win.eval(`document.querySelector("#commitform").addEventListener("submit", (e) => { e.preventDefault(); window.__orderSubmitted = true; });`);
-  const res = send({ type: "type_text", field: "Order search", text: "widget", submit: true, userApproved: true });
+  const res = await send({ type: "type_text", field: "Order search", text: "widget", submit: true, userApproved: true });
   assert.equal(res.ok, false, "a form with a 'Place order' button must not be auto-submitted via a search field");
   assert.equal(res.deniedToAutomation, true);
   assert.notEqual(win.__orderSubmitted, true);
@@ -131,7 +148,7 @@ test("#240: typing+submit is denied when the form holds a public-commit button (
 
 test("#240: an onclick commit control (div) is denied", async () => {
   const { win, send } = await loadContentScript(PAGE);
-  const res = send({ type: "click_text", text: "Publish article", userApproved: true });
+  const res = await send({ type: "click_text", text: "Publish article", userApproved: true });
   assert.equal(res.ok, false);
   assert.equal(res.deniedToAutomation, true, "a scripted <div onclick>Publish must be human-only");
   assert.notEqual(win.__divClicked, true);
@@ -139,7 +156,7 @@ test("#240: an onclick commit control (div) is denied", async () => {
 
 test("#240: an <a role=button onclick> commit is denied", async () => {
   const { win, send } = await loadContentScript(PAGE);
-  const res = send({ type: "click_text", text: "Reserve seat", userApproved: true });
+  const res = await send({ type: "click_text", text: "Reserve seat", userApproved: true });
   assert.equal(res.ok, false);
   assert.equal(res.deniedToAutomation, true);
   assert.notEqual(win.__linkClicked, true);
@@ -147,7 +164,7 @@ test("#240: an <a role=button onclick> commit is denied", async () => {
 
 test("#240 non-breaking: a plain navigation link with a commit-word is still clickable", async () => {
   const { send } = await loadContentScript(PAGE);
-  const res = send({ type: "click_text", text: "Order History" });
+  const res = await send({ type: "click_text", text: "Order History" });
   assert.equal(res.ok, true, "a plain <a href> nav link (no button semantics) must not be blocked by #240");
 });
 

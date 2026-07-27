@@ -103,6 +103,31 @@ export function parseReadPageIntent(message) {
     : null;
 }
 
+// A message that is essentially *just* a "summarize"/"tl;dr"/"recap" command
+// means "summarize the page I'm looking at" — no /control and no need to spell
+// out "the page". It is bounded to the whole message so a richer ask that only
+// starts with the verb ("summarize these notes: ...") still falls through to
+// normal chat. Routing this to a silent page read + a chat turn gives an LLM
+// summary that matches the inline floating-panel Summarize.
+export function parseSummarizePageIntent(message) {
+  const normalized = String(message ?? "").trim();
+  if (!normalized || /^\//.test(normalized)) return null;
+  const command = /^(?:please\s+|pls\s+|can\s+you\s+|could\s+you\s+)?(?:summari[sz]e|summary|tl;?dr|recap|sum\s+(?:it\s+)?up)(?:\s+(?:it|this|that|the\s+page|this\s+page|the\s+site|for\s+me|please))*[.!?]*$/i;
+  return command.test(normalized) ? { action: "summarize_page" } : null;
+}
+
+// A bare continuation phrase ("try again", "continue", "retry", "keep going")
+// means "carry on the Agent Control run I just resumed" — not a new task and not
+// chat. Callers gate this on there actually being a resumable run, so a stray
+// "continue" in pure chat still goes to chat. Bounded to the whole message so
+// "continue to the checkout and pay" stays a real task.
+export function parseControlContinuationIntent(message) {
+  const normalized = String(message ?? "").trim();
+  if (!normalized || /^\//.test(normalized)) return null;
+  const phrase = /^(?:please\s+|pls\s+)?(?:try\s+again|retry(?:\s+(?:it|that))?|continue|keep\s+going|carry\s+on|go\s+on|resume|one\s+more\s+time)[.!?]*$/i;
+  return phrase.test(normalized) ? { action: "control_continue" } : null;
+}
+
 export function parseStructuredPageEditIntent(message) {
   const normalized = String(message ?? "").trim();
   if (/^\//.test(normalized) || !/\b(add|edit|update|write|insert|change|replace)\b/i.test(normalized)) {
@@ -146,6 +171,29 @@ export function parseControlIntent(message) {
     return null;
   }
   return { goal: (match[2] || normalized).trim() };
+}
+
+// A compound "go to <site> and <do something>" command needs navigation first,
+// so it belongs in agent-control mode — not the single-action fast paths
+// (click/type/scroll/read) that operate on the *current* page. Without this,
+// "go to fifa.com and click on news" was swallowed by the click rule and never
+// navigated. It fires only when BOTH a real navigation target and a follow-up
+// action are present, so bare "click Submit" and bare "go to fifa.com" are
+// untouched.
+export function parseBrowserNavigationTaskIntent(message) {
+  const normalized = String(message ?? "").trim();
+  if (/^\//.test(normalized)) {
+    return null;
+  }
+  const hasNavigationTarget = browserTargetPattern.test(normalized) && browserIntentVerbs.test(normalized);
+  if (!hasNavigationTarget) {
+    return null;
+  }
+  const hasFollowupAction = /\b(click|press|tap|select|choose|find|search|look\s+for|add|put|fill|complete|submit|scroll|read|inspect|check|compare|buy|book|type|enter|watch|play|download)\b/i.test(normalized);
+  if (!hasFollowupAction) {
+    return null;
+  }
+  return { goal: normalized };
 }
 
 export function parseAutonomousBrowserActionIntent(message) {

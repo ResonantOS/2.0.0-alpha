@@ -149,6 +149,11 @@ test("main workspace prompt router separates browser control from normal chat", 
   assert.equal(planMainWorkspacePrompt("can you navigate to manoloremiddi.com?").action, "control");
   assert.equal(planMainWorkspacePrompt("find latest AI news on the internet").action, "control");
   assert.equal(planMainWorkspacePrompt("hey what's the most inportant new in the world today?").action, "control");
+  // Direct page actions run through Agent Control without a /control prefix.
+  assert.equal(planMainWorkspacePrompt("click the FIFA News search result").action, "control");
+  assert.equal(planMainWorkspacePrompt('type "resonantos" into the search bar').action, "control");
+  assert.equal(planMainWorkspacePrompt("scroll to the bottom").action, "control");
+  assert.equal(planMainWorkspacePrompt("show form fields").action, "control");
   assert.equal(planMainWorkspacePrompt("what is your technology stack?").action, "workspace-inspection");
   assert.equal(planMainWorkspacePrompt("inspect this workspace and summarize the package managers").action, "workspace-inspection");
   assert.equal(planMainWorkspacePrompt("explain the strategy without delegating").action, "chat");

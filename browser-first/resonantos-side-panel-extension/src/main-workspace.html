@@ -58,23 +58,13 @@
           </button>
         </section>
 
-        <section class="rail-section" aria-label="Projects">
-          <div class="rail-section-row">
-            <h2>Projects</h2>
-            <button id="rail-new-project" type="button">New</button>
-          </div>
-          <ol id="rail-project-list" class="rail-project-list"></ol>
-        </section>
-
-        <section class="rail-section rail-recents" aria-label="Recent chats" data-project-id="">
-          <div class="rail-section-row">
-            <h2>Chats</h2>
-            <button id="rail-clear-search" type="button" hidden>Clear</button>
-          </div>
-          <ol id="rail-chat-list" class="rail-chat-list"></ol>
-        </section>
+        <!-- Projects + Chats moved to the top-bar "Chats" tab (see #dock-popout). -->
 
         <footer class="rail-footer">
+          <button type="button" class="rail-item rail-settings" data-workspace="settings" data-settings-section="overview">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z"/><path d="M4 12h2"/><path d="M18 12h2"/><path d="M12 4v2"/><path d="M12 18v2"/></svg>
+            <span>Settings</span>
+          </button>
           <button type="button" class="rail-user-card" data-workspace="settings" data-settings-section="profile">
             <span id="rail-avatar" class="rail-avatar">R</span>
             <span>
@@ -82,27 +72,53 @@
               <small id="rail-user-subtitle">Local sovereign profile</small>
             </span>
           </button>
-          <button type="button" class="rail-item rail-settings" data-workspace="settings" data-settings-section="overview">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z"/><path d="M4 12h2"/><path d="M18 12h2"/><path d="M12 4v2"/><path d="M12 18v2"/></svg>
-            <span>Settings</span>
-          </button>
         </footer>
       </aside>
 
       <section class="answer-workspace" aria-label="Augmentor full-screen chat">
-        <header class="workspace-topbar">
-          <div class="topbar-actions">
-            <button id="open-sidebar" type="button" class="share-button augmentor-panel-button" title="Show Augmentor sidebar" aria-label="Show Augmentor sidebar">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="M15 5v14"/><path d="M8 9h3"/><path d="M8 13h3"/></svg>
-            </button>
-            <button id="new-chat" type="button" class="share-button" title="New chat" aria-label="New chat">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
-            </button>
-          </div>
-        </header>
+        <nav id="dock-tabs" class="dock-tabs" aria-label="Browser panels">
+          <button id="dock-tab-control" class="dock-tab" type="button" aria-expanded="false" aria-controls="dock-popout" aria-label="Agent Control">Control<span id="dock-dot-control" class="dock-tab-dot" hidden aria-hidden="true"></span></button>
+          <button id="dock-tab-jobs" class="dock-tab" type="button" aria-expanded="false" aria-controls="dock-popout">Jobs<span id="dock-dot-jobs" class="dock-tab-dot" hidden aria-hidden="true"></span></button>
+          <button id="dock-tab-permissions" class="dock-tab" type="button" aria-expanded="false" aria-controls="dock-popout">Permissions<span id="dock-dot-permissions" class="dock-tab-dot" hidden aria-hidden="true"></span></button>
+          <button id="dock-tab-chats" class="dock-tab" type="button" aria-expanded="false" aria-controls="dock-popout">Chats<span id="dock-dot-chats" class="dock-tab-dot" hidden aria-hidden="true"></span></button>
+          <button id="new-chat" type="button" class="dock-new-chat" title="New chat" aria-label="New chat">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+          </button>
+        </nav>
 
-        <section id="main-browser-jobs" class="main-browser-jobs" aria-label="Agent Control browser jobs" hidden></section>
+        <div class="answer-body">
         <section id="transcript" class="answer-thread" aria-live="polite"></section>
+        <section id="dock-popout" class="dock-popout" aria-label="Browser panel" data-open="none" hidden>
+          <div class="dock-popout-header">
+            <strong id="dock-popout-title">Panel</strong>
+            <button id="dock-popout-close" class="dock-popout-close" type="button" aria-label="Close panel">&#10005;</button>
+          </div>
+          <div id="dock-popout-body" class="dock-popout-body">
+            <section id="dock-control-panel" class="dock-control-panel" aria-label="Agent Control" hidden>
+              <div class="control-monitor-header">
+                <div><span class="eyebrow">Agent Control</span><strong id="dock-control-title">No active browser task</strong></div>
+                <span id="dock-control-status" class="control-status">idle</span>
+              </div>
+              <div id="dock-control-step-list" class="control-step-list"></div>
+            </section>
+            <section id="main-browser-jobs" class="main-browser-jobs" aria-label="Agent Control browser jobs" hidden></section>
+            <section id="chats-panel" class="chats-panel" aria-label="Chats">
+              <section class="rail-section" aria-label="Projects">
+                <div class="rail-section-row"><h2>Projects</h2><button id="rail-new-project" type="button">New</button></div>
+                <ol id="rail-project-list" class="rail-project-list"></ol>
+              </section>
+              <section class="rail-section rail-recents" aria-label="Recent chats" data-project-id="">
+                <div class="rail-section-row"><h2>Chats</h2><button id="rail-clear-search" type="button" hidden>Clear</button></div>
+                <ol id="rail-chat-list" class="rail-chat-list"></ol>
+              </section>
+            </section>
+            <section id="permission-manager-panel" class="permission-manager-panel" aria-label="Permission and consent manager" hidden>
+              <div class="task-consent-header"><div><span class="eyebrow">Permissions</span><strong id="permission-manager-title">No stored browser grants</strong></div></div>
+              <ol id="permission-manager-list" class="permission-manager-list"></ol>
+            </section>
+          </div>
+        </section>
+        </div>
 
         <form id="command-form" class="main-composer" aria-label="Ask Augmentor">
           <textarea id="command-input" rows="2" placeholder="Ask Augmentor anything"></textarea>
@@ -166,6 +182,7 @@
           <div id="composer-notice" class="composer-notice" role="status" aria-live="polite" hidden></div>
         </form>
       </section>
+      <div id="rail-resize" class="rail-resize" role="separator" aria-orientation="vertical" aria-label="Resize sidebar" tabindex="0"></div>
     </main>
     <script src="./bridge-config.generated.js"></script>
     <script type="module" src="./main-workspace.js"></script>

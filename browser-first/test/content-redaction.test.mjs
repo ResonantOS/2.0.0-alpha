@@ -107,6 +107,7 @@ async function loadContentScript(html, { asChildFrame = false, loadSdk = false, 
     },
   };
   targetWindow.HTMLElement.prototype.scrollIntoView = function scrollIntoView() {};
+  targetWindow.__resonantosControlDwellMs = 0; // no spotlight dwell in tests
   if (loadSdk) {
     targetWindow.eval(await readFile(resonantContextScriptPath, "utf8"));
     targetWindow.eval(await readFile(contextPluginsScriptPath, "utf8"));
@@ -344,15 +345,15 @@ test("page reads and governed actions are available inside child frames", async 
   frameWindow.document.querySelector("#target").addEventListener("click", () => {
     clicked = true;
   });
-  let clickResponse = null;
-  const clickHandled = listener({
-    channel: "resonantos.browser_first.content",
-    type: "click_text",
-    text: "Tuesday 10:00",
-  }, {}, (payload) => {
-    clickResponse = payload;
+  // clickElement now dwells on the spotlight before acting, so the response is
+  // delivered asynchronously — resolve it before asserting.
+  const clickResponse = await new Promise((resolve) => {
+    listener({
+      channel: "resonantos.browser_first.content",
+      type: "click_text",
+      text: "Tuesday 10:00",
+    }, {}, resolve);
   });
-  assert.equal(clickHandled, true);
   assert.equal(clickResponse?.ok, true);
   assert.equal(clicked, true);
 });
@@ -375,13 +376,12 @@ test("content click actions reject repeated text unless a control ref is supplie
     snapshot = payload.snapshot;
   });
 
-  let response = null;
-  listener({
-    channel: "resonantos.browser_first.content",
-    type: "click_text",
-    text: "Add",
-  }, {}, (payload) => {
-    response = payload;
+  const response = await new Promise((resolve) => {
+    listener({
+      channel: "resonantos.browser_first.content",
+      type: "click_text",
+      text: "Add",
+    }, {}, resolve);
   });
 
   assert.equal(response?.ok, false);

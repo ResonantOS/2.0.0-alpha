@@ -23,13 +23,18 @@ export function createChatSessionStore({
   isAllowedModel,
   isAllowedThinkingDepth,
   now = defaultNow,
-  createId = defaultId
+  createId = defaultId,
+  // A per-instance token stamped on every write so each surface can tell its own
+  // writes from the other surface's when reacting to storage change events.
+  instanceId = `chat-${defaultId()}`
 }) {
   let messages = [];
   let forks = [];
   let attachments = [];
+  let writeSeq = 0;
   let sessions = [];
   let projects = [];
+  let folders = [];
   let activeSessionId = "";
 
   const validMessage = (message) =>
@@ -109,6 +114,7 @@ export function createChatSessionStore({
       titleEdited,
       workspaceId: typeof session?.workspaceId === "string" ? session.workspaceId : "answer",
       projectId: typeof session?.projectId === "string" ? session.projectId : "",
+      folderId: typeof session?.folderId === "string" ? session.folderId : "",
       pinned: Boolean(session?.pinned),
       unread: Boolean(session?.unread),
       archivedAt: typeof session?.archivedAt === "string" ? session.archivedAt : "",
@@ -132,6 +138,16 @@ export function createChatSessionStore({
     archivedAt: typeof project?.archivedAt === "string" ? project.archivedAt : "",
     createdAt: project?.createdAt || now(),
     updatedAt: project?.updatedAt || project?.createdAt || now()
+  });
+
+  const normalizeFolder = (folder) => ({
+    id: String(folder?.id || `folder-${createId()}`),
+    projectId: String(folder?.projectId ?? "").trim(),
+    name: String(folder?.name ?? "New folder").replace(/\s+/g, " ").trim().slice(0, 80) || "New folder",
+    expanded: folder?.expanded !== false,
+    archivedAt: typeof folder?.archivedAt === "string" ? folder.archivedAt : "",
+    createdAt: folder?.createdAt || now(),
+    updatedAt: folder?.updatedAt || folder?.createdAt || now()
   });
 
   const ensureSession = () => {
@@ -185,10 +201,14 @@ export function createChatSessionStore({
       [storageKeys.forks]: forks,
       [storageKeys.sessions]: sessions,
       [storageKeys.projects]: projects,
+      [storageKeys.folders]: folders,
       [storageKeys.activeSessionId]: activeSessionId,
       [storageKeys.model]: getModel(),
       [storageKeys.thinkingDepth]: getThinkingDepth(),
-      [storageKeys.attachments]: attachments
+      [storageKeys.attachments]: attachments,
+      // Unique per write (seq changes each time) so the token always appears in
+      // storage-change events; the instanceId prefix identifies the writer.
+      [storageKeys.writer]: `${instanceId}:${++writeSeq}`
     };
     await storage?.set?.(Object.fromEntries(
       Object.entries(payload).filter(([key]) => key !== "undefined")
@@ -201,6 +221,7 @@ export function createChatSessionStore({
       storageKeys.forks,
       storageKeys.sessions,
       storageKeys.projects,
+      storageKeys.folders,
       storageKeys.activeSessionId,
       storageKeys.model,
       storageKeys.thinkingDepth,
@@ -235,6 +256,15 @@ export function createChatSessionStore({
     sessions = sessions.map((session) => session.projectId && !activeProjectIds.has(session.projectId)
       ? { ...session, projectId: "", updatedAt: now() }
       : session);
+    // Folders belong to a project; drop orphaned folders and unfile any session
+    // whose folder is gone, so the tree can never point at a missing parent.
+    folders = Array.isArray(settings?.[storageKeys.folders])
+      ? settings[storageKeys.folders].map(normalizeFolder).filter((folder) => !folder.projectId || activeProjectIds.has(folder.projectId))
+      : [];
+    const activeFolderIds = new Set(folders.filter((folder) => !folder.archivedAt).map((folder) => folder.id));
+    sessions = sessions.map((session) => session.folderId && !activeFolderIds.has(session.folderId)
+      ? { ...session, folderId: "", updatedAt: now() }
+      : session);
     attachments = Array.isArray(settings?.[storageKeys.attachments]) ? settings[storageKeys.attachments] : [];
     return snapshot();
   }
@@ -244,6 +274,7 @@ export function createChatSessionStore({
       messages,
       sessions,
       projects,
+      folders,
       activeSessionId,
       forks,
       attachments
@@ -268,6 +299,10 @@ export function createChatSessionStore({
 
   function getProjects() {
     return projects;
+  }
+
+  function getFolders() {
+    return folders;
   }
 
   function getActiveSessionId() {
@@ -438,6 +473,8 @@ export function createChatSessionStore({
       updated = {
         ...session,
         projectId: normalizedProjectId,
+        // A folder lives in one project; moving projects drops the old folder.
+        folderId: "",
         updatedAt: now()
       };
       return updated;
@@ -530,11 +567,94 @@ export function createChatSessionStore({
       return false;
     }
     projects = projects.filter((project) => project.id !== id);
-    sessions = sessions.map((session) => session.projectId === id
-      ? { ...session, projectId: "", updatedAt: now() }
+    const removedFolderIds = new Set(
+      folders.filter((folder) => folder.projectId === id).map((folder) => folder.id)
+    );
+    folders = folders.filter((folder) => folder.projectId !== id);
+    sessions = sessions.map((session) => {
+      if (session.projectId !== id && !removedFolderIds.has(session.folderId)) return session;
+      return {
+        ...session,
+        projectId: session.projectId === id ? "" : session.projectId,
+        folderId: removedFolderIds.has(session.folderId) ? "" : session.folderId,
+        updatedAt: now()
+      };
+    });
+    await persist();
+    return true;
+  }
+
+  async function createFolder(projectId, name) {
+    const folder = normalizeFolder({
+      projectId: String(projectId ?? "").trim(),
+      name,
+      createdAt: now(),
+      updatedAt: now()
+    });
+    folders = [folder, ...folders];
+    await persist();
+    return folder;
+  }
+
+  async function renameFolder(id, name) {
+    const nextName = String(name ?? "").replace(/\s+/g, " ").trim().slice(0, 80);
+    if (!nextName) return null;
+    let updated = null;
+    folders = folders.map((folder) => {
+      if (folder.id !== id) return folder;
+      updated = { ...folder, name: nextName, updatedAt: now() };
+      return updated;
+    });
+    if (!updated) return null;
+    await persist();
+    return updated;
+  }
+
+  async function setFolderExpanded(id, expanded) {
+    let updated = null;
+    folders = folders.map((folder) => {
+      if (folder.id !== id) return folder;
+      updated = { ...folder, expanded: Boolean(expanded), updatedAt: now() };
+      return updated;
+    });
+    if (!updated) return null;
+    await persist();
+    return updated;
+  }
+
+  async function deleteFolder(id) {
+    if (!folders.some((folder) => folder.id === id)) {
+      return false;
+    }
+    folders = folders.filter((folder) => folder.id !== id);
+    sessions = sessions.map((session) => session.folderId === id
+      ? { ...session, folderId: "", updatedAt: now() }
       : session);
     await persist();
     return true;
+  }
+
+  async function setSessionFolder(id, folderId = "") {
+    const normalizedFolderId = String(folderId ?? "").trim();
+    const folder = normalizedFolderId
+      ? folders.find((item) => item.id === normalizedFolderId && !item.archivedAt)
+      : null;
+    if (normalizedFolderId && !folder) return null;
+    let updated = null;
+    sessions = sessions.map((session) => {
+      if (session.id !== id) return session;
+      updated = {
+        ...session,
+        folderId: normalizedFolderId,
+        // A folder belongs to a project; filing a chat aligns its project too.
+        projectId: folder ? folder.projectId : session.projectId,
+        updatedAt: now()
+      };
+      return updated;
+    });
+    if (!updated) return null;
+    await persist();
+    return updated;
   }
 
   async function deleteSession(id) {
@@ -732,8 +852,10 @@ export function createChatSessionStore({
     clearAttachments,
     createSession,
     createProject,
+    createFolder,
     deleteMessage,
     deleteProject,
+    deleteFolder,
     deleteSession,
     ensureFreshSession,
     findMessage,
@@ -745,18 +867,22 @@ export function createChatSessionStore({
     getForks,
     getMessages,
     getProjects,
+    getFolders,
     getSessions,
     hydrate,
     persist,
     prepareRegenerationFromMessage,
     renameProject,
+    renameFolder,
     renameSession,
     removeAttachment,
     setActiveSessionWorkspace,
+    setFolderExpanded,
     setProjectArchived,
     setProjectExpanded,
     setProjectPinned,
     setSessionArchived,
+    setSessionFolder,
     setSessionPinned,
     setSessionProject,
     setSessionUnread,

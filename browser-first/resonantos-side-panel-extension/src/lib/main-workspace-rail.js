@@ -30,3 +30,34 @@ export function railSearchMatchesProject(project, projectSessions = [], query = 
   const projectHaystack = [project?.name, project?.id].join(" ").toLowerCase();
   return projectHaystack.includes(normalized) || projectSessions.some((session) => railSearchMatchesSession(session, normalized));
 }
+
+// Split a project's chats into its folders and the loose (unfiled) chats. A chat
+// whose folderId points at a folder not in this project falls back to loose, so
+// the tree never renders a chat under a folder it does not belong to.
+export function groupProjectSessionsByFolder(projectSessions = [], projectFolders = []) {
+  const byFolder = new Map(projectFolders.map((folder) => [folder.id, []]));
+  const looseSessions = [];
+  for (const session of projectSessions) {
+    const bucket = session?.folderId ? byFolder.get(session.folderId) : null;
+    if (bucket) bucket.push(session);
+    else looseSessions.push(session);
+  }
+  const folderGroups = projectFolders.map((folder) => ({ folder, sessions: byFolder.get(folder.id) ?? [] }));
+  return { folderGroups, looseSessions };
+}
+
+// Build the full project → folder → chat tree shared by the main rail and the
+// sidecar Chats tab, so both surfaces render the same structure from the same
+// store. Sessions should already be filtered to the visible set; `orderItems`
+// applies the caller's sort (pinned-first, recency) to projects and folders.
+export function buildChatTree(projects = [], folders = [], sessions = [], { orderItems = (items) => [...items] } = {}) {
+  const projectIds = new Set(projects.map((project) => project.id));
+  const projectNodes = orderItems(projects).map((project) => {
+    const projectSessions = sessions.filter((session) => session.projectId === project.id);
+    const projectFolders = orderItems(folders.filter((folder) => folder.projectId === project.id));
+    const { folderGroups, looseSessions } = groupProjectSessionsByFolder(projectSessions, projectFolders);
+    return { project, folderGroups, looseSessions };
+  });
+  const unfiledSessions = sessions.filter((session) => !session.projectId || !projectIds.has(session.projectId));
+  return { projects: projectNodes, unfiledSessions };
+}

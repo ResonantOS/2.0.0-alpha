@@ -282,6 +282,7 @@ export function hermesPythonRuntimeDiagnostics(command, options = {}) {
       return unavailablePythonRuntime(rejections);
     }
 
+    const pathApi = platform === "win32" ? path.win32 : path.posix;
     const canonicalInstallationRoot = realpath(adapter.agentRoot);
     const canonicalPythonPath = realpath(adapter.pythonPath);
     const canonicalRunAgentPath = realpath(adapter.runAgentPath);
@@ -289,7 +290,21 @@ export function hermesPythonRuntimeDiagnostics(command, options = {}) {
       rejections.push({ path: adapter.agentRoot, reason: "canonical installation root escapes fixed allowlisted roots" });
       return unavailablePythonRuntime(rejections);
     }
-    if (!pathInside(canonicalPythonPath, canonicalInstallationRoot, platform)) {
+    // A virtualenv legitimately symlinks its python launcher to a base
+    // interpreter in a Python store (uv/pyenv/system), so realpath(python) can
+    // resolve OUTSIDE the Hermes root. Accept the interpreter when its resolved
+    // path stays inside the root (copied venv) OR it is a genuine venv rooted
+    // INSIDE the trusted installation root — proven by a pyvenv.cfg whose
+    // canonical path is also inside the root. The trust anchor still holds:
+    // creating such a venv needs write access to the Hermes install itself,
+    // which already implies control of run_agent.py. A bare malicious symlink
+    // (no pyvenv.cfg inside the root) is still rejected.
+    const venvConfigPath = pathApi.join(pathApi.dirname(pathApi.dirname(adapter.pythonPath)), "pyvenv.cfg");
+    let rootedVenv = false;
+    if (exists(venvConfigPath) && stat(venvConfigPath).isFile()) {
+      rootedVenv = pathInside(realpath(venvConfigPath), canonicalInstallationRoot, platform);
+    }
+    if (!pathInside(canonicalPythonPath, canonicalInstallationRoot, platform) && !rootedVenv) {
       rejections.push({ path: adapter.pythonPath, reason: "canonical path escapes fixed allowlisted Hermes installation root" });
       return unavailablePythonRuntime(rejections);
     }
@@ -298,14 +313,18 @@ export function hermesPythonRuntimeDiagnostics(command, options = {}) {
       return unavailablePythonRuntime(rejections);
     }
 
+    // Spawn the venv LAUNCHER (inside the trusted root), not the resolved base
+    // interpreter, so the venv's site-packages activate. For a copied venv the
+    // two are identical; for a symlinked venv only the launcher activates it.
+    const launchPythonPath = adapter.pythonPath;
     return {
       installed: true,
       agentRoot: canonicalInstallationRoot,
-      pythonPath: canonicalPythonPath,
+      pythonPath: launchPythonPath,
       runAgentPath: canonicalRunAgentPath,
       resolution: {
         base: selectedCandidate.base,
-        path: canonicalPythonPath,
+        path: launchPythonPath,
         canonical_path: canonicalPythonPath,
         validated_by: "hermesPythonRuntimeDiagnostics",
         source: selectedCandidate.source,

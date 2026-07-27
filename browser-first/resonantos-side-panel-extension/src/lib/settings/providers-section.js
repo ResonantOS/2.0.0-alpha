@@ -1,6 +1,5 @@
 import { metricCard, noteCard, safeErrorMessage, setStatus, settingsHeader } from "./settings-common.js";
 import {
-  allowsCustomProviderEndpoint,
   formatLabel,
   modelLabel,
   modelValue,
@@ -20,7 +19,7 @@ function labeledField({ label, input }) {
   return wrapper;
 }
 
-export function providerAccountPayload(form, provider = {}) {
+function providerAccountPayload(form, provider = {}) {
   const FormDataCtor = form.ownerDocument?.defaultView?.FormData ?? FormData;
   const data = new FormDataCtor(form);
   const templateId = String(data.get("templateId") ?? provider.templateId ?? provider.providerType ?? "minimax").trim();
@@ -39,7 +38,7 @@ export function providerAccountPayload(form, provider = {}) {
   };
 }
 
-export function providerAccountForm(provider = {}) {
+function providerAccountForm(provider = {}) {
   const form = document.createElement("form");
   form.className = "settings-provider-account-form";
 
@@ -72,15 +71,6 @@ export function providerAccountForm(provider = {}) {
   apiBaseUrl.placeholder = "https://api.provider.com/v1";
   apiBaseUrl.value = provider.apiBaseUrl ?? providerTypePresets[template.value]?.apiBaseUrl ?? "";
 
-  function applyTemplateLock() {
-    const editable = allowsCustomProviderEndpoint(template.value);
-    apiBaseUrl.disabled = !editable;
-    apiBaseUrl.title = editable
-      ? ""
-      : "This provider requires its built-in endpoint URL.";
-  }
-  applyTemplateLock();
-
   const role = document.createElement("input");
   role.name = "role";
   role.placeholder = "Fast Augmentor account, routine account, archive account...";
@@ -103,7 +93,6 @@ export function providerAccountForm(provider = {}) {
     name.placeholder = `${preset.label} account`;
     apiBaseUrl.value = preset.apiBaseUrl;
     models.value = preset.models.join("\n");
-    applyTemplateLock();
   });
 
   const grid = document.createElement("div");
@@ -139,11 +128,6 @@ export function openProviderAccountModal({ bridgeRequest, getBridgeRequest, stat
   close.textContent = "Close";
   heading.append(title, close);
   const form = providerAccountForm();
-  const errorNode = document.createElement("p");
-  errorNode.className = "settings-provider-modal-error";
-  errorNode.setAttribute("aria-live", "assertive");
-  errorNode.hidden = true;
-  form.append(errorNode);
   const actions = document.createElement("div");
   actions.className = "settings-provider-modal-actions";
   const save = document.createElement("button");
@@ -151,31 +135,39 @@ export function openProviderAccountModal({ bridgeRequest, getBridgeRequest, stat
   save.textContent = "Save account";
   actions.append(save);
   form.append(actions);
-  panel.append(heading, form);
+  // Status lives INSIDE the modal so save progress and — critically — save
+  // failures are shown to the user while the dialog is still open. Writing them
+  // to the settings page behind the modal (the old behavior) hid the error and
+  // left the dialog stuck with no signal (#271).
+  const modalStatus = document.createElement("p");
+  modalStatus.className = "settings-provider-modal-status";
+  modalStatus.setAttribute("role", "status");
+  modalStatus.setAttribute("aria-live", "polite");
+  panel.append(heading, form, modalStatus);
   overlay.append(panel);
   document.body.append(overlay);
   close.addEventListener("click", () => overlay.remove());
   overlay.addEventListener("click", (event) => {
     if (event.target === overlay) overlay.remove();
   });
-
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    errorNode.textContent = "";
-    errorNode.hidden = true;
     save.disabled = true;
+    setStatus(modalStatus, "Saving provider account…");
     try {
       await bridge()("/providers/accounts", {
         method: "POST",
         capability: "provider-credential-write",
         body: providerAccountPayload(form),
       });
+      // Success: close the dialog, then surface confirmation on the settings page.
       overlay.remove();
       setStatus(statusNode, "Provider account saved.", "success");
       await reload();
     } catch (error) {
-      errorNode.textContent = `Provider account save failed: ${safeErrorMessage(error)}`;
-      errorNode.hidden = false;
+      // Failure: keep the dialog open and show the reason in the dialog so the
+      // user can correct the input and retry — do not write it behind the modal.
+      setStatus(modalStatus, `Save failed: ${safeErrorMessage(error)}`, "error");
     } finally {
       save.disabled = false;
     }

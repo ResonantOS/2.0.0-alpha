@@ -45,7 +45,7 @@ function createHarness(overrides = {}) {
       <button id="control-stop"></button>
       <div id="control-current"><span></span><div><small></small><strong></strong></div></div>
       <div id="control-summary-card"></div>
-      <ol id="control-steps"></ol>
+      <div id="control-steps"></div>
       <div id="control-artifacts"></div>
     </section>
     <section id="approval" hidden>
@@ -223,10 +223,11 @@ test("monitor renderers render control steps, artifacts, and approval boundaries
       status: "approval",
       pageLock: { tabId: 44, siteKey: "example.com", url: "https://example.com/product", reason: "Agent Control goal: find product" },
       steps: [
+        { type: "read", state: "completed", note: "saw page" },
         {
-          type: "read",
-          state: "completed",
-          note: "saw page",
+          type: "click",
+          label: "Click button",
+          state: "blocked",
           details: {
             observation: { title: "Product page", url: "https://example.com/product" },
             decision: "Read first.",
@@ -248,8 +249,7 @@ test("monitor renderers render control steps, artifacts, and approval boundaries
             nextHumanAction: "No human action needed."
           },
           timing: { durationMs: 1250 }
-        },
-        { type: "click", label: "Click button", state: "blocked" }
+        }
       ],
       artifacts: [{ type: "report", path: "/tmp/report.md" }]
     },
@@ -278,16 +278,20 @@ test("monitor renderers render control steps, artifacts, and approval boundaries
   assert.equal(harness.dom.window.document.querySelector("#control-summary-card").hidden, false);
   assert.equal(harness.dom.window.document.querySelector("#control-summary-card").dataset.state, "approval");
   assert.match(harness.dom.window.document.querySelector("#control-summary-card").textContent, /Human approval needed/);
-  assert.deepEqual([...harness.dom.window.document.querySelectorAll("#control-steps li")].map((item) => ({
+  // The list renders through the shared Claude-app step-list component: a glyph
+  // per step (decorative), the label, and a visually-hidden state text. The
+  // progress pill reads "N of M".
+  assert.deepEqual([...harness.dom.window.document.querySelectorAll("#control-steps .step-list-item")].map((item) => ({
     index: item.dataset.index,
     state: item.dataset.state,
-    text: item.querySelector(".control-step-main").textContent,
-    note: item.querySelector(".control-step-note")?.textContent ?? "",
-    badge: item.querySelector(".control-step-state")?.textContent ?? ""
+    text: item.querySelector(".step-list-label").textContent,
+    srState: item.querySelector(".step-list-sr").textContent.trim()
   })), [
-    { index: "1", state: "completed", text: "read", note: "saw page", badge: "done" },
-    { index: "2", state: "blocked", text: "Click button", note: "", badge: "needs review" }
+    { index: "1", state: "completed", text: "read", srState: "— done" },
+    { index: "2", state: "blocked", text: "Click button", srState: "— needs review" }
   ]);
+  assert.equal(harness.dom.window.document.querySelectorAll("#control-steps .step-list-glyph").length, 2);
+  assert.equal(harness.dom.window.document.querySelector("#control-steps .step-list-pill-text").textContent, "1 of 2");
   assert.match(harness.dom.window.document.querySelector(".control-step-detail").textContent, /Observation/);
   assert.match(harness.dom.window.document.querySelector(".control-step-detail").textContent, /1\.3 sec/);
   assert.match(harness.dom.window.document.querySelector(".control-step-detail").textContent, /Confidence/);
@@ -317,6 +321,32 @@ test("monitor renderers render control steps, artifacts, and approval boundaries
   assert.equal(harness.dom.window.document.querySelector("#approval-approve").disabled, false);
   assert.equal(harness.dom.window.document.querySelector("#approval-trust").disabled, true);
   assert.match(harness.dom.window.document.querySelector("#approval-reason").textContent, /Public-submit boundary/);
+});
+
+test("a blocked step opens its detail by default so the human sees action/safety before approving", () => {
+  const harness = createHarness({
+    currentControlRun: {
+      goal: "buy item",
+      status: "approval",
+      steps: [
+        { type: "read", state: "completed", details: { action: "Read page", result: "saw page" } },
+        {
+          type: "click",
+          label: "Confirm purchase",
+          state: "blocked",
+          details: { action: "Click Buy", safetyClass: "public-submit", nextHumanAction: "Approve to proceed" }
+        }
+      ]
+    }
+  });
+
+  harness.renderers.renderControlMonitor();
+
+  const items = [...harness.dom.window.document.querySelectorAll("#control-steps .step-list-item")];
+  const blockedDetail = items[1].querySelector(".control-step-detail");
+  assert.equal(blockedDetail.open, true, "the blocked step reveals its action/safety/next without a click");
+  assert.match(blockedDetail.textContent, /Approve to proceed/);
+  assert.equal(items[0].querySelector(".control-step-detail"), null, "a settled step renders no detail toggle — the done list stays pure clean lines");
 });
 
 test("monitor renderers render collapsed and expanded browser jobs", () => {
@@ -409,6 +439,56 @@ test("monitor renderers render collapsed and expanded browser jobs", () => {
     .find((button) => button.textContent === "Cancel")
     .click();
   assert.deepEqual(harness.state.cancelled, ["job-a"]);
+});
+
+test("monitor renderers collapse settled jobs to a compact card and surface live work first", () => {
+  const browserJobs = [
+    { id: "job-done", goal: "Done task", status: "completed", updatedAt: "2026-05-26T09:00:00.000Z", planner: "loop" },
+    { id: "job-live", goal: "Live task", status: "running", updatedAt: "2026-05-26T10:00:00.000Z", planner: "loop" }
+  ];
+  const harness = createHarness({ browserJobs, jobMonitorCollapsed: false, activeJobId: "job-live" });
+
+  harness.renderers.renderJobMonitor();
+
+  const items = [...harness.dom.window.document.querySelectorAll("#jobs-list > li")];
+  // Active-first ordering: the running job renders before the settled one regardless of input order.
+  assert.deepEqual(items.map((item) => item.dataset.status), ["running", "completed"]);
+
+  const compact = harness.dom.window.document.querySelector('#jobs-list > li[data-compact="true"]');
+  assert.equal(compact.dataset.status, "completed");
+  assert.match(compact.textContent, /Done task/);
+  assert.match(compact.textContent, /completed/);
+  // Compact keeps only the two actions that apply to a finished job.
+  assert.deepEqual(
+    [...compact.querySelectorAll(".job-actions button")].map((button) => button.textContent),
+    ["Continue", "Report"]
+  );
+  compact.querySelector(".job-actions button").click();
+  assert.deepEqual(harness.state.continued, ["job-done"]);
+
+  // The live job stays a full card.
+  const liveItem = items.find((item) => item.dataset.status === "running");
+  assert.notEqual(liveItem.dataset.compact, "true");
+});
+
+test("monitor renderers keep a focused settled job in full detail", () => {
+  const browserJobs = [
+    {
+      id: "job-done",
+      goal: "Focused done",
+      status: "completed",
+      updatedAt: "2026-05-26T10:00:00.000Z",
+      planner: "loop",
+      steps: [{ state: "completed", label: "Read page", type: "read" }]
+    }
+  ];
+  const harness = createHarness({ browserJobs, jobMonitorCollapsed: false, activeJobId: "job-done" });
+
+  harness.renderers.renderJobMonitor();
+
+  const item = harness.dom.window.document.querySelector("#jobs-list > li");
+  assert.notEqual(item.dataset.compact, "true");
+  assert.match(item.textContent, /Focused browser job/);
 });
 
 test("monitor renderers expose scheduler state for queued browser jobs", () => {

@@ -20,7 +20,7 @@ async function readPreferences(profileDir) {
   return JSON.parse(await readFile(path.join(profileDir, "Default", "Preferences"), "utf8"));
 }
 
-test("browser profile service seeds ResonantOS startup and new-tab ownership", async () => {
+test("browser profile service seeds ResonantOS startup pages and leaves the new-tab page untouched", async () => {
   const profile = await tempRoot();
   try {
     await seedResonantStartupExperience(profile, "resonantos-extension", "chrome-extension://resonantos-extension/src/main-workspace.html");
@@ -30,7 +30,9 @@ test("browser profile service seeds ResonantOS startup and new-tab ownership", a
     assert.equal(preferences.profile.exited_cleanly, true);
     assert.equal(preferences.session.restore_on_startup, 4);
     assert.deepEqual(preferences.session.startup_urls, ["chrome-extension://resonantos-extension/src/main-workspace.html"]);
-    assert.equal(preferences.extensions.chrome_url_overrides.newtab[0].extension_id, "resonantos-extension");
+    // Regression guard: the seeder must never write a new-tab override — Chrome's
+    // new-tab page stays whatever the human has configured.
+    assert.equal(preferences.extensions?.chrome_url_overrides?.newtab, undefined);
   } finally {
     await rm(profile, { recursive: true, force: true });
   }

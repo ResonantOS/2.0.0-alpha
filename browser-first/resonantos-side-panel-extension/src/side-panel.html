@@ -9,7 +9,30 @@
   <body>
     <main class="chat-shell" aria-label="Augmentor chat">
       <section class="chat-workspace" aria-label="Active Augmentor workspace">
+      <nav id="dock-tabs" class="dock-tabs" aria-label="Browser panels">
+        <button id="dock-tab-site" class="dock-tab" type="button" aria-expanded="false" aria-controls="dock-popout">Site<span id="dock-dot-site" class="dock-tab-dot" hidden aria-hidden="true"></span></button>
+        <button id="dock-tab-control" class="dock-tab" type="button" aria-expanded="false" aria-controls="dock-popout" aria-label="Agent Control">Control<span id="dock-dot-control" class="dock-tab-dot" hidden aria-hidden="true"></span></button>
+        <button id="dock-tab-jobs" class="dock-tab" type="button" aria-expanded="false" aria-controls="dock-popout">Jobs<span id="dock-dot-jobs" class="dock-tab-dot" hidden aria-hidden="true"></span></button>
+        <button id="dock-tab-permissions" class="dock-tab" type="button" aria-expanded="false" aria-controls="dock-popout">Permissions<span id="dock-dot-permissions" class="dock-tab-dot" hidden aria-hidden="true"></span></button>
+        <button id="dock-tab-chats" class="dock-tab" type="button" aria-expanded="false" aria-controls="dock-popout">Chats<span id="dock-dot-chats" class="dock-tab-dot" hidden aria-hidden="true"></span></button>
+        <button id="dock-new-chat" type="button" class="dock-new-chat" title="New chat" aria-label="New chat">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+        </button>
+      </nav>
+      <div class="chat-body">
       <section id="transcript" class="transcript" aria-live="polite"></section>
+      <section id="dock-popout" class="dock-popout" aria-label="Browser panel" data-open="none" hidden>
+        <div class="dock-popout-header">
+          <strong id="dock-popout-title">Panel</strong>
+          <button id="dock-popout-close" class="dock-popout-close" type="button" aria-label="Close panel">&#10005;</button>
+        </div>
+        <div id="dock-popout-body" class="dock-popout-body">
+          <section id="chats-panel" class="chats-panel" aria-label="Chats">
+            <div id="chats-tree" class="chats-tree"></div>
+          </section>
+        </div>
+      </section>
+      </div>
       <section id="context-dock" class="context-dock" aria-label="Browser context and task status" hidden>
         <section id="activity-panel" class="activity-panel" aria-live="polite" hidden>
           <span class="activity-pulse"></span>
@@ -66,7 +89,10 @@
               <span class="eyebrow">Jobs</span>
               <strong id="job-monitor-title">No durable browser jobs</strong>
             </div>
-            <button id="job-monitor-toggle" type="button">Show</button>
+            <div class="job-monitor-actions">
+              <button id="job-monitor-clear" type="button" title="Clear finished jobs (completed, cancelled, denied)">Clear done</button>
+              <button id="job-monitor-toggle" type="button">Show</button>
+            </div>
           </div>
           <ol id="job-list" class="job-list" hidden></ol>
         </section>
@@ -89,7 +115,7 @@
             </div>
           </div>
           <div id="control-summary-card" class="control-summary-card" hidden></div>
-          <ol id="control-step-list" class="control-step-list"></ol>
+          <div id="control-step-list" class="control-step-list"></div>
           <div id="control-artifacts" class="control-artifacts" hidden></div>
           <div id="approval-card" class="approval-card" hidden>
             <strong id="approval-title">Approval required</strong>
@@ -109,6 +135,9 @@
         <textarea id="command-input" rows="3" placeholder="Message Augmentor"></textarea>
         <div id="attachment-strip" class="attachment-strip" hidden></div>
         <div class="composer-toolbar">
+          <button id="workspace-toggle" type="button" class="icon-button workspace-toggle" aria-pressed="false" title="Show or hide the Augmentor workspace" aria-label="Show or hide the Augmentor workspace">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg>
+          </button>
           <button id="attach-file" type="button" class="icon-button" title="Attach file" aria-label="Attach file">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
           </button>

@@ -21,11 +21,14 @@ function createHarness(initial = {}) {
       forks: "forks",
       sessions: "sessions",
       projects: "projects",
+      folders: "folders",
+      writer: "writer",
       activeSessionId: "activeSessionId",
       model: "model",
       thinkingDepth: "thinkingDepth",
       attachments: "attachments"
     },
+    instanceId: "test-instance",
     getModel: () => model,
     getThinkingDepth: () => thinkingDepth,
     setModel: (value) => {
@@ -460,4 +463,107 @@ test("chat session store manages attachments and persists selected provider sett
   assert.equal(harness.store.getAttachments().length, 0);
   assert.equal(harness.writes.at(-1).model, "MiniMax-M3");
   assert.equal(harness.writes.at(-1).thinkingDepth, "high");
+});
+
+test("chat session store files sessions into folders and aligns the project", async () => {
+  const harness = createHarness();
+  await harness.store.hydrate();
+  const project = await harness.store.createProject("Alpha");
+  const folder = await harness.store.createFolder(project.id, "Specs");
+  assert.equal(folder.projectId, project.id);
+  assert.equal(harness.store.getFolders().length, 1);
+
+  const session = harness.store.getSessions()[0];
+  const updated = await harness.store.setSessionFolder(session.id, folder.id);
+  assert.equal(updated.folderId, folder.id);
+  assert.equal(updated.projectId, project.id, "filing a chat aligns it to the folder's project");
+});
+
+test("chat session store rejects filing a session into an unknown folder", async () => {
+  const harness = createHarness();
+  await harness.store.hydrate();
+  const session = harness.store.getSessions()[0];
+  assert.equal(await harness.store.setSessionFolder(session.id, "missing"), null);
+  assert.equal(harness.store.getSessions()[0].folderId, "");
+});
+
+test("chat session store unfiles sessions when their folder is deleted", async () => {
+  const harness = createHarness();
+  await harness.store.hydrate();
+  const project = await harness.store.createProject("Alpha");
+  const folder = await harness.store.createFolder(project.id, "Specs");
+  const session = harness.store.getSessions()[0];
+  await harness.store.setSessionFolder(session.id, folder.id);
+
+  assert.equal(await harness.store.deleteFolder(folder.id), true);
+  assert.equal(harness.store.getFolders().length, 0);
+  assert.equal(harness.store.getSessions()[0].folderId, "", "the chat is unfiled, not deleted");
+});
+
+test("chat session store removes a project's folders and unfiles their sessions", async () => {
+  const harness = createHarness();
+  await harness.store.hydrate();
+  const project = await harness.store.createProject("Alpha");
+  const folder = await harness.store.createFolder(project.id, "Specs");
+  const session = harness.store.getSessions()[0];
+  await harness.store.setSessionFolder(session.id, folder.id);
+
+  await harness.store.deleteProject(project.id);
+  assert.equal(harness.store.getFolders().length, 0);
+  const cleared = harness.store.getSessions()[0];
+  assert.equal(cleared.projectId, "");
+  assert.equal(cleared.folderId, "");
+});
+
+test("chat session store hydrate drops orphan folders and unfiles their sessions", async () => {
+  const harness = createHarness({
+    projects: [{ id: "p1", name: "Alpha" }],
+    folders: [
+      { id: "f1", projectId: "p1", name: "Specs" },
+      { id: "f-orphan", projectId: "gone", name: "Orphan" }
+    ],
+    sessions: [
+      { id: "s1", projectId: "p1", folderId: "f1", messages: [] },
+      { id: "s2", projectId: "p1", folderId: "f-orphan", messages: [] }
+    ],
+    activeSessionId: "s1"
+  });
+
+  await harness.store.hydrate();
+
+  assert.deepEqual(harness.store.getFolders().map((folder) => folder.id), ["f1"]);
+  const s2 = harness.store.getSessions().find((session) => session.id === "s2");
+  assert.equal(s2.folderId, "", "a session pointing at a dropped folder is unfiled");
+});
+
+test("chat session store renames folders and toggles expansion, rejecting blanks", async () => {
+  const harness = createHarness();
+  await harness.store.hydrate();
+  const project = await harness.store.createProject("Alpha");
+  const folder = await harness.store.createFolder(project.id, "Specs");
+  assert.equal((await harness.store.renameFolder(folder.id, "  Design  Docs ")).name, "Design Docs");
+  assert.equal((await harness.store.setFolderExpanded(folder.id, false)).expanded, false);
+  assert.equal(await harness.store.renameFolder(folder.id, "   "), null);
+});
+
+test("chat session store persists folders", async () => {
+  const harness = createHarness();
+  await harness.store.hydrate();
+  const project = await harness.store.createProject("Alpha");
+  await harness.store.createFolder(project.id, "Specs");
+  const lastWrite = harness.writes.at(-1);
+  assert.equal(Array.isArray(lastWrite.folders), true);
+  assert.equal(lastWrite.folders.length, 1);
+});
+
+test("chat session store stamps a per-write writer token for cross-surface sync", async () => {
+  const harness = createHarness();
+  await harness.store.hydrate();
+  await harness.store.createProject("Alpha");
+  const firstWriter = harness.writes.at(-1).writer;
+  await harness.store.createProject("Beta");
+  const secondWriter = harness.writes.at(-1).writer;
+
+  assert.match(firstWriter, /^test-instance:\d+$/);
+  assert.notEqual(firstWriter, secondWriter, "the token changes each write so it always appears in storage events");
 });

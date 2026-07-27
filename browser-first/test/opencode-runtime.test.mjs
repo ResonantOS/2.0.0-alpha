@@ -112,3 +112,22 @@ test("opencode diagnostics reject canonical escapes from trusted candidates", ()
   assert.equal(diagnostics.command, null);
   assert.ok(diagnostics.rejections.some(({ reason }) => /canonical path escapes/i.test(reason)));
 });
+
+test("opencode diagnostics accept an npm-global symlink into the bin root's lib/node_modules", () => {
+  // `npm install -g --prefix ~/.local opencode-ai` symlinks ~/.local/bin/opencode
+  // to ~/.local/lib/node_modules/opencode-ai/bin/opencode — a legitimate install.
+  const link = "/home/reviewer/.local/bin/opencode";
+  const target = "/home/reviewer/.local/lib/node_modules/opencode-ai/bin/opencode";
+  const diagnostics = opencodeRuntimeDiagnostics({
+    env: {},
+    homeDir: "/home/reviewer",
+    platform: "linux",
+    exists: (candidate) => candidate === link,
+    realpath: (candidate) => (candidate === link ? target : candidate),
+    stat: () => ({ isFile: () => true, mode: 0o755 }),
+  });
+
+  assert.equal(diagnostics.installed, true);
+  assert.equal(diagnostics.command, target);
+  assert.equal(diagnostics.resolution?.source, "fixed-user-install-root");
+});

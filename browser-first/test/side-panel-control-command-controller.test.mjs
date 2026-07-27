@@ -50,6 +50,7 @@ function createHarness({
       }
     }),
     getCurrentControlRun: () => currentRun,
+    getRawActiveTab: async () => activeTab,
     permissionForUrl: async () => permissionMode,
     persistContextDockExpanded: async () => events.push(["persist-dock"]),
     renderControlMonitor: () => events.push(["render-control"]),
@@ -158,7 +159,24 @@ test("control command controller refuses current-page jobs when only ResonantOS 
 
   assert.equal(result, null);
   assert.ok(harness.events.some((event) => event[0] === "status" && event[1] === "Control target unavailable"));
-  assert.ok(harness.events.some((event) => event[0] === "message" && /normal web page target/.test(event[2])));
+  // The message names the restricted page and explains why, not a generic ask.
+  assert.ok(harness.events.some((event) => event[0] === "message" && /can't operate an extension page/.test(event[2])));
+  assert.equal(harness.events.some((event) => event[0] === "create-job"), false);
+});
+
+test("control command controller explains chrome:// pages can't be operated (#chrome-internal)", async () => {
+  const harness = createHarness({
+    activeTab: { id: 9, url: "chrome://settings" },
+    currentReadableControlTab: null
+  });
+
+  const result = await harness.controller.runControlCommand("click the On startup option");
+
+  assert.equal(result, null);
+  const message = harness.events.find((event) => event[0] === "message")?.[2] ?? "";
+  assert.match(message, /can't operate a Chrome page/);
+  assert.match(message, /chrome:\/\/settings/);
+  assert.match(message, /Chrome blocks extensions/);
   assert.equal(harness.events.some((event) => event[0] === "create-job"), false);
 });
 

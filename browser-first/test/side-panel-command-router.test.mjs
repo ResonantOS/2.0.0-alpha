@@ -3,12 +3,13 @@ import test from "node:test";
 
 import { createSidePanelCommandRouter } from "../resonantos-side-panel-extension/src/lib/side-panel-command-router.js";
 
-function createHarness() {
+function createHarness({ resumableControlRun = false } = {}) {
   const calls = [];
   const handler = (name) => async (...args) => {
     calls.push([name, ...args]);
   };
   const router = createSidePanelCommandRouter({
+    hasResumableControlRun: () => resumableControlRun,
     allowControlPreflightOnceForTaskClass: handler("allow-control-once"),
     bindMentionedTab: handler("bind"),
     cancelBrowserJob: handler("cancel"),
@@ -45,6 +46,7 @@ function createHarness() {
     saveIntake: handler("save"),
     scrollActivePage: handler("scroll"),
     searchBrowser: handler("search"),
+    summarizeActivePage: handler("summarize-page"),
     summarizeSnapshot: handler("summary"),
     typeIntoActivePage: handler("type")
   });
@@ -198,6 +200,52 @@ test("side panel command router dispatches natural browser intents before chat",
   const dispatched = harness.calls.filter((call) => call[0] !== "bind");
   assert.deepEqual(dispatched.at(-2), ["control", "go to amazon.it and find me a rtx5090"]);
   assert.deepEqual(dispatched.at(-1), ["control", "add the visible item on this page to the cart"]);
+});
+
+test("side panel command router reads + summarizes the page for a bare summarize/tldr/recap", async () => {
+  const harness = createHarness();
+
+  // Bare summarize-family commands route to a silent page read + chat summary
+  // (handler "summarize-page"), before the generic read intent's title+excerpt.
+  await harness.router.respondToCommand("summarize");
+  await harness.router.respondToCommand("tldr");
+  await harness.router.respondToCommand("recap this page");
+  // A plain conversational message still goes to chat, untouched by the branch.
+  await harness.router.respondToCommand("what should I cook tonight?");
+
+  const dispatched = harness.calls.filter((call) => call[0] !== "bind").map((call) => call[0]);
+  assert.deepEqual(dispatched, ["summarize-page", "summarize-page", "summarize-page", "chat"]);
+});
+
+test("side panel command router continues a resumable run on a bare 'try again', else chats", async () => {
+  const resumable = createHarness({ resumableControlRun: true });
+  await resumable.router.respondToCommand("try again");
+  await resumable.router.respondToCommand("continue");
+  assert.deepEqual(
+    resumable.calls.filter((call) => call[0] !== "bind").map((call) => call[0]),
+    ["continue", "continue"]
+  );
+
+  // With no resumable run, a bare "try again" is just a chat turn.
+  const noRun = createHarness({ resumableControlRun: false });
+  await noRun.router.respondToCommand("try again");
+  assert.deepEqual(
+    noRun.calls.filter((call) => call[0] !== "bind").map((call) => call[0]),
+    ["chat"]
+  );
+});
+
+test("side panel command router sends compound navigate-and-act commands to agent control", async () => {
+  const harness = createHarness();
+
+  await harness.router.respondToCommand("go to fifa.com and click on news");
+  await harness.router.respondToCommand("open espn.com and search for scores");
+
+  const dispatched = harness.calls.filter((call) => call[0] !== "bind");
+  assert.deepEqual(dispatched, [
+    ["control", "go to fifa.com and click on news"],
+    ["control", "open espn.com and search for scores"]
+  ]);
 });
 
 test("side panel command router dispatches natural delegation before chat", async () => {

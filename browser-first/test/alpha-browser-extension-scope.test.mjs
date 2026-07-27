@@ -55,6 +55,17 @@ test("2.0.0 alpha release scope is Chrome extension and bridge only", async () =
   );
   assert.equal(manifest.manifest_version, 3);
   assert.equal(manifest.side_panel.default_path, "src/side-panel.html");
+  // The extension ships its own ResonantOS brand icon (matching the in-app brand
+  // mark) for every required size, for both the toolbar action and the store
+  // listing — so Chrome never falls back to an auto-generated letter icon.
+  for (const size of ["16", "32", "48", "128"]) {
+    assert.equal(manifest.icons?.[size], `icons/icon-${size}.png`);
+    assert.equal(manifest.action?.default_icon?.[size], `icons/icon-${size}.png`);
+  }
+  // The extension must not override Chrome's new-tab page — the browser keeps
+  // whatever the human has configured. The Augmentor workspace is opt-in via the
+  // side-panel toggle, never forced onto new tabs.
+  assert.equal(manifest.chrome_url_overrides, undefined);
   assert.equal(manifest.permissions.includes("audioCapture"), false);
   assert.match(manifest.content_security_policy.extension_pages, /connect-src 'self' http:\/\/127\.0\.0\.1:\*/);
   // The extension connects to a user-configured bridge that can live on any

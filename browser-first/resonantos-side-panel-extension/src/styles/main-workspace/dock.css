@@ -1,0 +1,343 @@
+/* Top-bar dock for the main workspace — mirrors the side panel's Site · Control
+   · Jobs · Chats · Permissions link bar. Panels live in #dock-popout and pop out
+   full-size over the transcript. Colors are explicit (green accent) to match the
+   side panel regardless of the main-workspace theme tokens. */
+
+/* The flexible middle row: hosts the transcript and the panel popout overlay. */
+.answer-body {
+  position: relative;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  min-height: 0;
+}
+
+.dock-tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+}
+
+.dock-tab {
+  border: 1px solid rgba(148, 255, 198, 0.15);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(207, 219, 210, 0.75);
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  padding: 5px 13px;
+  cursor: pointer;
+}
+
+.dock-tab:hover {
+  color: #eef7f0;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.dock-tab.active {
+  color: #eef7f0;
+  border-color: rgba(36, 209, 143, 0.5);
+  background: rgba(36, 209, 143, 0.14);
+}
+
+.dock-tab-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: rgba(36, 209, 143, 0.95);
+  box-shadow: 0 0 8px rgba(36, 209, 143, 0.7);
+  vertical-align: middle;
+}
+
+.dock-tab-dot[hidden] {
+  display: none;
+}
+
+.dock-tab-dot[data-blocking="true"] {
+  background: rgba(255, 90, 74, 0.98);
+  box-shadow: 0 0 9px rgba(255, 90, 74, 0.8);
+  animation: dock-dot-blink 0.9s steps(1, end) infinite;
+}
+
+@keyframes dock-dot-blink {
+  50% { opacity: 0.25; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dock-tab-dot[data-blocking="true"] { animation: none; }
+}
+
+/* Popout overlay */
+.dock-popout {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(36, 209, 143, 0.22);
+  border-radius: 14px;
+  background: rgba(5, 8, 7, 0.98);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.dock-popout[hidden] {
+  display: none;
+}
+
+.dock-popout-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex: 0 0 auto;
+}
+
+.dock-popout-header strong {
+  color: #eef7f0;
+  font-size: 0.82rem;
+  letter-spacing: 0.02em;
+}
+
+.dock-popout-close {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  background: transparent;
+  color: rgba(238, 247, 240, 0.8);
+  cursor: pointer;
+}
+
+.dock-popout-close:hover {
+  color: #eef7f0;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.dock-popout-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+/* Show only the active panel; force it visible even if its own render hid it. */
+.dock-popout-body > section {
+  display: none;
+}
+
+.dock-popout[data-open="control"] #dock-control-panel,
+.dock-popout[data-open="jobs"] #main-browser-jobs,
+.dock-popout[data-open="chats"] #chats-panel,
+.dock-popout[data-open="permissions"] #permission-manager-panel {
+  display: block;
+}
+
+/* Shared bits used by the panels */
+.eyebrow {
+  display: block;
+  color: rgba(36, 209, 143, 0.72);
+  font-size: 0.6rem;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.dock-popout .control-monitor-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.control-status {
+  flex: 0 0 auto;
+  border: 1px solid rgba(36, 209, 143, 0.24);
+  border-radius: 999px;
+  color: rgba(238, 247, 240, 0.8);
+  font-size: 0.64rem;
+  font-weight: 800;
+  padding: 4px 8px;
+  text-transform: uppercase;
+}
+
+#dock-control-title {
+  display: block;
+  margin-top: 2px;
+  color: #eef7f0;
+  font-size: 0.82rem;
+}
+
+.dock-control-panel .control-step-list {
+  margin: 0;
+  max-height: none;
+  overflow: visible;
+  padding: 0;
+}
+
+/* Permissions panel */
+.permission-manager-panel {
+  border: 1px solid rgba(36, 209, 143, 0.14);
+  border-radius: 14px;
+  background:
+    linear-gradient(135deg, rgba(36, 209, 143, 0.07), rgba(255, 255, 255, 0.025)),
+    rgba(5, 8, 7, 0.62);
+  padding: 12px 14px;
+}
+
+.task-consent-header strong {
+  display: block;
+  color: #eef7f0;
+  font-size: 0.78rem;
+}
+
+.permission-manager-list {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+  margin: 9px 0 0;
+  padding: 0;
+}
+
+.permission-manager-list li {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 12px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 8px 10px;
+}
+
+.permission-manager-list strong {
+  display: block;
+  color: #eef7f0;
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+}
+
+.permission-manager-list small {
+  display: block;
+  color: rgba(207, 219, 210, 0.6);
+  font-size: 0.58rem;
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+
+.permission-manager-list button {
+  border: 1px solid rgba(255, 154, 138, 0.32);
+  border-radius: 999px;
+  background: rgba(112, 26, 18, 0.3);
+  color: #ffd3cc;
+  font-size: 0.62rem;
+  font-weight: 900;
+  padding: 5px 11px;
+  cursor: pointer;
+}
+
+/* Chats panel hosts the relocated Projects/Chats rail sections. */
+.chats-panel {
+  display: grid;
+  gap: 12px;
+}
+
+/* Collapsed left rail: a narrow icon strip. Text labels hide but the icons and
+   the collapse toggle stay visible, so the rail can be expanded again. */
+body[data-rail-collapsed="true"] .workspace-shell {
+  grid-template-columns: 58px minmax(0, 1fr);
+}
+
+body[data-rail-collapsed="true"] .workspace-rail {
+  padding: 14px 8px;
+}
+
+body[data-rail-collapsed="true"] .workspace-rail :is(
+  .rail-item span,
+  .rail-text,
+  .rail-section h2,
+  .brand-lockup strong,
+  .rail-user-card > span:last-child,
+  .rail-section-row button,
+  #rail-search-box
+) {
+  display: none;
+}
+
+body[data-rail-collapsed="true"] .workspace-rail .rail-item,
+body[data-rail-collapsed="true"] .workspace-rail .rail-project,
+body[data-rail-collapsed="true"] .workspace-rail .rail-user-card {
+  justify-content: center;
+}
+
+/* Draggable divider on the rail's right edge. Rides the --rail-width boundary. */
+.rail-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--rail-width, 268px) - 3px);
+  width: 6px;
+  z-index: 20;
+  cursor: col-resize;
+  background: transparent;
+}
+
+.rail-resize:hover,
+.rail-resize:focus-visible,
+body.rail-resizing .rail-resize {
+  background: rgba(36, 209, 143, 0.45);
+  outline: none;
+}
+
+/* Can't resize a collapsed rail — hide the handle. */
+body[data-rail-collapsed="true"] .rail-resize {
+  display: none;
+}
+
+/* While dragging, kill selection/iframe interference across the shell. */
+body.rail-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+body.rail-resizing iframe {
+  pointer-events: none;
+}
+
+/* New-chat "+" lives in the dock, to the right of the Chats tab. */
+.dock-new-chat {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid rgba(148, 255, 198, 0.15);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(207, 219, 210, 0.8);
+  cursor: pointer;
+}
+
+.dock-new-chat:hover {
+  color: #eef7f0;
+  background: rgba(36, 209, 143, 0.14);
+  border-color: rgba(36, 209, 143, 0.4);
+}
+
+.dock-new-chat svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}

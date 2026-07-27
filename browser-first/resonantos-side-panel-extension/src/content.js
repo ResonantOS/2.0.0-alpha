@@ -457,7 +457,16 @@ const isHardRestrictedElement = (element, fallbackText = "") => {
   return /\b(wallet|phantom|sign|signature|approve|connect wallet|buy|sell|swap|stake|unstake|bridge|mint|claim|pay|payment|checkout|login|credential|password|transfer)\b/i.test(text);
 };
 
-const clickElement = (element, { userApproved = false, fallbackText = "" } = {}) => {
+// How long the target spotlight dwells before the click fires, so the human can
+// see which element is about to be actuated (Comet / teach-mode behavior).
+// Tests set globalThis.__resonantosControlDwellMs = 0 to keep runs fast.
+const CONTROL_ACTION_DWELL_MS = 650;
+const controlActionDwell = () => new Promise((resolve) => {
+  const override = Number(globalThis.__resonantosControlDwellMs);
+  window.setTimeout(resolve, Number.isFinite(override) ? override : CONTROL_ACTION_DWELL_MS);
+});
+
+const clickElement = async (element, { userApproved = false, fallbackText = "" } = {}) => {
   pulseControlOverlay({ state: "active", label: `Clicking ${visibleText(element) || fallbackText}`, phase: "clicking", target: element });
   if (isHardRestrictedElement(element, fallbackText)) {
     pulseControlOverlay({ state: "blocked", label: "Blocked: human-only action", phase: "blocked", target: element });
@@ -483,6 +492,10 @@ const clickElement = (element, { userApproved = false, fallbackText = "" } = {})
     };
   }
   element.scrollIntoView({ block: "center", inline: "center", behavior: "auto" });
+  // Spotlight the target on its post-scroll position and dwell so the highlight
+  // actually paints and the human sees it before the click can navigate away.
+  pulseControlOverlay({ state: "active", label: `Clicking ${visibleText(element) || fallbackText}`, phase: "clicking", target: element });
+  await controlActionDwell();
   const rect = element.getBoundingClientRect();
   const eventOptions = {
     bubbles: true,
@@ -1240,9 +1253,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === "click_text") {
-    sendResponse(message.ref
+    // clickElement now dwells on the spotlight before acting, so the result is a
+    // promise; resolve it before responding (return true keeps the port open).
+    Promise.resolve(message.ref
       ? clickControlRef(message.ref, { userApproved: Boolean(message.userApproved) })
-      : clickVisibleText(message.text, { userApproved: Boolean(message.userApproved) }));
+      : clickVisibleText(message.text, { userApproved: Boolean(message.userApproved) }))
+      .then(sendResponse);
     return true;
   }
 

@@ -7,7 +7,7 @@ state, milestone, and project fields decide scheduling.
 ## Alpha MVP
 
 - [#209: Alpha stabilization - bridge, provider, and first-run reliability](https://github.com/ResonantOS/2.0.0-alpha/issues/209)
-  is the open Alpha MVP gate.
+  is closed — the Alpha MVP gate is met. Current focus is Beta.1 (below).
 
 ## Community Test
 

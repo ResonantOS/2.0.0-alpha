@@ -1,8 +1,13 @@
 import { parseNaturalDelegationIntent } from "./app-command-handlers.js";
 import {
   parseAutonomousBrowserActionIntent,
+  parseBrowserNavigationTaskIntent,
+  parseClickIntent,
+  parseFormsIntent,
   parseNaturalBrowserIntent,
-  parseNaturalSearchIntent
+  parseNaturalSearchIntent,
+  parseScrollIntent,
+  parseTypeIntent
 } from "./browser-command-parser.js";
 
 export const parseHermesSlashCommand = (value) => {
@@ -116,7 +121,20 @@ export function planMainWorkspacePrompt(value) {
   if (daoCommand) return { action: "dao", command: daoCommand };
   const draftCommand = parseDraftSlashCommand(prompt);
   if (draftCommand) return { action: "draft", command: draftCommand };
-  if (parseAutonomousBrowserActionIntent(prompt) || parseNaturalBrowserIntent(prompt) || parseNaturalSearchIntent(prompt)) {
+  // Direct page-action intents (click / type / scroll / form / compound
+  // navigate-and-act) run through Agent Control here, same as the side panel —
+  // so a plain "click the FIFA News search result" acts on the page instead of
+  // falling to chat and demanding a /control prefix.
+  if (
+    parseClickIntent(prompt) ||
+    parseTypeIntent(prompt) ||
+    parseScrollIntent(prompt) ||
+    parseFormsIntent(prompt) ||
+    parseBrowserNavigationTaskIntent(prompt) ||
+    parseAutonomousBrowserActionIntent(prompt) ||
+    parseNaturalBrowserIntent(prompt) ||
+    parseNaturalSearchIntent(prompt)
+  ) {
     return { action: "control" };
   }
   return { action: "chat" };

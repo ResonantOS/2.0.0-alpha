@@ -1,4 +1,5 @@
 import { inferControlNavigationTarget } from "./browser-command-parser.js";
+import { classifyControlTarget } from "./control-target-classification.js";
 
 const TERMINAL_CONTROL_RUN_STATUSES = new Set(["completed", "blocked", "denied", "cancelled", "failed"]);
 
@@ -10,6 +11,7 @@ export function createSidePanelControlCommandController({
   createBrowserJob = async () => null,
   getBrowserJobScheduler = () => null,
   getCurrentControlRun = () => null,
+  getRawActiveTab = async () => null,
   currentReadableControlTab = activeTab,
   ensureControlTabForUrl = async () => null,
   permissionForUrl = async () => "ask-before-action",
@@ -62,7 +64,11 @@ export function createSidePanelControlCommandController({
 
     const tab = await currentReadableControlTab();
     if (!tab?.url) {
-      throw new Error("Agent Control needs a normal web page target. Open or select a webpage first, or ask Augmentor to navigate to a site before operating the browser.");
+      // No http(s) tab is available to operate. Name the actual active page
+      // (e.g. chrome://settings) and explain Chrome's platform limit instead of a
+      // generic dead-end, so the human knows why and what to do next.
+      const rawActive = await getRawActiveTab().catch(() => null);
+      throw new Error(classifyControlTarget(rawActive?.url).guidance);
     }
     return {
       kind: "current-page",

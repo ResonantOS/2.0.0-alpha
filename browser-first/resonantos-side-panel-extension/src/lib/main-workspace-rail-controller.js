@@ -1,3 +1,5 @@
+import { groupProjectSessionsByFolder } from "./main-workspace-rail.js";
+
 export function createMainWorkspaceRailController(dependencies) {
   const {
     allowedWorkspaces,
@@ -18,6 +20,8 @@ export function createMainWorkspaceRailController(dependencies) {
     window,
     workspaceButtons,
   } = dependencies;
+
+  let activeMoveMenu = null;
 
   function relativeTime(value) {
     const time = new Date(value).getTime();
@@ -42,6 +46,7 @@ export function createMainWorkspaceRailController(dependencies) {
       dot: `<circle cx="12" cy="12" r="4"/>`,
       fork: `<path d="M7 6v5a3 3 0 0 0 3 3h7"/><path d="M14 10l4 4-4 4"/><path d="M7 6h4"/>`,
       folder: `<path d="M4 6h6l2 2h8v10H4z"/>`,
+      newFolder: `<path d="M4 6h6l2 2h8v10H4z"/><path d="M12 12v4"/><path d="M10 14h4"/>`,
       pin: `<path d="m14 4 6 6"/><path d="m5 19 6-6"/><path d="m9 15-2-2 8-8 4 4-8 8-2-2Z"/>`,
       rename: `<path d="M4 20h4l10-10-4-4L4 16v4Z"/><path d="m13 7 4 4"/>`,
       unpin: `<path d="m3 3 18 18"/><path d="m14 4 6 6"/><path d="m5 19 6-6"/><path d="m9 15-2-2 8-8 4 4"/>`
@@ -123,6 +128,107 @@ export function createMainWorkspaceRailController(dependencies) {
     renderAll();
   }
 
+  async function assignSessionFolder(sessionId, folderId = "") {
+    const session = await chatSessionStore.setSessionFolder(sessionId, folderId);
+    if (!session) return;
+    const folder = chatSessionStore.getFolders().find((item) => item.id === folderId);
+    updateConnectionLine(folderId ? `Moved to ${folder?.name ?? "folder"}` : "Removed from folder");
+    renderAll();
+  }
+
+  async function createFolderInProject(projectId) {
+    const name = window.prompt("Folder name");
+    if (!name?.trim()) return;
+    const folder = await chatSessionStore.createFolder(projectId, name);
+    updateConnectionLine(`Created folder: ${folder.name}`);
+    renderAll();
+  }
+
+  async function renameFolderFromRail(folderId) {
+    const folder = chatSessionStore.getFolders().find((item) => item.id === folderId);
+    if (!folder) return;
+    const name = window.prompt("Rename folder", folder.name);
+    if (!name?.trim()) return;
+    await chatSessionStore.renameFolder(folderId, name);
+    renderAll();
+  }
+
+  async function deleteFolderFromRail(folderId) {
+    const folder = chatSessionStore.getFolders().find((item) => item.id === folderId);
+    if (!folder) return;
+    if (!window.confirm(`Delete folder "${folder.name}"? Chats move back to the project.`)) return;
+    await chatSessionStore.deleteFolder(folderId);
+    renderAll();
+  }
+
+  async function toggleFolderExpanded(folderId) {
+    const folder = chatSessionStore.getFolders().find((item) => item.id === folderId);
+    if (!folder) return;
+    await chatSessionStore.setFolderExpanded(folderId, !folder.expanded);
+    renderAll();
+  }
+
+  function closeMoveMenu() {
+    if (!activeMoveMenu) return;
+    activeMoveMenu.remove();
+    activeMoveMenu = null;
+    document.removeEventListener("click", handleMoveMenuOutside, true);
+  }
+
+  function handleMoveMenuOutside(event) {
+    if (activeMoveMenu && !activeMoveMenu.contains(event.target)) closeMoveMenu();
+  }
+
+  function openMoveMenu(triggerButton, session) {
+    closeMoveMenu();
+    const menu = document.createElement("div");
+    menu.className = "rail-move-menu";
+    menu.setAttribute("role", "menu");
+    const addItem = (label, onClick, { disabled = false } = {}) => {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = "rail-move-item";
+      item.setAttribute("role", "menuitem");
+      item.textContent = label;
+      if (disabled) {
+        item.disabled = true;
+      } else {
+        item.addEventListener("click", (event) => {
+          event.stopPropagation();
+          closeMoveMenu();
+          void onClick();
+        });
+      }
+      menu.append(item);
+    };
+    const projectFolders = session.projectId
+      ? chatSessionStore.getFolders().filter((folder) => folder.projectId === session.projectId && !folder.archivedAt)
+      : [];
+    if (!session.projectId) {
+      addItem("Add this chat to a project first", () => {}, { disabled: true });
+    } else if (!projectFolders.length) {
+      addItem("No folders in this project yet", () => {}, { disabled: true });
+    } else {
+      for (const folder of projectFolders) {
+        const here = folder.id === session.folderId;
+        addItem(here ? `✓ ${folder.name}` : folder.name, () => assignSessionFolder(session.id, folder.id), { disabled: here });
+      }
+    }
+    if (session.folderId) {
+      addItem("Remove from folder", () => assignSessionFolder(session.id, ""));
+    }
+    document.body.append(menu);
+    const rect = triggerButton.getBoundingClientRect?.() ?? { left: 0, bottom: 0 };
+    menu.style.position = "fixed";
+    menu.style.left = `${Math.round(rect.left)}px`;
+    menu.style.top = `${Math.round(rect.bottom + 4)}px`;
+    activeMoveMenu = menu;
+    // The trigger's own handler calls stopPropagation and its capture phase has
+    // already passed the document, so a capture-phase listener added now is not
+    // fired by the opening click — no deferral (and no lingering timer) needed.
+    document.addEventListener("click", handleMoveMenuOutside, true);
+  }
+
   async function toggleProjectExpanded(projectId) {
     const project = chatSessionStore.getProjects().find((item) => item.id === projectId);
     if (!project) return;
@@ -164,7 +270,7 @@ export function createMainWorkspaceRailController(dependencies) {
     button.innerHTML = iconSvg(icon);
     button.addEventListener("click", (event) => {
       event.stopPropagation();
-      void onClick();
+      void onClick(event);
     });
     return button;
   }
@@ -178,6 +284,12 @@ export function createMainWorkspaceRailController(dependencies) {
         icon: session.pinned ? "unpin" : "pin",
         label: session.pinned ? "Unpin chat" : "Pin chat",
         onClick: () => toggleSessionPinned(session.id)
+      }),
+      railActionButton({
+        action: "move",
+        icon: "folder",
+        label: "Move to folder",
+        onClick: (event) => openMoveMenu(event.currentTarget, session)
       }),
       railActionButton({
         action: "rename",
@@ -212,6 +324,12 @@ export function createMainWorkspaceRailController(dependencies) {
     actions.className = "rail-chat-actions rail-project-actions";
     actions.append(
       railActionButton({
+        action: "new-folder",
+        icon: "newFolder",
+        label: "New folder",
+        onClick: () => createFolderInProject(project.id)
+      }),
+      railActionButton({
         action: project.pinned ? "unpin-project" : "pin-project",
         icon: project.pinned ? "unpin" : "pin",
         label: project.pinned ? "Unpin project" : "Pin project",
@@ -241,6 +359,78 @@ export function createMainWorkspaceRailController(dependencies) {
       })
     );
     return actions;
+  }
+
+  function railFolderActions(folder) {
+    const actions = document.createElement("span");
+    actions.className = "rail-chat-actions rail-folder-actions";
+    actions.append(
+      railActionButton({
+        action: "rename-folder",
+        icon: "rename",
+        label: "Rename folder",
+        onClick: () => renameFolderFromRail(folder.id)
+      }),
+      railActionButton({
+        action: "delete-folder",
+        icon: "delete",
+        label: "Delete folder",
+        onClick: () => deleteFolderFromRail(folder.id)
+      })
+    );
+    return actions;
+  }
+
+  function renderFolderRow(folder, folderSessions, projectLabelById) {
+    const item = document.createElement("li");
+    item.className = "rail-folder-item";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "rail-folder";
+    button.dataset.folderId = folder.id;
+    button.setAttribute("aria-expanded", String(Boolean(folder.expanded)));
+    button.setAttribute("aria-label", `${folder.expanded ? "Collapse" : "Expand"} folder: ${folder.name}. ${folderSessions.length} chat${folderSessions.length === 1 ? "" : "s"}.`);
+    const top = document.createElement("span");
+    top.className = "rail-folder-top";
+    top.innerHTML = `<span class="rail-folder-expand">${iconSvg(folder.expanded ? "chevronDown" : "chevronRight")}</span>${iconSvg("folder")}<span class="rail-text"></span><kbd>${folderSessions.length}</kbd>`;
+    top.querySelector(".rail-text").textContent = folder.name; // textContent avoids HTML injection in folder names
+    const actionLine = document.createElement("span");
+    actionLine.className = "rail-action-line";
+    actionLine.append(railFolderActions(folder));
+    button.append(top, actionLine);
+    button.addEventListener("click", () => void toggleFolderExpanded(folder.id));
+    button.addEventListener("dragover", (event) => {
+      event.preventDefault();
+      button.classList.add("drag-over");
+      event.dataTransfer.dropEffect = "move";
+    });
+    button.addEventListener("dragleave", () => {
+      button.classList.remove("drag-over");
+    });
+    button.addEventListener("drop", (event) => {
+      event.preventDefault();
+      button.classList.remove("drag-over");
+      const sessionId = event.dataTransfer.getData("text/plain");
+      void assignSessionFolder(sessionId, folder.id);
+    });
+    item.append(button);
+    if (folder.expanded) {
+      const list = document.createElement("ol");
+      list.className = "rail-folder-chat-list";
+      for (const session of folderSessions) {
+        const sessionRow = document.createElement("li");
+        sessionRow.append(railChatButton(session, projectLabelById));
+        list.append(sessionRow);
+      }
+      if (!folderSessions.length) {
+        const empty = document.createElement("li");
+        empty.className = "rail-empty rail-folder-empty";
+        empty.textContent = "Empty folder. Move or drop chats here.";
+        list.append(empty);
+      }
+      item.append(list);
+    }
+    return item;
   }
 
   function railChatButton(session, projectLabelById) {
@@ -353,17 +543,24 @@ export function createMainWorkspaceRailController(dependencies) {
       });
       row.append(button);
       if (project.expanded) {
+        const projectFolders = orderedRailItems(
+          chatSessionStore.getFolders().filter((folder) => folder.projectId === project.id && !folder.archivedAt)
+        );
+        const { folderGroups, looseSessions } = groupProjectSessionsByFolder(projectSessions, projectFolders);
         const list = document.createElement("ol");
         list.className = "rail-project-chat-list";
-        for (const session of projectSessions) {
+        for (const { folder, sessions: folderSessions } of folderGroups) {
+          list.append(renderFolderRow(folder, folderSessions, projectLabelById));
+        }
+        for (const session of looseSessions) {
           const sessionRow = document.createElement("li");
           sessionRow.append(railChatButton(session, projectLabelById));
           list.append(sessionRow);
         }
-        if (!projectSessions.length) {
+        if (!folderGroups.length && !looseSessions.length) {
           const emptyProject = document.createElement("li");
           emptyProject.className = "rail-empty rail-project-empty";
-          emptyProject.textContent = "Drop chats here.";
+          emptyProject.textContent = "Drop chats here, or add a folder.";
           list.append(emptyProject);
         }
         row.append(list);

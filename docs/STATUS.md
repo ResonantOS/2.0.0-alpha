@@ -14,7 +14,7 @@ it only from the current worktree, deterministic checks, GitHub issues, and
 | Alpha runtime | Chrome extension plus local Node.js bridge | `browser-first/resonantos-side-panel-extension/`, `browser-first/host/`, `run-bridge-minimal.mjs` |
 | Development branch | `dev`; changes use a feature branch and a PR into `dev` | `AGENTS.md` |
 | Release planning | GitHub issues organized in Project 2 | [Project 2](https://github.com/orgs/ResonantOS/projects/2) |
-| Release gate | Open | [Alpha stabilization epic #209](https://github.com/ResonantOS/2.0.0-alpha/issues/209) |
+| Release gate | Alpha stabilization met; beta.1 in progress | [#209](https://github.com/ResonantOS/2.0.0-alpha/issues/209) closed; beta.1 gate is governed Agent Control [#211](https://github.com/ResonantOS/2.0.0-alpha/issues/211) |
 
 ## Runtime Components
 
@@ -78,21 +78,28 @@ runtime/GitHub consumer. Out-of-tree Hot Rod Rig (HRR) run evidence records are 
 repository authority and do not override the current repository, GitHub
 issues, or Project 2.
 
-## Open Alpha Gates
+## Release Gate
 
-The alpha is not release-ready while the Project 2 alpha gate remains open.
-Current issue evidence includes:
+The Alpha MVP stabilization gate is **met**. The epic
+[#209](https://github.com/ResonantOS/2.0.0-alpha/issues/209) and its evidence
+issues are closed:
 
-- [#209](https://github.com/ResonantOS/2.0.0-alpha/issues/209): bridge,
-  provider, and first-run reliability epic.
 - [#200](https://github.com/ResonantOS/2.0.0-alpha/issues/200): capability
-  token-map drift in the alternate production launcher.
-- [#203](https://github.com/ResonantOS/2.0.0-alpha/issues/203): missing
-  full-pipeline first-time setup smoke coverage.
-- [#204](https://github.com/ResonantOS/2.0.0-alpha/issues/204): capability
-  bootstrap failures need an operator-visible diagnostic.
+  token-map drift in the alternate production launcher — closed.
+- [#203](https://github.com/ResonantOS/2.0.0-alpha/issues/203): full-pipeline
+  first-time setup smoke coverage — closed.
+- [#204](https://github.com/ResonantOS/2.0.0-alpha/issues/204): operator-visible
+  diagnostic for capability bootstrap failures — closed.
 - [#207](https://github.com/ResonantOS/2.0.0-alpha/issues/207): a newly added
-  provider does not propagate into Provider Fabric routing.
+  provider not propagating into Provider Fabric routing — closed.
+
+The current gate is **beta.1** — see the beta.1 epics
+[#210](https://github.com/ResonantOS/2.0.0-alpha/issues/210) through
+[#215](https://github.com/ResonantOS/2.0.0-alpha/issues/215). Governed Agent
+Control safety ([#211](https://github.com/ResonantOS/2.0.0-alpha/issues/211)) is
+the P0 gate for community testing; its live-browser safety harness
+([#267](https://github.com/ResonantOS/2.0.0-alpha/issues/267)) must be green
+before Agent Control community testing opens.
 
 An open issue is not proof that every deterministic check currently fails. It
 is unresolved release evidence until the issue is closed or explicitly

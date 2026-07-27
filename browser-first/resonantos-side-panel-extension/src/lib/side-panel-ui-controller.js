@@ -52,14 +52,13 @@ export function createSidePanelUiController(dependencies) {
   };
 
   const updateContextDockVisibility = () => {
+    // Site / Jobs / Agent Control now live in the top-tab popout, not this inline
+    // dock — only the auto-surfacing approval/consent/activity panels drive it.
     const hasVisiblePanel = [
       activityPanel,
-      sitePermissionPanel,
       taskConsentPanel,
       permissionManagerPanel,
-      controlPreflightCard,
-      jobMonitor,
-      controlMonitor
+      controlPreflightCard
     ].some((panel) => !panel.hidden);
     contextDock.hidden = !hasVisiblePanel;
     contextToggleButton.title = getContextDockExpanded()

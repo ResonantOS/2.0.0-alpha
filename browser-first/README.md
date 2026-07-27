@@ -45,7 +45,10 @@ npm run test:browser-first
 
 The [HRR-033 deterministic certification gate](test/hrr033-certification/README.md)
 documents the focused context and Resonator evidence workflow used for deeper
-browser-first regression certification.
+browser-first regression certification. Implementation notes for the Alpha
+demo-hardening pass — the workspace toggle, new-tab handling, task monitor, and
+the launchd-managed bridge — are recorded in
+[Augmentor demo hardening](docs/2026-07-20-augmentor-demo-hardening.md).
 
 Bridge or shared-package changes may also require:
 

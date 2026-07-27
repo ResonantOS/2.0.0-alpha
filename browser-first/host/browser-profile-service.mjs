@@ -105,15 +105,11 @@ export async function seedResonantStartupExperience(profileDir, extensionId, mai
   preferences.session = preferences.session ?? {};
   preferences.session.restore_on_startup = 4;
   preferences.session.startup_urls = [mainWorkspaceUrl];
-  preferences.extensions = preferences.extensions ?? {};
-  preferences.extensions.chrome_url_overrides = preferences.extensions.chrome_url_overrides ?? {};
-  const existingNewTab = Array.isArray(preferences.extensions.chrome_url_overrides.newtab)
-    ? preferences.extensions.chrome_url_overrides.newtab
-    : [];
-  preferences.extensions.chrome_url_overrides.newtab = [
-    { active: true, extension_id: extensionId, entry: `chrome-extension://${extensionId}/src/main-workspace.html` },
-    ...existingNewTab.filter((entry) => String(entry?.extension_id ?? "") !== extensionId),
-  ];
+  // Deliberately leave Chrome's new-tab page untouched. The extension no longer
+  // overrides `chrome_url_overrides.newtab`, so seeding new-tab ownership here
+  // would silently re-impose an override the human didn't ask for. The Augmentor
+  // workspace stays opt-in via the side-panel toggle. (`extensionId` is retained
+  // in the signature for call-site stability.)
   await writeFile(preferencesPath, `${JSON.stringify(preferences, null, 2)}\n`);
 }
 

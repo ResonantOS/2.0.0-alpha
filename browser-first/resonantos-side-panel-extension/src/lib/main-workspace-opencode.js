@@ -2,6 +2,8 @@
 // Intent citation: docs/architecture/ADR-015-delegation-fabric-addon-catalog-native-tools.md
 
 import { delegationGuidanceText } from "./delegation-guidance.js";
+import { createOpenCodeSession } from "./main-workspace-opencode-session.js";
+import { createOpenCodeBridgeSource } from "./opencode-bridge-source.js";
 import { opencodeStatusMessage } from "./runtime-error-messages.js";
 
 function setStatus(node, text, tone = "neutral") {
@@ -79,7 +81,12 @@ export function renderOpenCodeWorkspace({ container, bridgeRequest, getBridgeReq
   const refreshButton = document.createElement("button");
   refreshButton.type = "button";
   refreshButton.textContent = "Refresh";
-  statusCard.append(statusTitle, statusBody, statusMeta, refreshButton);
+  const startSessionButton = document.createElement("button");
+  startSessionButton.type = "button";
+  startSessionButton.className = "opencode-start-session";
+  startSessionButton.textContent = "Start live session";
+  startSessionButton.hidden = true;
+  statusCard.append(statusTitle, statusBody, statusMeta, refreshButton, startSessionButton);
 
   const boundaryCard = document.createElement("section");
   boundaryCard.className = "opencode-card";
@@ -119,6 +126,7 @@ export function renderOpenCodeWorkspace({ container, bridgeRequest, getBridgeReq
       statusBody.textContent = status.detail;
       statusMeta.textContent = openCodeStatusMeta(status);
       statusCard.dataset.ready = status.installed ? "true" : "false";
+      startSessionButton.hidden = !status.installed;
       if (!status.installed || !executionEnabled) {
         const guidance = statusCard.querySelector(".delegation-guidance") ?? document.createElement("pre");
         guidance.className = "delegation-guidance";
@@ -195,6 +203,50 @@ export function renderOpenCodeWorkspace({ container, bridgeRequest, getBridgeReq
       taskButton.disabled = false;
     }
   });
+
+  // Live session: mount the streaming OpenCode workspace element. The bridge
+  // starts (reuses) `opencode serve` and returns the session + its /event URL;
+  // the element streams events directly from the server (host_permissions cover
+  // 127.0.0.1) and routes prompts/permissions back through the bridge.
+  const sessionArea = document.createElement("div");
+  sessionArea.className = "opencode-session-area";
+  section.append(sessionArea);
+  let activeSession = null;
+
+  async function startLiveSession() {
+    startSessionButton.disabled = true;
+    setStatus(taskStatus, "Starting OpenCode session…");
+    try {
+      const info = await bridge()("/opencode/session/start", { method: "POST", body: {} });
+      if (!info?.sessionId) throw new Error("No session id returned.");
+      header.hidden = true;
+      boundaryCard.hidden = true;
+      taskForm.hidden = true;
+      activeSession?.destroy?.();
+      sessionArea.replaceChildren();
+      const source = createOpenCodeBridgeSource({
+        // Idempotent: return the already-started session so subscribe + prompt share it.
+        startSession: async () => ({ sessionId: info.sessionId, eventUrl: info.eventUrl }),
+        openEventStream: (eventUrl) => fetch(eventUrl),
+        postJson: (path, body) => bridge()(path, { method: "POST", body })
+      });
+      activeSession = createOpenCodeSession({
+        document,
+        container: sessionArea,
+        scope: info.baseUrl ? "" : "",
+        subscribe: source.subscribe,
+        sendPrompt: source.sendPrompt,
+        replyPermission: source.replyPermission,
+        revert: async () => {}
+      });
+      setStatus(taskStatus, "");
+    } catch (error) {
+      setStatus(taskStatus, opencodeStatusMessage(error, "Could not start OpenCode session"), "error");
+    } finally {
+      startSessionButton.disabled = false;
+    }
+  }
+  startSessionButton.addEventListener("click", () => void startLiveSession());
 
   void loadStatus();
   if (initialMission.trim()) {

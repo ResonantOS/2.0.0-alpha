@@ -1,0 +1,157 @@
+/* Shared task/plan step-list visuals (Claude-app style). Imported by both the
+   sidecar (side-panel.css) and the main Augmentor panel (main-workspace.css) so
+   the component looks identical in both. The renderer (step-list.js) sets
+   data-state; everything visual is here. */
+
+.step-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.step-list-item {
+  display: grid;
+  grid-template-columns: 18px auto minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.step-list-glyph {
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  border: 1.5px solid rgba(207, 219, 210, 0.55);
+  border-radius: 50%;
+  color: transparent;
+  font-size: 0.6rem;
+  font-weight: 900;
+}
+
+/* pending → the bordered empty circle above (default) */
+
+.step-list-item[data-state="completed"] .step-list-glyph {
+  border-color: rgba(36, 209, 143, 0.9);
+  background: rgba(36, 209, 143, 0.9);
+  color: #04140d;
+}
+.step-list-item[data-state="completed"] .step-list-glyph::after {
+  content: "\2713"; /* ✓ */
+}
+
+.step-list-item[data-state="blocked"] .step-list-glyph {
+  border-color: rgba(255, 190, 90, 0.9);
+  color: rgba(255, 190, 90, 0.95);
+}
+.step-list-item[data-state="blocked"] .step-list-glyph::after {
+  content: "!";
+}
+
+.step-list-item[data-state="failed"] .step-list-glyph,
+.step-list-item[data-state="cancelled"] .step-list-glyph {
+  border-color: rgba(255, 121, 91, 0.9);
+  color: rgba(255, 121, 91, 0.95);
+}
+.step-list-item[data-state="failed"] .step-list-glyph::after {
+  content: "\2715"; /* ✕ */
+}
+
+.step-list-item[data-state="active"] .step-list-glyph,
+.step-list-item[data-state="running"] .step-list-glyph {
+  border-color: rgba(36, 209, 143, 0.25);
+  border-top-color: rgba(36, 209, 143, 0.95);
+  animation: step-list-spin 0.7s linear infinite;
+}
+
+/* Screen-reader-only per-step state text (the glyph is decorative). */
+.step-list-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.step-list-item[data-state="cancelled"] .step-list-glyph::after {
+  content: "\2013"; /* – (stopped) */
+}
+
+/* Optional per-step extra content (e.g. the agent-control detail expander).
+   It clears the glyph column and sits under the number + label so the list
+   stays clean until you open a step. */
+.step-list-extra {
+  grid-column: 2 / -1;
+  margin-top: 3px;
+}
+
+.step-list-num {
+  color: rgba(207, 219, 210, 0.62);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.step-list-label {
+  color: rgba(238, 247, 240, 0.9);
+  overflow-wrap: anywhere;
+}
+
+.step-list-item[data-state="completed"] .step-list-label,
+.step-list-item[data-state="completed"] .step-list-num {
+  color: rgba(207, 219, 210, 0.58);
+  text-decoration: line-through;
+}
+
+.step-list-pill {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: fit-content;
+  margin: 8px auto 0; /* center under the list (justify-self doesn't apply here) */
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(238, 247, 240, 0.86);
+  font-size: 0.7rem;
+  font-weight: 800;
+  padding: 4px 12px;
+}
+
+.step-list-pill-glyph {
+  box-sizing: border-box;
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid rgba(207, 219, 210, 0.4);
+  border-radius: 50%;
+}
+
+.step-list-pill[data-active="true"] .step-list-pill-glyph {
+  border-color: rgba(36, 209, 143, 0.25);
+  border-top-color: rgba(36, 209, 143, 0.95);
+  animation: step-list-spin 0.7s linear infinite;
+}
+
+.step-list-pill-text {
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes step-list-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .step-list-glyph,
+  .step-list-pill-glyph {
+    animation: none !important;
+  }
+}

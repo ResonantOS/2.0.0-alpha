@@ -1,8 +1,10 @@
 import { createBrowserPageActions } from "./lib/browser-page-actions.js";
 import { normalizeBrowserUrl } from "./lib/browser-command-parser.js";
+import { isControllableTabUrl } from "./lib/control-target-classification.js";
 import { createBridgeClient, createRawBridgeFetch, detectLoopbackBridge, initCapabilityTokens, isUnauthorizedBridgeError, resolveBridgeConfig } from "./lib/bridge-client.js";
 import { createPrefsSync } from "./lib/prefs-sync.js";
 import { createChatSessionStore } from "./lib/chat-session-store.js";
+import { shouldSyncChatChange } from "./lib/chat-sync.js";
 import { createComposerController } from "./lib/composer-controller.js";
 import {
   contextUsageSnapshot,
@@ -28,6 +30,9 @@ import { readPersonalizationSettings } from "./lib/personalization-settings.js";
 import { runReviewableCapture } from "./lib/main-workspace-review-handoff.js";
 import { createMainWorkspaceActionController } from "./lib/main-workspace-action-controller.js";
 import { createMainWorkspaceRailController } from "./lib/main-workspace-rail-controller.js";
+import { createDockTabs } from "./lib/dock-tabs.js";
+import { hasBlockingBrowserJob } from "./lib/browser-job-store.js";
+import { renderDockControl, renderDockPermissions } from "./lib/main-workspace-dock-panels.js";
 import { isRailVisibleChatSession, railSearchMatchesProject, railSearchMatchesSession } from "./lib/main-workspace-rail.js";
 import { renderSettingsWorkspace } from "./lib/main-workspace-settings.js";
 import { createMessageActionController } from "./lib/message-action-controller.js";
@@ -44,6 +49,8 @@ const STORAGE_KEYS = {
   thinkingDepth: "augmentorThinkingDepth",
   attachments: "augmentorBrowserAttachments",
   projects: "augmentorBrowserProjects",
+  folders: "augmentorBrowserFolders",
+  writer: "augmentorChatWriter",
   pendingSidebarPrompt: "augmentorPendingSidebarPrompt",
   activeWorkspace: "augmentorMainWorkspace",
   augmentorConfig: "augmentorConfig",
@@ -62,7 +69,6 @@ const STORAGE_KEYS = {
 const transcript = document.querySelector("#transcript");
 const workspaceButtons = [...document.querySelectorAll("[data-workspace]")];
 const newChatButton = document.querySelector("#new-chat");
-const openSidebarButton = document.querySelector("#open-sidebar");
 const mainBrowserJobs = document.querySelector("#main-browser-jobs");
 const railNewChatButton = document.querySelector("#rail-new-chat");
 const railSearchToggle = document.querySelector("#rail-search-toggle");
@@ -258,9 +264,11 @@ const composerController = createComposerController({
   forceClipboardFallback: true,
   navigator
 });
+const chatInstanceId = `main-${Math.random().toString(36).slice(2, 10)}`;
 const chatSessionStore = createChatSessionStore({
   storage: chrome.storage?.local,
   storageKeys: STORAGE_KEYS,
+  instanceId: chatInstanceId,
   getModel: () => modelSelect.value,
   getThinkingDepth: () => thinkingDepthSelect.value,
   setModel: (model) => {
@@ -283,7 +291,7 @@ const taskConsentStore = createTaskConsentStore({
   taskConsentStorageKey: STORAGE_KEYS.taskConsents
 });
 
-const isReadableBrowserTab = (tab) => typeof tab?.url === "string" && /^https?:\/\//i.test(tab.url);
+const isReadableBrowserTab = (tab) => isControllableTabUrl(tab?.url);
 const setMainActivity = (_phase, label, detail = "") => {
   updateConnectionLine(detail ? `${label}: ${detail}` : label);
 };
@@ -518,6 +526,116 @@ const {
   renderRailNavigation,
   switchToSession,
 } = railController;
+
+// --- Top-bar dock (Site · Control · Jobs · Chats · Permissions), mirroring the
+// side panel. The panels live in #dock-popout and pop out full-size; Chats holds
+// the Projects/Chats tree that used to sit in the left rail. ---
+const dockControlEls = {
+  titleEl: document.querySelector("#dock-control-title"),
+  statusEl: document.querySelector("#dock-control-status"),
+  stepListEl: document.querySelector("#dock-control-step-list")
+};
+const dockPermissionList = document.querySelector("#permission-manager-list");
+const dockPermissionTitle = document.querySelector("#permission-manager-title");
+
+async function refreshDockControl() {
+  const snapshot = await mainBrowserJobController.readJobs().catch(() => null);
+  const jobs = Array.isArray(snapshot?.jobs) ? snapshot.jobs : [];
+  const job = jobs.find((entry) => entry.id === snapshot?.activeJobId)
+    ?? jobs.find((entry) => entry.status === "running" || entry.status === "blocked")
+    ?? jobs[0] ?? null;
+  renderDockControl(dockControlEls, job, { document });
+}
+
+async function refreshDockPermissions() {
+  const permissions = await sitePermissionStore.sitePermissions().catch(() => ({}));
+  renderDockPermissions(dockPermissionList, dockPermissionTitle, permissions, {
+    document,
+    onReset: async (siteKey) => {
+      await sitePermissionStore.resetSitePermission(siteKey).catch(() => undefined);
+      await refreshDockPermissions();
+    }
+  });
+}
+
+const dockTabs = createDockTabs({
+  tabs: [
+    { name: "control", button: document.querySelector("#dock-tab-control"), dot: document.querySelector("#dock-dot-control"), panel: document.querySelector("#dock-control-panel") },
+    { name: "jobs", button: document.querySelector("#dock-tab-jobs"), dot: document.querySelector("#dock-dot-jobs"), panel: document.querySelector("#main-browser-jobs") },
+    { name: "chats", button: document.querySelector("#dock-tab-chats"), dot: document.querySelector("#dock-dot-chats"), panel: document.querySelector("#chats-panel") },
+    { name: "permissions", button: document.querySelector("#dock-tab-permissions"), dot: document.querySelector("#dock-dot-permissions"), panel: document.querySelector("#permission-manager-panel") }
+  ],
+  popout: document.querySelector("#dock-popout"),
+  popoutTitle: document.querySelector("#dock-popout-title"),
+  closeButton: document.querySelector("#dock-popout-close"),
+  titles: { control: "Control", jobs: "Jobs", chats: "Chats", permissions: "Permissions" },
+  onOpen: (name) => {
+    if (name === "chats") renderRailNavigation();
+    else if (name === "jobs") void renderMainBrowserJobStatusFromStorage();
+    else if (name === "control") void refreshDockControl();
+    else if (name === "permissions") void refreshDockPermissions();
+  }
+});
+dockTabs.bind();
+
+// Collapse / expand the left rail. Collapsed leaves a narrow icon strip so the
+// toggle itself stays reachable to expand it back (see body[data-rail-collapsed]).
+const railToggle = document.querySelector("#rail-toggle");
+railToggle?.addEventListener("click", () => {
+  const collapsed = document.body.dataset.railCollapsed === "true";
+  document.body.dataset.railCollapsed = collapsed ? "false" : "true";
+  const label = collapsed ? "Collapse sidebar" : "Expand sidebar";
+  railToggle.setAttribute("aria-label", label);
+  railToggle.setAttribute("title", label);
+  railToggle.setAttribute("aria-expanded", collapsed ? "true" : "false");
+});
+
+// Draggable left-rail width (persisted). The handle rides the rail's right edge;
+// the shell reads --rail-width for its first grid column.
+const railResize = document.querySelector("#rail-resize");
+const RAIL_MIN = 180;
+const RAIL_MAX = 460;
+const railWidthValue = () =>
+  parseInt(getComputedStyle(document.documentElement).getPropertyValue("--rail-width"), 10) || 268;
+const applyRailWidth = (px) => {
+  const clamped = Math.max(RAIL_MIN, Math.min(RAIL_MAX, Math.round(px)));
+  document.documentElement.style.setProperty("--rail-width", `${clamped}px`);
+  return clamped;
+};
+chrome.storage?.local?.get?.("augmentorRailWidth").then((stored) => {
+  const px = Number(stored?.augmentorRailWidth);
+  if (Number.isFinite(px)) applyRailWidth(px);
+}).catch(() => undefined);
+
+if (railResize) {
+  let dragging = false;
+  const onMove = (event) => {
+    if (dragging) applyRailWidth(event.clientX);
+  };
+  const onUp = () => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.classList.remove("rail-resizing");
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
+    void chrome.storage?.local?.set?.({ augmentorRailWidth: railWidthValue() }).catch(() => undefined);
+  };
+  railResize.addEventListener("pointerdown", (event) => {
+    if (document.body.dataset.railCollapsed === "true") return;
+    dragging = true;
+    document.body.classList.add("rail-resizing");
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    event.preventDefault();
+  });
+  railResize.addEventListener("keydown", (event) => {
+    const step = event.shiftKey ? 24 : 8;
+    if (event.key === "ArrowLeft") { applyRailWidth(railWidthValue() - step); event.preventDefault(); }
+    else if (event.key === "ArrowRight") { applyRailWidth(railWidthValue() + step); event.preventDefault(); }
+    else return;
+    void chrome.storage?.local?.set?.({ augmentorRailWidth: railWidthValue() }).catch(() => undefined);
+  });
+}
 
 function setActiveWorkspace(workspaceId, { bindSession = false, persist = false } = {}) {
   activeWorkspace = allowedWorkspaces.has(workspaceId) ? workspaceId : "answer";
@@ -878,7 +996,6 @@ async function createNewChat() {
 }
 
 newChatButton?.addEventListener("click", createNewChat);
-openSidebarButton?.addEventListener("click", () => void openSidebar());
 railNewChatButton?.addEventListener("click", createNewChat);
 railSearchToggle?.addEventListener("click", () => {
   railSearchBox.hidden = !railSearchBox.hidden;
@@ -967,6 +1084,21 @@ chrome.storage?.onChanged?.addListener?.((changes, areaName) => {
   if (areaName !== "local") return;
   if (changes[STORAGE_KEYS.browserJobs] || changes[STORAGE_KEYS.activeBrowserJob]) {
     void renderMainBrowserJobStatusFromStorage();
+    // Keep the Jobs + Control dots in sync with the side panel: light them on
+    // any job change, red (blocking) when a job needs the human.
+    const jobs = changes[STORAGE_KEYS.browserJobs]?.newValue ?? [];
+    const blocking = hasBlockingBrowserJob(jobs);
+    dockTabs.signalActivity("jobs", { blocking });
+    dockTabs.signalActivity("control", { blocking });
+  }
+  // Live tandem sync: mirror chat/folder/project/active-session changes made in
+  // the sidecar (or another tab). Our own writes carry our instanceId and are skipped.
+  if (shouldSyncChatChange(changes, {
+    keys: [STORAGE_KEYS.sessions, STORAGE_KEYS.folders, STORAGE_KEYS.projects, STORAGE_KEYS.activeSessionId],
+    writerKey: STORAGE_KEYS.writer,
+    instanceId: chatInstanceId
+  })) {
+    void chatSessionStore.hydrate().then(() => renderAll());
   }
 });
 window.addEventListener("hashchange", () => {

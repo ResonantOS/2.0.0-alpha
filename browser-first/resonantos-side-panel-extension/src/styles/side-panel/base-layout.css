@@ -58,10 +58,109 @@ textarea:disabled {
 
 .chat-workspace {
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto auto;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
   gap: 8px;
   min-width: 0;
   min-height: 0;
+}
+
+/* The flexible chat region: hosts the transcript and the panel popout overlay. */
+.chat-body {
+  position: relative;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  min-height: 0;
+}
+
+/* Top links that pop the Site / Agent Control / Jobs panels out full-size. */
+.dock-tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.dock-tab {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(207, 219, 210, 0.75);
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+
+.dock-tab:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.dock-tab.active {
+  color: var(--text);
+  border-color: rgba(36, 209, 143, 0.5);
+  background: rgba(36, 209, 143, 0.14);
+}
+
+.dock-tab-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: rgba(36, 209, 143, 0.95);
+  box-shadow: 0 0 8px rgba(36, 209, 143, 0.7);
+  vertical-align: middle;
+}
+
+.dock-tab-dot[hidden] {
+  display: none;
+}
+
+/* Blocking message behind the link → red + blinking, to pull the eye. */
+.dock-tab-dot[data-blocking="true"] {
+  background: rgba(255, 90, 74, 0.98);
+  box-shadow: 0 0 9px rgba(255, 90, 74, 0.8);
+  animation: dock-dot-blink 0.9s steps(1, end) infinite;
+}
+
+@keyframes dock-dot-blink {
+  50% { opacity: 0.25; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dock-tab-dot[data-blocking="true"] {
+    animation: none;
+  }
+}
+
+/* New-chat "+" lives in the dock, to the right of the Chats tab. */
+.dock-new-chat {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(207, 219, 210, 0.8);
+  cursor: pointer;
+}
+
+.dock-new-chat:hover {
+  color: var(--text);
+  background: rgba(36, 209, 143, 0.14);
+  border-color: rgba(36, 209, 143, 0.4);
+}
+
+.dock-new-chat svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .composer {
@@ -118,6 +217,16 @@ textarea:disabled {
 .icon-button.muted {
   font-size: 0.72rem;
   font-weight: 800;
+}
+
+/* Workspace toggle: filled/accented when the Augmentor workspace is showing. */
+.workspace-toggle[aria-pressed="true"] {
+  background: rgba(36, 209, 143, 0.16);
+  color: var(--text);
+}
+
+.workspace-toggle[aria-pressed="true"]:hover {
+  background: rgba(36, 209, 143, 0.24);
 }
 
 .transcript {

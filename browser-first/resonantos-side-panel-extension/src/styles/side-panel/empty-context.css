@@ -48,9 +48,164 @@
 .context-dock {
   display: grid;
   gap: 6px;
-  max-height: min(34vh, 250px);
+  max-height: min(56vh, 480px);
   min-height: 0;
   overflow: auto;
+}
+
+/* Full-size popout overlay for a tabbed panel (Site / Agent Control / Jobs). */
+.dock-popout {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(36, 209, 143, 0.22);
+  border-radius: 14px;
+  background: var(--panel, rgba(5, 8, 7, 0.98));
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.dock-popout[hidden] {
+  display: none;
+}
+
+.dock-popout-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex: 0 0 auto;
+}
+
+.dock-popout-header strong {
+  color: var(--text);
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+}
+
+.dock-popout-close {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  background: transparent;
+  color: rgba(238, 247, 240, 0.8);
+  cursor: pointer;
+}
+
+.dock-popout-close:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.dock-popout-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px;
+}
+
+/* Show only the active panel; force it visible even if its own render hid it. */
+.dock-popout-body > section {
+  display: none;
+}
+
+.dock-popout[data-open="site"] #site-permission-panel,
+.dock-popout[data-open="control"] #control-monitor,
+.dock-popout[data-open="jobs"] #job-monitor,
+.dock-popout[data-open="chats"] #chats-panel,
+.dock-popout[data-open="permissions"] #permission-manager-panel {
+  display: block;
+}
+
+/* Sidecar Chats tab: a compact mirror of the main rail's project/folder/chat tree. */
+.chats-tree {
+  display: grid;
+  gap: 1px;
+}
+
+.chats-tree-group-header {
+  display: grid;
+  grid-template-columns: 14px 16px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: rgba(238, 247, 240, 0.82);
+  font-size: 0.72rem;
+  font-weight: 800;
+  padding: 6px 7px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chats-tree-group-header:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+}
+
+.chats-tree-group-header svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.chats-tree-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chats-tree-group-body {
+  display: grid;
+  gap: 1px;
+  margin-left: 16px;
+}
+
+.chats-tree-chat {
+  width: 100%;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: rgba(207, 219, 210, 0.82);
+  font-size: 0.72rem;
+  font-weight: 650;
+  padding: 6px 8px;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chats-tree-chat:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+}
+
+.chats-tree-chat.active {
+  background: rgba(36, 209, 143, 0.16);
+  color: var(--text);
+  font-weight: 850;
+}
+
+.chats-tree-empty {
+  margin: 0;
+  color: rgba(207, 219, 210, 0.45);
+  font-size: 0.7rem;
+  padding: 6px 8px;
 }
 
 .activity-panel {
@@ -248,6 +403,12 @@
   font-size: 0.68rem;
 }
 
+.job-monitor-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .job-monitor-header button {
   border: 1px solid rgba(36, 209, 143, 0.18);
   border-radius: 999px;
@@ -258,11 +419,21 @@
   padding: 4px 7px;
 }
 
+#job-monitor-clear {
+  border-color: rgba(255, 255, 255, 0.14);
+  color: rgba(207, 219, 210, 0.68);
+}
+
+#job-monitor-clear:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.08);
+}
+
 .job-list {
   display: grid;
   gap: 5px;
   margin: 0;
-  max-height: 108px;
+  max-height: 230px;
   overflow: auto;
   padding: 0 10px 8px;
 }
@@ -279,6 +450,18 @@
   border-radius: 11px;
   background: rgba(255, 255, 255, 0.035);
   padding: 7px;
+}
+
+.job-list li[data-compact="true"] {
+  align-items: center;
+  gap: 4px 8px;
+  padding: 5px 7px;
+  background: rgba(255, 255, 255, 0.02);
+  opacity: 0.78;
+}
+
+.job-list li[data-compact="true"] .job-actions {
+  align-items: center;
 }
 
 .job-actions {

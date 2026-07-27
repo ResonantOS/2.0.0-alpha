@@ -1,4 +1,7 @@
+@import url("./styles/shared/step-list.css");
 @import url("./styles/main-workspace/base-rail.css");
+@import url("./styles/main-workspace/dock.css");
+@import url("./styles/main-workspace/opencode-session.css");
 @import url("./styles/main-workspace/answer-browser-jobs.css");
 @import url("./styles/main-workspace/composer.css");
 @import url("./styles/main-workspace/workspace-modules.css");

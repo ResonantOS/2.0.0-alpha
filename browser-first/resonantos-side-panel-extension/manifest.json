@@ -25,11 +25,20 @@
   "side_panel": {
     "default_path": "src/side-panel.html"
   },
-  "chrome_url_overrides": {
-    "newtab": "src/main-workspace.html"
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
   },
   "action": {
-    "default_title": "Open ResonantOS"
+    "default_title": "Open ResonantOS",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
   },
   "commands": {
     "open-augmentor-side-panel": {

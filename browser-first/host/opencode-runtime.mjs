@@ -37,7 +37,15 @@ function trustedCandidates({ homeDir, platform }) {
     ? OPENCODE_COMMAND_NAMES.map((name) => `${name}.exe`)
     : OPENCODE_COMMAND_NAMES;
   const candidates = [];
-  const appendRoot = (root, base, source, canonicalRoots) => {
+  const appendRoot = (root, base, source, extraRoots = []) => {
+    // A bin root's sibling `lib/node_modules` is where `npm install -g` with that
+    // prefix puts the package; the bin entry is just a symlink into it. Trust
+    // that sibling at the same level as the bin root, or a perfectly valid
+    // npm-global OpenCode (e.g. ~/.local/bin/opencode -> ~/.local/lib/node_modules/
+    // opencode-ai/bin/opencode) is rejected as "canonical path escapes fixed
+    // allowlisted roots".
+    const npmGlobalRoot = pathApi.join(pathApi.dirname(root), "lib", "node_modules");
+    const canonicalRoots = [root, npmGlobalRoot, ...extraRoots];
     for (const name of names) candidates.push(candidate(root, name, base, source, pathApi, canonicalRoots));
   };
   if (platform === "win32") {
@@ -48,9 +56,9 @@ function trustedCandidates({ homeDir, platform }) {
     appendRoot(pathApi.join(homeDir, ".opencode", "bin"), "install-prefix", "fixed-user-install-root");
     appendRoot(pathApi.join(homeDir, ".local", "bin"), "install-prefix", "fixed-user-install-root");
     if (platform === "darwin") {
-      appendRoot("/opt/homebrew/bin", "system-bin", "fixed-system-root", ["/opt/homebrew/bin", "/opt/homebrew/Cellar"]);
+      appendRoot("/opt/homebrew/bin", "system-bin", "fixed-system-root", ["/opt/homebrew/Cellar"]);
     }
-    appendRoot("/usr/local/bin", "system-bin", "fixed-system-root", ["/usr/local/bin", "/usr/local/Cellar"]);
+    appendRoot("/usr/local/bin", "system-bin", "fixed-system-root", ["/usr/local/Cellar"]);
     appendRoot("/usr/bin", "system-bin", "fixed-system-root");
     appendRoot("/bin", "system-bin", "fixed-system-root");
     if (platform === "darwin") {

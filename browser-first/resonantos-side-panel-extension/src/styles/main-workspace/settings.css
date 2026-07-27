@@ -1043,6 +1043,21 @@
   justify-content: flex-end;
 }
 
+.settings-provider-modal-status {
+  min-height: 1.3em;
+  margin: 10px 2px 0;
+  font-size: 0.82rem;
+  color: rgba(143, 159, 149, 0.82);
+}
+
+.settings-provider-modal-status[data-tone="success"] {
+  color: rgba(36, 209, 143, 0.92);
+}
+
+.settings-provider-modal-status[data-tone="error"] {
+  color: rgba(255, 124, 124, 0.9);
+}
+
 .settings-provider-modal-actions button {
   border: 0;
   background: var(--accent);

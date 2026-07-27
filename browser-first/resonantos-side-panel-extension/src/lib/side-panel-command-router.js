@@ -1,7 +1,9 @@
 import { parseNaturalDelegationIntent } from "./app-command-handlers.js";
 import {
   parseAutonomousBrowserActionIntent,
+  parseBrowserNavigationTaskIntent,
   parseClickIntent,
+  parseControlContinuationIntent,
   parseControlIntent,
   parseFormsIntent,
   parseNaturalBrowserIntent,
@@ -9,6 +11,7 @@ import {
   parseReadPageIntent,
   parseScrollIntent,
   parseStructuredPageEditIntent,
+  parseSummarizePageIntent,
   parseTypeIntent
 } from "./browser-command-parser.js";
 
@@ -57,8 +60,20 @@ export function createSidePanelCommandRouter(handlers) {
       if (name === "dao") return handlers.prepareDaoWorkflowGuidance(body);
     }
 
+    // "try again" / "continue" / "retry" after a resumed run continues that run
+    // instead of falling to chat and demanding /control. Gated on there being a
+    // resumable run so a stray "continue" in pure chat still reaches the model.
+    if (parseControlContinuationIntent(value) && handlers.hasResumableControlRun?.()) {
+      return handlers.continueBrowserJob("");
+    }
+
     const controlIntent = parseControlIntent(value);
     if (controlIntent) return handlers.runControlCommand(controlIntent.goal);
+
+    // Compound "go to <site> and <act>" tasks route to agent control before the
+    // single-action fast paths can swallow the "<act>" half against the wrong page.
+    const navigationTaskIntent = parseBrowserNavigationTaskIntent(value);
+    if (navigationTaskIntent) return handlers.runControlCommand(navigationTaskIntent.goal);
 
     const delegationIntent = parseNaturalDelegationIntent(value);
     if (delegationIntent) {
@@ -76,6 +91,13 @@ export function createSidePanelCommandRouter(handlers) {
 
     const clickIntent = parseClickIntent(value);
     if (clickIntent) return handlers.clickActivePageText(clickIntent);
+
+    // A bare "summarize" / "tldr" / "recap" reads the current page and lets the
+    // model summarize it — an LLM summary that matches the inline Summarize,
+    // with no /control needed. This sits before the generic read intent so a
+    // summarize verb never falls to the title+excerpt acknowledgement below.
+    const summarizePageIntent = parseSummarizePageIntent(value);
+    if (summarizePageIntent) return handlers.summarizeActivePage();
 
     const readPageIntent = parseReadPageIntent(value);
     if (readPageIntent) return handlers.summarizeSnapshot();

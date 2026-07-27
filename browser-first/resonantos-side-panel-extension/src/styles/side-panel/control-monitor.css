@@ -141,6 +141,10 @@
 .control-current-action strong {
   color: rgba(247, 255, 249, 0.9);
   font-size: 0.72rem;
+  /* The action text must be fully readable, not truncated to one line. */
+  overflow: visible;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .control-current-action .control-target-meta,
@@ -185,6 +189,10 @@
   border-radius: 13px;
   background: rgba(36, 209, 143, 0.07);
   padding: 9px 10px;
+  /* A long result summary scrolls inside the card instead of stretching the
+     whole panel past the dock. */
+  max-height: 220px;
+  overflow-y: auto;
 }
 
 .control-summary-card[hidden] {
@@ -309,109 +317,14 @@
   line-height: 1.35;
 }
 
+/* Scroll container for the shared step-list component (ol.step-list + pill).
+   The Claude-app glyph/label/pill visuals live in shared/step-list.css; only
+   the per-step detail expander below is agent-control-specific. */
 .control-step-list {
-  display: grid;
-  gap: 6px;
-  list-style: none;
   margin: 0;
-  max-height: 168px;
+  max-height: 220px;
   overflow: auto;
   padding: 0 10px 10px;
-}
-
-.control-step-list li {
-  position: relative;
-  display: grid;
-  gap: 2px;
-  min-height: 28px;
-  border: 1px solid rgba(255, 255, 255, 0.055);
-  border-radius: 11px;
-  background: rgba(255, 255, 255, 0.03);
-  color: rgba(207, 219, 210, 0.75);
-  font-size: 0.68rem;
-  padding: 7px 72px 7px 34px;
-}
-
-.control-step-list li::before {
-  content: attr(data-index);
-  position: absolute;
-  left: 8px;
-  top: 7px;
-  display: grid;
-  place-items: center;
-  width: 17px;
-  height: 17px;
-  border: 1px solid rgba(36, 209, 143, 0.3);
-  border-radius: 999px;
-  color: rgba(36, 209, 143, 0.78);
-  font-size: 0.52rem;
-  font-weight: 900;
-}
-
-.control-step-list li[data-state="active"] {
-  border-color: rgba(36, 209, 143, 0.32);
-  background: rgba(36, 209, 143, 0.08);
-  color: var(--accent);
-  font-weight: 800;
-}
-
-.control-step-state {
-  position: absolute;
-  right: 8px;
-  top: 7px;
-  border: 1px solid rgba(36, 209, 143, 0.26);
-  border-radius: 999px;
-  color: rgba(36, 209, 143, 0.92);
-  font-size: 0.52rem;
-  font-style: normal;
-  font-weight: 900;
-  letter-spacing: 0.06em;
-  padding: 2px 5px;
-  text-transform: uppercase;
-}
-
-.control-step-list li[data-state="active"] .control-step-state {
-  animation: activity-pulse 1.4s ease-out infinite;
-}
-
-.control-step-list li[data-state="completed"] {
-  border-color: rgba(117, 255, 187, 0.14);
-  color: rgba(238, 247, 240, 0.9);
-}
-
-.control-step-list li[data-state="completed"] .control-step-state {
-  border: 0;
-  color: rgba(117, 255, 187, 0.72);
-  animation: none;
-}
-
-.control-step-list li[data-state="blocked"],
-.control-step-list li[data-state="failed"] {
-  border-color: rgba(255, 154, 138, 0.22);
-  background: rgba(112, 26, 18, 0.18);
-  color: #ff9a8a;
-  font-weight: 800;
-}
-
-.control-step-list li[data-state="blocked"] .control-step-state,
-.control-step-list li[data-state="failed"] .control-step-state {
-  border-color: rgba(255, 154, 138, 0.28);
-  color: #ffb3a6;
-}
-
-.control-step-main,
-.control-step-note {
-  display: block;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.control-step-note {
-  color: rgba(207, 219, 210, 0.58);
-  font-size: 0.58rem;
-  font-weight: 700;
 }
 
 .control-step-detail {
@@ -419,14 +332,21 @@
   color: rgba(207, 219, 210, 0.7);
 }
 
+/* Unobtrusive per-step affordance: a muted "Details" toggle that keeps the
+   clean list calm until you open a step (a blocked step opens itself). */
 .control-step-detail summary {
   cursor: pointer;
   width: max-content;
+  color: rgba(207, 219, 210, 0.5);
+  font-size: 0.54rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+}
+
+.control-step-detail[open] summary {
   color: rgba(36, 209, 143, 0.72);
-  font-size: 0.56rem;
-  font-weight: 900;
-  letter-spacing: 0.08em;
   text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
 .control-step-detail p {

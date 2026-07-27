@@ -25,6 +25,15 @@ test("side panel DOM contract resolves every required element from side-panel.ht
   }
 });
 
+test("side panel dock order matches the main panel, with a new-chat button after Chats", async () => {
+  const html = await readFile(path.join(extensionRoot, "src", "side-panel.html"), "utf8");
+  const d = new JSDOM(html).window.document;
+  const dockButtons = [...d.querySelectorAll("#dock-tabs button")].map((button) => button.id);
+  assert.deepEqual(dockButtons, [
+    "dock-tab-site", "dock-tab-control", "dock-tab-jobs", "dock-tab-permissions", "dock-tab-chats", "dock-new-chat"
+  ]);
+});
+
 test("side panel storage keys stay namespaced to Augmentor browser state", () => {
   const values = Object.values(SIDE_PANEL_STORAGE_KEYS);
   assert.equal(new Set(values).size, values.length);

@@ -1,0 +1,150 @@
+/* Live OpenCode session workspace (Option A): streaming transcript + rolling
+   diff pane + inline approvals + plan checklist. Structure comes from
+   main-workspace-opencode-session.js; the step-list checklist reuses
+   shared/step-list.css. */
+
+.oc-session {
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  gap: 10px;
+  height: 100%;
+  min-height: 0;
+}
+
+.oc-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.oc-spacer { flex: 1; }
+.oc-scope { color: rgba(207, 219, 210, 0.6); font-size: 0.6rem; font-variant-numeric: tabular-nums; }
+
+.oc-status-pill,
+.oc-agent-pill,
+.oc-model-pill {
+  border: 1px solid rgba(148, 255, 198, 0.15);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 0.62rem;
+  font-weight: 800;
+  color: rgba(207, 219, 210, 0.85);
+  background: rgba(255, 255, 255, 0.03);
+}
+.oc-status-pill::before { content: "● "; color: rgba(207, 219, 210, 0.5); }
+.oc-status-pill[data-status="running"] { border-color: rgba(36, 209, 143, 0.5); color: #eef7f0; }
+.oc-status-pill[data-status="running"]::before { color: #24d18f; }
+.oc-status-pill[data-status="waiting-approval"] { border-color: rgba(255, 190, 90, 0.5); color: #ffce78; }
+.oc-status-pill[data-status="waiting-approval"]::before { color: #ffbe6a; }
+.oc-status-pill[data-status="error"] { border-color: rgba(255, 121, 91, 0.5); color: #ffb3a6; }
+.oc-agent-pill { border-color: rgba(36, 209, 143, 0.4); background: rgba(36, 209, 143, 0.12); color: #eef7f0; text-transform: capitalize; }
+
+.oc-todo[hidden], .oc-approvals[hidden] { display: none; }
+
+/* Body: streaming transcript + persistent diff pane */
+.oc-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 240px;
+  gap: 12px;
+  min-height: 0;
+}
+.oc-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 4px;
+}
+.oc-msg { font-size: 0.76rem; color: rgba(238, 247, 240, 0.9); line-height: 1.5; overflow-wrap: anywhere; }
+.oc-reasoning { color: rgba(207, 219, 210, 0.6); font-style: italic; }
+
+.oc-tool {
+  display: grid;
+  grid-template-columns: 16px auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(148, 255, 198, 0.14);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.028);
+  padding: 7px 10px;
+  font-size: 0.68rem;
+}
+.oc-tool-glyph {
+  box-sizing: border-box;
+  width: 16px; height: 16px;
+  border: 1.5px solid rgba(36, 209, 143, 0.25);
+  border-top-color: rgba(36, 209, 143, 0.95);
+  border-radius: 50%;
+  animation: oc-spin 0.7s linear infinite;
+}
+.oc-tool[data-state="completed"] .oc-tool-glyph { border-color: rgba(36, 209, 143, 0.9); background: rgba(36, 209, 143, 0.9); animation: none; }
+.oc-tool[data-state="completed"] .oc-tool-glyph::after { content: "\2713"; display: grid; place-items: center; height: 100%; color: #04140d; font-size: 0.55rem; font-weight: 900; }
+.oc-tool[data-state="error"] .oc-tool-glyph { border-color: rgba(255, 121, 91, 0.9); animation: none; }
+.oc-tool[data-state="error"] .oc-tool-glyph::after { content: "\2715"; display: grid; place-items: center; height: 100%; color: #ff795b; font-size: 0.55rem; font-weight: 900; }
+.oc-tool-name { font-weight: 800; color: #eef7f0; text-transform: capitalize; }
+.oc-tool-meta { color: rgba(207, 219, 210, 0.72); font-family: ui-monospace, Menlo, monospace; font-size: 0.6rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.oc-tool-sr { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); }
+@keyframes oc-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .oc-tool-glyph { animation: none !important; } }
+
+/* Diff pane */
+.oc-diffpane {
+  border-left: 1px solid rgba(148, 255, 198, 0.14);
+  padding-left: 11px;
+  min-height: 0;
+  overflow: auto;
+}
+.oc-diff-title { display: block; margin-bottom: 8px; font-size: 0.58rem; letter-spacing: 0.1em; text-transform: uppercase; color: rgba(36, 209, 143, 0.7); }
+.oc-file-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.oc-file {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(148, 255, 198, 0.14);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 6px 8px;
+  font-size: 0.62rem;
+}
+.oc-file[data-touched="true"] { border-color: rgba(36, 209, 143, 0.5); background: rgba(36, 209, 143, 0.1); animation: oc-pulse 1s ease-out; }
+@keyframes oc-pulse { from { background: rgba(36, 209, 143, 0.28); } to { background: rgba(36, 209, 143, 0.1); } }
+@media (prefers-reduced-motion: reduce) { .oc-file[data-touched="true"] { animation: none; } }
+.oc-file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #eef7f0; }
+.oc-file-stat { font-variant-numeric: tabular-nums; }
+.oc-add { color: #24d18f; margin-right: 5px; }
+.oc-del { color: #ff795b; }
+.oc-revert { border: 1px solid rgba(148, 255, 198, 0.18); border-radius: 7px; background: rgba(255, 255, 255, 0.04); color: rgba(207, 219, 210, 0.85); font-size: 0.54rem; font-weight: 800; padding: 3px 7px; cursor: pointer; }
+.oc-revert:hover { border-color: rgba(255, 121, 91, 0.4); color: #ffb3a6; }
+
+/* Inline approvals — the governance boundary */
+.oc-approvals { display: grid; gap: 8px; }
+.oc-approve { border: 1px solid rgba(255, 190, 90, 0.4); background: rgba(70, 50, 10, 0.32); border-radius: 12px; padding: 10px 12px; }
+.oc-approve-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 0.7rem; }
+.oc-approve-head strong { color: #eef7f0; }
+.oc-approve-head code { color: rgba(255, 206, 120, 0.95); font-family: ui-monospace, Menlo, monospace; font-size: 0.62rem; }
+.oc-approve-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.oc-approve-actions button { border: 1px solid rgba(148, 255, 198, 0.15); border-radius: 8px; background: rgba(255, 255, 255, 0.04); color: #eef7f0; font-size: 0.6rem; font-weight: 800; padding: 5px 10px; cursor: pointer; }
+.oc-approve-actions .oc-go { border-color: rgba(36, 209, 143, 0.5); background: rgba(36, 209, 143, 0.16); }
+.oc-approve-actions .oc-no { border-color: rgba(255, 121, 91, 0.4); color: #ffb3a6; }
+
+/* Composer */
+.oc-composer { display: flex; gap: 8px; align-items: flex-end; }
+.oc-composer textarea { flex: 1; resize: none; border: 1px solid rgba(148, 255, 198, 0.15); border-radius: 11px; background: rgba(5, 8, 7, 0.6); color: #eef7f0; font: inherit; font-size: 0.72rem; padding: 9px 11px; }
+.oc-composer button { border: 1px solid rgba(36, 209, 143, 0.5); border-radius: 11px; background: rgba(36, 209, 143, 0.16); color: #eef7f0; font-weight: 800; font-size: 0.7rem; padding: 9px 16px; cursor: pointer; }
+
+/* Entry point + mount area in the OpenCode workspace panel */
+.opencode-start-session {
+  margin-top: 10px;
+  border: 1px solid rgba(36, 209, 143, 0.5);
+  border-radius: 10px;
+  background: rgba(36, 209, 143, 0.16);
+  color: #eef7f0;
+  font-weight: 800;
+  font-size: 0.7rem;
+  padding: 8px 16px;
+  cursor: pointer;
+}
+.opencode-start-session[hidden] { display: none; }
+.opencode-session-area:not(:empty) { min-height: 480px; margin-top: 10px; }

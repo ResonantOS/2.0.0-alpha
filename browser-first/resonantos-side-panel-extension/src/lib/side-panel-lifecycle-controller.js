@@ -30,9 +30,13 @@ export function createSidePanelLifecycleController({
   fileInput = null,
   getLastSnapshot = () => null,
   getPendingControlPreflight = () => null,
+  getMainWorkspaceVisible = async () => false,
   getStatusLabel = () => "Ready",
   getTurnBusy = () => false,
+  jobMonitorClear = null,
   jobMonitorToggle = null,
+  toggleMainWorkspace = async () => false,
+  workspaceToggle = null,
   messageActions,
   modelSelect = null,
   persistChatState = async () => undefined,
@@ -123,6 +127,24 @@ export function createSidePanelLifecycleController({
       await browserJobStore.toggleMonitorCollapsed();
       renderJobMonitor();
     });
+    jobMonitorClear?.addEventListener?.("click", async () => {
+      const removed = await browserJobStore.clearCompletedJobs();
+      renderJobMonitor();
+      setStatus(removed > 0 ? `Cleared ${removed} finished job${removed === 1 ? "" : "s"}` : "No finished jobs to clear");
+    });
+    const syncWorkspaceToggleState = async () => {
+      if (!workspaceToggle) return;
+      const visible = await getMainWorkspaceVisible().catch(() => false);
+      workspaceToggle.setAttribute("aria-pressed", String(Boolean(visible)));
+    };
+    workspaceToggle?.addEventListener?.("click", async () => {
+      const visible = await toggleMainWorkspace().catch(() => false);
+      workspaceToggle.setAttribute("aria-pressed", String(Boolean(visible)));
+    });
+    // The workspace can also be opened/closed from the browser itself, so
+    // re-sync the pressed state whenever the panel regains focus.
+    windowRef?.addEventListener?.("visibilitychange", () => void syncWorkspaceToggleState());
+    void syncWorkspaceToggleState();
     sitePermissionMode?.addEventListener?.("change", async () => {
       const tab = await activeTab();
       const result = await setSitePermission(tab?.url, sitePermissionMode.value, {

@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   browserJobSchedulerState,
   createBrowserJobStore,
+  hasBlockingBrowserJob,
   isActiveBrowserJobStatus,
   isLockHoldingBrowserJobStatus,
   isTerminalBrowserJobStatus,
@@ -196,6 +197,17 @@ test("browser job store normalizes job shape and status classes", () => {
   assert.equal(isLockHoldingBrowserJobStatus("paused"), false);
   assert.equal(isTerminalBrowserJobStatus("cancelled"), true);
   assert.equal(isTerminalBrowserJobStatus("paused"), false);
+});
+
+test("hasBlockingBrowserJob flags jobs that need the human", () => {
+  assert.equal(hasBlockingBrowserJob([{ status: "running" }, { status: "queued" }]), false);
+  assert.equal(hasBlockingBrowserJob([{ status: "approval" }]), true);
+  assert.equal(hasBlockingBrowserJob([{ status: "blocked" }]), true);
+  assert.equal(hasBlockingBrowserJob([{ status: "failed" }]), true);
+  assert.equal(hasBlockingBrowserJob([{ status: "denied" }]), true);
+  assert.equal(hasBlockingBrowserJob([{ status: "running", pendingApproval: { step: {} } }]), true);
+  assert.equal(hasBlockingBrowserJob([]), false);
+  assert.equal(hasBlockingBrowserJob(null), false);
 });
 
 test("browser job store persists bounded pending approval only for approval jobs", () => {
@@ -636,6 +648,41 @@ test("browser job store updates terminal completion and monitor collapsed state"
   await harness.store.toggleMonitorCollapsed();
   assert.equal(harness.store.getMonitorCollapsed(), false);
   assert.equal(harness.writes.at(-1).collapsed, false);
+});
+
+test("browser job store clears settled jobs but keeps live and focused work", async () => {
+  const harness = createHarness();
+  const done = await harness.store.createJob({ goal: "done task", activate: false });
+  const cancelledJob = await harness.store.createJob({ goal: "cancel task", activate: false });
+  const live = await harness.store.createJob({ goal: "live task" });
+  await harness.store.updateJob(done.id, { status: "completed" });
+  await harness.store.updateJob(cancelledJob.id, { status: "cancelled" });
+
+  const removed = await harness.store.clearCompletedJobs();
+
+  assert.equal(removed, 2);
+  assert.deepEqual(harness.store.getJobs().map((job) => job.id), [live.id]);
+  assert.equal(harness.store.getActiveJobId(), live.id);
+  // The clear must be persisted, not just in-memory.
+  assert.deepEqual(harness.writes.at(-1).jobs.map((job) => job.id), [live.id]);
+});
+
+test("browser job store leaves blocked and failed jobs when clearing done work", async () => {
+  const harness = createHarness();
+  const blocked = await harness.store.createJob({ goal: "blocked task", activate: false });
+  const failed = await harness.store.createJob({ goal: "failed task", activate: false });
+  const done = await harness.store.createJob({ goal: "done task", activate: false });
+  await harness.store.updateJob(blocked.id, { status: "blocked" });
+  await harness.store.updateJob(failed.id, { status: "failed" });
+  await harness.store.updateJob(done.id, { status: "completed" });
+
+  const removed = await harness.store.clearCompletedJobs();
+
+  assert.equal(removed, 1);
+  assert.deepEqual(
+    harness.store.getJobs().map((job) => job.status).sort(),
+    ["blocked", "failed"]
+  );
 });
 
 test("browser job store preserves human stop state from stale runner updates unless explicitly resumed", async () => {
