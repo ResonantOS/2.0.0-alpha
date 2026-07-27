@@ -6,6 +6,7 @@ import {
   modelValue,
   parseModelsText,
   providerModelsText,
+  providerRequiresCredential,
   providerSort,
   providerTypeLabel,
   providerTypePresets
@@ -31,7 +32,7 @@ export function providerAccountPayload(form, provider = {}) {
     templateId,
     label: String(data.get("label") ?? "").trim(),
     providerType: preset.providerType,
-    authType: "api-key",
+    authType: preset.providerType === "local" ? "local-runtime" : "api-key",
     apiBaseUrl: String(data.get("apiBaseUrl") ?? "").trim(),
     role: String(data.get("role") ?? "").trim(),
     models: parseModelsText(data.get("models")),
@@ -89,6 +90,18 @@ export function providerAccountForm(provider = {}) {
   credential.autocomplete = "off";
   credential.placeholder = provider.id ? "Leave blank to keep current credential" : "Paste account API key";
 
+  function updateCredentialRequirement(templateId) {
+    const required = providerRequiresCredential(templateId);
+    credential.required = required;
+    credential.placeholder = provider.id
+      ? "Leave blank to keep current credential"
+      : required
+        ? "Paste account API key"
+        : "No API key needed for local runtime";
+  }
+
+  updateCredentialRequirement(template.value);
+
   function lockUrlForTemplate(templateId) {
     const preset = providerTypePresets[templateId] ?? providerTypePresets.minimax;
     const editable = allowsCustomProviderEndpoint(templateId);
@@ -104,6 +117,7 @@ export function providerAccountForm(provider = {}) {
     name.placeholder = `${preset.label} account`;
     models.value = preset.models.join("\n");
     lockUrlForTemplate(template.value);
+    updateCredentialRequirement(template.value);
   });
 
   const grid = document.createElement("div");
