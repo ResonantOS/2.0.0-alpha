@@ -212,9 +212,14 @@ export function modelRuntimeState(model, { secrets = {}, preferences = {}, local
     return null;
   }
   const allowed = isModelAllowed(model, preferences, catalog);
-  const configured = catalogEntry.providerId === "desktop-local"
+  const profile = providerProfileById(catalogEntry.providerId);
+  const isDesktopLocal = catalogEntry.providerId === "desktop-local";
+  const requiresCredential = !isDesktopLocal && String(profile?.authType ?? "api-key").toLowerCase() !== "none";
+  const configured = isDesktopLocal
     ? Boolean(localRuntimeUrl)
-    : Boolean(secrets[catalogEntry.providerId]);
+    : requiresCredential
+      ? Boolean(secrets[catalogEntry.providerId])
+      : true;
   return {
     ...catalogEntry,
     allowed,
@@ -262,6 +267,7 @@ export function providerRouteForModel(model, { localRuntimeUrl = "", catalog = m
         apiBaseUrl: profile.apiBaseUrl,
         wireModel: dynamicEntry.wireModel ?? model,
         label: profile.label ?? dynamicEntry.providerLabel ?? "Provider",
+        authType: profile.authType ?? "api-key",
       };
     }
   }
@@ -272,6 +278,7 @@ export function providerRouteForModel(model, { localRuntimeUrl = "", catalog = m
       apiBaseUrl: localRuntimeUrl || "http://127.0.0.1:11434/v1",
       wireModel: model,
       label: "Desktop Local",
+      authType: "local-runtime",
     };
   }
   if (model?.startsWith("gpt-")) {
@@ -308,6 +315,7 @@ export function providerConnectivityTarget(providerId, { localRuntimeUrl = "" } 
       url: localRuntimeUrl || "http://127.0.0.1:11434/v1/models",
       label: "Desktop Local",
       sendsCredential: false,
+      authType: "local-runtime",
     };
   }
   if (providerId === "shared-openai") {

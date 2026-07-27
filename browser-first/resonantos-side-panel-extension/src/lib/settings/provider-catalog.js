@@ -256,6 +256,11 @@ export function allowsCustomProviderEndpoint(templateId) {
   return ["custom", "local", "openai-compatible"].includes(preset?.providerType);
 }
 
+export function providerRequiresCredential(templateId) {
+  const preset = providerTypePresets[String(templateId ?? "minimax")];
+  return preset?.providerType !== "local";
+}
+
 export function providerModelsText(provider) {
   return (provider.models ?? [])
     .map((model) => modelValue(model))

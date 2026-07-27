@@ -483,11 +483,11 @@ export function createProviderBridgeService({
     return new Set(configured.length ? configured : declaredModels).has(model);
   }
 
-  function providerModelRuntimeState(entry, { secrets = {}, preferences = {}, localRuntimeUrl = "", catalog = modelCatalog } = {}) {
+  function providerModelRuntimeState(entry, { secrets = {}, preferences = {}, localRuntimeUrl = "", catalog = modelCatalog, profiles = providerProfiles } = {}) {
     const allowed = isModelAllowedForProviderModel(entry.providerId, entry.model, preferences, catalog);
-    const configured = entry.providerId === "desktop-local"
-      ? Boolean(localRuntimeUrl)
-      : Boolean(secrets[entry.providerId]);
+    const profile = profiles.find((candidate) => candidate.id === entry.providerId) ?? {};
+    const requiresCredential = String(profile.authType ?? "api-key").toLowerCase() !== "none";
+    const configured = requiresCredential ? Boolean(secrets[entry.providerId]) : true;
     return {
       ...entry,
       allowed,
@@ -605,31 +605,42 @@ export function createProviderBridgeService({
     if (!profile) {
       throw new Error("Unknown provider profile.");
     }
-    const [secrets, preferences, strategies, catalog] = await Promise.all([
+    const [secrets, preferences, strategies, catalog, profiles] = await Promise.all([
       readProviderSecrets(),
       readProviderModelPreferences().catch(() => ({})),
       resolvedRoutingStrategies(),
       allModelCatalog(),
+      allProviderProfiles(),
     ]);
     const models = catalog.filter((entry) => entry.providerId === providerId);
-    const configured = Boolean(secrets[providerId]);
+    const isDesktopLocal = providerId === "desktop-local";
+    const requiresCredential = !isDesktopLocal && String(profile.authType ?? "api-key").toLowerCase() !== "none";
+    const configured = isDesktopLocal
+      ? Boolean(process.env.RESONANTOS_LOCAL_RUNTIME_URL)
+      : requiresCredential
+        ? Boolean(secrets[providerId])
+        : true;
     const routeConsumers = strategies.filter((strategy) =>
       [strategy.primary, ...(strategy.fallbackChain ?? [])]
         .some((entry) => entry?.providerId === providerId)
     );
     const blockedConsumers = routeConsumers.filter((strategy) => strategy.routeState !== "routable");
-    const availableModels = models.filter((entry) => providerModelRuntimeState(entry, {
+    const runtimeOptions = {
       secrets,
       preferences,
       catalog,
       localRuntimeUrl: process.env.RESONANTOS_LOCAL_RUNTIME_URL,
-    })?.configured);
+      profiles,
+    };
+    const availableModels = models.filter((entry) => providerModelRuntimeState(entry, runtimeOptions)?.configured);
     const allowedModels = models.filter((entry) => isModelAllowedForProviderModel(providerId, entry.model, preferences, catalog));
     const state = configured && availableModels.length
       ? (blockedConsumers.length ? "degraded" : "ready")
       : configured && !allowedModels.length
         ? "disabled"
-      : "missing-credential";
+      : requiresCredential
+        ? "missing-credential"
+        : "unreachable";
     return {
       providerId,
       label: profile.label,
@@ -641,12 +652,7 @@ export function createProviderBridgeService({
         label: entry.label,
         runtime: entry.runtime,
         allowed: isModelAllowedForProviderModel(providerId, entry.model, preferences, catalog),
-        configured: Boolean(providerModelRuntimeState(entry, {
-          secrets,
-          preferences,
-          catalog,
-          localRuntimeUrl: process.env.RESONANTOS_LOCAL_RUNTIME_URL,
-        })?.configured),
+        configured: Boolean(providerModelRuntimeState(entry, runtimeOptions)?.configured),
       })),
       routeConsumers: routeConsumers.map((strategy) => ({
         id: strategy.id,
@@ -671,8 +677,9 @@ export function createProviderBridgeService({
       throw new Error("Unknown provider profile.");
     }
     const secrets = await readProviderSecrets();
-    const credential = secrets[providerId];
-    if (!credential) {
+    const requiresCredential = String(profile.authType ?? "api-key").toLowerCase() !== "none";
+    const credential = secrets[providerId] ?? "";
+    if (requiresCredential && !credential) {
       const result = {
         providerId,
         label: profile.label,
@@ -690,7 +697,7 @@ export function createProviderBridgeService({
       providerId,
       url: `${String(profile.apiBaseUrl).replace(/\/$/, "")}/models`,
       label: profile.label,
-      sendsCredential: profile.authType !== "none",
+      sendsCredential: requiresCredential,
     } : null);
     if (!target) {
       throw new Error("No connectivity diagnostic target exists for this provider.");
@@ -996,7 +1003,8 @@ export function createProviderBridgeService({
       allProviderProfiles(),
     ]);
     const route = providerRouteForArchiveVerifier(secrets, requestedModel, { catalog, profiles });
-    if (!route) {
+    const routeSendsCredential = String(route?.authType ?? "api-key").toLowerCase() !== "none";
+    if (!route || (routeSendsCredential && !secrets[route.providerId])) {
       return {
         semanticStatus: "unavailable",
         semanticSummary: "No configured provider was available for semantic archive verification.",
@@ -1023,11 +1031,13 @@ export function createProviderBridgeService({
     });
     try {
       const response = await fetchProviderResponse(
-        providerRequestUrl(route, "/chat/completions"),
+        providerRequestUrl(route, "/chat/completions", { sendsCredential: routeSendsCredential }),
         {
           method: "POST",
-          headers: {
+          headers: routeSendsCredential ? {
             "Authorization": `Bearer ${secrets[route.providerId]}`,
+            "Content-Type": "application/json",
+          } : {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
@@ -1158,8 +1168,9 @@ export function createProviderBridgeService({
     });
     const failures = [];
     for (const { model: attemptModel, route } of uniqueAttempts) {
-      const apiKey = route.providerId === "desktop-local" ? "local-runtime" : secrets[route.providerId];
-      if (!apiKey) {
+      const sendsCredential = String(route.authType ?? "api-key").toLowerCase() !== "none";
+      const apiKey = sendsCredential ? secrets[route.providerId] : "local-runtime";
+      if (sendsCredential && !apiKey) {
         if (routeDecision.source !== "strategy") {
           // A manually selected, catalog-valid model whose provider has no
           // credential: name it and point to recovery, instead of the generic
@@ -1172,11 +1183,13 @@ export function createProviderBridgeService({
       let response;
       try {
         response = await fetchProviderResponse(
-          providerRequestUrl(route, "/chat/completions", { sendsCredential: route.providerId !== "desktop-local" }),
+          providerRequestUrl(route, "/chat/completions", { sendsCredential }),
           {
             method: "POST",
-            headers: {
+            headers: sendsCredential ? {
               "Authorization": `Bearer ${apiKey}`,
+              "Content-Type": "application/json",
+            } : {
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
@@ -1261,8 +1274,9 @@ export function createProviderBridgeService({
       allProviderProfiles(),
     ]);
     const route = providerRouteForModel(payload.model, { catalog, profiles });
-    const apiKey = secrets[route.providerId];
-    if (!apiKey) {
+    const sendsCredential = String(route.authType ?? "api-key").toLowerCase() !== "none";
+    const apiKey = sendsCredential ? secrets[route.providerId] : "local-runtime";
+    if (sendsCredential && !apiKey) {
       return {
         reply: fallbackInlineAssistant({ action, selection, prompt }),
         providerId: "local-fallback",
@@ -1285,11 +1299,13 @@ export function createProviderBridgeService({
     let response;
     try {
       response = await fetchProviderResponse(
-        providerRequestUrl(route, "/chat/completions"),
+        providerRequestUrl(route, "/chat/completions", { sendsCredential }),
         {
           method: "POST",
-          headers: {
+          headers: sendsCredential ? {
             "Authorization": `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+          } : {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
