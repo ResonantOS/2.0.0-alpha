@@ -552,7 +552,7 @@ test("settings provider add modal exposes comprehensive cloud, gateway, local, a
 
     select.value = "ollama";
     select.dispatchEvent(new Event("change", { bubbles: true }));
-    assert.equal(document.querySelector("input[name='apiBaseUrl']").value, "http://127.0.0.1:11434");
+    assert.equal(document.querySelector("input[name='apiBaseUrl']").value, "http://127.0.0.1:11434/v1");
     assert.match(document.querySelector("textarea[name='models']").value, /batiai\/gemma4-e2b:q4/);
   } finally {
     document.querySelector(".settings-provider-modal")?.remove();
