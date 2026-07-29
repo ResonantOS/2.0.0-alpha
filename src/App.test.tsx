@@ -4417,7 +4417,7 @@ describe("App boot flow", () => {
     expect(requestProviderSetupProbeMock).toHaveBeenCalledWith(
       expect.objectContaining({
         providerType: "local",
-        runtimeNodeEndpoint: "http://127.0.0.1:11434",
+        runtimeNodeEndpoint: "http://127.0.0.1:11434/v1",
       }),
     );
   });

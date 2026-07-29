@@ -185,7 +185,7 @@ export const providerTypePresets = {
     label: "Ollama",
     providerType: "local",
     category: "Local software",
-    apiBaseUrl: "http://127.0.0.1:11434",
+    apiBaseUrl: "http://127.0.0.1:11434/v1",
     models: ["batiai/gemma4-e2b:q4"],
   },
   "lm-studio": {

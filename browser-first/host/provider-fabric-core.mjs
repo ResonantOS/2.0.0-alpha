@@ -158,7 +158,7 @@ export function modelCatalogEntriesForProvider(profile) {
         providerId,
         providerLabel,
         providerType,
-        runtime: typeof entry === "string" ? (builtIn?.runtime ?? "cloud") : (entry.runtime ?? builtIn?.runtime ?? "cloud"),
+        runtime: typeof entry === "string" ? (builtIn?.runtime ?? (providerType === "local" ? "local" : "cloud")) : (entry.runtime ?? builtIn?.runtime ?? (providerType === "local" ? "local" : "cloud")),
         costTier: typeof entry === "string" ? (builtIn?.costTier ?? "custom") : (entry.costTier ?? builtIn?.costTier ?? "custom"),
         qualityTier: typeof entry === "string" ? (builtIn?.qualityTier ?? "custom") : (entry.qualityTier ?? builtIn?.qualityTier ?? "custom"),
         wireModel: typeof entry === "string" ? (builtIn?.wireModel ?? model) : (entry.wireModel ?? builtIn?.wireModel ?? model),
@@ -213,8 +213,9 @@ export function modelRuntimeState(model, { secrets = {}, preferences = {}, local
   }
   const allowed = isModelAllowed(model, preferences, catalog);
   const profile = providerProfileById(catalogEntry.providerId);
+  const authType = String(profile?.authType ?? "api-key").toLowerCase();
   const isDesktopLocal = catalogEntry.providerId === "desktop-local";
-  const requiresCredential = !isDesktopLocal && String(profile?.authType ?? "api-key").toLowerCase() !== "none";
+  const requiresCredential = !isDesktopLocal && !["none", "local-runtime"].includes(authType);
   const configured = isDesktopLocal
     ? Boolean(localRuntimeUrl)
     : requiresCredential
