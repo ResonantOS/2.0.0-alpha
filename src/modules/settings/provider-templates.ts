@@ -478,7 +478,7 @@ export const providerTemplates: ProviderTemplate[] = [
   localTemplate({
     id: "ollama",
     label: "Ollama",
-    apiBaseUrl: "http://127.0.0.1:11434",
+    apiBaseUrl: "http://127.0.0.1:11434/v1",
     models: ["batiai/gemma4-e2b:q4"],
     primaryModel: "batiai/gemma4-e2b:q4",
     fallbackModel: undefined,
@@ -495,7 +495,7 @@ export const providerTemplates: ProviderTemplate[] = [
   localTemplate({
     id: "dgx-spark",
     label: "NVIDIA DGX Spark",
-    apiBaseUrl: "http://dgx-spark.local:11434",
+    apiBaseUrl: "http://dgx-spark.local:11434/v1",
     models: [],
     primaryModel: "",
     runtimeKind: "remote-user-owned",
