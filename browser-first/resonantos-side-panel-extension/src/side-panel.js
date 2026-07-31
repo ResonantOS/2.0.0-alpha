@@ -823,6 +823,7 @@ const agentControlRunner = createAgentControlRunner({
   executeControlStep,
   finishControlRun,
   getActiveJobId: () => browserJobStore.getActiveJobId(),
+  getActiveJobStatus: () => browserJobStore.findJob(browserJobStore.getActiveJobId())?.status ?? null,
   getCurrentControlRun: () => currentControlRun,
   getLastSnapshot: () => lastSnapshot,
   observeControlPage,

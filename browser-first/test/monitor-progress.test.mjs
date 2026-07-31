@@ -70,4 +70,12 @@ test("monitor progress helpers summarize terminal runs", () => {
     steps: [{ state: "blocked", details: { nextHumanAction: "Pick the target." } }],
   }).body, /Pick the target/);
   assert.equal(controlRunSummary({ status: "running", steps: [] }), null);
+  assert.deepEqual(controlRunSummary({
+    status: "cancelled",
+    steps: [{ state: "cancelled", details: { nextHumanAction: "Review the page state." } }],
+  }), {
+    state: "cancelled",
+    title: "Task stopped",
+    body: "Augmentor stopped before the next browser action. No pending approval or page control remains active. Review the page state, then continue the job, start a new task, or save a report.",
+  });
 });

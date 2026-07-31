@@ -151,6 +151,7 @@ export function createSidePanelScheduledBrowserJobRunner({
         syncFocusedLocalRun();
       },
       getActiveJobId: () => job.id,
+      getActiveJobStatus: () => browserJobStore.findJob(job.id)?.status ?? null,
       getCurrentControlRun: () => localRun,
       getLastSnapshot: () => localLastSnapshot,
       observeControlPage: () => observeQueuedJobPage(job, {

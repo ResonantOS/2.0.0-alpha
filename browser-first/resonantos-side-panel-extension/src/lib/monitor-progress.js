@@ -122,6 +122,13 @@ export function controlRunSummary(run) {
       body: "Augmentor stopped at a gated action. Review the page, then approve once, trust safe actions for this task class, deny, or delegate the issue.",
     };
   }
+  if (run?.status === "cancelled") {
+    return {
+      state: "cancelled",
+      title: "Task stopped",
+      body: "Augmentor stopped before the next browser action. No pending approval or page control remains active. Review the page state, then continue the job, start a new task, or save a report.",
+    };
+  }
   if (run?.status === "denied") {
     return {
       state: "blocked",
