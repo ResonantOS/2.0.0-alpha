@@ -2,6 +2,7 @@ import {
   controlRunProgress,
   controlRunProgressSummary
 } from "./monitor-renderers.js";
+import { redactTraceText } from "./trace-redaction.js";
 
 export function createControlReportingService({
   addMessage,
@@ -98,7 +99,7 @@ export function createControlReportingService({
     const currentControlRun = getCurrentControlRun();
     if (!currentControlRun) return "";
     const lastSnapshot = getLastSnapshot();
-    return [
+    const report = [
       "# Browser Agent Control Report",
       "",
       `- id: ${currentControlRun.id}`,
@@ -131,6 +132,7 @@ export function createControlReportingService({
       "This is an intake artifact only. Wallet, credential, public-submit, payment, and destructive actions require explicit human approval.",
       ""
     ].join("\n");
+    return redactTraceText(report);
   };
 
   const saveControlReportToArchive = async (results, status) => {
@@ -154,7 +156,7 @@ export function createControlReportingService({
     const steps = Array.isArray(job.steps) ? job.steps : [];
     const artifacts = Array.isArray(job.artifacts) ? job.artifacts : [];
     const preflight = job.preflightDecision;
-    return [
+    const report = [
       "# Browser Job Report",
       "",
       `- id: ${job.id}`,
@@ -206,6 +208,7 @@ export function createControlReportingService({
       "This is an intake artifact only. Wallet, credential, public-submit, payment, and destructive actions require explicit human approval.",
       ""
     ].join("\n");
+    return redactTraceText(report);
   };
 
   const buildControlDelegationPacket = () => {
@@ -215,7 +218,7 @@ export function createControlReportingService({
     const lastSnapshot = getLastSnapshot();
     const step = pendingApproval?.step;
     const steps = Array.isArray(currentControlRun?.steps) ? currentControlRun.steps : [];
-    return [
+    const packet = [
       "# Browser Control Delegation Context",
       "",
       "## Requested Outcome",
@@ -251,6 +254,7 @@ export function createControlReportingService({
       "The receiving add-on gets this context packet only. ResonantOS keeps provider routing, wallet actions, credentials, browser permissions, and trusted memory writes mediated.",
       ""
     ].join("\n");
+    return redactTraceText(packet);
   };
 
   const saveBrowserJobReportToArchive = async (job) => {
@@ -279,12 +283,12 @@ export function createControlReportingService({
         contextMarkdown: buildControlDelegationPacket(),
         source: "browser-control-blocker",
         sourceControlRunId: currentControlRun?.id ?? "",
-        mission: [
+        mission: redactTraceText([
           "Investigate blocked browser-control task.",
           `Goal: ${currentControlRun?.goal ?? "unknown"}`,
           step ? `Blocked step: ${controlStepLabel(step)}` : "",
           pendingApproval?.reason ? `Reason: ${pendingApproval.reason}` : ""
-        ].filter(Boolean).join("\n")
+        ].filter(Boolean).join("\n"))
       }
     }).catch((error) => ({ error: error instanceof Error ? error.message : String(error) }));
     await addMessage(

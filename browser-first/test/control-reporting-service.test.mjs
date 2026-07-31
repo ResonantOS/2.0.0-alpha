@@ -94,6 +94,75 @@ test("control reporting service builds browser control reports with boundaries",
   assert.match(report, /Wallet, credential, public-submit, payment, and destructive actions/);
 });
 
+test("control reporting service redacts secret-like values from reports", () => {
+  const harness = createHarness({
+    currentControlRun: {
+      id: "job-1",
+      goal: "book with password=hunter2secret and pin: 9876",
+      planner: "observe-act-verify-loop",
+      startedAt: "2026-05-26T10:00:00.000Z",
+      summary: "Observe and act",
+      status: "completed",
+      timing: { durationMs: 1000 },
+      steps: [
+        { type: "type", field: "Search", state: "completed", note: 'typed "vintage synths"', details: { confidence: "high" } },
+        { type: "click", text: "Submit", state: "blocked", note: "auth token 7f3c9a1b2d4e5f68790a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f", details: { confidence: "low" } }
+      ],
+      pageLock: { tabId: 7, siteKey: "example.test", url: "https://example.test/login?token=abc123&email=a@b.com", reason: "Agent Control goal" }
+    }
+  });
+
+  const report = harness.service.buildControlReport([
+    { step: { type: "type", field: "Search", state: "completed", note: 'typed "vintage synths"' }, result: { ok: true } },
+    { step: { type: "click", text: "Submit", state: "blocked" }, result: { ok: false, error: "auth token 7f3c9a1b2d4e5f68790a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f" } }
+  ], "blocked");
+
+  assert.match(report, /password=REDACTED/);
+  assert.doesNotMatch(report, /hunter2secret/);
+  assert.match(report, /pin: REDACTED/);
+  assert.match(report, /token=REDACTED/);
+  assert.doesNotMatch(report, /abc123/);
+  assert.match(report, /email=a@b\.com/);
+  assert.match(report, /\[REDACTED-TOKEN\]/);
+  assert.doesNotMatch(report, /7f3c9a1b/);
+});
+
+test("control reporting service redacts secrets from job reports and delegation packets", async () => {
+  const harness = createHarness({
+    pendingApproval: {
+      step: { type: "click", text: "Submit" },
+      reason: "Public submit requires approval with token=xyz789"
+    }
+  });
+  const job = {
+    id: "job-2",
+    goal: "compare a product",
+    status: "blocked",
+    planner: "observe-act-verify-loop",
+    createdAt: "2026-05-26T09:00:00.000Z",
+    updatedAt: "2026-05-26T09:02:00.000Z",
+    timing: { durationMs: 122000 },
+    summary: "Observed and compared",
+    pageLock: { tabId: 12, siteKey: "example.com", url: "https://example.com/session?session=abc", reason: "Product comparison task" },
+    steps: [
+      { label: "Read page", state: "completed", note: "read product page", timing: { durationMs: 1500 }, details: { confidence: "high" } },
+      { label: "Click details", state: "blocked", note: "clicked details", details: { confidence: "low", nextHumanAction: "Focus the correct product row before resuming." } }
+    ],
+    artifacts: []
+  };
+
+  const report = harness.service.buildBrowserJobReport(job);
+  assert.match(report, /session=REDACTED/);
+  assert.doesNotMatch(report, /abc/);
+
+  await harness.service.delegateControlIssue();
+  const bridgeCall = harness.events.find((event) => event[0] === "bridge");
+  assert.match(bridgeCall[2].contextMarkdown, /token=REDACTED/);
+  assert.doesNotMatch(bridgeCall[2].contextMarkdown, /xyz789/);
+  assert.match(bridgeCall[2].mission, /token=REDACTED/);
+  assert.doesNotMatch(bridgeCall[2].mission, /xyz789/);
+});
+
 test("control reporting service saves reports to archive intake", async () => {
   const harness = createHarness();
 
