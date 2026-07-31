@@ -1,0 +1,42 @@
+{
+  "artifactKind": "agent-control-certification",
+  "artifactsRoot": "output/runtime-evidence/agent-control-certification",
+  "targetFiles": [
+    "browser-first/test/agent-control-certification-fixtures.mjs",
+    "browser-first/test/fixtures/agent-control-certification/agent-control-certification-page.html",
+    "browser-first/test/control-step-executor.test.mjs",
+    "browser-first/test/agent-control-runner.test.mjs",
+    "browser-first/resonantos-side-panel-extension/src/content.js",
+    "browser-first/resonantos-side-panel-extension/src/lib/content-field-safety.js",
+    "browser-first/resonantos-side-panel-extension/src/lib/control-step-executor.js",
+    "browser-first/resonantos-side-panel-extension/src/lib/agent-control-runner.js"
+  ],
+  "certificationFiles": [
+    "browser-first/test/agent-control-certification/README.md",
+    "browser-first/test/agent-control-certification/certification.config.json",
+    "browser-first/test/agent-control-certification/run-certification.mjs"
+  ],
+  "focusedTestFiles": [
+    "browser-first/test/control-step-executor.test.mjs",
+    "browser-first/test/agent-control-runner.test.mjs"
+  ],
+  "focusedTestAssertions": [
+    "safe click on the certification fixture completes",
+    "safe type into the search field on the certification fixture completes",
+    "safe type into the generic notes field completes",
+    "safe scroll on the certification fixture completes",
+    "wallet connect click is denied with the wallet boundary named",
+    "public submit clicks are denied as human-only handoffs",
+    "typing into credential and payment fields is denied with the boundary named",
+    "safe click/type/scroll plan completes on the certification fixture",
+    "wallet connect attempt blocks the run with the wallet boundary named",
+    "public-submit attempt creates an approval card",
+    "credential typing attempt blocks the run with the credential boundary named"
+  ],
+  "fullRegressionCommand": ["npm", "run", "test:browser-first"],
+  "minFullRegressionPassCount": 649,
+  "forbiddenEvidenceText": [
+    "AC_CERT_SENTINEL_DO_NOT_LEAK"
+  ],
+  "liveProofDirEnv": "RESONANTOS_CERT_PROOF_DIR"
+}

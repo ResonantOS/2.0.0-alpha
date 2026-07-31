@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createControlStepExecutor } from "../resonantos-side-panel-extension/src/lib/control-step-executor.js";
+import { createCertifiedExecutor, loadCertificationPage } from "./agent-control-certification-fixtures.mjs";
 
 function createHarness(overrides = {}) {
   const events = [];
@@ -138,4 +139,116 @@ test("control step executor summarizes read steps and rejects unknown steps", as
   assert.ok(harness.events.some((event) => event[0] === "summary"));
   assert.equal(unknown.ok, false);
   assert.match(unknown.error, /Unknown control step/);
+});
+
+// #223: certification fixtures. The executor below is wired to the REAL
+// content.js safety layer inside the fixture page (not stubs), so safe actions
+// certify a completed state with observable page-side effects, and high-risk
+// actions certify boundary-named denials before any page mutation.
+
+test("#223: safe click on the certification fixture completes and visibly mutates the page", async () => {
+  const { win, send } = await loadCertificationPage();
+  const { executor } = createCertifiedExecutor({ win, send });
+
+  const result = await executor.executeControlStep({ type: "click", text: "Load more", userApproved: true });
+
+  assert.equal(result.ok, true, "safe click must complete");
+  // content.js fires the dispatched click sequence and then element.click(),
+  // so a single certification step can actuate the handler more than once;
+  // the fixture asserts honest page-side activation (>= 1), not an exact count.
+  assert.ok(win.__certClicks.loadMore >= 1, "page-side click handler must have run");
+  assert.ok(win.document.getElementById("cert-feed").querySelectorAll("article").length > 12, "click must have visibly loaded a new row");
+  assert.equal(win.__certActivity, "loaded more rows", "certification activity log must show the completed click");
+});
+
+test("#223: safe type into the search field on the certification fixture completes and lands the value", async () => {
+  const { win, send } = await loadCertificationPage();
+  const { executor } = createCertifiedExecutor({ win, send });
+
+  const result = await executor.executeControlStep({ type: "type", text: "vintage synths", field: "Search the catalog", userApproved: true });
+
+  assert.equal(result.ok, true, "search typing must complete");
+  assert.equal(win.document.getElementById("cert-search").value, "vintage synths", "typed value must land in the page");
+  assert.equal(win.__certActivity, "typed vintage synths", "certification activity log must show the typed value");
+});
+
+test("#223: safe type into the generic notes field completes and lands the value", async () => {
+  const { win, send } = await loadCertificationPage();
+  const { executor } = createCertifiedExecutor({ win, send });
+
+  const result = await executor.executeControlStep({ type: "type", text: "audit notes", field: "Notes", userApproved: true });
+
+  assert.equal(result.ok, true, "generic typing must complete");
+  assert.equal(win.document.getElementById("cert-notes").value, "audit notes", "typed value must land in the page");
+});
+
+test("#223: safe scroll on the certification fixture completes and reports real scroll position", async () => {
+  const { win, send } = await loadCertificationPage();
+  const { executor } = createCertifiedExecutor({ win, send });
+
+  const down = await executor.executeControlStep({ type: "scroll", direction: "down" });
+
+  assert.equal(down.ok, true, "scroll down must complete");
+  assert.ok(down.scrollY > 0, "scroll down must report a positive scroll position");
+  assert.equal(win.scrollY, down.scrollY, "page-side scroll position must match the certified result");
+
+  const top = await executor.executeControlStep({ type: "scroll", direction: "top" });
+
+  assert.equal(top.ok, true, "scroll to top must complete");
+  assert.equal(top.scrollY, 0, "scroll to top must return to the top of the page");
+  assert.equal(win.__certScrollY, 0, "page-side scroll listener must observe the top position");
+});
+
+test("#223: wallet connect click is denied with the wallet boundary named", async () => {
+  const { win, send } = await loadCertificationPage();
+  const { executor } = createCertifiedExecutor({ win, send });
+
+  const result = await executor.executeControlStep({ type: "click", text: "Connect wallet", userApproved: true });
+
+  assert.equal(result.ok, false, "wallet connect must be denied to automation");
+  assert.equal(result.approvalRequired, true);
+  assert.equal(result.deniedToAutomation, true);
+  assert.match(result.error, /wallet|payment|login|credential/, "denial must name the wallet/payment boundary, not an ambiguous target");
+  assert.equal(win.__certClicks.wallet, 0, "the wallet control must never be actuated");
+  assert.equal(win.__certActivity, "fixture ready", "the page must remain untouched by the denied click");
+});
+
+test("#223: public submit clicks are denied as human-only handoffs", async () => {
+  const { win, send } = await loadCertificationPage();
+  const { executor } = createCertifiedExecutor({ win, send });
+
+  const order = await executor.executeControlStep({ type: "click", text: "Place order", userApproved: true });
+
+  assert.equal(order.ok, false, "Place order must be denied");
+  assert.equal(order.deniedToAutomation, true);
+  assert.equal(order.humanHandoff, true);
+  assert.match(order.error, /public submit|commit|human/, "denial must name the public-submit boundary");
+  assert.equal(win.__certClicks.placeOrder, 0, "the order control must never be actuated");
+
+  const post = await executor.executeControlStep({ type: "click", text: "Post comment", userApproved: true });
+
+  assert.equal(post.ok, false, "Post comment must be denied");
+  assert.equal(post.humanHandoff, true);
+  assert.match(post.error, /public submit|commit|human/, "denial must name the public-submit boundary");
+  assert.equal(win.__certClicks.post, 0, "the post control must never be actuated");
+});
+
+test("#223: typing into credential and payment fields is denied with the boundary named and values untouched", async () => {
+  const { win, send } = await loadCertificationPage();
+  const { executor } = createCertifiedExecutor({ win, send });
+
+  const password = await executor.executeControlStep({ type: "type", text: "hunter2", field: "Password", userApproved: true });
+
+  assert.equal(password.ok, false, "password typing must be denied");
+  assert.equal(password.deniedToAutomation, true);
+  assert.equal(password.fieldSafety.kind, "credential", "denial must report the credential boundary");
+  assert.match(password.error, /credential|human/i, "denial message must name the boundary");
+  assert.equal(win.document.getElementById("cert-password").value, "", "the password field must stay empty");
+
+  const card = await executor.executeControlStep({ type: "type", text: "4111 2222 3333 4444", field: "Card number", userApproved: true });
+
+  assert.equal(card.ok, false, "card number typing must be denied");
+  assert.equal(card.fieldSafety.kind, "payment", "denial must report the payment boundary");
+  assert.match(card.error, /payment|human/i, "denial message must name the boundary");
+  assert.equal(win.document.getElementById("cert-card").value, "", "the card field must stay empty");
 });

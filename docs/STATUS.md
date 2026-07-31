@@ -60,7 +60,17 @@ sandbox denials remain explicit non-certified skips. Until
 [#240](https://github.com/ResonantOS/2.0.0-alpha/issues/240) supplies the
 non-bypassable public-submit handoff, that scenario is reported as a gate rather
 than a false pass. Manual dispatch can set `public_submit_contract=required` to
-make the pre-#240 approval path fail certification.
+make the pre-#240 approval path fail certification. The #240 handoff
+implementation is open in
+[#281](https://github.com/ResonantOS/2.0.0-alpha/pull/281); live proof is still
+required to close it. Deterministic certification fixtures for safe
+click/type/scroll and blocked high-risk paths
+([#223](https://github.com/ResonantOS/2.0.0-alpha/issues/223)) run through
+`browser-first/test/agent-control-certification/run-certification.mjs` with
+run-ID-bound artifacts, and credential alias fields
+(`passwd`/`pwd`/`pin`/`passkey`/`security_code`) are hard typing boundaries
+([#224](https://github.com/ResonantOS/2.0.0-alpha/issues/224), implementation
+open in [#282](https://github.com/ResonantOS/2.0.0-alpha/pull/282)).
 
 Runtime discovery is fixed-root and canonical: ambient `PATH`, arbitrary
 Hermes profile roots, and arbitrary OpenCode command paths are not executable
