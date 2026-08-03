@@ -24,6 +24,9 @@ scope, area, and delivery state belong in
 - [Side-Panel Command Reference](reference/COMMANDS.md) lists the supported
   Augmentor slash commands and their safety boundaries.
 - [Status](STATUS.md) records the latest verified snapshot.
+- [Alpha Code Review Report](../ALPHA_CODE_REVIEW_REPORT.md) records the
+  2026-08-03 security and reliability review, practical impact, repair guidance,
+  and regression criteria for commit 80dcd796.
 
 ## Change The Extension
 
