@@ -40,9 +40,10 @@ async function loadContentScript(html) {
     window.__submitted = false;
     window.__searchSubmitted = false;
     window.__safeClicked = false;
+    window.__safeClickCount = 0;
     document.querySelector("#public").addEventListener("submit", (e) => { e.preventDefault(); window.__submitted = true; });
     document.querySelector("#searchonly").addEventListener("submit", (e) => { e.preventDefault(); window.__searchSubmitted = true; });
-    document.querySelector("#safe").addEventListener("click", () => { window.__safeClicked = true; });
+    document.querySelector("#safe").addEventListener("click", () => { window.__safeClicked = true; window.__safeClickCount += 1; });
   `);
   // clickElement is async (spotlight dwell before the click), so responses can
   // arrive after a microtask — resolve a promise from sendResponse.
@@ -66,6 +67,15 @@ const PAGE = `<!doctype html>
     <input name="ordersearch" aria-label="Order search" placeholder="Order search">
     <button type="submit">Place order</button>
   </form>
+  <form id="postsearch" method="post" action="/irreversible">
+  <input name="mutating" type="search" aria-label="Mutating Search" placeholder="Mutating Search">
+    <button type="submit">Go</button>
+  </form>
+  <form id="neutral-login">
+    <input type="password" name="password" aria-label="Password">
+    <button id="neutral-continue" type="button">Continue</button>
+  </form>
+  <button id="delete-account" type="button">Delete account</button>
   <button id="publishit">Publish now</button>
   <button id="safe">Safe Details</button>
   <button id="sign" type="submit">Sign transaction</button>
@@ -81,6 +91,16 @@ test("#240: approved click of a public submit button is denied and does not subm
   assert.equal(res.deniedToAutomation, true);
   assert.equal(res.humanHandoff, true);
   assert.equal(win.__submitted, false, "the public form must NOT have been submitted");
+});
+
+test("destructive and neutral login controls are human-only", async () => {
+  const { send } = await loadContentScript(PAGE);
+  const deleteResult = await send({ type: "click_text", text: "Delete account", userApproved: true });
+  assert.equal(deleteResult.ok, false);
+  assert.equal(deleteResult.deniedToAutomation, true);
+  const loginResult = await send({ type: "click_text", text: "Continue", userApproved: true });
+  assert.equal(loginResult.ok, false);
+  assert.equal(loginResult.deniedToAutomation, true);
 });
 
 test("#240: approved click of a formless commit button (Publish) is denied", async () => {
@@ -105,11 +125,26 @@ test("#240 non-breaking: typing+submit on a search-only form still works", async
   assert.equal(res.submitted, true);
 });
 
+test("search-looking POST forms cannot be auto-submitted", async () => {
+  const { send } = await loadContentScript(PAGE);
+  const res = await send({ type: "type_text", field: "Mutating Search", text: "irreversible", submit: true });
+  assert.equal(res.ok, false);
+  assert.equal(res.deniedToAutomation, true);
+  assert.equal(res.humanHandoff, true);
+});
+
 test("#240 non-breaking: a benign non-submit button is still clickable", async () => {
   const { win, send } = await loadContentScript(PAGE);
   const res = await send({ type: "click_text", text: "Safe Details" });
   assert.equal(res.ok, true, "safe reads/clicks must not be blocked by #240");
   assert.equal(win.__safeClicked, true);
+});
+
+test("an accepted click dispatches exactly one click event", async () => {
+  const { win, send } = await loadContentScript(PAGE);
+  const res = await send({ type: "click_text", text: "Safe Details" });
+  assert.equal(res.ok, true);
+  assert.equal(win.__safeClickCount, 1);
 });
 
 test("agent control spotlights the target before clicking and dwells so it is visible", async () => {

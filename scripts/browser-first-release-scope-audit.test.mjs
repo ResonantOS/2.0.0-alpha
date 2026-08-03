@@ -96,10 +96,10 @@ test("parses committed ranges with local and CI defaults and configurable refs",
 });
 
 test("alpha workflow fetches history and supplies event-specific audit refs", async () => {
-  const workflow = await readFile(
+  const workflow = (await readFile(
     new URL("../.github/workflows/alpha-build.yml", import.meta.url),
     "utf8",
-  );
+  )).replace(/\r\n/g, "\n");
   const parsed = parse(workflow);
 
   assert.match(workflow, /uses: actions\/checkout@[a-f0-9]+[^\n]*\n\s+with:\n\s+fetch-depth: 0/);

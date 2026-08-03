@@ -235,7 +235,7 @@ test("bridge config resolver can refresh a generated config resource without eva
   }
 });
 
-test("bridge config resolver lets tokenless overrides inherit generated credentials", async () => {
+test("bridge config resolver does not inherit generated credentials across origins", async () => {
   const previousBridgeConfig = globalThis.__RESONANTOS_BRIDGE_CONFIG__;
   const previousChrome = globalThis.chrome;
   globalThis.__RESONANTOS_BRIDGE_CONFIG__ = Object.freeze({
@@ -262,9 +262,9 @@ test("bridge config resolver lets tokenless overrides inherit generated credenti
     const cfg = await resolveBridgeConfig();
     assert.equal(cfg.source, "override");
     assert.equal(cfg.bridgeUrl, "http://127.0.0.1:48773");
-    assert.equal(cfg.bridgeToken, "generated-token");
-    assert.equal(cfg.capabilityBootstrapToken, "generated-bootstrap");
-    assert.equal(cfg.bridgeCapabilityTokens["addon-runtime-read"], "runtime-token");
+    assert.equal(cfg.bridgeToken, "");
+    assert.equal(cfg.capabilityBootstrapToken, "");
+    assert.deepEqual(cfg.bridgeCapabilityTokens, {});
   } finally {
     if (previousBridgeConfig === undefined) {
       delete globalThis.__RESONANTOS_BRIDGE_CONFIG__;
@@ -522,4 +522,47 @@ test("bridge client uses runtime-scoped capability tokens after bootstrap", asyn
     body: { providerId: "shared-minimax", credential: "minimax-test-credential" },
   });
   assert.equal(saved.saved, true);
+});
+
+test("bridge client does not reuse runtime capability tokens across origins", async () => {
+  const originA = "http://127.0.0.1:57773";
+  const originB = "http://127.0.0.1:57774";
+  let lastHeaders = null;
+  const fetchImpl = async (url, options = {}) => {
+    lastHeaders = options.headers ?? {};
+    if (new URL(url).pathname === "/api/capability-tokens") {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ok: true,
+          capabilityTokens: { "provider-credential-write": "origin-a-only" },
+        }),
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, saved: true }),
+    };
+  };
+
+  await initCapabilityTokens({
+    bridgeUrl: originA,
+    bridgeToken: "origin-a-bridge",
+    capabilityBootstrapToken: "origin-a-bootstrap",
+    fetchImpl,
+  });
+  const client = createBridgeClient({
+    bridgeUrl: originB,
+    bridgeToken: "origin-b-bridge",
+    fetchImpl,
+  });
+
+  await client("/providers/credentials", {
+    method: "POST",
+    body: { providerId: "test", credential: "not-real" },
+  });
+  assert.equal(lastHeaders["X-ResonantOS-Bridge-Token"], "origin-b-bridge");
+  assert.equal(lastHeaders["X-ResonantOS-Bridge-Capability-Token"], undefined);
 });

@@ -219,6 +219,25 @@ test("content page snapshots redact sensitive and ambiguous editable values", as
   assert.ok(response.snapshot.fields.every((field) => typeof field.fieldKind === "string"));
 });
 
+test("password selections are blocked before they can reach the provider or draft storage", async () => {
+  const { dom, listener } = await loadContentScript(`
+    <!doctype html>
+    <input id="password" type="password" value="ordinary-password-42">
+  `);
+  const password = dom.window.document.querySelector("#password");
+  password.focus();
+  password.setSelectionRange(0, password.value.length);
+  let response = null;
+  listener({
+    channel: "resonantos.browser_first.content",
+    type: "get_selection",
+  }, {}, (payload) => {
+    response = payload;
+  });
+  assert.equal(response?.ok, true);
+  assert.equal(response.selection, null);
+});
+
 test("content page snapshots strip query and hash secrets from URLs", async () => {
   const { listener } = await loadContentScript(`
     <!doctype html>

@@ -89,6 +89,13 @@ function isAuthorizedBridgeRequest(request, bridgeToken) {
   return constantTimeEqual(request.headers[bridgeTokenHeader], bridgeToken);
 }
 
+function isAllowedProxyOrigin(request, extensionOrigin, allowedOrigins) {
+  const origin = String(request?.headers?.origin ?? "").trim();
+  if (!origin) return false;
+  const allowed = pickAllowedOrigin(request.headers, extensionOrigin, allowedOrigins);
+  return Boolean(allowed) && allowed !== "*";
+}
+
 function dashboardProxyPathPrefix() {
   // The extension iframe lives on a chrome-extension:// page (treated as a
   // secure origin by Chrome). Embedding http://<pi>:9119/... directly in an
@@ -335,6 +342,8 @@ function createDashboardProxyUpgradeHandler({
   notRunningHint = (port) => `${addonLabel} is not running on port ${port}.`,
   openPathPrefixes = [],
   mirrorPaths = DASHBOARD_PROXY_MIRROR_PATHS,
+  extensionOrigin,
+  allowedOrigins = [],
 }) {
   return function handleProxyUpgrade(request, clientSocket, head) {
     const remoteAddress = clientSocket?.remoteAddress;
@@ -344,11 +353,16 @@ function createDashboardProxyUpgradeHandler({
       clientSocket.destroy();
       return;
     }
+    if (!isAllowedProxyOrigin(request, extensionOrigin, allowedOrigins)) {
+      clientSocket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+      clientSocket.destroy();
+      return;
+    }
     if (!isAuthorizedBridgeRequest(request, bridgeToken)) {
       const isOpenPath = openPathPrefixes.some(
         (openPrefix) => pathPart === openPrefix || pathPart.startsWith(`${openPrefix}/`),
       );
-      if (!isOpenPath) {
+      if (!isOpenPath || !isAllowedProxyOrigin(request, extensionOrigin, allowedOrigins)) {
         clientSocket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
         clientSocket.destroy();
         return;
@@ -577,7 +591,7 @@ function createAddonProxyHandler({
       const isOpenPath = openPathPrefixes.some(
         (openPrefix) => pathPart === openPrefix || pathPart.startsWith(`${openPrefix}/`),
       );
-      if (!isOpenPath) {
+      if (!isOpenPath || !["GET", "HEAD"].includes(String(request.method ?? "").toUpperCase())) {
         writeJson(
           response,
           401,
@@ -1218,6 +1232,8 @@ export async function startBridgeServer({
     upstreamHostname: dashboardProxyHostname,
     upstreamPort: dashboardProxyPort,
     openPathPrefixes: effectiveOpenPathPrefixes,
+    extensionOrigin,
+    allowedOrigins,
   });
   server.on("upgrade", (req, socket, head) => {
     const pathPart = (req.url ?? "/").split("?")[0] ?? "/";
@@ -1316,6 +1332,8 @@ export async function startBridgeServersWithTls({
     upstreamHostname: dashboardProxyHostname,
     upstreamPort: dashboardProxyPort,
     openPathPrefixes: effectiveOpenPathPrefixes,
+    extensionOrigin,
+    allowedOrigins,
   });
   const onUpgrade = (req, socket, head) => {
     const pathPart = (req.url ?? "/").split("?")[0] ?? "/";

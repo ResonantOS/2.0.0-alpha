@@ -58,6 +58,35 @@ test("browser job scheduler starts multiple non-conflicting queued jobs", async 
   assert.equal(harness.store.findJob("job-b").status, "completed");
 });
 
+test("browser job scheduler single-flights concurrent ticks", async () => {
+  let release;
+  let executions = 0;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const harness = createHarness([
+    { id: "job-once", goal: "Run once", status: "queued", pageLock: { tabId: 1, siteKey: "once.example" } }
+  ], { maxConcurrent: 1 });
+  harness.scheduler = createBrowserJobScheduler({
+    browserJobStore: harness.store,
+    maxConcurrent: 1,
+    runJob: async () => {
+      executions += 1;
+      await gate;
+      return { ok: true };
+    }
+  });
+  await harness.store.hydrate();
+
+  const first = harness.scheduler.tick();
+  const second = harness.scheduler.tick();
+  release();
+  const [firstResult, secondResult] = await Promise.all([first, second]);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(firstResult.startedJobs.map((job) => job.id), ["job-once"]);
+  assert.deepEqual(secondResult.startedJobs.map((job) => job.id), ["job-once"]);
+  assert.equal(executions, 1);
+});
+
 test("browser job scheduler does not steal focus when starting background queued jobs", async () => {
   let releaseQueued;
   const gate = new Promise((resolve) => {

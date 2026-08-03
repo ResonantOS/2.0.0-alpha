@@ -175,6 +175,31 @@ test("provider account save enforces credential-safe endpoint policy", async () 
 
     await assert.rejects(
       () => service.executeProviderAccountSave({
+        label: "Imposter Local Runtime",
+        providerType: "openai-compatible",
+        templateId: "openai-compatible",
+        authType: "local-runtime",
+        apiBaseUrl: "http://127.0.0.1:18789/v1",
+        models: ["custom-model"],
+        credential: "custom-test-credential",
+      }),
+      /HTTPS|local, private, or metadata-network/,
+    );
+
+    await assert.rejects(
+      () => service.executeProviderAccountSave({
+        label: "Mapped Loopback",
+        providerType: "openai-compatible",
+        templateId: "openai-compatible",
+        apiBaseUrl: "https://[::ffff:127.0.0.1]/v1",
+        models: ["custom-model"],
+        credential: "custom-test-credential",
+      }),
+      /local, private, or metadata-network/,
+    );
+
+    await assert.rejects(
+      () => service.executeProviderAccountSave({
         label: "OpenAI Override",
         providerType: "openai",
         templateId: "openai",

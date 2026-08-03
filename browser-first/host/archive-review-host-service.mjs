@@ -1,3 +1,4 @@
+import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { createArchiveReviewService } from "./archive-review-service.mjs";
 
@@ -11,9 +12,40 @@ export function safeMemoryRelativePathForRoot(memoryRoot, relativePath, required
     throw new Error(`Archive path must stay inside ${requiredPrefix}.`);
   }
   const root = path.resolve(memoryRoot);
+  const prefixRoot = path.resolve(root, requiredPrefix);
   const resolved = path.resolve(root, normalized);
   if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) {
     throw new Error("Archive path escapes the memory root.");
+  }
+  const relativeToPrefix = path.relative(prefixRoot, resolved);
+  if (
+    relativeToPrefix === ".." ||
+    relativeToPrefix.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relativeToPrefix)
+  ) {
+    throw new Error(`Archive path must stay inside ${requiredPrefix}.`);
+  }
+
+  // Lexical normalization is not enough when an existing directory inside a
+  // zone is a symlink/junction. Canonicalize the nearest existing ancestor so
+  // new-file paths are protected as well as existing-file reads.
+  if (existsSync(root) && existsSync(prefixRoot)) {
+    const canonicalPrefixRoot = realpathSync.native(prefixRoot);
+    let ancestor = resolved;
+    while (!existsSync(ancestor)) {
+      const parent = path.dirname(ancestor);
+      if (parent === ancestor) break;
+      ancestor = parent;
+    }
+    const canonicalAncestor = realpathSync.native(ancestor);
+    const canonicalRelative = path.relative(canonicalPrefixRoot, canonicalAncestor);
+    if (
+      canonicalRelative === ".." ||
+      canonicalRelative.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(canonicalRelative)
+    ) {
+      throw new Error(`Archive path must stay inside ${requiredPrefix}.`);
+    }
   }
   return resolved;
 }

@@ -7,18 +7,49 @@
 const DEFAULT_PORT = 4096;
 const DEFAULT_HOST = "127.0.0.1";
 
+// The OpenCode child is a separately governed local runtime. Do not hand it
+// the bridge process environment wholesale: that environment can contain
+// provider keys, bridge capability tokens, and unrelated host credentials.
+// Keep only runtime/bootstrap variables that OpenCode needs to locate itself
+// and its own explicitly configured server credentials.
+export function scopedOpencodeEnv(source = process.env) {
+  const allowed = [
+    "HOME", "USERPROFILE", "PATH", "PATHEXT", "SystemRoot", "WINDIR",
+    "ComSpec", "TEMP", "TMP", "TMPDIR", "LANG", "LC_ALL",
+    "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME",
+    "APPDATA", "LOCALAPPDATA",
+    "OPENCODE_CONFIG", "OPENCODE_DATA", "OPENCODE_CACHE",
+    "OPENCODE_SERVER_USERNAME", "OPENCODE_SERVER_PASSWORD",
+  ];
+  return Object.fromEntries(allowed
+    .map((key) => [key, source?.[key]])
+    .filter(([, value]) => value !== undefined));
+}
+
+export function opencodeAuthHeaders(source = process.env) {
+  const username = String(source?.OPENCODE_SERVER_USERNAME ?? "");
+  const password = String(source?.OPENCODE_SERVER_PASSWORD ?? "");
+  if (!username && !password) return {};
+  return {
+    authorization: `Basic ${Buffer.from(`${username}:${password}`, "utf8").toString("base64")}`,
+  };
+}
+
 export function opencodeBaseUrl({ hostname = DEFAULT_HOST, port = DEFAULT_PORT } = {}) {
   return `http://${hostname}:${port}`;
 }
 
 // Is a server already answering at baseUrl? Probes the OpenAPI doc (always
 // present, needs no provider) with a short timeout.
-export async function opencodeServerHealthy({ fetchImpl, baseUrl, timeoutMs = 1500 } = {}) {
+export async function opencodeServerHealthy({ fetchImpl, baseUrl, headers = {}, timeoutMs = 1500 } = {}) {
   if (typeof fetchImpl !== "function") return false;
   try {
     const controller = typeof AbortController === "function" ? new AbortController() : null;
     const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
-    const res = await fetchImpl(`${baseUrl}/doc`, { signal: controller?.signal });
+    const res = await fetchImpl(`${baseUrl}/doc`, {
+      headers,
+      signal: controller?.signal,
+    });
     if (timer) clearTimeout(timer);
     return Boolean(res && res.ok);
   } catch {
@@ -36,12 +67,13 @@ export async function ensureOpencodeServer({
   hostname = DEFAULT_HOST,
   port = DEFAULT_PORT,
   env = {},
+  headers = {},
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   maxWaitMs = 12000,
   pollMs = 300
 } = {}) {
   const baseUrl = opencodeBaseUrl({ hostname, port });
-  if (await opencodeServerHealthy({ fetchImpl, baseUrl })) {
+  if (await opencodeServerHealthy({ fetchImpl, baseUrl, headers })) {
     return { baseUrl, spawned: false, process: null };
   }
   if (!command || typeof spawnImpl !== "function") {
@@ -54,7 +86,7 @@ export async function ensureOpencodeServer({
   const deadline = Date.now() + maxWaitMs;
   while (Date.now() < deadline) {
     await sleep(pollMs);
-    if (await opencodeServerHealthy({ fetchImpl, baseUrl })) {
+    if (await opencodeServerHealthy({ fetchImpl, baseUrl, headers })) {
       return { baseUrl, spawned: true, process: child };
     }
   }

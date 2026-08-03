@@ -61,6 +61,10 @@ test("archive review host helpers write frontmatter and enforce memory-relative 
     () => safeMemoryRelativePathForRoot("/tmp/resonantos-memory", "../escape.md", "INTAKE"),
     /Archive path must stay inside INTAKE|Archive path escapes/,
   );
+  assert.throws(
+    () => safeMemoryRelativePathForRoot("/tmp/resonantos-memory", "INTAKE/../REVIEW/escape.md", "INTAKE"),
+    /Archive path must stay inside INTAKE/,
+  );
 });
 
 test("archive review host service wires archive review dependencies", () => {

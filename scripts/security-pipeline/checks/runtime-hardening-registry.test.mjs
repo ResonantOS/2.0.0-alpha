@@ -433,7 +433,7 @@ function normalizeTlsArgs(args, root) {
   });
 }
 
-test("Hermes dashboard registry descriptors match captured production start and stop invocations", async () => {
+test("Hermes dashboard registry descriptors match captured production start and stop invocations", { skip: process.platform === "win32" ? "Hermes production fixture uses a POSIX runtime path." : false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "runtime-registry-dashboard-"));
   const calls = [];
   try {
@@ -472,7 +472,7 @@ test("Hermes dashboard registry descriptors match captured production start and 
   }
 });
 
-test("delegated CLI registry descriptors match captured production invocations", async () => {
+test("delegated CLI registry descriptors match captured production invocations", { skip: process.platform === "win32" ? "Hermes production fixture uses a POSIX runtime path." : false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "runtime-registry-addon-cli-"));
   const calls = [];
   try {
@@ -565,7 +565,7 @@ test("delegated CLI registry descriptors match captured production invocations",
   }
 });
 
-test("native picker registry descriptors match captured production invocations", async () => {
+test("native picker registry descriptors match captured production invocations", { skip: process.platform === "win32" ? "Native picker registry fixture is POSIX-specific." : false }, async () => {
   const registry = await readRegistry();
   const records = new Map(registry.recordSets[RECORD_SET].map((record) => [record.id, record]));
   const commonUnixEnvironment = {
@@ -659,7 +659,7 @@ test("native picker registry descriptors match captured production invocations",
   }
 });
 
-test("diagnostic open and reveal registry descriptors match captured production invocations", async () => {
+test("diagnostic open and reveal registry descriptors match captured production invocations", { skip: process.platform === "win32" ? "Diagnostic opener registry fixture is POSIX-specific." : false }, async () => {
   const registry = await readRegistry();
   const records = new Map(registry.recordSets[RECORD_SET].map((record) => [record.id, record]));
   const macEnvironment = {
@@ -850,7 +850,7 @@ test("bridge TLS registry descriptors match captured production OpenSSL invocati
   }
 });
 
-test("active runtime-hardening checks share production-derived spawn records", async () => {
+test("active runtime-hardening checks share production-derived spawn records", { skip: process.platform === "win32" ? "Production-derived runtime registry fixture is POSIX-specific." : false }, async () => {
   const registry = await readRegistry();
   const runtimeChecks = registry.checks.filter((check) =>
     check.family === "runtime-hardening" && check.policy !== "disabled"

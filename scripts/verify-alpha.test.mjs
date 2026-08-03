@@ -8,6 +8,7 @@ import {
   isDirectExecution,
   main,
   reportEvent,
+  resolveCommandExecutable,
   runCommand,
   runVerifier,
 } from "./verify-alpha.mjs";
@@ -152,10 +153,17 @@ test("spawns without a shell and inherits stdio and environment", async () => {
 
   assert.deepEqual(await pending, { exitCode: 0, signal: null });
   assert.deepEqual(calls, [[
-    "npm",
+    resolveCommandExecutable("npm"),
     ["run", "name; echo not-interpolated"],
     { cwd: "/repo", env, shell: false, stdio: "inherit" },
   ]]);
+});
+
+test("resolves npm and npx command shims explicitly on Windows", () => {
+  assert.equal(resolveCommandExecutable("npm", "win32"), "npm.cmd");
+  assert.equal(resolveCommandExecutable("npx", "win32"), "npx.cmd");
+  assert.equal(resolveCommandExecutable("node", "win32"), "node");
+  assert.equal(resolveCommandExecutable("npm", "linux"), "npm");
 });
 
 test("propagates a nonzero result to the process exit code", async () => {

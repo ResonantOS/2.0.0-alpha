@@ -18,6 +18,11 @@ on:
     branches:
       - dev
     paths:
+      - "browser-first/host/**"
+      - "browser-first/resonantos-side-panel-extension/src/**"
+      - "browser-first/test/**"
+      - "docs/architecture/ALPHA_RUNTIME_BOUNDARY.md"
+      - "docs/reference/CAPABILITY_MATRIX.md"
       - "browser-first/resonantos-side-panel-extension/src/lib/agent-control*"
       - "browser-first/resonantos-side-panel-extension/src/lib/control-*"
       - "browser-first/resonantos-side-panel-extension/src/lib/browser-page-actions.js"

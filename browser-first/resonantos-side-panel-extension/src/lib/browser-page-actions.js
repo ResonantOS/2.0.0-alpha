@@ -347,7 +347,7 @@ export function createBrowserPageActions(deps) {
       type: "active_tab_context",
       tabId: tab.id
     }).catch(() => null);
-    const snapshot = response?.snapshot ?? null;
+    const snapshot = response?.contextSnapshot ?? null;
     if (sameContextTab(snapshot, tab)) {
       setLastSnapshot(snapshot);
       setContextMeter(snapshot);

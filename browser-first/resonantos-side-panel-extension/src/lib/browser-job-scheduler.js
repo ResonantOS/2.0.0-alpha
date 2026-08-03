@@ -21,6 +21,7 @@ export function createBrowserJobScheduler({
 }) {
   const running = new Map();
   let started = false;
+  let tickInFlight = null;
 
   function schedulerState() {
     return browserJobStore.getSchedulerState({ maxConcurrent: safeMaxConcurrent(maxConcurrent) });
@@ -82,18 +83,26 @@ export function createBrowserJobScheduler({
   }
 
   async function tick() {
-    const state = schedulerState();
-    const startedJobs = [];
-    for (const job of state.runnableQueued ?? []) {
-      if (running.size >= safeMaxConcurrent(maxConcurrent)) break;
-      const startedJob = await startJob(job);
-      if (startedJob) startedJobs.push(startedJob);
-    }
-    return {
-      activeJobIds: activeJobIds(),
-      schedulerState: schedulerState(),
-      startedJobs
-    };
+    if (tickInFlight) return tickInFlight;
+    const inFlight = (async () => {
+      const state = schedulerState();
+      const startedJobs = [];
+      for (const job of state.runnableQueued ?? []) {
+        if (running.size >= safeMaxConcurrent(maxConcurrent)) break;
+        const startedJob = await startJob(job);
+        if (startedJob) startedJobs.push(startedJob);
+      }
+      return {
+        activeJobIds: activeJobIds(),
+        schedulerState: schedulerState(),
+        startedJobs
+      };
+    })();
+    tickInFlight = inFlight;
+    void inFlight.finally(() => {
+      if (tickInFlight === inFlight) tickInFlight = null;
+    });
+    return inFlight;
   }
 
   function start() {

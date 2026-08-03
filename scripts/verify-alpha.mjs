@@ -40,16 +40,25 @@ function formatCommand({ command, args }) {
   return [command, ...args].join(" ");
 }
 
+export function resolveCommandExecutable(command, platform = process.platform) {
+  const value = String(command ?? "");
+  if (platform === "win32" && ["npm", "npx"].includes(value)) {
+    return `${value}.cmd`;
+  }
+  return value;
+}
+
 export function runCommand(
   { command, args },
   {
     cwd = REPO_ROOT,
     env = process.env,
     spawnImpl = spawn,
+    platform = process.platform,
   } = {},
 ) {
   return new Promise((resolve, reject) => {
-    const child = spawnImpl(command, args, {
+    const child = spawnImpl(resolveCommandExecutable(command, platform), args, {
       cwd,
       env,
       shell: false,

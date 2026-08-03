@@ -38,7 +38,8 @@ test("allows multiple managed labels when populated Project fields remain author
 });
 
 test("sync script completes global conflict preflight before its first write loop", async () => {
-  const source = await readFile(new URL("./sync-project-issue-labels.mjs", import.meta.url), "utf8");
+  const source = (await readFile(new URL("./sync-project-issue-labels.mjs", import.meta.url), "utf8"))
+    .replace(/\r\n/g, "\n");
   const preflight = source.indexOf("assertNoManagedLabelConflicts(syncCandidates");
   const firstWriteLoop = source.indexOf("for (const item of openItems)");
 
@@ -169,7 +170,8 @@ test("pollForRemoteResult recovers a value after delayed visibility", async () =
 });
 
 test("uncertain Project add compensation performs final item recovery", async () => {
-  const source = await readFile(new URL("./sync-project-issue-labels.mjs", import.meta.url), "utf8");
+  const source = (await readFile(new URL("./sync-project-issue-labels.mjs", import.meta.url), "utf8"))
+    .replace(/\r\n/g, "\n");
   const addOperation = source.slice(
     source.indexOf("apply: async () => {\n        projectItem = await addIssueOrPullRequestToProject"),
     source.indexOf("...fieldWrites"),
