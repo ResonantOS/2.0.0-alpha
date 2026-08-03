@@ -98,6 +98,24 @@ test("opencode Windows candidates reject command shims and include only direct e
   assert.ok(candidates.every(({ path: candidate }) => !/\.(?:cmd|bat)$/i.test(candidate)));
 });
 
+test("opencode diagnostics accept the official native Windows npm prefix", () => {
+  const localAppData = "C:\\Users\\reviewer\\AppData\\Local";
+  const command = `${localAppData}\\OpenCode\\node_modules\\opencode-ai\\bin\\opencode.exe`;
+  const diagnostics = opencodeRuntimeDiagnostics({
+    env: { OPENCODE_COMMAND: command, PATH: "C:\\attacker" },
+    homeDir: "C:\\Users\\reviewer",
+    localAppData,
+    platform: "win32",
+    exists: (candidate) => candidate === command,
+    realpath: (candidate) => candidate,
+    stat: () => ({ isFile: () => true, mode: 0o755 }),
+  });
+
+  assert.equal(diagnostics.command, command);
+  assert.equal(diagnostics.overrideAccepted, true);
+  assert.equal(diagnostics.resolution?.source, "fixed-localappdata-install-root");
+});
+
 test("opencode diagnostics reject canonical escapes from trusted candidates", () => {
   const command = "/usr/local/bin/opencode";
   const diagnostics = opencodeRuntimeDiagnostics({

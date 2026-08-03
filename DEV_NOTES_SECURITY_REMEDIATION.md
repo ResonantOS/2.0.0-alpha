@@ -8,6 +8,24 @@
 - No real provider credentials were added, logged, or used. The bridge was not started as a user-facing runtime; the only smoke test used synthetic tokens and a private loopback listener that was closed before the command exited.
 - The optional browser-host runtime is not installed or enabled on this Windows workstation. Findings that require that optional host remain design/acceptance items rather than claims that the host is currently exposed.
 
+## Hermes/OpenCode enablement plan
+
+The repository already contains the governed Hermes/OpenCode delegation paths. The enablement work is intentionally split from provider login:
+
+- Hermes native Windows support now recognizes the official `%LOCALAPPDATA%\\hermes\\hermes-agent\\venv\\Scripts\\hermes.exe` layout and validates its Python adapter, while still rejecting ambient `PATH`, profile-selected binaries, and untrusted overrides.
+- OpenCode native Windows support now recognizes the official npm prefix under `%LOCALAPPDATA%\\OpenCode\\node_modules\\opencode-ai\\bin\\opencode.exe`; command shims remain rejected.
+- Hermes was installed with the official installer using `-SkipSetup`; no provider setup, OAuth login, or credential was entered.
+- OpenCode `opencode-ai` `1.18.11` was installed into the dedicated local prefix and its direct executable passed `--version` (`1.18.11`).
+- Runtime discovery currently reports both binaries as installed and canonical. Add-on execution remains opt-in and provider credentials remain unset until a separate human-approved setup step.
+
+Activation sequence:
+
+1. Start the loopback bridge and confirm Hermes/OpenCode show `installed` in Settings → Add-ons/Diagnostics.
+2. Enable only the desired add-on and grant its explicit shell/provider capability.
+3. Configure a test provider through the authenticated host flow; do not put credentials in extension files, repository files, or global environment variables.
+4. Run one bounded delegation in a disposable workspace, inspect the returned artifact, and verify cancellation/failure behavior before normal use.
+5. Keep Hermes dashboard access loopback-only unless the bridge is separately deployed with TLS, an IP allowlist, and real Hermes auth/CSRF/WebSocket acceptance evidence.
+
 ## What was repaired
 
 The implementation now includes the following protections from `ALPHA_CODE_REVIEW_REPORT.md`:

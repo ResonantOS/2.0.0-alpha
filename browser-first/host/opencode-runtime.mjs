@@ -31,7 +31,7 @@ function candidate(root, name, base, source, pathApi, canonicalRoots = [root]) {
   };
 }
 
-function trustedCandidates({ homeDir, platform }) {
+function trustedCandidates({ homeDir, platform, localAppData }) {
   const pathApi = platform === "win32" ? path.win32 : path.posix;
   const names = platform === "win32"
     ? OPENCODE_COMMAND_NAMES.map((name) => `${name}.exe`)
@@ -49,6 +49,17 @@ function trustedCandidates({ homeDir, platform }) {
     for (const name of names) candidates.push(candidate(root, name, base, source, pathApi, canonicalRoots));
   };
   if (platform === "win32") {
+    const nativeLocalAppData = localAppData ?? process.env.LOCALAPPDATA ?? path.win32.join(homeDir, "AppData", "Local");
+    appendRoot(pathApi.join(nativeLocalAppData, "OpenCode"), "install-prefix", "fixed-localappdata-install-root");
+    const npmPackageRoot = pathApi.join(nativeLocalAppData, "OpenCode", "node_modules", "opencode-ai");
+    candidates.push(candidate(
+      pathApi.join(npmPackageRoot, "bin"),
+      "opencode.exe",
+      "install-prefix",
+      "fixed-localappdata-install-root",
+      pathApi,
+      [npmPackageRoot],
+    ));
     appendRoot(pathApi.join(homeDir, ".opencode", "bin"), "install-prefix", "fixed-user-install-root");
     appendRoot(pathApi.join(homeDir, "scoop", "apps", "opencode", "current"), "install-prefix", "fixed-user-install-root");
     appendRoot("C:\\Program Files\\OpenCode", "install-prefix", "fixed-program-files-root");
@@ -138,9 +149,10 @@ export function opencodeCandidatePaths(options = {}) {
   const env = options.env ?? process.env;
   const homeDir = options.homeDir ?? os.homedir();
   const platform = options.platform ?? process.platform;
+  const localAppData = options.localAppData ?? env.LOCALAPPDATA ?? (platform === "win32" ? path.win32.join(homeDir, "AppData", "Local") : "");
   const candidates = options.includeCommonCandidates === false
     ? []
-    : trustedCandidates({ homeDir, platform });
+    : trustedCandidates({ homeDir, localAppData, platform });
   const overridePath = normalizeOverride(env.OPENCODE_COMMAND, homeDir, platform);
   const overrideCandidate = candidates.find((entry) => samePath(entry.path, overridePath, platform));
   return overrideCandidate

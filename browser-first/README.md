@@ -58,6 +58,17 @@ npm test -- --run
 npm run build
 ```
 
+## Optional Hermes and OpenCode runtimes
+
+The delegation adapters are implemented but remain opt-in. On native Windows,
+the host trusts only fixed direct executables: Hermes at
+`%LOCALAPPDATA%\\hermes\\hermes-agent\\venv\\Scripts\\hermes.exe` and
+OpenCode at the dedicated `%LOCALAPPDATA%\\OpenCode` npm prefix. Ambient `PATH`
+and `.cmd`/`.ps1` shims are not accepted. Install or update either tool through
+its official installer, then verify the binary with `hermes --version` or
+`opencode.exe --version` before enabling the add-on. Provider setup is a separate
+step and must use the authenticated host flow.
+
 Read the [bridge README](host/README.md) for host-specific details and
 [CONTRIBUTING.md](../CONTRIBUTING.md) before opening a pull request into `dev`.
 Current responsibility, verified status, and release workflow are routed by
