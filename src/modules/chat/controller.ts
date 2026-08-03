@@ -86,6 +86,7 @@ import {
   parseAugmentorCommand,
   parseNaturalBrowserIntent,
 } from "./augmentor-commands";
+import { rebaseStateOntoLatest } from "../../core/state-concurrency";
 
 type ReadyShellSnapshot = {
   state: ResonantShellState;
@@ -103,6 +104,7 @@ type ChatTurnControllerInput = {
   overrideMessage?: string;
   overrideContextPrompt?: string;
   commitReadyState: (state: ResonantShellState) => void;
+  getLatestState?: () => ResonantShellState;
   setComposer: Dispatch<SetStateAction<string>>;
   setAttachments: Dispatch<SetStateAction<ComposerAttachment[]>>;
   setChatNotice: Dispatch<SetStateAction<string | null>>;
@@ -172,7 +174,8 @@ export const executeChatTurn = async ({
   thinkingDepth,
   overrideMessage,
   overrideContextPrompt,
-  commitReadyState,
+  commitReadyState: commitReadyStateBase,
+  getLatestState,
   setComposer,
   setAttachments,
   setChatNotice,
@@ -186,6 +189,10 @@ export const executeChatTurn = async ({
   isRunCurrent,
   errorMessageOf,
 }: ChatTurnControllerInput): Promise<void> => {
+  const commitReadyState = (candidate: ResonantShellState): void => {
+    const latest = getLatestState?.();
+    commitReadyStateBase(latest ? rebaseStateOntoLatest(snapshot.state, candidate, latest) : candidate);
+  };
   const outgoing = (overrideMessage ?? composer).trim();
   if (!outgoing) {
     return;

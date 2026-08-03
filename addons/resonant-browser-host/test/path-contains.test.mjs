@@ -43,9 +43,17 @@ describe("pathContains primitive (P1-d)", () => {
     assert.equal(v.evidence.escapeKind, "absolute-outside");
   });
 
-  it("blocks a symlink leaf that points outside the root", async () => {
+  it("blocks a symlink leaf that points outside the root", async (t) => {
     const link = path.join(root, "escape-link");
-    await symlink(outside, link);
+    try {
+      await symlink(outside, link);
+    } catch (error) {
+      if (process.platform === "win32" && error?.code === "EPERM") {
+        t.skip("Windows test host does not permit creating symlinks without developer mode.");
+        return;
+      }
+      throw error;
+    }
     const v = pathContains(root, path.join(link, "secret.txt"));
     assert.equal(v.result, "block");
     assert.equal(v.evidence.escapeKind, "symlink-escape");

@@ -20,12 +20,18 @@ The implementation now includes the following protections from `ALPHA_CODE_REVIE
 - R-08/R-09: provider endpoints reject forged local-runtime authorization, metadata/link-local/private targets, credential-bearing URLs, and redirects; browser job ticks are single-flight; cached background responses use the actual context snapshot field.
 - R-10: release verification resolves Windows npm/npx shims without a shell; repository hygiene has a safe fallback when `O_NOFOLLOW` is unavailable; release path filters cover the active browser-first code and host surfaces.
 - R-11: engineer-runner scope is checked after required commands as well as before them.
+- A-03: the security pipeline now performs TypeScript/JavaScript AST discovery of privileged process, network, credential, and filesystem sinks and fails when the reviewed baseline changes without an explicit update.
+- A-05: the optional browser host now requires a per-launch JSON-RPC token, rejects caller-selected executables, restricts configured paths to canonical Chrome/Edge installs, and derives sensitive/high-impact approval from the live DOM.
+- A-06: async chat commits rebase candidate changes onto the latest shell state, preserving concurrent keyed thread/provider/settings edits.
+- A-09: renderer-only provider and Telegram secret saves now fail closed instead of writing an unauthenticated `__configured__` marker.
+- Diagnostic history: memory source sync/move history now stores only `[path]/basename` labels, including paths beneath the OS home directory; intake and move self-tests verify that source paths are not persisted.
 
 ## Deliberate residuals / acceptance items
 
-- A-03 remains a policy limitation: the capability matrix still has hand-declared security-critical entries and should be replaced with generated/verified route metadata before treating that item as fully closed.
-- A-05 is not active on this machine because the optional browser-host surface is not installed or running.
-- A-06 concerns the shared React application and is outside the active browser-first Alpha runtime; it was not silently changed here.
+- A-03 now has a reviewed AST sink baseline. The baseline is intentionally review-gated: adding or changing a privileged sink requires a deliberate baseline update and security review.
+- A-05 is not active on this machine because the optional browser-host surface is not installed or running; live Chromium behavior still needs a host with Playwright Chromium installed.
+- A-06 is repaired in the shared React shell with a three-way rebase; a broader reducer migration is not required for the verified race case.
+- A-08 remains a shared-shell integration item: the active browser-first chat client aborts its bridge fetch, while the legacy web transport still does not expose a full provider-stream AbortSignal/cost cancellation path.
 - Provider hostname validation is deliberately conservative and redirect-free, but a future defense-in-depth pass could add DNS-resolution pinning for hostile rebinding environments.
 - OpenCode server Basic auth is used when its explicit username/password are configured; deployment policy should require those values whenever the sidecar is reachable beyond the loopback-only default.
 
@@ -34,16 +40,20 @@ The implementation now includes the following protections from `ALPHA_CODE_REVIE
 Passing gates on this branch:
 
 ```text
-npm test -- --run                         37 files / 312 tests passed
+npm test -- --run                         38 files / 315 tests passed
 npm run build                             TypeScript + Vite build passed
 npm run docs:check                        passed
 npm run test:docs                         217 passed / 8 skipped / 0 failed
-npm run test:security-pipeline            24 passed / 5 platform skips / 0 failed
+npm run test:security-pipeline            26 passed / 5 platform skips / 0 failed
+`npm run test:browser-host`                11 passed / 3 explicit environment skips / 0 failed
+npm run test:browser-first                831 passed / 6 explicit platform skips / 0 failed
+privileged sink AST gate                  511 sinks across 44 source files matched baseline
+state-concurrency + chat controller tests 10 passed
 focused bridge/content/host suites        passed (44 browser/bridge/content; 34 host)
 focused scheduler/page-action/runner      passed
 ```
 
-The eight documentation-gate skips and five runtime-registry skips are explicit Windows portability skips: this host cannot create symlinks without Developer Mode, and several production-derived registry fixtures describe POSIX Hermes/native-picker paths. They are not counted as passing Linux-runtime evidence.
+The eight documentation-gate skips, five runtime-registry skips, six browser-first skips, and three optional-host skips are explicit environment boundaries: this host cannot create symlinks without Developer Mode, several production-derived fixtures describe POSIX Hermes/native-picker paths, and the deterministic CLI fixtures cannot stand in for a signed direct Windows executable. They are not counted as passing Linux-runtime or live-Chromium evidence.
 
 The isolated smoke command started `startBridgeServer` on `127.0.0.1:0` with synthetic bridge/capability tokens, verified `200` for the authorized route and `403` without the capability token, then closed the listener. Port `47773` was checked afterward and was not listening.
 

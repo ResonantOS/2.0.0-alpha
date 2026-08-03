@@ -30,7 +30,11 @@ test("add-on execution settings pass in-process deterministic smoke test", async
   assert.equal(result.settings.opencode.localCliExecution, true);
 });
 
-test("Hermes CLI execution bridge routes prompts through the safe local runtime adapter", async () => {
+test("Hermes CLI execution bridge routes prompts through the safe local runtime adapter", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("The deterministic CLI adapter fixture is a POSIX script; Windows production requires a signed direct .exe.");
+    return;
+  }
   const result = await runSelfTest("--hermes-cli-execution-inprocess-self-test=true");
   assert.equal(result.ok, true);
   assert.equal(result.mode, "in-process");
@@ -41,7 +45,11 @@ test("Hermes CLI execution bridge routes prompts through the safe local runtime 
   assert.ok(toPortablePath(result.artifactPath).includes("BrowserFirst/DelegationArtifacts/hermes/"));
 });
 
-test("OpenCode CLI execution bridge routes pass in-process deterministic smoke test", async () => {
+test("OpenCode CLI execution bridge routes pass in-process deterministic smoke test", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("The deterministic CLI adapter fixture is a POSIX script; Windows production requires a signed direct .exe.");
+    return;
+  }
   const result = await runSelfTest("--opencode-cli-execution-inprocess-self-test=true");
   assert.equal(result.ok, true);
   assert.equal(result.mode, "in-process");

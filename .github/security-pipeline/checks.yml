@@ -1204,6 +1204,20 @@
         "browser-first/host",
         "src"
       ]
+    },
+    {
+      "id": "privileged-sink-coverage",
+      "family": "runtime-hardening",
+      "policy": "block",
+      "adapter": "privileged-sink-coverage",
+      "baseline": "scripts/security-pipeline/privileged-sink-baseline.json",
+      "scope": [
+        "browser-first/host",
+        "browser-first/resonantos-side-panel-extension/src",
+        "addons/resonant-browser-host/src",
+        "src/core",
+        "src/modules"
+      ]
     }
   ]
 }

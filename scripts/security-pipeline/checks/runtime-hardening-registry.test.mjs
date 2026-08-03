@@ -856,10 +856,13 @@ test("active runtime-hardening checks share production-derived spawn records", {
     check.family === "runtime-hardening" && check.policy !== "disabled"
   );
   assert.equal(registry.families["runtime-hardening"].status, "active");
-  assert.equal(runtimeChecks.length, 4);
-  for (const check of runtimeChecks) {
+  assert.equal(runtimeChecks.length, 5);
+  for (const check of runtimeChecks.filter((entry) => entry.id !== "privileged-sink-coverage")) {
     assert.deepEqual(check.recordSets, [RECORD_SET], `${check.id} must use the production record set`);
   }
+  const sinkCoverage = runtimeChecks.find((entry) => entry.id === "privileged-sink-coverage");
+  assert.equal(sinkCoverage?.adapter, "privileged-sink-coverage");
+  assert.ok(sinkCoverage?.baseline, "privileged sink coverage must declare its reviewed baseline");
 
   const records = registry.recordSets?.[RECORD_SET];
   assert.ok(Array.isArray(records) && records.length > 0, "production record set must not be empty");
@@ -944,6 +947,6 @@ test("production runtime-hardening records pass strict certification", () => {
   );
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
   const results = result.stdout.trim().split(/\n(?=\{)/).map((document) => JSON.parse(document));
-  assert.equal(results.length, 4, result.stdout);
-  assert.deepEqual(results.map(({ status }) => status), ["pass", "pass", "pass", "pass"]);
+  assert.equal(results.length, 5, result.stdout);
+  assert.deepEqual(results.map(({ status }) => status), ["pass", "pass", "pass", "pass", "pass"]);
 });

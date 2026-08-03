@@ -455,7 +455,9 @@ export async function runBrowserFirstSelfTest(context) {
     let exitCode = 1;
     try {
       setAddonRuntimeSelfTestHomeDir(tempRoot);
-      const fakeHermes = path.join(tempRoot, ".hermes", "bin", process.platform === "win32" ? "hermes.exe" : "hermes");
+      const fakeHermes = path.join(tempRoot, ".hermes", "hermes-agent", "venv",
+        process.platform === "win32" ? "Scripts" : "bin",
+        process.platform === "win32" ? "hermes.exe" : "hermes");
       await mkdir(path.dirname(fakeHermes), { recursive: true });
       await writeFile(fakeHermes, process.platform === "win32" ? "@echo off\r\necho fake hermes\r\n" : "#!/bin/sh\necho fake hermes\n");
       await chmod(fakeHermes, 0o755).catch(() => undefined);
@@ -552,7 +554,9 @@ export async function runBrowserFirstSelfTest(context) {
     let exitCode = 1;
     try {
       setAddonRuntimeSelfTestHomeDir(tempRoot);
-      const fakeHermes = path.join(tempRoot, ".hermes", "bin", process.platform === "win32" ? "hermes.exe" : "hermes");
+      const fakeHermes = path.join(tempRoot, ".hermes", "hermes-agent", "venv",
+        process.platform === "win32" ? "Scripts" : "bin",
+        process.platform === "win32" ? "hermes.exe" : "hermes");
       await mkdir(path.dirname(fakeHermes), { recursive: true });
       await writeFile(fakeHermes, process.platform === "win32" ? "@echo off\r\necho fake hermes\r\n" : "#!/bin/sh\necho fake hermes\n");
       await chmod(fakeHermes, 0o755).catch(() => undefined);
@@ -1327,7 +1331,8 @@ export async function runBrowserFirstSelfTest(context) {
     let exitCode = 1;
     try {
       setAddonRuntimeSelfTestHomeDir(tempRoot);
-      const hermesBinRoot = path.join(tempRoot, ".hermes", "bin");
+      const hermesBinRoot = path.join(tempRoot, ".hermes", "hermes-agent", "venv",
+        process.platform === "win32" ? "Scripts" : "bin");
       const openCodeBinRoot = path.join(tempRoot, ".opencode", "bin");
       const fakeHermes = path.join(hermesBinRoot, process.platform === "win32" ? "hermes.exe" : "hermes");
       const fakeOpenCode = path.join(openCodeBinRoot, process.platform === "win32" ? "opencode.exe" : "opencode");
@@ -1446,7 +1451,8 @@ export async function runBrowserFirstSelfTest(context) {
     let exitCode = 1;
     try {
       setAddonRuntimeSelfTestHomeDir(tempRoot);
-      const hermesBinRoot = path.join(tempRoot, ".hermes", "bin");
+      const hermesBinRoot = path.join(tempRoot, ".hermes", "hermes-agent", "venv",
+        process.platform === "win32" ? "Scripts" : "bin");
       const openCodeBinRoot = path.join(tempRoot, ".opencode", "bin");
       const fakeHermes = path.join(hermesBinRoot, process.platform === "win32" ? "hermes.exe" : "hermes");
       const fakeOpenCode = path.join(openCodeBinRoot, process.platform === "win32" ? "opencode.exe" : "opencode");

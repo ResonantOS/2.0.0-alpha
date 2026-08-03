@@ -1,12 +1,22 @@
 // Intent citation: docs/architecture/ADR-017-resonant-browser-addon.md
 
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { mkdtemp, stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
-import { ResonantBrowserHost, handleJsonRpcLine, resolveChromiumLaunchOptions } from "../src/browser-host.mjs";
+import { chromium } from "playwright";
+import {
+  ResonantBrowserHost,
+  handleJsonRpcLine,
+  isApprovedChromiumExecutable,
+  resolveChromiumLaunchOptions,
+} from "../src/browser-host.mjs";
+
+const AUTH_TOKEN = "browser-host-test-auth-token";
+const chromiumUnavailable = !existsSync(chromium.executablePath());
 
 let server;
 let baseUrl;
@@ -41,8 +51,11 @@ before(async () => {
         <h1>Resonant Browser Host Fixture</h1>
         <p id="status">Waiting</p>
         <button id="change-status" onclick="document.querySelector('#status').textContent = 'Clicked'">Change status</button>
+        <button id="delete-account">Delete account</button>
         <label for="field">Field</label>
         <input id="field" oninput="document.querySelector('#typed').textContent = this.value" />
+        <label for="password">Password</label>
+        <input id="password" type="password" />
         <p id="typed"></p>
         <a href="/next">Go next</a>
       </main>`),
@@ -88,6 +101,10 @@ after(async () => {
 
 describe("ResonantBrowserHost", () => {
   it("opens, reads, clicks, types, captures evidence, and closes a Chromium session", { timeout: 90_000 }, async (t) => {
+    if (chromiumUnavailable) {
+      t.skip("Playwright Chromium is not installed on this host; live browser-host behavior must run after `npx playwright install chromium`.");
+      return;
+    }
     if (localhostBindDenied) {
       t.skip("localhost bind is denied in this sandbox; browser-host live Chromium behavior must be verified outside sandboxed CI.");
       return;
@@ -116,6 +133,15 @@ describe("ResonantBrowserHost", () => {
     const typed = await host.readPage();
     assert.match(typed.text, /Augmentor controls Chromium/);
 
+    await assert.rejects(
+      () => host.type({ selector: "#password", text: "not-a-real-password" }),
+      /blocked sensitive typing/i,
+    );
+    await assert.rejects(
+      () => host.click({ selector: "#delete-account" }),
+      /blocked a high-impact or sensitive control/i,
+    );
+
     const evidence = await host.captureEvidence({ artifactsDir, reason: "contract-test" });
     const screenshotStats = await stat(evidence.evidenceRef);
     assert.equal(screenshotStats.isFile(), true);
@@ -142,16 +168,48 @@ describe("ResonantBrowserHost", () => {
     assert.equal(channelOptions.executablePath, undefined);
     assert.deepEqual(channelOptions.args, ["--password-store=basic", "--use-mock-keychain"]);
 
-    const executableOptions = resolveChromiumLaunchOptions({
-      headless: true,
-      params: { executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" },
-      env: { RESONANTOS_BROWSER_HOST_CHANNEL: "chrome" },
-    });
-    assert.equal(executableOptions.channel, undefined);
-    assert.equal(executableOptions.executablePath, "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
+    assert.throws(
+      () => resolveChromiumLaunchOptions({
+        headless: true,
+        params: { executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" },
+        env: { RESONANTOS_BROWSER_HOST_CHANNEL: "chrome" },
+      }),
+      /does not accept caller-selected executable paths/i,
+    );
+    assert.equal(isApprovedChromiumExecutable("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", {
+      platform: "darwin",
+      approvedPaths: ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"],
+      exists: () => true,
+      realpath: (value) => value,
+    }), true);
+    assert.equal(isApprovedChromiumExecutable("/tmp/attacker-chrome", {
+      platform: "darwin",
+      approvedPaths: ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"],
+      exists: () => true,
+      realpath: (value) => value,
+    }), false);
+  });
+
+  it("requires per-launch JSON-RPC authentication", async () => {
+    const host = new ResonantBrowserHost({ headless: true });
+    await assert.rejects(
+      () => handleJsonRpcLine(host, JSON.stringify({ id: "unauthenticated", method: "browser.health" }), { authToken: AUTH_TOKEN }),
+      /Unauthorized browser host request/,
+    );
+    const response = await handleJsonRpcLine(
+      host,
+      JSON.stringify({ id: "authenticated", method: "browser.health", authToken: AUTH_TOKEN }),
+      { authToken: AUTH_TOKEN },
+    );
+    assert.equal(response.id, "authenticated");
+    assert.equal(response.result.ready, false);
   });
 
   it("handles stdio JSON-RPC method lines", { timeout: 60_000 }, async (t) => {
+    if (chromiumUnavailable) {
+      t.skip("Playwright Chromium is not installed on this host; live browser-host behavior must run after `npx playwright install chromium`.");
+      return;
+    }
     if (localhostBindDenied) {
       t.skip("localhost bind is denied in this sandbox; browser-host JSON-RPC live Chromium behavior must be verified outside sandboxed CI.");
       return;
@@ -163,13 +221,14 @@ describe("ResonantBrowserHost", () => {
 
     const response = await handleJsonRpcLine(
       host,
-      JSON.stringify({ id: "1", method: "browser.start", params: { defaultUrl: baseUrl } }),
+      JSON.stringify({ id: "1", method: "browser.start", authToken: AUTH_TOKEN, params: { defaultUrl: baseUrl } }),
+      { authToken: AUTH_TOKEN },
     );
     assert.equal(response.id, "1");
     assert.equal(response.result.ready, true);
     assert.equal(response.result.url, `${baseUrl}/`);
 
-    const read = await handleJsonRpcLine(host, JSON.stringify({ id: "2", method: "browser.read_page" }));
+    const read = await handleJsonRpcLine(host, JSON.stringify({ id: "2", method: "browser.read_page", authToken: AUTH_TOKEN }), { authToken: AUTH_TOKEN });
     assert.equal(read.id, "2");
     assert.match(read.result.text, /Resonant Browser Host Fixture/);
 

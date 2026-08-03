@@ -82,7 +82,7 @@ test("browser-first host utils execute bounded stdout commands", async () => {
 });
 
 test("browser-first host utils can constrain executable lookup to trusted roots", () => {
-  const searchPath = ["/usr/bin", "/bin"].join(path.delimiter);
+  const searchPath = ["/usr/bin", "/bin"].join(path.posix.delimiter);
   assert.deepEqual(
     executableCandidates("zenity", { platform: "linux", searchPath }),
     ["/usr/bin/zenity", "/bin/zenity"],

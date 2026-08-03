@@ -11,6 +11,8 @@ The package implements:
 - `http` and `https` navigation only;
 - title, URL, page-text, and link reads;
 - selector or coordinate clicks and selector-based typing;
+- DOM-derived approval gates for sensitive fields, authentication/payment
+  controls, destructive actions, and opaque coordinate clicks;
 - screenshot evidence constrained to the configured artifacts directory;
 - append-only audit events with bounded recent output; and
 - newline-delimited JSON request/response messages over standard input/output.
@@ -42,15 +44,24 @@ From this package directory:
 npm start
 ```
 
-The process reads one JSON request per line from standard input and writes one
-JSON response per line to standard output. Set an installed browser explicitly
-by exporting `RESONANTOS_BROWSER_HOST_CHANNEL` or
-`RESONANTOS_BROWSER_HOST_EXECUTABLE_PATH` before startup:
+The process reads one authenticated JSON request per line from standard input
+and writes one response per line to standard output. Every request must include
+the per-launch `authToken` value. Set the token before startup and choose either
+an approved Playwright channel or a canonical installed Chrome/Edge path:
 
 ```bash
+export RESONANTOS_BROWSER_HOST_AUTH_TOKEN="one-random-token-for-this-launch"
 export RESONANTOS_BROWSER_HOST_CHANNEL="chrome"
 npm start
 ```
+
+Caller-selected executable paths in request parameters are rejected. The
+`RESONANTOS_BROWSER_HOST_EXECUTABLE_PATH` override is accepted only for the
+canonical Chrome/Edge installation paths for the current operating system.
+Sensitive typing and high-impact controls are classified from the live DOM;
+they require `humanApproved: true` in the authenticated request, and coordinate
+clicks are always approval-gated because the host cannot inspect their target
+before the click.
 
 The launcher reads the process environment and does not load dotenv files.
 Never pass provider secrets, wallet material, browser profiles, or private user
