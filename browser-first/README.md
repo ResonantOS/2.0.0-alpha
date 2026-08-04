@@ -63,11 +63,20 @@ npm run build
 The delegation adapters are implemented but remain opt-in. On native Windows,
 the host trusts only fixed direct executables: Hermes at
 `%LOCALAPPDATA%\\hermes\\hermes-agent\\venv\\Scripts\\hermes.exe` and
-OpenCode at the dedicated `%LOCALAPPDATA%\\OpenCode` npm prefix. Ambient `PATH`
+OpenCode at `%LOCALAPPDATA%\\OpenCode\\node_modules\\opencode-ai\\bin\\opencode.exe`
+inside its dedicated npm prefix. Ambient `PATH`
 and `.cmd`/`.ps1` shims are not accepted. Install or update either tool through
 its official installer, then verify the binary with `hermes --version` or
 `opencode.exe --version` before enabling the add-on. Provider setup is a separate
 step and must use the authenticated host flow.
+
+For OpenCode on native Windows, use PowerShell so the installed location and
+the host allowlist agree:
+
+```powershell
+npm install --global --prefix "$env:LOCALAPPDATA\OpenCode" opencode-ai
+& "$env:LOCALAPPDATA\OpenCode\node_modules\opencode-ai\bin\opencode.exe" --version
+```
 
 Read the [bridge README](host/README.md) for host-specific details and
 [CONTRIBUTING.md](../CONTRIBUTING.md) before opening a pull request into `dev`.

@@ -17,6 +17,11 @@ The repository already contains the governed Hermes/OpenCode delegation paths. T
 - Hermes was installed with the official installer using `-SkipSetup`; no provider setup, OAuth login, or credential was entered.
 - OpenCode `opencode-ai` `1.18.11` was installed into the dedicated local prefix and its direct executable passed `--version` (`1.18.11`).
 - Runtime discovery currently reports both binaries as installed and canonical. Add-on execution remains opt-in and provider credentials remain unset until a separate human-approved setup step.
+- Follow-up review narrowed OpenCode discovery to the exact package executable; the unused `%LOCALAPPDATA%\\OpenCode\\opencode.exe` prefix-root candidate was removed. Missing-runtime diagnostics now give the dedicated-prefix PowerShell command that produces a trusted executable instead of POSIX-only instructions.
+- The follow-up full-gate run also exposed Node 24 rejecting direct `npm.cmd` child-process launches on Windows. `verify:alpha` now invokes npm's JavaScript CLI with the current trusted Node executable and keeps `shell: false`, so the gate is runnable without command-shell interpolation.
+- The first complete rerun reached the browser-first suite and exposed a Windows temporary-directory cleanup race (`ENOTEMPTY`) after a memory versioning test had completed. That test now uses the documented bounded `fs.rm` retry controls; it does not relax any product assertion.
+- The final pre-release step was also resolving the inaccessible WindowsApps `bash.exe` alias even though Git Bash was installed. A small shell-free Node launcher now selects Bash only from fixed system/Git installation roots and invokes the existing scan script with literal arguments.
+- The strict committed-scope audit then identified the two intentional root-level security evidence files as unknown. The classifier now includes only `ALPHA_CODE_REVIEW_REPORT.md` and this remediation handoff by exact name; unrelated root or `docs/` Markdown still requires review.
 
 Activation sequence:
 
@@ -77,12 +82,18 @@ The isolated smoke command started `startBridgeServer` on `127.0.0.1:0` with syn
 
 ## Resume / next safe step
 
+Follow-up audit state on 2026-08-04:
+
+- `npm run verify:alpha` passes from start to finish on native Windows, including the build, browser-first suite, security certification, pre-release scan, and strict committed-scope audit.
+- Hermes `0.20.0` and OpenCode `1.18.11` are installed and resolve from `fixed-localappdata-install-root` candidates.
+- No listener was present on the normal ResonantOS bridge port `47773` or Hermes dashboard port `9119` after verification. The runtimes are installed, but the app and dashboard are not currently running.
+- No provider credential, login, or live model call was used during this audit.
+
 ```powershell
 Set-Location G:\res-os
-git switch security/alpha-remediation
-npm test -- --run
-npm run test:docs
-npm run test:security-pipeline
+git switch feature/hermes-opencode-enable
+node --test browser-first/test/hermes-runtime.test.mjs browser-first/test/opencode-runtime.test.mjs
+npm run verify:alpha
 ```
 
-Before enabling any real provider or extension runtime, review the residual items above, provide explicit test credentials through the approved secret store, and perform a separate authenticated end-to-end test in a disposable profile. Keep the bridge bound to loopback and retain practice/sandbox mode until that validation is recorded.
+The practical forward sequence is: merge this branch into `dev`; start the loopback bridge; load/reload the unpacked extension; confirm both add-ons report `installed`; choose one provider/auth route; enable only one add-on with its explicit grants; and run one bounded disposable-workspace delegation before enabling the second. Before enabling any real provider or extension runtime, review the residual items above, provide explicit test credentials through the approved host flow, and perform a separate authenticated end-to-end test in a disposable profile. Keep the bridge bound to loopback and retain practice/sandbox mode until that validation is recorded.

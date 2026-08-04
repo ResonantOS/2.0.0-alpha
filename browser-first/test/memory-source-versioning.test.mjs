@@ -15,6 +15,10 @@ import {
   writeSourceFileSnapshot,
 } from "../host/memory-source-versioning.mjs";
 
+async function removeTestRoot(root) {
+  await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+}
+
 test("source file versioning increments only when content changes", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "resonantos-source-versioning-"));
   const manifestPath = path.join(root, "Memory", "CONFIG", "source-file-versions.json");
@@ -86,7 +90,7 @@ test("source file versioning increments only when content changes", async () => 
     assert.equal(listed.entries[0].latestIntakePath, "INTAKE/sources/identity-v2.md");
     assert.equal(listed.entries[0].latestSnapshotPath, sourceFileSnapshotPath(secondHash));
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestRoot(root);
   }
 });
 
@@ -112,7 +116,7 @@ test("source file snapshots are content-addressed immutable history blobs", asyn
     assert.equal(reused.reused, true);
     assert.equal(await readFile(path.join(root, "Memory", snapshot.path), "utf8"), content);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestRoot(root);
   }
 });
 
@@ -134,7 +138,7 @@ test("source file snapshots reject claimed hash mismatches", async () => {
       /ENOENT/
     );
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestRoot(root);
   }
 });
 
@@ -157,7 +161,7 @@ test("source file snapshots reject corrupt existing blobs before reuse", async (
     );
     assert.equal(await readFile(absoluteSnapshotPath, "utf8"), "corrupted bytes\n");
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestRoot(root);
   }
 });
 
@@ -235,7 +239,7 @@ test("source file versioning rolls back unfinalized reservations only", async ()
     assert.equal(listed.entries[0].latestIntakePath, "INTAKE/sources/identity-v2.md");
     assert.equal(listed.entries[0].latestSnapshotPath, sourceFileSnapshotPath(thirdHash));
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestRoot(root);
   }
 });
 
@@ -279,7 +283,7 @@ test("source file artifact recording rejects stale version targets", async () =>
     assert.equal(listed.entries[0].latestHash, secondHash);
     assert.equal(listed.entries[0].latestIntakePath, "");
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestRoot(root);
   }
 });
 
@@ -306,7 +310,7 @@ test("source file versioning rejects unsafe source file paths", async () => {
       /Source file must be a safe relative path/
     );
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestRoot(root);
   }
 });
 
@@ -348,7 +352,7 @@ test("source file artifact recording keeps intake and snapshot paths inside mana
     assert.equal(listed.entries[0].latestIntakePath, "");
     assert.equal(listed.entries[0].latestSnapshotPath, "");
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestRoot(root);
   }
 });
 

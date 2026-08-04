@@ -40,12 +40,27 @@ function formatCommand({ command, args }) {
   return [command, ...args].join(" ");
 }
 
-export function resolveCommandExecutable(command, platform = process.platform) {
+export function resolveCommandExecutable(command, platform = process.platform, execPath = process.execPath) {
   const value = String(command ?? "");
   if (platform === "win32" && ["npm", "npx"].includes(value)) {
-    return `${value}.cmd`;
+    return execPath;
   }
   return value;
+}
+
+export function resolveCommandArguments(command, args, platform = process.platform, execPath = process.execPath) {
+  const value = String(command ?? "");
+  if (platform === "win32" && ["npm", "npx"].includes(value)) {
+    const cliPath = path.win32.join(
+      path.win32.dirname(execPath),
+      "node_modules",
+      "npm",
+      "bin",
+      `${value}-cli.js`,
+    );
+    return [cliPath, ...args];
+  }
+  return args;
 }
 
 export function runCommand(
@@ -53,17 +68,22 @@ export function runCommand(
   {
     cwd = REPO_ROOT,
     env = process.env,
+    execPath = process.execPath,
     spawnImpl = spawn,
     platform = process.platform,
   } = {},
 ) {
   return new Promise((resolve, reject) => {
-    const child = spawnImpl(resolveCommandExecutable(command, platform), args, {
+    const child = spawnImpl(
+      resolveCommandExecutable(command, platform, execPath),
+      resolveCommandArguments(command, args, platform, execPath),
+      {
       cwd,
       env,
       shell: false,
       stdio: "inherit",
-    });
+      },
+    );
     child.once("error", reject);
     child.once("exit", (exitCode, signal) => resolve({ exitCode, signal }));
   });

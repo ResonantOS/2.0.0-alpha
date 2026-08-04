@@ -9,6 +9,8 @@ export const OPENCODE_INSTALL_COMMAND = "curl -fsSL https://opencode.ai/install 
 export const OPENCODE_NPM_INSTALL_COMMAND = "npm install -g opencode-ai";
 export const OPENCODE_BREW_INSTALL_COMMAND = "brew install anomalyco/tap/opencode";
 export const OPENCODE_CONFIGURE_COMMAND = "OPENCODE_COMMAND=/usr/local/bin/opencode";
+export const OPENCODE_WINDOWS_NPM_INSTALL_COMMAND = 'npm install --global --prefix "$env:LOCALAPPDATA\\OpenCode" opencode-ai';
+export const OPENCODE_WINDOWS_CONFIGURE_COMMAND = '$env:OPENCODE_COMMAND="$env:LOCALAPPDATA\\OpenCode\\node_modules\\opencode-ai\\bin\\opencode.exe"';
 export const OPENCODE_COMMAND_NAMES = ["opencode", "opencode-ai"];
 
 function uniqueCandidates(candidates, platform) {
@@ -50,7 +52,6 @@ function trustedCandidates({ homeDir, platform, localAppData }) {
   };
   if (platform === "win32") {
     const nativeLocalAppData = localAppData ?? process.env.LOCALAPPDATA ?? path.win32.join(homeDir, "AppData", "Local");
-    appendRoot(pathApi.join(nativeLocalAppData, "OpenCode"), "install-prefix", "fixed-localappdata-install-root");
     const npmPackageRoot = pathApi.join(nativeLocalAppData, "OpenCode", "node_modules", "opencode-ai");
     candidates.push(candidate(
       pathApi.join(npmPackageRoot, "bin"),
@@ -137,11 +138,34 @@ function resolveCandidate(candidateDescriptor, { exists, platform, realpath, sta
   }
 }
 
-export function opencodeInstallHint() {
+function opencodeInstallGuidance(platform) {
+  if (platform === "win32") {
+    return {
+      installCommand: OPENCODE_WINDOWS_NPM_INSTALL_COMMAND,
+      alternativeInstallCommands: [],
+      configureCommand: OPENCODE_WINDOWS_CONFIGURE_COMMAND,
+    };
+  }
+  return {
+    installCommand: OPENCODE_INSTALL_COMMAND,
+    alternativeInstallCommands: [OPENCODE_NPM_INSTALL_COMMAND, OPENCODE_BREW_INSTALL_COMMAND],
+    configureCommand: OPENCODE_CONFIGURE_COMMAND,
+  };
+}
+
+export function opencodeInstallHint(platform = process.platform) {
+  const guidance = opencodeInstallGuidance(platform);
+  if (platform === "win32") {
+    return [
+      `Install OpenCode from PowerShell with \`${guidance.installCommand}\`.`,
+      "ResonantOS discovers the direct package executable automatically; npm command shims are intentionally ignored.",
+      `To select that supported executable explicitly for the current bridge session, set \`${guidance.configureCommand}\` before starting ResonantOS.`,
+    ].join(" ");
+  }
   return [
-    `Install OpenCode with \`${OPENCODE_INSTALL_COMMAND}\`.`,
-    `Node users can use \`${OPENCODE_NPM_INSTALL_COMMAND}\`; Homebrew users can use \`${OPENCODE_BREW_INSTALL_COMMAND}\`.`,
-    `To select an OpenCode binary at a supported fixed install root, set \`${OPENCODE_CONFIGURE_COMMAND}\` and restart ResonantOS.`
+    `Install OpenCode with \`${guidance.installCommand}\`.`,
+    `Node users can use \`${guidance.alternativeInstallCommands[0]}\`; Homebrew users can use \`${guidance.alternativeInstallCommands[1]}\`.`,
+    `To select an OpenCode binary at a supported fixed install root, set \`${guidance.configureCommand}\` and restart ResonantOS.`
   ].join(" ");
 }
 
@@ -168,6 +192,7 @@ export function opencodeRuntimeDiagnostics(options = {}) {
   const realpath = options.realpath ?? ((candidatePath) => realpathSync.native(candidatePath));
   const stat = options.stat ?? statSync;
   const displayLimit = Number.isInteger(options.displayLimit) && options.displayLimit > 0 ? options.displayLimit : 48;
+  const guidance = opencodeInstallGuidance(platform);
   const overridePath = normalizeOverride(env.OPENCODE_COMMAND, homeDir, platform);
   const candidates = opencodeCandidatePaths(options);
   const overrideCandidate = candidates.find((entry) => samePath(entry.path, overridePath, platform));
@@ -196,10 +221,10 @@ export function opencodeRuntimeDiagnostics(options = {}) {
     })),
     resolution,
     commandRedacted: command ? redactPathForDiagnostics(command) : "",
-    installHint: opencodeInstallHint(),
-    installCommand: OPENCODE_INSTALL_COMMAND,
-    alternativeInstallCommands: [OPENCODE_NPM_INSTALL_COMMAND, OPENCODE_BREW_INSTALL_COMMAND],
-    configureCommand: OPENCODE_CONFIGURE_COMMAND,
+    installHint: opencodeInstallHint(platform),
+    installCommand: guidance.installCommand,
+    alternativeInstallCommands: guidance.alternativeInstallCommands,
+    configureCommand: guidance.configureCommand,
     searchedCommands: OPENCODE_COMMAND_NAMES,
     searchedPaths,
     searchedPathCount: candidates.length,
