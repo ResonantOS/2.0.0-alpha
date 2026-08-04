@@ -82,18 +82,24 @@ The isolated smoke command started `startBridgeServer` on `127.0.0.1:0` with syn
 
 ## Resume / next safe step
 
-Follow-up audit state on 2026-08-04:
+Activation checkpoint saved on 2026-08-04:
 
-- `npm run verify:alpha` passes from start to finish on native Windows, including the build, browser-first suite, security certification, pre-release scan, and strict committed-scope audit.
-- Hermes `0.20.0` and OpenCode `1.18.11` are installed and resolve from `fixed-localappdata-install-root` candidates.
-- No listener was present on the normal ResonantOS bridge port `47773` or Hermes dashboard port `9119` after verification. The runtimes are installed, but the app and dashboard are not currently running.
-- No provider credential, login, or live model call was used during this audit.
+- Pull request [#1](https://github.com/GeneraI44/2.0.0-alpha/pull/1) merged the security remediation and Hermes/OpenCode enablement into `dev` at merge commit `3bd72d1339847642e13f421a0e0c4b0d4ace3159`.
+- `npm run verify:alpha` passed from start to finish on native Windows, including build, browser-first, security certification, pre-release scan, and strict committed-scope audit stages.
+- Hermes `0.20.0` and OpenCode `1.18.11` are installed and resolve only from their fixed `%LOCALAPPDATA%` roots.
+- The loopback bridge was running on `127.0.0.1:47773` as process `34344` when this checkpoint was written. Treat the PID as a snapshot and recheck the listener before relying on it.
+- The unpacked Chrome extension was loaded by the operator. Chrome's private extension page could not be inspected through browser automation, so this is operator-confirmed rather than automated visual evidence.
+- An authenticated bridge check returned Hermes `available: true` in `local-hermes-cli-disabled` mode and OpenCode `installed: true` in `local-opencode-cli-disabled` mode. Both execution switches were false, and the Hermes dashboard was stopped.
+- Provider status reported zero configured providers. No credential, OAuth login, live model request, or real delegation was used. Generated bridge credentials remain machine-local and ignored by Git.
+
+Resume from the normal development branch:
 
 ```powershell
 Set-Location G:\res-os
-git switch feature/hermes-opencode-enable
-node --test browser-first/test/hermes-runtime.test.mjs browser-first/test/opencode-runtime.test.mjs
-npm run verify:alpha
+git switch dev
+git pull --ff-only origin dev
+Get-NetTCPConnection -State Listen -LocalPort 47773 -ErrorAction SilentlyContinue
+npm run browser-first:bridge
 ```
 
-The practical forward sequence is: merge this branch into `dev`; start the loopback bridge; load/reload the unpacked extension; confirm both add-ons report `installed`; choose one provider/auth route; enable only one add-on with its explicit grants; and run one bounded disposable-workspace delegation before enabling the second. Before enabling any real provider or extension runtime, review the residual items above, provide explicit test credentials through the approved host flow, and perform a separate authenticated end-to-end test in a disposable profile. Keep the bridge bound to loopback and retain practice/sandbox mode until that validation is recorded.
+Run the final command only if no bridge listener is already present. Then press `Alt+Shift+A`, open **Settings -> Providers**, and configure exactly one of MiniMax, Z.AI GLM, or OpenAI through the host-owned form. Do not paste the credential into chat, source files, extension storage, or the generated bridge config. Confirm the provider shows ready, enable Hermes only with its explicit grants, and run one bounded disposable-workspace delegation. Review its artifact and cancellation/failure behavior before enabling OpenCode or any dashboard. Keep the bridge loopback-only.
