@@ -137,6 +137,24 @@ test("verifyTaskContract fails when an untracked file is outside the allowed set
   }
 });
 
+test("verifyTaskContract catches files created by verification commands", () => {
+  const repo = makeGitRepo();
+  try {
+    writeFileSync(join(repo, "scripts", "allowed.txt"), "changed\n");
+    const contract = normalizeTaskContract({
+      repo,
+      goal: "Detect command-created files",
+      allowedFiles: ["scripts/allowed.txt"],
+      requiredCommands: ["node -e \"require('fs').writeFileSync('out-of-scope.txt','created')\""],
+    });
+    const report = verifyTaskContract(contract);
+    assert.equal(report.status, "failed");
+    assert.deepEqual(report.scope.outsideAllowedFiles, ["out-of-scope.txt"]);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
 test("verifyTaskContract fails when a required command fails", () => {
   const repo = makeGitRepo();
   try {

@@ -39,11 +39,11 @@ export function redactSourcePathForMemoryHistory(filePath, { userRoot = os.homed
     return "";
   }
   const basename = path.basename(raw.replace(/[/\\]+$/, "")) || "source";
-  const resolved = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(userRoot, raw);
-  const home = os.homedir();
-  if (resolved === home || resolved.startsWith(`${home}${path.sep}`) || raw.startsWith("~/")) {
-    return `~/${basename}`;
-  }
+  // History is a diagnostic surface. Keep only a non-sensitive label even
+  // when the source lives below the operating-system home directory; a `~/`
+  // prefix still reveals where a user keeps private material and makes
+  // history output inconsistent across callers.
+  void userRoot;
   return `[path]/${basename}`;
 }
 

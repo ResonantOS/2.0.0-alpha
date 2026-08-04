@@ -4,11 +4,34 @@ import test from "node:test";
 import {
   createOpencodeHttpClient,
   ensureOpencodeServer,
-  opencodeServerHealthy
+  opencodeAuthHeaders,
+  opencodeServerHealthy,
+  scopedOpencodeEnv,
 } from "../host/opencode-client.mjs";
 
 const okRes = (body = "{}") => ({ ok: true, status: 200, text: async () => body });
 const errRes = (status = 500, body = "nope") => ({ ok: false, status, text: async () => body });
+
+test("OpenCode runtime environment is allowlisted and auth headers are explicit", () => {
+  const env = scopedOpencodeEnv({
+    PATH: "/safe/bin",
+    HOME: "/home/test",
+    OPENAI_API_KEY: "must-not-cross-runtime-boundary",
+    RESONANTOS_BROWSER_FIRST_BRIDGE_TOKEN: "must-not-cross-runtime-boundary",
+    OPENCODE_SERVER_USERNAME: "resonantos",
+    OPENCODE_SERVER_PASSWORD: "local-password",
+  });
+  assert.deepEqual(env, {
+    PATH: "/safe/bin",
+    HOME: "/home/test",
+    OPENCODE_SERVER_USERNAME: "resonantos",
+    OPENCODE_SERVER_PASSWORD: "local-password",
+  });
+  assert.equal(
+    opencodeAuthHeaders(env).authorization,
+    `Basic ${Buffer.from("resonantos:local-password").toString("base64")}`,
+  );
+});
 
 test("opencodeServerHealthy is true only when the /doc probe succeeds", async () => {
   assert.equal(await opencodeServerHealthy({ fetchImpl: async () => okRes(), baseUrl: "http://x" }), true);

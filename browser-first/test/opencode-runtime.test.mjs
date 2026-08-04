@@ -7,6 +7,8 @@ import test from "node:test";
 import {
   OPENCODE_INSTALL_COMMAND,
   OPENCODE_NPM_INSTALL_COMMAND,
+  OPENCODE_WINDOWS_CONFIGURE_COMMAND,
+  OPENCODE_WINDOWS_NPM_INSTALL_COMMAND,
   opencodeCandidatePaths,
   opencodeRuntimeDiagnostics,
 } from "../host/opencode-runtime.mjs";
@@ -19,7 +21,9 @@ test("opencode diagnostics surface install and override guidance when runtime is
         PATH: tempDir,
         OPENCODE_COMMAND: path.join(tempDir, "missing-opencode"),
       },
+      homeDir: "/home/reviewer",
       includeCommonCandidates: false,
+      platform: "linux",
     });
 
     assert.equal(diagnostics.installed, false);
@@ -84,18 +88,55 @@ test("opencode diagnostics return canonical provenance for a fixed system candid
 });
 
 test("opencode Windows candidates reject command shims and include only direct executables", () => {
+  const localAppData = "C:\\Users\\reviewer\\AppData\\Local";
   const candidates = opencodeCandidatePaths({
     env: {
       OPENCODE_COMMAND: "C:\\Users\\reviewer\\bin\\opencode.cmd",
       PATH: "C:\\Users\\reviewer\\bin",
     },
     homeDir: "C:\\Users\\reviewer",
+    localAppData,
     platform: "win32",
   });
 
   assert.ok(candidates.length > 0);
   assert.ok(candidates.every(({ path: candidate }) => /\.exe$/i.test(candidate)));
   assert.ok(candidates.every(({ path: candidate }) => !/\.(?:cmd|bat)$/i.test(candidate)));
+  assert.ok(candidates.some(({ path: candidate }) => candidate === `${localAppData}\\OpenCode\\node_modules\\opencode-ai\\bin\\opencode.exe`));
+  assert.ok(candidates.every(({ path: candidate }) => candidate !== `${localAppData}\\OpenCode\\opencode.exe`));
+});
+
+test("opencode diagnostics provide commands that install into the trusted Windows prefix", () => {
+  const diagnostics = opencodeRuntimeDiagnostics({
+    env: { LOCALAPPDATA: "C:\\Users\\reviewer\\AppData\\Local" },
+    homeDir: "C:\\Users\\reviewer",
+    includeCommonCandidates: false,
+    platform: "win32",
+  });
+
+  assert.equal(diagnostics.installCommand, OPENCODE_WINDOWS_NPM_INSTALL_COMMAND);
+  assert.equal(diagnostics.configureCommand, OPENCODE_WINDOWS_CONFIGURE_COMMAND);
+  assert.deepEqual(diagnostics.alternativeInstallCommands, []);
+  assert.match(diagnostics.installHint, /direct package executable automatically/i);
+  assert.doesNotMatch(diagnostics.installHint, /curl .* bash/i);
+});
+
+test("opencode diagnostics accept the official native Windows npm prefix", () => {
+  const localAppData = "C:\\Users\\reviewer\\AppData\\Local";
+  const command = `${localAppData}\\OpenCode\\node_modules\\opencode-ai\\bin\\opencode.exe`;
+  const diagnostics = opencodeRuntimeDiagnostics({
+    env: { OPENCODE_COMMAND: command, PATH: "C:\\attacker" },
+    homeDir: "C:\\Users\\reviewer",
+    localAppData,
+    platform: "win32",
+    exists: (candidate) => candidate === command,
+    realpath: (candidate) => candidate,
+    stat: () => ({ isFile: () => true, mode: 0o755 }),
+  });
+
+  assert.equal(diagnostics.command, command);
+  assert.equal(diagnostics.overrideAccepted, true);
+  assert.equal(diagnostics.resolution?.source, "fixed-localappdata-install-root");
 });
 
 test("opencode diagnostics reject canonical escapes from trusted candidates", () => {

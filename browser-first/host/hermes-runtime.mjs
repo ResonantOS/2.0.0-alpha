@@ -36,15 +36,20 @@ function candidate(root, name, base, source, pathApi, canonicalRoots = [root], p
 export function hermesTrustedCandidates({
   homeDir = os.homedir(),
   platform = process.platform,
+  localAppData = process.env.LOCALAPPDATA ?? (platform === "win32" ? path.win32.join(homeDir, "AppData", "Local") : ""),
 } = {}) {
   const pathApi = platform === "win32" ? path.win32 : path.posix;
   if (platform === "win32") {
+    const nativeAgentRoot = pathApi.join(localAppData, "hermes", "hermes-agent");
+    const nativeBinRoot = pathApi.join(nativeAgentRoot, "venv", "Scripts");
     const primaryAgentRoot = pathApi.join(homeDir, ".hermes", "hermes-agent");
     const primaryBinRoot = pathApi.join(primaryAgentRoot, "venv", "Scripts");
     const fallbackAgentRoot = pathApi.join(homeDir, ".hermes");
     const fallbackBinRoot = pathApi.join(fallbackAgentRoot, "venv", "Scripts");
     const programFilesRoot = "C:\\Program Files\\Hermes";
     return uniqueCandidates([
+      candidate(nativeBinRoot, "hermes.exe", "install-prefix", "fixed-localappdata-install-root", pathApi, [nativeBinRoot],
+        pythonAdapterDescriptor(nativeAgentRoot, nativeBinRoot, platform, pathApi)),
       candidate(primaryBinRoot, "hermes.exe", "install-prefix", "fixed-user-install-root", pathApi, [primaryBinRoot],
         pythonAdapterDescriptor(primaryAgentRoot, primaryBinRoot, platform, pathApi)),
       candidate(fallbackBinRoot, "hermes.exe", "install-prefix", "fixed-user-install-root", pathApi, [fallbackBinRoot],
@@ -150,10 +155,11 @@ function resolveHermesRuntimeSelection(options = {}) {
   const env = options.env ?? process.env;
   const homeDir = options.homeDir ?? os.homedir();
   const platform = options.platform ?? process.platform;
+  const localAppData = options.localAppData ?? env.LOCALAPPDATA ?? (platform === "win32" ? path.win32.join(homeDir, "AppData", "Local") : "");
   const exists = options.exists ?? existsSync;
   const realpath = options.realpath ?? ((candidatePath) => realpathSync.native(candidatePath));
   const stat = options.stat ?? statSync;
-  const trustedCandidates = hermesTrustedCandidates({ homeDir, platform });
+  const trustedCandidates = hermesTrustedCandidates({ homeDir, localAppData, platform });
   const overridePath = normalizeOverride(env.HERMES_COMMAND, homeDir, platform);
   const overrideCandidate = trustedCandidates.find((candidateDescriptor) =>
     samePath(candidateDescriptor.path, overridePath, platform)

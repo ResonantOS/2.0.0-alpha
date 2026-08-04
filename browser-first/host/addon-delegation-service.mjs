@@ -124,6 +124,18 @@ function redactCliText(value) {
     .replace(/secret\s*[:=]\s*[^\s]+/gi, "secret=[redacted]");
 }
 
+function redactKnownSecrets(value, secrets = {}) {
+  let text = redactCliText(value);
+  const credentials = [...new Set(Object.values(secrets ?? {})
+    .map((credential) => String(credential ?? "").trim())
+    .filter((credential) => credential.length >= 8))]
+    .sort((left, right) => right.length - left.length);
+  for (const credential of credentials) {
+    text = text.split(credential).join("[redacted-secret]");
+  }
+  return text;
+}
+
 // When the bridge runs on a multi-homed host (e.g. the Pi5 has loopback,
 // LAN 192.168.1.100, and Tailscale 100.100.100.100), it has to publish URLs
 // that a remote extension can actually reach. `dashboardTarget()` returns
@@ -921,11 +933,17 @@ except BaseException as exc:
         settled = true;
         clearTimeout(timer);
         if (code !== 0) {
-          const detail = redactCliText(stderr || stdout || `Hermes local runtime exited with code ${code ?? "unknown"}${signal ? ` signal ${signal}` : ""}.`).trim();
+          const detail = redactKnownSecrets(
+            stderr || stdout || `Hermes local runtime exited with code ${code ?? "unknown"}${signal ? ` signal ${signal}` : ""}.`,
+            options.secrets,
+          ).trim();
           reject(new Error(detail));
           return;
         }
-        resolve({ stdout, stderr });
+        resolve({
+          stdout: redactKnownSecrets(stdout, options.secrets),
+          stderr: redactKnownSecrets(stderr, options.secrets),
+        });
       });
     });
   }
@@ -973,12 +991,13 @@ except BaseException as exc:
           RESONANTOS_HERMES_AGENT_ROOT: runtime.agentRoot,
           RESONANTOS_HERMES_MAX_TURNS: String(Math.min(90, Math.max(1, Number(payload.maxTurns ?? 20)))),
         },
+        secrets,
         timeout: Math.min(900_000, Math.max(30_000, Number(payload.timeoutMs ?? 300_000))),
       });
       const rawResult = await readFile(outputPath, "utf8");
       const parsed = JSON.parse(rawResult);
       if (!parsed.ok) {
-        throw new Error(redactCliText(parsed.error || "Hermes local runtime failed."));
+        throw new Error(redactKnownSecrets(parsed.error || "Hermes local runtime failed.", secrets));
       }
       return {
         ...parseHermesCliResult(parsed.finalResponse, repoRoot),
@@ -996,6 +1015,8 @@ except BaseException as exc:
     const artifactDir = path.join(delegationArtifactRoot(), "hermes");
     await mkdir(artifactDir, { recursive: true });
     const artifactPath = path.join(artifactDir, `${id}-result.md`);
+    const secrets = await readProviderSecrets();
+    const safe = (value) => redactKnownSecrets(value, secrets);
     const lines = [
       `# Hermes Result: ${id}`,
       "",
@@ -1009,19 +1030,19 @@ except BaseException as exc:
       "- boundary: Reviewable artifact only. External sends and trusted memory writes remain blocked.",
       "",
       "## Final Summary",
-      result.finalSummary,
+      safe(result.finalSummary),
       "",
       "## Actions Taken",
-      ...result.actionsTaken.map((item) => `- ${item}`),
+      ...result.actionsTaken.map((item) => `- ${safe(item)}`),
       "",
       "## Approval Needs",
-      ...result.approvalNeeds.map((item) => `- ${item}`),
+      ...result.approvalNeeds.map((item) => `- ${safe(item)}`),
       "",
       "## Residual Risks",
-      ...result.residualRisks.map((item) => `- ${item}`),
+      ...result.residualRisks.map((item) => `- ${safe(item)}`),
       "",
       "## Verification",
-      ...result.verification.map((item) => `- ${item}`),
+      ...result.verification.map((item) => `- ${safe(item)}`),
       "",
     ];
     await writeFile(artifactPath, lines.join("\n"));
@@ -1357,12 +1378,7 @@ except BaseException as exc:
   }
 
   function redactOpenCodeCliText(value) {
-    return String(value ?? "")
-      .replace(/sk-[a-z0-9_-]+/gi, "[redacted-key]")
-      .replace(/bearer\s+[a-z0-9._-]+/gi, "Bearer [redacted-token]")
-      .replace(/api[_-]?key\s*[:=]\s*[^\s]+/gi, "api_key=[redacted]")
-      .replace(/token\s*[:=]\s*[^\s]+/gi, "token=[redacted]")
-      .replace(/secret\s*[:=]\s*[^\s]+/gi, "secret=[redacted]");
+    return redactCliText(value);
   }
 
   async function execOpenCodeCli(command, args, options = {}) {
@@ -1409,11 +1425,14 @@ except BaseException as exc:
         settled = true;
         clearTimeout(timer);
         if (code !== 0) {
-          const detail = redactOpenCodeCliText(stderr || stdout || `OpenCode CLI exited with code ${code ?? "unknown"}${signal ? ` signal ${signal}` : ""}.`).trim();
+          const detail = redactKnownSecrets(
+            redactOpenCodeCliText(stderr || stdout || `OpenCode CLI exited with code ${code ?? "unknown"}${signal ? ` signal ${signal}` : ""}.`),
+            options.secrets,
+          ).trim();
           reject(new Error(detail));
           return;
         }
-        resolve(String(stdout ?? "").trim());
+        resolve(redactKnownSecrets(redactOpenCodeCliText(stdout), options.secrets).trim());
       });
     });
   }
@@ -1445,6 +1464,7 @@ except BaseException as exc:
       const output = await execOpenCodeCli(command, args, {
         cwd: workspacePath,
         env: scopedOpenCodeEnv(model, secrets),
+        secrets,
         timeout: Math.min(900_000, Math.max(30_000, Number(payload.timeoutMs ?? 300_000))),
       });
       return {
@@ -1461,6 +1481,8 @@ except BaseException as exc:
     const artifactDir = path.join(delegationArtifactRoot(), "opencode");
     await mkdir(artifactDir, { recursive: true });
     const artifactPath = path.join(artifactDir, `${id}-result.md`);
+    const secrets = await readProviderSecrets();
+    const safe = (value) => redactKnownSecrets(value, secrets);
     const lines = [
       `# OpenCode Result: ${id}`,
       "",
@@ -1474,22 +1496,22 @@ except BaseException as exc:
       "- boundary: Reviewable coding artifact only. Shell, filesystem, provider secrets, trusted memory writes, and external sends remain governed by ResonantOS.",
       "",
       "## Final Summary",
-      result.finalSummary,
+      safe(result.finalSummary),
       "",
       "## Actions Taken",
-      ...(result.actionsTaken ?? []).map((item) => `- ${item}`),
+      ...(result.actionsTaken ?? []).map((item) => `- ${safe(item)}`),
       "",
       "## Changed Files",
-      ...((result.changedFiles ?? []).length ? result.changedFiles : ["None reported."]).map((item) => `- ${item}`),
+      ...((result.changedFiles ?? []).length ? result.changedFiles : ["None reported."]).map((item) => `- ${safe(item)}`),
       "",
       "## Commands Run",
-      ...((result.commandsRun ?? []).length ? result.commandsRun : ["None reported."]).map((item) => `- ${item}`),
+      ...((result.commandsRun ?? []).length ? result.commandsRun : ["None reported."]).map((item) => `- ${safe(item)}`),
       "",
       "## Residual Risks",
-      ...(result.residualRisks ?? []).map((item) => `- ${item}`),
+      ...(result.residualRisks ?? []).map((item) => `- ${safe(item)}`),
       "",
       "## Verification",
-      ...(result.verification ?? []).map((item) => `- ${item}`),
+      ...(result.verification ?? []).map((item) => `- ${safe(item)}`),
       "",
     ];
     await writeFile(artifactPath, lines.join("\n"));

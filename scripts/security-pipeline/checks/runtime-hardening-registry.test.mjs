@@ -433,7 +433,7 @@ function normalizeTlsArgs(args, root) {
   });
 }
 
-test("Hermes dashboard registry descriptors match captured production start and stop invocations", async () => {
+test("Hermes dashboard registry descriptors match captured production start and stop invocations", { skip: process.platform === "win32" ? "Hermes production fixture uses a POSIX runtime path." : false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "runtime-registry-dashboard-"));
   const calls = [];
   try {
@@ -472,7 +472,7 @@ test("Hermes dashboard registry descriptors match captured production start and 
   }
 });
 
-test("delegated CLI registry descriptors match captured production invocations", async () => {
+test("delegated CLI registry descriptors match captured production invocations", { skip: process.platform === "win32" ? "Hermes production fixture uses a POSIX runtime path." : false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "runtime-registry-addon-cli-"));
   const calls = [];
   try {
@@ -565,7 +565,7 @@ test("delegated CLI registry descriptors match captured production invocations",
   }
 });
 
-test("native picker registry descriptors match captured production invocations", async () => {
+test("native picker registry descriptors match captured production invocations", { skip: process.platform === "win32" ? "Native picker registry fixture is POSIX-specific." : false }, async () => {
   const registry = await readRegistry();
   const records = new Map(registry.recordSets[RECORD_SET].map((record) => [record.id, record]));
   const commonUnixEnvironment = {
@@ -659,7 +659,7 @@ test("native picker registry descriptors match captured production invocations",
   }
 });
 
-test("diagnostic open and reveal registry descriptors match captured production invocations", async () => {
+test("diagnostic open and reveal registry descriptors match captured production invocations", { skip: process.platform === "win32" ? "Diagnostic opener registry fixture is POSIX-specific." : false }, async () => {
   const registry = await readRegistry();
   const records = new Map(registry.recordSets[RECORD_SET].map((record) => [record.id, record]));
   const macEnvironment = {
@@ -850,16 +850,19 @@ test("bridge TLS registry descriptors match captured production OpenSSL invocati
   }
 });
 
-test("active runtime-hardening checks share production-derived spawn records", async () => {
+test("active runtime-hardening checks share production-derived spawn records", { skip: process.platform === "win32" ? "Production-derived runtime registry fixture is POSIX-specific." : false }, async () => {
   const registry = await readRegistry();
   const runtimeChecks = registry.checks.filter((check) =>
     check.family === "runtime-hardening" && check.policy !== "disabled"
   );
   assert.equal(registry.families["runtime-hardening"].status, "active");
-  assert.equal(runtimeChecks.length, 4);
-  for (const check of runtimeChecks) {
+  assert.equal(runtimeChecks.length, 5);
+  for (const check of runtimeChecks.filter((entry) => entry.id !== "privileged-sink-coverage")) {
     assert.deepEqual(check.recordSets, [RECORD_SET], `${check.id} must use the production record set`);
   }
+  const sinkCoverage = runtimeChecks.find((entry) => entry.id === "privileged-sink-coverage");
+  assert.equal(sinkCoverage?.adapter, "privileged-sink-coverage");
+  assert.ok(sinkCoverage?.baseline, "privileged sink coverage must declare its reviewed baseline");
 
   const records = registry.recordSets?.[RECORD_SET];
   assert.ok(Array.isArray(records) && records.length > 0, "production record set must not be empty");
@@ -944,6 +947,6 @@ test("production runtime-hardening records pass strict certification", () => {
   );
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
   const results = result.stdout.trim().split(/\n(?=\{)/).map((document) => JSON.parse(document));
-  assert.equal(results.length, 4, result.stdout);
-  assert.deepEqual(results.map(({ status }) => status), ["pass", "pass", "pass", "pass"]);
+  assert.equal(results.length, 5, result.stdout);
+  assert.deepEqual(results.map(({ status }) => status), ["pass", "pass", "pass", "pass", "pass"]);
 });

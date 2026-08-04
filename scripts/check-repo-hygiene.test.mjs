@@ -375,10 +375,18 @@ test("scanRepository checks content only when enabled", async () => {
   });
 });
 
-test("scanRepository rejects symbolic link candidates", async () => {
+test("scanRepository rejects symbolic link candidates", async (t) => {
   await withTempDirectory(async (root) => {
     await writeFixture(root, "target.txt", "ordinary content\n");
-    await symlink("target.txt", join(root, "linked.txt"));
+    try {
+      await symlink("target.txt", join(root, "linked.txt"));
+    } catch (error) {
+      if (process.platform === "win32" && error?.code === "EPERM") {
+        t.skip("Windows test host does not permit creating symlinks without developer mode.");
+        return;
+      }
+      throw error;
+    }
 
     const violations = await scanRepository(root, { checkContent: true });
     assert.equal(violations.length, 1);
@@ -387,7 +395,7 @@ test("scanRepository rejects symbolic link candidates", async () => {
   });
 });
 
-test("scanRepository rejects candidates escaping through a symlinked parent", async () => {
+test("scanRepository rejects candidates escaping through a symlinked parent", async (t) => {
   await withTempDirectory(async (root) => {
     await withTempDirectory(async (outside) => {
       execFileSync("git", ["init", "--quiet", root]);
@@ -396,7 +404,15 @@ test("scanRepository rejects candidates escaping through a symlinked parent", as
       await writeFixture(root, ".gitignore", "parent\n");
       await rm(join(root, "parent"), { recursive: true });
       await writeFixture(outside, "file.txt", "outside fixture\n");
-      await symlink(outside, join(root, "parent"));
+      try {
+        await symlink(outside, join(root, "parent"));
+      } catch (error) {
+        if (process.platform === "win32" && error?.code === "EPERM") {
+          t.skip("Windows test host does not permit creating symlinks without developer mode.");
+          return;
+        }
+        throw error;
+      }
 
       const violations = await scanRepository(root, { checkContent: true });
       assert.equal(violations.length, 1);
@@ -475,9 +491,10 @@ test("scanRepository rejects files changed during a bounded content read", async
   });
 });
 
-test("scanRepository rejects a candidate swapped to a symlink before content open", async () => {
+test("scanRepository rejects a candidate swapped to a symlink before content open", async (t) => {
   await withTempDirectory(async (root) => {
     const candidatePath = join(root, "candidate.txt");
+    let symlinkUnavailable = false;
     await writeFixture(root, "candidate.txt", "x".repeat(32));
     await writeFixture(root, "target.txt", "/Users/dr.tom/x");
 
@@ -488,11 +505,24 @@ test("scanRepository rejects a candidate swapped to a symlink before content ope
       sizeAllowlist: (path) => {
         if (path === "candidate.txt") {
           unlinkSync(candidatePath);
-          symlinkSync("target.txt", candidatePath);
+          try {
+            symlinkSync("target.txt", candidatePath);
+          } catch (error) {
+            if (process.platform === "win32" && error?.code === "EPERM") {
+              symlinkUnavailable = true;
+              return true;
+            }
+            throw error;
+          }
         }
         return true;
       },
     });
+
+    if (symlinkUnavailable) {
+      t.skip("Windows test host does not permit creating symlinks without developer mode.");
+      return;
+    }
 
     assert.equal(violations.length, 1);
     assert.equal(violations[0].path, "candidate.txt");
@@ -727,13 +757,21 @@ test("CLI accepts an explicit content allowlist path", async () => {
   });
 });
 
-test("CLI executes when the script path is a symbolic link", async () => {
+test("CLI executes when the script path is a symbolic link", async (t) => {
   await withTempDirectory(async (root) => {
     const repositoryRoot = join(root, "repository");
     const linkedScript = join(root, "check-repo-hygiene-link.mjs");
     await mkdir(repositoryRoot);
     await writeFixture(repositoryRoot, "README.md", "Clean fixture\n");
-    await symlink(SCRIPT_PATH, linkedScript);
+    try {
+      await symlink(SCRIPT_PATH, linkedScript);
+    } catch (error) {
+      if (process.platform === "win32" && error?.code === "EPERM") {
+        t.skip("Windows test host does not permit creating symlinks without developer mode.");
+        return;
+      }
+      throw error;
+    }
 
     const result = spawnSync(process.execPath, [linkedScript], {
       cwd: repositoryRoot,

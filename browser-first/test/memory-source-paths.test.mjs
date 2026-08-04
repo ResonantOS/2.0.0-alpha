@@ -11,7 +11,7 @@ import {
   resolveSourceRelativeFile,
 } from "../host/memory-source-paths.mjs";
 
-test("source path helpers keep selected files inside the source root", async () => {
+test("source path helpers keep selected files inside the source root", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "resonantos-source-paths-"));
   const source = path.join(root, "vault");
   const outside = path.join(root, "outside");
@@ -62,11 +62,19 @@ test("source path helpers keep selected files inside the source root", async () 
     );
 
     const link = path.join(source, "notes", "secret-link.md");
-    await symlink(external, link);
-    await assert.rejects(
-      () => assertResolvedSourceFileInsideSource(source, link),
-      /symbolic link/
-    );
+    try {
+      await symlink(external, link);
+      await assert.rejects(
+        () => assertResolvedSourceFileInsideSource(source, link),
+        /symbolic link/
+      );
+    } catch (error) {
+      if (process.platform === "win32" && ["EPERM", "EACCES"].includes(error?.code)) {
+        t.skip("Windows symlink creation requires Developer Mode or elevated privileges.");
+        return;
+      }
+      throw error;
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }

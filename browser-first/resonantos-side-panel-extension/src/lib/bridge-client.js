@@ -112,6 +112,8 @@ function normalizeBridgeTarget(value) {
   const url = typeof value.bridgeUrl === "string" ? value.bridgeUrl.trim() : "";
   if (!url) return null;
   if (!/^https?:\/\//i.test(url)) return null;
+  const origin = normalizedBridgeOrigin(url);
+  if (!origin) return null;
   const token = typeof value.bridgeToken === "string" && value.bridgeToken.trim()
     ? value.bridgeToken.trim()
     : null;
@@ -121,7 +123,17 @@ function normalizeBridgeTarget(value) {
   const capabilityBootstrapToken = typeof value.capabilityBootstrapToken === "string" && value.capabilityBootstrapToken.trim()
     ? value.capabilityBootstrapToken.trim()
     : null;
-  return { url, token, capabilityTokens, capabilityBootstrapToken };
+  return { url: url.replace(/\/+$/, ""), origin, token, capabilityTokens, capabilityBootstrapToken };
+}
+
+function normalizedBridgeOrigin(value) {
+  try {
+    const parsed = new URL(String(value ?? "").trim());
+    if (!["http:", "https:"].includes(parsed.protocol) || !parsed.hostname) return "";
+    return parsed.origin.toLowerCase();
+  } catch {
+    return "";
+  }
 }
 
 async function readOverrideFromStorage() {
@@ -142,6 +154,7 @@ function normalizeGeneratedConfig(cfg) {
   if (!url) return null;
   return {
     url,
+    origin: normalizedBridgeOrigin(url),
     token: typeof cfg.bridgeToken === "string" ? cfg.bridgeToken : null,
     capabilityBootstrapToken: typeof cfg.capabilityBootstrapToken === "string" ? cfg.capabilityBootstrapToken : null,
     capabilityTokens: cfg.bridgeCapabilityTokens && typeof cfg.bridgeCapabilityTokens === "object"
@@ -194,6 +207,7 @@ export async function refreshGeneratedBridgeConfig({ fetchImpl, resourceUrl, now
 function toResolvedBridgeConfig(config, source) {
   return {
     bridgeUrl: config.url,
+    bridgeOrigin: config.origin ?? normalizedBridgeOrigin(config.url),
     bridgeToken: config.token ?? "",
     capabilityBootstrapToken: config.capabilityBootstrapToken ?? "",
     bridgeCapabilityTokens: config.capabilityTokens ?? {},
@@ -207,11 +221,18 @@ export async function resolveBridgeConfig(options = {}) {
     ? (await refreshGeneratedBridgeConfig(options).catch(() => null)) ?? generatedConfig()
     : generatedConfig();
   if (override) {
+    const sameOriginAsGenerated = Boolean(
+      generated?.url &&
+      override.origin &&
+      override.origin === (generated.origin ?? normalizedBridgeOrigin(generated.url))
+    );
     return toResolvedBridgeConfig({
       ...override,
-      token: override.token ?? generated?.token ?? null,
-      capabilityBootstrapToken: override.capabilityBootstrapToken ?? generated?.capabilityBootstrapToken ?? null,
-      capabilityTokens: override.capabilityTokens ?? generated?.capabilityTokens ?? null,
+      token: override.token ?? (sameOriginAsGenerated ? generated?.token : null),
+      capabilityBootstrapToken: override.capabilityBootstrapToken ??
+        (sameOriginAsGenerated ? generated?.capabilityBootstrapToken : null),
+      capabilityTokens: override.capabilityTokens ??
+        (sameOriginAsGenerated ? generated?.capabilityTokens : null),
     }, "override");
   }
   if (generated) {
@@ -268,7 +289,7 @@ export function createBridgeClient(config = globalThis.__RESONANTOS_BRIDGE_CONFI
       headers["X-ResonantOS-Bridge-Token"] = bridgeToken;
     }
     const capability = options.capability || capabilityForBridgeRoute(route, method);
-    const effectiveCapabilityTokens = { ..._capabilityTokens, ...bridgeCapabilityTokens };
+    const effectiveCapabilityTokens = { ...runtimeCapabilityTokens(config), ...bridgeCapabilityTokens };
     if (capability && effectiveCapabilityTokens[capability]) {
       headers["X-ResonantOS-Bridge-Capability-Token"] = effectiveCapabilityTokens[capability];
     }
@@ -310,7 +331,7 @@ export function createRawBridgeFetch(config = globalThis.__RESONANTOS_BRIDGE_CON
       headers["X-ResonantOS-Bridge-Token"] = bridgeToken;
     }
     const capability = options.capability || capabilityForBridgeRoute(path, method);
-    const effectiveCapabilityTokens = { ..._capabilityTokens, ...bridgeCapabilityTokens };
+    const effectiveCapabilityTokens = { ...runtimeCapabilityTokens(config), ...bridgeCapabilityTokens };
     if (capability && effectiveCapabilityTokens[capability]) {
       headers["X-ResonantOS-Bridge-Capability-Token"] = effectiveCapabilityTokens[capability];
     }
@@ -446,11 +467,21 @@ export async function detectLoopbackBridge(config, { fetchImpl: fetchOverride } 
 // take precedence — they are typically the higher-privilege tokens baked
 // into the build. The runtime-fetched tokens are an additional layer for
 // tokens that should NOT appear in the generated config file.
-const _capabilityTokens = {};
+const _capabilityTokensByOrigin = new Map();
+
+function capabilityTokenOrigin(config) {
+  return normalizedBridgeOrigin(config?.bridgeUrl ?? config?.url ?? "");
+}
+
+function runtimeCapabilityTokens(config) {
+  const origin = capabilityTokenOrigin(config);
+  if (!origin) return {};
+  return _capabilityTokensByOrigin.get(origin) ?? {};
+}
 
 /**
  * Fetches capability tokens from the bridge server's authenticated endpoint
- * and merges them into the shared _capabilityTokens map. Must be called
+ * and stores them under the authenticated bridge origin. Must be called
  * once on service-worker startup so that subsequent bridgeRequest() calls
  * can attach the right capability headers.
  *
@@ -464,7 +495,8 @@ export async function initCapabilityTokens(config) {
   const bridgeToken = cfg.bridgeToken ?? "";
   const capabilityBootstrapToken = cfg.capabilityBootstrapToken ?? "";
   const fetchImpl = cfg.fetchImpl ?? fetch;
-  if (!bridgeToken || !capabilityBootstrapToken) return;
+  const origin = capabilityTokenOrigin(cfg);
+  if (!origin || !bridgeToken || !capabilityBootstrapToken) return;
   try {
     const response = await fetchImpl(`${bridgeUrl}/api/capability-tokens`, {
       method: "POST",
@@ -478,7 +510,7 @@ export async function initCapabilityTokens(config) {
     if (response.ok) {
       const payload = await response.json().catch(() => ({}));
       if (payload?.ok && payload?.capabilityTokens && typeof payload.capabilityTokens === "object") {
-        Object.assign(_capabilityTokens, payload.capabilityTokens);
+        _capabilityTokensByOrigin.set(origin, { ...payload.capabilityTokens });
       }
     }
   } catch {

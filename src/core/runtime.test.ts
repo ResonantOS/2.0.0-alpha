@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AddOnManifest, ResonantShellState } from "./contracts";
 import { buildDefaultState } from "./defaults";
-import { applyProviderCredentialStatuses, normalizeState, rebaseStateOnManifests, requestProviderSmokeTest } from "./runtime";
+import {
+  applyProviderCredentialStatuses,
+  normalizeState,
+  rebaseStateOnManifests,
+  requestProviderSmokeTest,
+  saveProviderSecret,
+} from "./runtime";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -217,6 +223,12 @@ describe("runtime state migration", () => {
       authTier: "supported",
       model: "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF:Q4_K_M",
     })).rejects.toThrow("Browser-first bridge is not configured.");
+  });
+
+  it("does not report a provider credential as saved without the authenticated host", async () => {
+    await expect(saveProviderSecret("provider-test", "synthetic-not-a-secret")).rejects.toThrow(
+      "no credential was stored in this web surface",
+    );
   });
 
   it("rebases stale placeholder GX10 runtime state onto the verified default runtime", () => {

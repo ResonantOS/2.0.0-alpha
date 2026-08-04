@@ -67,6 +67,25 @@ test("Hermes runtime returns canonical provenance for a fixed trusted candidate"
   }), command);
 });
 
+test("Hermes runtime accepts the official native Windows install root", () => {
+  const homeDir = "C:\\Users\\reviewer";
+  const localAppData = "C:\\Users\\reviewer\\AppData\\Local";
+  const command = `${localAppData}\\hermes\\hermes-agent\\venv\\Scripts\\hermes.exe`;
+  const diagnostics = hermesRuntimeDiagnostics({
+    env: { HERMES_COMMAND: command, PATH: "C:\\attacker" },
+    homeDir,
+    localAppData,
+    platform: "win32",
+    exists: (candidate) => candidate === command,
+    realpath: (candidate) => candidate,
+    stat: () => ({ isFile: () => true, mode: 0o755 }),
+  });
+
+  assert.equal(diagnostics.command, command);
+  assert.equal(diagnostics.overrideAccepted, true);
+  assert.equal(diagnostics.resolution?.source, "fixed-localappdata-install-root");
+});
+
 test("Hermes runtime rejects a trusted-path symlink that canonicalizes outside allowlisted roots", () => {
   const command = "/usr/local/bin/hermes";
   const diagnostics = hermesRuntimeDiagnostics({

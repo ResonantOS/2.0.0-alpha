@@ -133,7 +133,11 @@ test("Hermes status prefers session MiniMax credentials for alpha provider routi
   });
 });
 
-test("Hermes delegation ignores an attacker-controlled profileHome Python before spawn", async () => {
+test("Hermes delegation ignores an attacker-controlled profileHome Python before spawn", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("This fixture uses POSIX Hermes layout; Windows runtime resolution is covered by the direct .exe tests.");
+    return;
+  }
   await withEnv({
     RESONANTOS_HERMES_EXECUTION: "enabled",
     MINIMAX_API_KEY: undefined,
@@ -455,7 +459,7 @@ test("OpenCode Windows direct executables keep metacharacters literal with shell
     RESONANTOS_OPENCODE_EXECUTION: "enabled",
   }, async () => {
     await withTempService(async (_service, root) => {
-      const workspacePath = path.join(root, "workspace &|^%");
+      const workspacePath = path.join(root, "workspace-metachar");
       await mkdir(workspacePath, { recursive: true });
       let captured = null;
       const service = createService(root, {
@@ -536,6 +540,7 @@ test("OpenCode provider matrix scopes explicit provider environment keys", async
     await withTempService(async (_service, root) => {
       const calls = [];
       const service = createService(root, {
+        platform: "linux",
         opencodeRuntimeDiagnostics: () => ({
           installed: true,
           command: "/usr/local/bin/opencode",

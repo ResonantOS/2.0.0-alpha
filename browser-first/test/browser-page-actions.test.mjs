@@ -174,7 +174,7 @@ test("browser page actions hydrates cached active-tab context from background sn
   const harness = createHarness({
     activeTabContext: () => ({
       ok: true,
-      snapshot: {
+      contextSnapshot: {
         tabId: 1,
         title: "Cached Active Tab",
         url: "https://example.test/",
@@ -200,7 +200,7 @@ test("browser page actions clears stale page context when active tab changes", a
     },
     activeTabContext: () => ({
       ok: true,
-      snapshot: {
+      contextSnapshot: {
         tabId: 9,
         title: "Old Tab",
         url: "https://old.example/",

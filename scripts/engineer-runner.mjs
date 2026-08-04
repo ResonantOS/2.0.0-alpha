@@ -137,9 +137,13 @@ export function runRequiredCommands(repo, commands, options = {}) {
 }
 
 export function verifyTaskContract(contract, options = {}) {
+  const changedFilesBeforeCommands = listChangedFiles(contract.repo);
+  const commands = runRequiredCommands(contract.repo, contract.requiredCommands, options);
+  // Commands are untrusted: a successful command may create or modify files
+  // outside the task contract. Re-snapshot after the full verification set and
+  // make the final scope decision from the post-command state.
   const changedFiles = listChangedFiles(contract.repo);
   const scope = evaluateScope(changedFiles, contract.allowedFiles);
-  const commands = runRequiredCommands(contract.repo, contract.requiredCommands, options);
   const commandsOk = commands.every((command) => command.status === 0);
   const status = scope.ok && commandsOk ? "verified" : "failed";
   return {
@@ -154,6 +158,7 @@ export function verifyTaskContract(contract, options = {}) {
     },
     scope,
     commands,
+    changedFilesBeforeCommands,
   };
 }
 

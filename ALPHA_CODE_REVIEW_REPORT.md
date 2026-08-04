@@ -650,6 +650,26 @@ These should be scheduled after the release blockers above, or sooner if their a
 
 The browser-first failures were primarily Windows/POSIX command assumptions and symlink-privilege cases. The optional-host failures included two tests requiring an installed Playwright Chromium binary and one Windows symlink-privilege case. These results are not evidence that the reproduced security findings are false; the findings were confirmed with focused tests or isolated executable reproductions.
 
+## Remediation update — 2026-08-03
+
+The original findings above describe the pre-remediation state. The current branch `security/alpha-remediation` contains the following verified changes:
+
+| Finding | Current status | Evidence |
+| --- | --- | --- |
+| R-01 through R-07 | Fixed in the active bridge/extension path | Focused adversarial bridge, content, archive, provider, OpenCode, and redaction tests pass. |
+| R-08 | Partially fixed and guarded | Exact-origin/CORS, state-changing proxy authentication, redirect refusal, and WebSocket Origin tests pass; real Hermes end-to-end authentication still requires an installed runtime. |
+| R-09/R-10 | Fixed and regression-tested | Canonical path containment, private/metadata endpoint rejection, redirect refusal, and cross-platform verifier tests pass; Linux symlink/DNS attack execution remains a platform acceptance check. |
+| A-01/A-02/A-04/A-07 | Fixed | Single-flight scheduling, context snapshot contract, CI path coverage, and post-command scope tests pass. |
+| A-03 | Fixed with review gate | `privileged-sink-coverage` parses the active JS/TS surfaces and compares 511 privileged sinks across 44 files with a checked-in reviewed baseline. |
+| A-05 | Fixed in the optional host | JSON-RPC requires a per-launch token; executable paths are allowlisted; DOM-derived sensitive/high-impact approval blocks password and destructive bypasses. Live Chromium execution remains unverified here because Playwright Chromium is not installed. Windows-only CLI fixture skips are explicit and do not weaken the direct-executable policy. |
+| A-06 | Fixed for the verified race | Async chat commits use a three-way rebase and preserve concurrent keyed thread/provider/settings edits. |
+| A-08 | Shared-shell residual | The active browser-first chat client aborts its bridge request. The legacy web transport still needs a full provider-stream AbortSignal and server-side cost-cancellation integration before this finding is fully closed. |
+| A-09 | Fixed closed | Renderer-only secret saves now refuse to claim success; authenticated host/bridge storage remains the only configured path. |
+
+Memory source sync and move history were also tightened during the remediation pass: persisted diagnostics now retain only a `[path]/basename` label, including sources located below the operating-system home directory. The intake and move in-process self-tests cover this redaction behavior.
+
+The detailed handoff, exact commands, platform limitations, and safe resume procedure are in [DEV_NOTES_SECURITY_REMEDIATION.md](DEV_NOTES_SECURITY_REMEDIATION.md).
+
 ## Minimum release acceptance checklist
 
 - [ ] R-01 through R-07 are fixed with adversarial regression tests.

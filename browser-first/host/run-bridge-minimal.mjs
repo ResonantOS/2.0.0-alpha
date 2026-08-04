@@ -34,7 +34,12 @@ import { createAgentControlHostService } from "./agent-control-host-service.mjs"
 import { buildBridgeCapabilityTokens } from "./bridge-capability-tokens.mjs";
 import { createAddonDelegationHostService } from "./addon-delegation-host-service.mjs";
 import { createAddonDelegationService } from "./addon-delegation-service.mjs";
-import { createOpencodeHttpClient, ensureOpencodeServer } from "./opencode-client.mjs";
+import {
+  createOpencodeHttpClient,
+  ensureOpencodeServer,
+  opencodeAuthHeaders,
+  scopedOpencodeEnv,
+} from "./opencode-client.mjs";
 import { createOpencodeSessionHandlers, createOpencodeSessionHostService } from "./opencode-session-host-service.mjs";
 import { createArchiveReviewHostService } from "./archive-review-host-service.mjs";
 import { createBrowserDiagnosticsHostService } from "./browser-diagnostics-host-service.mjs";
@@ -183,6 +188,8 @@ const { addonDelegationRoutes } = createAddonDelegationHostService(addonDelegati
 // ResonantOS-dedicated port and proxies session/prompt/permission; the extension
 // streams the server's /event bus directly (host_permissions cover 127.0.0.1).
 const opencodeSessionPort = Number(process.env.RESONANTOS_OPENCODE_PORT ?? 4231);
+const opencodeServerEnv = scopedOpencodeEnv(process.env);
+const opencodeServerHeaders = opencodeAuthHeaders(opencodeServerEnv);
 const opencodeSessionHandlers = createOpencodeSessionHandlers({
   ensureServer: () => ensureOpencodeServer({
     fetchImpl: (...args) => fetch(...args),
@@ -190,9 +197,14 @@ const opencodeSessionHandlers = createOpencodeSessionHandlers({
     command: resolveOpenCodeCommand(),
     hostname: "127.0.0.1",
     port: opencodeSessionPort,
-    env: process.env,
+    env: opencodeServerEnv,
+    headers: opencodeServerHeaders,
   }),
-  createClient: (baseUrl) => createOpencodeHttpClient({ fetchImpl: (...args) => fetch(...args), baseUrl }),
+  createClient: (baseUrl) => createOpencodeHttpClient({
+    fetchImpl: (...args) => fetch(...args),
+    baseUrl,
+    headers: opencodeServerHeaders,
+  }),
 });
 const { opencodeSessionRoutes } = createOpencodeSessionHostService(opencodeSessionHandlers);
 

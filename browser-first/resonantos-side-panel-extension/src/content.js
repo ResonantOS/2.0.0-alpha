@@ -426,6 +426,7 @@ const ambiguousTargetResponse = (kind, target, candidates) => ({
 // public submit even without a <form> (SPA buttons, links, type="button" that
 // wire up JS submit) — it is a human-only handoff, never auto-clicked.
 const PUBLIC_COMMIT_VERBS = /\b(submit|send|post|publish|save|share|buy|pay|confirm|connect|sign|reserve|book|order|checkout|apply|vote|subscribe|register|comment)\b/i;
+const DESTRUCTIVE_CONTROL_VERBS = /\b(delete|remove|destroy|erase|revoke|deactivate|terminate|wipe|close\s+account|delete\s+account)\b/i;
 const isSubmitLikeElement = (element) => {
   const type = String(element.getAttribute("type") || "").toLowerCase();
   const role = String(element.getAttribute("role") || "").toLowerCase();
@@ -447,14 +448,27 @@ const isSubmitLikeElement = (element) => {
 };
 
 const isHardRestrictedElement = (element, fallbackText = "") => {
+  const form = element?.closest?.("form");
+  const formFields = form
+    ? Array.from(form.querySelectorAll("input, textarea, select"))
+    : [];
+  const sensitiveForm = formFields.some((field) => {
+    const safety = classifyEditableField(field);
+    return safety && !safety.safeToType;
+  });
   const text = [
     visibleText(element),
     element?.getAttribute?.("aria-label"),
     element?.id,
     element?.className,
-    fallbackText
+    fallbackText,
+    form?.getAttribute?.("aria-label"),
+    form?.getAttribute?.("role"),
+    form?.innerText?.slice?.(0, 1200)
   ].filter(Boolean).join(" ").toLowerCase();
-  return /\b(wallet|phantom|sign|signature|approve|connect wallet|buy|sell|swap|stake|unstake|bridge|mint|claim|pay|payment|checkout|login|credential|password|transfer)\b/i.test(text);
+  return sensitiveForm ||
+    DESTRUCTIVE_CONTROL_VERBS.test(text) ||
+    /\b(wallet|phantom|sign|signature|approve|connect wallet|buy|sell|swap|stake|unstake|bridge|mint|claim|pay|payment|checkout|login|credential|password|transfer)\b/i.test(text);
 };
 
 // How long the target spotlight dwells before the click fires, so the human can
@@ -474,6 +488,7 @@ const clickElement = async (element, { userApproved = false, fallbackText = "" }
       ok: false,
       approvalRequired: true,
       deniedToAutomation: true,
+      humanHandoff: true,
       error: `Clicking "${visibleText(element) || fallbackText}" crosses a wallet/payment/login/credential boundary and must be completed by the human.`
     };
   }
@@ -505,7 +520,7 @@ const clickElement = async (element, { userApproved = false, fallbackText = "" }
     clientX: Math.round(rect.left + rect.width / 2),
     clientY: Math.round(rect.top + rect.height / 2)
   };
-  for (const eventName of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
+  for (const eventName of ["pointerdown", "mousedown", "pointerup", "mouseup"]) {
     const EventConstructor = eventName.startsWith("pointer") ? PointerEvent : MouseEvent;
     element.dispatchEvent(new EventConstructor(eventName, eventOptions));
   }
@@ -714,6 +729,16 @@ const setNativeValue = (element, value) => {
 // form whose every data field classifies as a search query.
 const formIsSafeToAutoSubmit = (form) => {
   if (!form) return true; // no enclosing form -> Enter only affects the field itself
+  const method = String(form.getAttribute("method") || "get").trim().toLowerCase();
+  if (method !== "get") return false;
+  const action = form.getAttribute("action") || window.location.href;
+  let actionUrl;
+  try {
+    actionUrl = new URL(action, window.location.href);
+  } catch {
+    return false;
+  }
+  if (actionUrl.origin !== window.location.origin) return false;
   const fields = form.querySelectorAll("input, textarea, select");
   for (const candidate of fields) {
     const candidateType = String(candidate.getAttribute("type") || "").toLowerCase();
@@ -726,6 +751,16 @@ const formIsSafeToAutoSubmit = (form) => {
   for (const control of form.querySelectorAll("button, input[type=submit], input[type=image], input[type=button], [role=button]")) {
     const controlLabel = `${visibleText(control)} ${control.getAttribute("value") || ""}`.toLowerCase();
     if (PUBLIC_COMMIT_VERBS.test(controlLabel)) return false;
+    const overrideMethod = String(control.getAttribute("formmethod") || "").trim().toLowerCase();
+    if (overrideMethod && overrideMethod !== "get") return false;
+    const overrideAction = control.getAttribute("formaction");
+    if (overrideAction) {
+      try {
+        if (new URL(overrideAction, window.location.href).origin !== window.location.origin) return false;
+      } catch {
+        return false;
+      }
+    }
   }
   return true;
 };
@@ -778,9 +813,17 @@ const typeIntoPage = ({ text, field = "", ref = "", submit = false, userApproved
         error: "This search field is inside a form with sensitive or public-submit fields; the human must submit it on the page."
       };
     }
-    element.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true, cancelable: true }));
-    element.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", bubbles: true, cancelable: true }));
-    element.form?.requestSubmit?.();
+    if (typeof element.form?.requestSubmit !== "function") {
+      return {
+        ok: false,
+        approvalRequired: true,
+        deniedToAutomation: true,
+        humanHandoff: true,
+        fieldSafety,
+        error: "This browser does not expose a safe form submission API; the human must submit it on the page."
+      };
+    }
+    element.form.requestSubmit();
   }
   pulseControlOverlay({ state: "done", label: `Typed ${value.slice(0, 80)}`, phase: "done", target: element });
   return {
@@ -903,6 +946,8 @@ const editableRootForSelection = () => {
 
 const editableSelectionDetails = (element) => {
   if (!element || !isEditable(element)) return null;
+  const fieldSafety = classifyEditableField(element);
+  if (fieldSafety && !fieldSafety.safeToType) return null;
   if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
     const start = element.selectionStart ?? 0;
     const end = element.selectionEnd ?? start;
@@ -949,7 +994,10 @@ const firstUsefulRangeRect = (range) => {
 };
 
 const currentSelectionDetails = () => {
-  const editableDetails = editableSelectionDetails(editableRootForSelection());
+  const editableRoot = editableRootForSelection();
+  const editableSafety = editableRoot ? classifyEditableField(editableRoot) : null;
+  if (editableSafety && !editableSafety.safeToType) return null;
+  const editableDetails = editableSelectionDetails(editableRoot);
   if (editableDetails) return editableDetails;
   const selection = window.getSelection();
   const text = selection?.toString?.().trim() ?? "";
@@ -987,6 +1035,7 @@ const positionInlineButton = () => {
     const details = currentSelectionDetails();
     const { button } = ensureInlineAssistantUi();
     if (!details || details.text.length < 2 || details.rect.width === 0) {
+      lastInlineSelectionDetails = null;
       button.style.display = "none";
       return;
     }
@@ -1004,6 +1053,7 @@ const positionInlineButtonSync = () => {
   const details = currentSelectionDetails();
   const { button } = ensureInlineAssistantUi();
   if (!details || details.text.length < 2 || details.rect.width === 0) {
+    lastInlineSelectionDetails = null;
     button.style.display = "none";
     return;
   }
@@ -1046,6 +1096,14 @@ const timeoutAfter = (ms, errorMessage) => new Promise((_, reject) => {
 const runInlineAction = async (action) => {
   const { panel } = ensureInlineAssistantUi();
   const result = panel.querySelector(".ros-inline-result");
+  const activeField = panel.dataset.activeRef ? elementByControlRef(panel.dataset.activeRef) : null;
+  const activeFieldSafety = activeField ? classifyEditableField(activeField) : null;
+  if (activeFieldSafety && !activeFieldSafety.safeToType) {
+    result.textContent = activeFieldSafety.reason;
+    panel.style.display = "none";
+    lastInlineSelectionDetails = null;
+    return;
+  }
   const selection = panel.dataset.selection || currentSelectionDetails()?.text || "";
   if (!selection) {
     result.textContent = "No selected text is available.";

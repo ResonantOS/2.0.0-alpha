@@ -2,6 +2,9 @@
 // Intent citation: docs/architecture/ADR-018-addon-sdk-v0.md
 
 import { createInterface } from "node:readline";
+import { timingSafeEqual } from "node:crypto";
+import { existsSync, realpathSync } from "node:fs";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { assertContained } from "./lib/path-contains.mjs";
@@ -11,6 +14,38 @@ const DEFAULT_VIEWPORT = { width: 1440, height: 1000 };
 const DEFAULT_CHROMIUM_ARGS = ["--password-store=basic", "--use-mock-keychain"];
 const MAX_TEXT_CHARS = 12000;
 const MAX_LINKS = 80;
+const APPROVED_BROWSER_CHANNELS = new Set([
+  "chromium",
+  "chrome",
+  "chrome-beta",
+  "chrome-dev",
+  "chrome-canary",
+  "msedge",
+  "msedge-beta",
+  "msedge-dev",
+  "msedge-canary",
+]);
+const SENSITIVE_FIELD_PATTERN = /\b(?:password|passcode|passphrase|passwd|pwd|secret|token|api[-_ ]?key|apikey|auth(?:orization)?|bearer|credential|private[-_ ]?key|seed|otp|2fa|mfa|verification[-_ ]?code|card|credit|debit|cvc|cvv|iban|routing|account[-_ ]?number|ssn|social[-_ ]?security)\b/i;
+const HIGH_IMPACT_CONTROL_PATTERN = /\b(?:delete|remove|destroy|erase|revoke|deactivate|terminate|wipe|close\s+account|submit|send|publish|post|checkout|buy|purchase|pay|transfer|sign|approve|confirm|login|log\s*in|sign\s*in|wallet|connect)\b/i;
+const APPROVED_EXECUTABLES = Object.freeze({
+  win32: [
+    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+    "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+  ],
+  darwin: [
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+  ],
+  linux: [
+    "/usr/bin/google-chrome",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+    "/usr/bin/microsoft-edge",
+    "/snap/bin/chromium",
+  ],
+});
 
 const nowIso = () => new Date().toISOString();
 
@@ -18,10 +53,42 @@ function optionalString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-export function resolveChromiumLaunchOptions({ headless = true, params = {}, env = process.env } = {}) {
-  const executablePath =
-    optionalString(params.executablePath) ?? optionalString(env.RESONANTOS_BROWSER_HOST_EXECUTABLE_PATH);
+function normalizeComparablePath(value, platform) {
+  const pathApi = platform === "win32" ? path.win32 : path.posix;
+  const normalized = pathApi.normalize(String(value ?? "").trim());
+  return platform === "win32" ? normalized.replaceAll("/", "\\").toLowerCase() : normalized;
+}
+
+export function isApprovedChromiumExecutable(executablePath, {
+  platform = process.platform,
+  exists = existsSync,
+  realpath = realpathSync,
+  approvedPaths = APPROVED_EXECUTABLES[platform] ?? [],
+} = {}) {
+  const candidate = normalizeComparablePath(executablePath, platform);
+  const approved = approvedPaths.some((entry) => normalizeComparablePath(entry, platform) === candidate);
+  if (!approved || !exists(executablePath)) {
+    return false;
+  }
+  try {
+    return normalizeComparablePath(realpath(executablePath), platform) === candidate;
+  } catch {
+    return false;
+  }
+}
+
+export function resolveChromiumLaunchOptions({ headless = true, params = {}, env = process.env, platform = process.platform } = {}) {
+  if (optionalString(params.executablePath)) {
+    throw new Error("Browser host does not accept caller-selected executable paths; configure an approved installation through the host environment.");
+  }
+  const executablePath = optionalString(env.RESONANTOS_BROWSER_HOST_EXECUTABLE_PATH);
   const channel = optionalString(params.browserChannel) ?? optionalString(env.RESONANTOS_BROWSER_HOST_CHANNEL);
+  if (channel && !APPROVED_BROWSER_CHANNELS.has(channel)) {
+    throw new Error(`Browser host channel '${channel}' is not on the approved Chromium channel list.`);
+  }
+  if (executablePath && !isApprovedChromiumExecutable(executablePath, { platform })) {
+    throw new Error("Configured browser executable is not a canonical approved Chrome/Edge installation.");
+  }
   const launchOptions = {
     headless,
     args: DEFAULT_CHROMIUM_ARGS,
@@ -57,6 +124,44 @@ function assertSafeHttpUrl(url) {
 
 function sanitizeText(value) {
   return String(value ?? "").replace(/\s+/g, " ").trim().slice(0, MAX_TEXT_CHARS);
+}
+
+function constantTimeTokenEqual(actual, expected) {
+  if (typeof actual !== "string" || typeof expected !== "string" || !actual || !expected) return false;
+  const actualBuffer = Buffer.from(actual);
+  const expectedBuffer = Buffer.from(expected);
+  return actualBuffer.length === expectedBuffer.length && timingSafeEqual(actualBuffer, expectedBuffer);
+}
+
+function actionApprovalError(action, reason) {
+  return new Error(`Browser host blocked ${action}: ${reason} Human approval is required before this action can run.`);
+}
+
+async function inspectLocator(locator) {
+  return locator.evaluate((element) => {
+    const sensitivePattern = /\b(?:password|passcode|passphrase|passwd|pwd|secret|token|api[-_ ]?key|apikey|auth(?:orization)?|bearer|credential|private[-_ ]?key|seed|otp|2fa|mfa|verification[-_ ]?code|card|credit|debit|cvc|cvv|iban|routing|account[-_ ]?number|ssn|social[-_ ]?security)\b/i;
+    const highImpactPattern = /\b(?:delete|remove|destroy|erase|revoke|deactivate|terminate|wipe|close\s+account|submit|send|publish|post|checkout|buy|purchase|pay|transfer|sign|approve|confirm|login|log\s*in|sign\s*in|wallet|connect)\b/i;
+    const form = element.closest("form");
+    const text = [
+      element.textContent,
+      element.getAttribute("aria-label"),
+      element.getAttribute("title"),
+      element.getAttribute("name"),
+      element.getAttribute("id"),
+      form?.textContent,
+      form?.getAttribute("aria-label"),
+      form?.getAttribute("name"),
+    ].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+    const type = String(element.getAttribute("type") ?? "").toLowerCase();
+    const autocomplete = String(element.getAttribute("autocomplete") ?? "").toLowerCase();
+    return {
+      text,
+      type,
+      autocomplete,
+      sensitive: type === "password" || sensitivePattern.test(`${text} ${type} ${autocomplete}`),
+      highImpact: highImpactPattern.test(text) || ["submit", "reset"].includes(type),
+    };
+  });
 }
 
 export class ResonantBrowserHost {
@@ -172,12 +277,21 @@ export class ResonantBrowserHost {
 
   async click(params = {}) {
     const page = this.requirePage();
+    const humanApproved = params.humanApproved === true;
     if (params.selector) {
-      await page.locator(params.selector).first().click({ timeout: params.timeoutMs ?? 8000 });
-      this.record("page.clicked", { selector: params.selector });
+      const locator = page.locator(params.selector).first();
+      const classification = await inspectLocator(locator);
+      if ((classification.sensitive || classification.highImpact) && !humanApproved) {
+        throw actionApprovalError("a high-impact or sensitive control", classification.sensitive ? "The target is sensitive." : "The target can submit, publish, purchase, authenticate, or change state.");
+      }
+      await locator.click({ timeout: params.timeoutMs ?? 8000 });
+      this.record("page.clicked", { selector: params.selector, sensitive: classification.sensitive, highImpact: classification.highImpact, humanApproved });
     } else if (Number.isFinite(params.x) && Number.isFinite(params.y)) {
+      if (!humanApproved) {
+        throw actionApprovalError("a coordinate click", "The host cannot inspect the DOM target before a coordinate click.");
+      }
       await page.mouse.click(params.x, params.y);
-      this.record("page.clicked", { x: params.x, y: params.y });
+      this.record("page.clicked", { x: params.x, y: params.y, humanApproved: true });
     } else {
       throw new Error("Click requires either selector or x/y coordinates.");
     }
@@ -198,8 +312,13 @@ export class ResonantBrowserHost {
       throw new Error("Type requires text.");
     }
     const locator = page.locator(params.selector).first();
+    const classification = await inspectLocator(locator);
+    const humanApproved = params.humanApproved === true;
+    if ((classification.sensitive || params.sensitive === true) && !humanApproved) {
+      throw actionApprovalError("sensitive typing", "The target is classified as a password, credential, payment, or identity field.");
+    }
     await locator.fill(params.text, { timeout: params.timeoutMs ?? 8000 });
-    this.record("page.typed", { selector: params.selector, chars: params.text.length, sensitive: Boolean(params.sensitive) });
+    this.record("page.typed", { selector: params.selector, chars: params.text.length, sensitive: classification.sensitive, humanApproved });
     return {
       sessionId: this.sessionId,
       finalUrl: page.url(),
@@ -269,19 +388,30 @@ const methodMap = {
   "browser.health": "health",
 };
 
-export async function handleJsonRpcLine(host, line) {
+export async function handleJsonRpcLine(host, line, { authToken = process.env.RESONANTOS_BROWSER_HOST_AUTH_TOKEN } = {}) {
   const request = JSON.parse(line);
+  if (!constantTimeTokenEqual(request.authToken, authToken)) {
+    throw new Error("Unauthorized browser host request.");
+  }
   const method = methodMap[request.method];
   if (!method || typeof host[method] !== "function") {
     throw new Error(`Unknown browser host method: ${request.method}`);
   }
+  const params = { ...(request.params ?? {}) };
+  if (request.humanApproved === true) {
+    params.humanApproved = true;
+  }
   return {
     id: request.id ?? null,
-    result: await host[method](request.params ?? {}),
+    result: await host[method](params),
   };
 }
 
 async function runStdioServer() {
+  const authToken = optionalString(process.env.RESONANTOS_BROWSER_HOST_AUTH_TOKEN);
+  if (!authToken) {
+    throw new Error("RESONANTOS_BROWSER_HOST_AUTH_TOKEN must be set for the browser host JSON-RPC service.");
+  }
   const host = new ResonantBrowserHost({ headless: true });
   const input = createInterface({ input: process.stdin, terminal: false });
 
@@ -290,7 +420,7 @@ async function runStdioServer() {
       continue;
     }
     try {
-      const response = await handleJsonRpcLine(host, line);
+      const response = await handleJsonRpcLine(host, line, { authToken });
       process.stdout.write(`${JSON.stringify(response)}\n`);
     } catch (error) {
       process.stdout.write(

@@ -137,6 +137,29 @@ test("proxy: allows iframe src dashboard mirror paths on loopback by default", a
   });
 });
 
+test("proxy: token-free open prefixes never accept state-changing methods", async () => {
+  await withFakeUpstream((_req, res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true }));
+  }, async () => {
+    await withBridgeServer(
+      {
+        bridgeToken: "proxy-test-token",
+        extensionOrigin: "chrome-extension://test",
+        routes: [],
+      },
+      async ({ bridgeUrl }) => {
+        const r = await fetch(`${bridgeUrl}/api/state`, {
+          method: "POST",
+          body: "{}",
+          headers: { "Content-Type": "application/json" },
+        });
+        assert.equal(r.status, 401);
+      },
+    );
+  });
+});
+
 test("proxy: owns CORS headers for local harness and extension origins", async () => {
   await withFakeUpstream((_req, res) => {
     res.writeHead(200, {
@@ -423,7 +446,11 @@ test("proxy: forwards WebSocket upgrade to upstream and pipes both ways", async 
   process.env.RESONANTOS_BRIDGE_OPEN_PROXY_PREFIXES = "/hermes-dashboard";
   try {
     await withBridgeServer(
-      { bridgeToken: "proxy-test-token", routes: [] },
+      {
+        bridgeToken: "proxy-test-token",
+        extensionOrigin: "chrome-extension://test",
+        routes: [],
+      },
       async ({ bridgePort }) => {
         const client = net.createConnection({ host: "127.0.0.1", port: bridgePort });
         try {
@@ -439,6 +466,7 @@ test("proxy: forwards WebSocket upgrade to upstream and pipes both ways", async 
             "Upgrade: websocket",
             "Sec-WebSocket-Version: 13",
             "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+            "Origin: chrome-extension://test",
             "X-ResonantOS-Bridge-Token: proxy-test-token",
             "\r\n",
           ].join("\r\n"));

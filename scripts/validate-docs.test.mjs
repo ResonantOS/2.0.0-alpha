@@ -2357,13 +2357,21 @@ test("validateRepositoryDocs fails safely on cyclic workflow merges", () => {
   });
 });
 
-test("validateRepositoryDocs rejects required-file symlinks that escape the repository", () => {
+test("validateRepositoryDocs rejects required-file symlinks that escape the repository", (t) => {
   withRepository((root) => {
     const outside = mkdtempSync(join(tmpdir(), "validate-docs-outside-"));
     try {
       writeFileSync(join(outside, "INSTALL.md"), "# Outside\n");
       rmSync(join(root, "INSTALL.md"));
-      symlinkSync(join(outside, "INSTALL.md"), join(root, "INSTALL.md"));
+      try {
+        symlinkSync(join(outside, "INSTALL.md"), join(root, "INSTALL.md"));
+      } catch (error) {
+        if (process.platform === "win32" && error?.code === "EPERM") {
+          t.skip("Windows test host does not permit creating symlinks without developer mode.");
+          return;
+        }
+        throw error;
+      }
       const output = messages(validateRepositoryDocs(root).findings);
       assert(output.some((message) => message.includes("INSTALL.md") && message.includes("symlink")));
     } finally {

@@ -21,6 +21,11 @@ const canonicalRootFiles = new Set([
   "SUPPORT.md",
 ]);
 
+const reviewedRootReports = new Set([
+  "ALPHA_CODE_REVIEW_REPORT.md",
+  "DEV_NOTES_SECURITY_REMEDIATION.md",
+]);
+
 const includeDocs = new Set([
   "docs/README.md",
   "docs/STATUS.md",
@@ -246,6 +251,12 @@ function classify(changedPath, state) {
     return {
       bucket: "include",
       reason: "canonical browser-first governance or release documentation",
+    };
+  }
+  if (reviewedRootReports.has(changedPath)) {
+    return {
+      bucket: "include",
+      reason: "named alpha security review or remediation evidence",
     };
   }
   if (/^docs\/architecture\/ADR-\d{3}[^/]*\.md$/.test(changedPath)) {

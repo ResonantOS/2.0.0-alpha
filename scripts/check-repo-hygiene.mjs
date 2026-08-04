@@ -555,9 +555,7 @@ function isContainedPath(root, candidate) {
 }
 
 async function inspectContentNoFollow(repositoryRealPath, absolutePath, path, expectedStat, options) {
-  if (!Number.isInteger(constants.O_NOFOLLOW)) {
-    throw new Error("Content scanning requires filesystem O_NOFOLLOW support");
-  }
+  const supportsNoFollow = Number.isInteger(constants.O_NOFOLLOW);
 
   let candidateRealPath;
   try {
@@ -580,7 +578,9 @@ async function inspectContentNoFollow(repositoryRealPath, absolutePath, path, ex
   try {
     handle = await open(
       absolutePath,
-      constants.O_RDONLY | constants.O_NOFOLLOW | (constants.O_NONBLOCK ?? 0),
+      constants.O_RDONLY |
+        (supportsNoFollow ? constants.O_NOFOLLOW : 0) |
+        (constants.O_NONBLOCK ?? 0),
     );
   } catch (error) {
     if (error?.code === "ELOOP") {
@@ -611,6 +611,34 @@ async function inspectContentNoFollow(repositoryRealPath, absolutePath, path, ex
         "file-changed",
         "Candidate was replaced before content scanning; retry after stabilizing the worktree.",
       ) };
+    }
+
+    // Windows does not expose O_NOFOLLOW. The open handle/stat identity check
+    // above still prevents a replaced file from being scanned; this second
+    // canonical-path check closes the remaining symlink/path-escape case as
+    // far as the platform permits without failing the entire release scan.
+    if (!supportsNoFollow) {
+      let openedRealPath;
+      try {
+        openedRealPath = await realpath(absolutePath);
+      } catch (error) {
+        if (error?.code === "ENOENT") return { content: null };
+        throw error;
+      }
+      if (!isContainedPath(repositoryRealPath, openedRealPath)) {
+        return { violation: violation(
+          path,
+          "path-escape",
+          "Candidate resolves outside the repository through a symbolic-link ancestor; remove the link.",
+        ) };
+      }
+      if (openedRealPath !== candidateRealPath) {
+        return { violation: violation(
+          path,
+          "symlink",
+          "Candidate changed its canonical path before content scanning; remove the link and retry.",
+        ) };
+      }
     }
 
     const openedPathViolation = classifyPath(path, openedStat, options);

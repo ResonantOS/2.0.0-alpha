@@ -201,11 +201,12 @@ export const saveProviderSecret = async (providerId: string, apiKey: string): Pr
     await invoke("save_provider_secret", { providerId, apiKey });
     return;
   }
-  // SECURITY: credentials resolved host-side via provider_service.
-  // Raw API keys must never be stored in the renderer (localStorage is readable
-  // by any script in the same origin). Record only an opaque profile-configured
-  // marker so the UI can reflect credential status without holding the secret.
-  window.localStorage.setItem(`${STORAGE_KEY}.secret.${providerId}`, "__configured__");
+  // SECURITY: a renderer-only fallback must not claim that a credential was
+  // stored. An opaque localStorage marker is not authenticated vault state and
+  // would make the UI report a credential that cannot survive a verified reload.
+  void providerId;
+  void apiKey;
+  throw new Error("Provider secrets require the authenticated local bridge; no credential was stored in this web surface.");
 };
 
 export const saveTelegramBotToken = async (botToken: string): Promise<void> => {
@@ -213,9 +214,8 @@ export const saveTelegramBotToken = async (botToken: string): Promise<void> => {
     await invoke("telegram_save_bot_token", { botToken });
     return;
   }
-  // SECURITY: credentials resolved host-side via provider_service.
-  // Store only a presence marker; the raw bot token is not persisted in the renderer.
-  window.localStorage.setItem(`${STORAGE_KEY}.secret.addon.telegram-channel.bot-token`, "__configured__");
+  void botToken;
+  throw new Error("Telegram bot tokens require the authenticated local bridge; no token was stored in this web surface.");
 };
 
 export const requestTelegramServiceStatus = async (channelId = "telegram-primary"): Promise<TelegramServiceStatus> => {
@@ -224,7 +224,7 @@ export const requestTelegramServiceStatus = async (channelId = "telegram-primary
   }
   return {
     running: false,
-    tokenConfigured: Boolean(window.localStorage.getItem(`${STORAGE_KEY}.secret.addon.telegram-channel.bot-token`)),
+    tokenConfigured: false,
     channelId,
   };
 };

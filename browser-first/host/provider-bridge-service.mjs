@@ -76,6 +76,10 @@ export function createProviderBridgeService({
     try {
       return await fetch(url, {
         ...init,
+        // Provider URLs are user-configurable. Never follow a redirect into
+        // a private or metadata network; callers can report the redirect as
+        // an unavailable endpoint and require an explicit corrected URL.
+        redirect: "error",
         signal: controller.signal,
       });
     } catch (error) {
@@ -167,10 +171,17 @@ export function createProviderBridgeService({
   ]);
 
   function isPrivateOrLocalHostname(hostname) {
-    const host = String(hostname ?? "").toLowerCase();
+    const host = String(hostname ?? "").toLowerCase().replace(/^\[|\]$/g, "");
     if (!host) return true;
     if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) return true;
-    if (host === "::1" || host === "[::1]" || host.startsWith("fe80:") || host.startsWith("fc") || host.startsWith("fd")) return true;
+    if (
+      host === "::1" ||
+      host === "::" ||
+      host.startsWith("::ffff:") ||
+      host.startsWith("fe80:") ||
+      host.startsWith("fc") ||
+      host.startsWith("fd")
+    ) return true;
     if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) {
       const octets = host.split(".").map((part) => Number(part));
       if (octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return true;
@@ -189,17 +200,25 @@ export function createProviderBridgeService({
 
   function allowsLocalProviderEndpoint(profile = {}) {
     const id = String(profile.id ?? "").toLowerCase();
-    const providerType = String(profile.providerType ?? "").toLowerCase();
     const templateId = String(profile.templateId ?? "").toLowerCase();
-    const authType = String(profile.authType ?? "").toLowerCase();
     return (
       process.env.RESONANTOS_PROVIDER_ALLOW_LOCAL_ENDPOINTS === "1" ||
       id === "desktop-local" ||
       id === "shared-zai-glm" ||
-      authType === "local-runtime" ||
-      providerType === "local" ||
       localEndpointTemplates.has(templateId)
     );
+  }
+
+  function isMetadataOrLinkLocalHostname(hostname) {
+    const host = String(hostname ?? "").toLowerCase();
+    if (
+      host === "169.254.169.254" ||
+      host === "100.100.100.200" ||
+      host === "metadata.google.internal" ||
+      host === "metadata.google.com"
+    ) return true;
+    if (/^169\.254\.\d{1,3}\.\d{1,3}$/.test(host)) return true;
+    return host === "::" || host === "0.0.0.0" || host === "[::]";
   }
 
   function normalizeProviderEndpointUrl(value, profile = {}, { required = false } = {}) {
@@ -229,6 +248,9 @@ export function createProviderBridgeService({
       throw new Error("Provider endpoint must use HTTPS unless it is a known local-runtime provider.");
     }
     const sendsCredential = String(profile.authType ?? "api-key").toLowerCase() !== "none";
+    if (sendsCredential && isMetadataOrLinkLocalHostname(url.hostname)) {
+      throw new Error("Credential-bearing provider endpoints cannot target metadata or link-local hosts.");
+    }
     if (sendsCredential && isLocal && !allowLocal) {
       throw new Error("Credential-bearing provider endpoints cannot target local, private, or metadata-network hosts.");
     }
@@ -707,6 +729,7 @@ export function createProviderBridgeService({
       const response = await fetch(targetUrl, {
         method: "GET",
         headers: target.sendsCredential ? { Authorization: `Bearer ${credential}` } : {},
+        redirect: "error",
         signal: controller.signal,
       });
       const latencyMs = Date.now() - startedAt;

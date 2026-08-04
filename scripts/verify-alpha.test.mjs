@@ -8,6 +8,8 @@ import {
   isDirectExecution,
   main,
   reportEvent,
+  resolveCommandArguments,
+  resolveCommandExecutable,
   runCommand,
   runVerifier,
 } from "./verify-alpha.mjs";
@@ -142,6 +144,8 @@ test("spawns without a shell and inherits stdio and environment", async () => {
     {
       cwd: "/repo",
       env,
+      execPath: "/usr/bin/node",
+      platform: "linux",
       spawnImpl: (...args) => {
         calls.push(args);
         queueMicrotask(() => child.emit("exit", 0, null));
@@ -156,6 +160,23 @@ test("spawns without a shell and inherits stdio and environment", async () => {
     ["run", "name; echo not-interpolated"],
     { cwd: "/repo", env, shell: false, stdio: "inherit" },
   ]]);
+});
+
+test("runs npm and npx through their JavaScript CLIs on Windows", () => {
+  const execPath = "C:\\Program Files\\nodejs\\node.exe";
+  assert.equal(resolveCommandExecutable("npm", "win32", execPath), execPath);
+  assert.equal(resolveCommandExecutable("npx", "win32", execPath), execPath);
+  assert.deepEqual(
+    resolveCommandArguments("npm", ["run", "build"], "win32", execPath),
+    ["C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js", "run", "build"],
+  );
+  assert.deepEqual(
+    resolveCommandArguments("npx", ["vite"], "win32", execPath),
+    ["C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npx-cli.js", "vite"],
+  );
+  assert.equal(resolveCommandExecutable("node", "win32"), "node");
+  assert.equal(resolveCommandExecutable("npm", "linux"), "npm");
+  assert.deepEqual(resolveCommandArguments("npm", ["test"], "linux", execPath), ["test"]);
 });
 
 test("propagates a nonzero result to the process exit code", async () => {

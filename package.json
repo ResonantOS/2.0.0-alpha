@@ -27,10 +27,10 @@
     "discipline:validate": "node scripts/validate-discipline-catalog.mjs",
     "repo:hygiene": "node scripts/check-repo-hygiene.mjs --content-allowlist scripts/check-repo-hygiene.mjs --content-allowlist scripts/check-repo-hygiene.test.mjs --content-allowlist scripts/validate-docs.test.mjs",
     "docs:check": "node scripts/validate-docs.mjs",
-    "test:docs": "node --test --test-concurrency=1 scripts/validate-docs.test.mjs scripts/check-repo-hygiene.test.mjs scripts/browser-first-release-scope-audit.test.mjs scripts/project-sync-policy.test.mjs scripts/roadmap-project-consistency.test.mjs scripts/verify-alpha.test.mjs",
+    "test:docs": "node --test --test-concurrency=1 scripts/validate-docs.test.mjs scripts/check-repo-hygiene.test.mjs scripts/browser-first-release-scope-audit.test.mjs scripts/project-sync-policy.test.mjs scripts/roadmap-project-consistency.test.mjs scripts/verify-alpha.test.mjs scripts/run-pre-release-scan.test.mjs",
     "project:check-roadmap": "node scripts/check-roadmap-project.mjs",
     "verify:alpha": "node scripts/verify-alpha.mjs",
-    "pre-release:scan": "bash scripts/pre-release-scan.sh",
+    "pre-release:scan": "node scripts/run-pre-release-scan.mjs",
     "browser-first:audit-scope": "node scripts/browser-first-release-scope-audit.mjs",
     "browser-first:audit-scope:staged": "node scripts/browser-first-release-scope-audit.mjs --staged --strict"
   },
