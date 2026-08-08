@@ -18,6 +18,9 @@ Keep the bridge running, open `chrome://extensions`, enable Developer mode,
 select **Load unpacked**, and choose
 `browser-first/resonantos-side-panel-extension`.
 
+To keep npm, Chromium, generated bridge credentials, and browser profiles out
+of the host runtime, use the [safe Docker development workflow](docs/DOCKER_DEVELOPMENT.md).
+
 ## Choose Work From GitHub
 
 GitHub Issues are the public intake queue.

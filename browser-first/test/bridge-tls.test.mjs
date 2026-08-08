@@ -14,6 +14,7 @@ import {
   startBridgeServersWithTls,
 } from "../host/bridge-server.mjs";
 import {
+  discoverBridgeSans,
   ensureBridgeTls,
   getCertSans,
 } from "../host/bridge-tls.mjs";
@@ -58,9 +59,22 @@ test("ensureBridgeTls: generates CA + leaf with auto-discovered SANs", async () 
   const sans = await getCertSans(tls.cert);
   assert.ok(sans.includes("localhost"), `localhost in SANs (got ${JSON.stringify(sans)})`);
   assert.ok(sans.includes("127.0.0.1"), `127.0.0.1 in SANs`);
-  // At least one of the LAN/Tailscale addresses should be there
-  const hasNetwork = sans.some(s => /^(192\.168|100\.112|10\.)/.test(s));
-  assert.ok(hasNetwork, `at least one network IP in SANs (got ${JSON.stringify(sans)})`);
+});
+
+test("discoverBridgeSans: Docker-only interfaces produce loopback-only SANs", () => {
+  const sans = discoverBridgeSans({
+    eth0: [{ address: "172.18.0.2", family: "IPv4", internal: false }],
+    lo: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
+  });
+  assert.deepEqual(sans, ["localhost", "127.0.0.1"]);
+});
+
+test("discoverBridgeSans: eligible non-Docker IPv4 interfaces remain available", () => {
+  const sans = discoverBridgeSans({
+    eth0: [{ address: "192.168.1.20", family: "IPv4", internal: false }],
+    docker0: [{ address: "172.17.0.1", family: "IPv4", internal: false }],
+  });
+  assert.deepEqual(sans, ["localhost", "127.0.0.1", "192.168.1.20"]);
 });
 
 test("bridge TLS pins OpenSSL and passes only a scoped environment", async () => {

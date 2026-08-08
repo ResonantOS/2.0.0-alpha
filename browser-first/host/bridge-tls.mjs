@@ -34,9 +34,8 @@ export const DEFAULT_LEAF_VALIDITY_DAYS = 825; // browsers cap leaf cert validit
 // (added separately), skip Docker bridges (172.16-31.x.x), skip IPv6 for
 // the LAN target (browsers prefer IPv4 when both are returned; we add IPv6
 // separately if needed).
-function discoverBridgeSans() {
+export function discoverBridgeSans(ifaces = os.networkInterfaces()) {
   const sans = ["localhost", "127.0.0.1"];
-  const ifaces = os.networkInterfaces();
   for (const list of Object.values(ifaces)) {
     if (!list) continue;
     for (const iface of list) {

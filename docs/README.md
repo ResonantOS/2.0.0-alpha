@@ -85,6 +85,7 @@ npm run test:docs
 
 Related contributor references:
 
+- [Safe Docker development](DOCKER_DEVELOPMENT.md)
 - [Repository discipline catalog](../disciplines/README.md)
 - [Browser research skill](addons/browser/skills/browser-research-session.md)
 - [Icon system decision](product/ICON-001-resonantos-svg-system.md) and

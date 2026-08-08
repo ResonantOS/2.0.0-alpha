@@ -98,6 +98,9 @@ For a basic manual check, confirm that the bridge terminal reports
 connection error. Do not paste the generated config or full diagnostics into a
 public issue.
 
+For contributor verification with isolated Debian Chromium instead of a
+production Chrome profile, use the [safe Docker development workflow](docs/DOCKER_DEVELOPMENT.md).
+
 ## Troubleshooting
 
 - **The extension cannot reach the bridge:** confirm the bridge is still

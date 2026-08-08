@@ -1,0 +1,81 @@
+# Dependencies and build output
+node_modules/
+dist/
+.vite/
+coverage/
+
+# Local runtime state and generated memory
+Memory/
+Living_Archive/
+ResonantOS_User/
+.resonantos/
+
+# Secrets and local environment
+.env
+.env.*
+*.key
+*.pem
+*.p12
+*.mobileprovision
+*.keystore
+
+# Logs, caches, and evidence
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+tmp/
+output/
+runs/
+screenshots/
+evidence/
+artifacts/
+playwright-report/
+test-results/
+*.zip
+
+# Repository-local agent and analysis state
+.abacusai/
+.codex/
+.understand-anything/
+
+# Browser profile databases and report environments
+**/Cookies
+**/Cookies-journal
+**/Login Data
+**/Login Data-journal
+**/History
+**/History-journal
+**/Web Data
+**/Web Data-journal
+**/Local State
+**/Preferences
+**/Secure Preferences
+**/Favicons
+**/Favicons-journal
+**/Top Sites
+**/Top Sites-journal
+**/Network Action Predictor
+**/Network Action Predictor-journal
+**/Visited Links
+**/Sessions/
+**/Session Storage/
+**/Local Storage/
+**/IndexedDB/
+**/chrome-user-data/
+**/chrome-profile/
+**/chrome-profiles/
+**/chromium/
+**/google-chrome/
+
+# Browser-first generated session material
+browser-first/resonantos-side-panel-extension/src/bridge-config.generated.js
+browser-first/certs/
+
+# Git and editor state
+.git/
+.idea/
+.vscode/
+.DS_Store
+*.swp
