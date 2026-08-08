@@ -22,6 +22,7 @@ const canonicalRootFiles = new Set([
 ]);
 
 const includeDocs = new Set([
+  "docs/DOCKER_DEVELOPMENT.md",
   "docs/README.md",
   "docs/STATUS.md",
   "docs/ROADMAP.md",
@@ -38,6 +39,11 @@ const includeDocs = new Set([
   "docs/browser-first-bridge-setup-runbook.md",
   "docs/augmentor-future-list-acceptance-matrix.md",
   "docs/augmentor-tester-runbook.md",
+]);
+
+const contributorDevelopmentFiles = new Set([
+  ".dockerignore",
+  "Dockerfile.dev",
 ]);
 
 function readOptionValue(argv, index, name) {
@@ -240,6 +246,12 @@ function classify(changedPath, state) {
     return {
       bucket: "include",
       reason: "browser-first release documentation",
+    };
+  }
+  if (contributorDevelopmentFiles.has(changedPath)) {
+    return {
+      bucket: "include",
+      reason: "browser-first contributor development tooling",
     };
   }
   if (canonicalRootFiles.has(changedPath) || changedPath === "public/icons/README.md") {

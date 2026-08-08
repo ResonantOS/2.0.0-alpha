@@ -296,7 +296,7 @@ test("unknown modified documentation still fails strict committed audit", () => 
   assert.match(stderr, /strict mode failed/i);
 });
 
-test("known canonical, ADR, icon, and deleted documentation pass strict audit", () => {
+test("known canonical, Docker development, ADR, icon, and deleted documentation pass strict audit", () => {
   const main = requireExport("main");
   let stdout = "";
   let stderr = "";
@@ -311,6 +311,9 @@ test("known canonical, ADR, icon, and deleted documentation pass strict audit", 
     "CONTRIBUTING.md",
     "INSTALL.md",
     "SUPPORT.md",
+    ".dockerignore",
+    "Dockerfile.dev",
+    "docs/DOCKER_DEVELOPMENT.md",
     "docs/architecture/ADR-999-release-metadata.md",
     "docs/reference/COMMANDS.md",
     "public/icons/README.md",
