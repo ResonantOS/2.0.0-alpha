@@ -3,6 +3,7 @@
 
 const DEFAULT_MAX_CONCURRENT = 2;
 const RESULT_JOB_STATUSES = new Set(["blocked", "approval", "failed", "cancelled", "paused", "completed"]);
+const FOCUS_HOLDING_JOB_STATUSES = new Set(["queued", "running", "paused", "approval"]);
 
 function safeMaxConcurrent(value) {
   const parsed = Number(value);
@@ -70,7 +71,8 @@ export function createBrowserJobScheduler({
     if (!jobSummary?.id || running.has(jobSummary.id)) return null;
     const job = browserJobStore.findJob(jobSummary.id);
     if (!job || job.status !== "queued") return null;
-    if (!browserJobStore.getActiveJobId?.()) {
+    const focusedJob = browserJobStore.currentJob?.();
+    if (!focusedJob || !FOCUS_HOLDING_JOB_STATUSES.has(focusedJob.status)) {
       await browserJobStore.activateJob?.(job.id);
     }
     const startedJob = await browserJobStore.updateJob(job.id, { status: "running" });

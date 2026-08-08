@@ -536,6 +536,33 @@ async function waitForComposerReady(panel, label) {
   throw new Error(`${label} did not return composer readiness. Panel text:\n${text}`);
 }
 
+async function browserJobDiagnostics(panel) {
+  return (await evaluate(panel, `(async () => {
+    const stored = await chrome.storage.local.get(["augmentorBrowserJobs", "augmentorActiveBrowserJob"]);
+    const jobs = stored.augmentorBrowserJobs ?? [];
+    return {
+      activeJobId: stored.augmentorActiveBrowserJob ?? null,
+      activeJobs: jobs
+        .filter((job) => ["queued", "running", "paused", "approval"].includes(job.status))
+        .map((job) => ({
+          goal: job.goal,
+          id: job.id,
+          pageLock: job.pageLock ?? null,
+          pendingApproval: job.pendingApproval ?? null,
+          status: job.status
+        })),
+      jobs: jobs.map((job) => ({
+        goal: job.goal,
+        id: job.id,
+        pageLock: job.pageLock ?? null,
+        pendingApproval: job.pendingApproval ?? null,
+        status: job.status
+      })),
+      monitorText: document.querySelector("#job-monitor")?.innerText ?? ""
+    };
+  })()`)).result.value;
+}
+
 async function waitForBrowserJobTerminal(panel, goalPattern, label) {
   const terminalStatuses = new Set(["completed", "blocked", "denied", "cancelled", "failed"]);
   for (let index = 0; index < 120; index += 1) {
@@ -549,11 +576,9 @@ async function waitForBrowserJobTerminal(panel, goalPattern, label) {
     }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  const state = (await evaluate(panel, `(async () => ({
-    jobs: (await chrome.storage.local.get("augmentorBrowserJobs")).augmentorBrowserJobs ?? [],
-    text: document.body.innerText
-  }))()`)).result.value;
-  throw new Error(`${label} did not reach a terminal browser-job state. Jobs:\n${JSON.stringify(state.jobs, null, 2)}\nPanel text:\n${state.text}`);
+  const diagnostics = await browserJobDiagnostics(panel);
+  const text = (await evaluate(panel, "document.body.innerText")).result.value;
+  throw new Error(`${label} did not reach a terminal browser-job state. Diagnostics:\n${JSON.stringify(diagnostics, null, 2)}\nPanel text:\n${text}`);
 }
 
 async function waitForPageCondition(page, expression, label) {
@@ -604,7 +629,10 @@ async function verifyPublicSubmitBoundary(panel, page) {
   try {
     outcome = await waitForPageCondition(panel, `(async () => {
       const jobs = (await chrome.storage.local.get("augmentorBrowserJobs")).augmentorBrowserJobs ?? [];
-      const publicJobs = jobs.filter((job) => /Submit public form/i.test(job.pendingApproval?.step?.text ?? ""));
+      const publicJobs = jobs.filter((job) =>
+        /Submit public form/i.test(job.goal ?? "") ||
+        /Submit public form/i.test(job.pendingApproval?.step?.text ?? "")
+      );
       const buttons = [...document.querySelectorAll("button")]
         .filter((button) => /click "Submit public form"/i.test(button.title || ""))
         .map((button) => button.textContent.trim());
@@ -613,8 +641,24 @@ async function verifyPublicSubmitBoundary(panel, page) {
         .map((message) => message.innerText)
         .join("\\n");
       const humanSignal = /human-only|click it yourself|must be performed by the human|then resume/i.test(newMessageText);
-      if (!publicJobs.length && !humanSignal) return false;
-      return { publicJobs, buttons, newMessageText, humanSignal };
+      const approvalJobs = publicJobs.filter((job) => job.status === "approval" && job.pendingApproval);
+      const terminalJobs = publicJobs.filter((job) =>
+        ["completed", "blocked", "denied", "cancelled", "failed"].includes(job.status) &&
+        !job.pendingApproval &&
+        !job.pageLock
+      );
+      const hasExecutableApproval = buttons.includes("Approve once");
+      const legacyApprovalReady = approvalJobs.length > 0 && buttons.includes("Deny");
+      const humanHandoffReady = humanSignal && terminalJobs.length > 0 && !hasExecutableApproval;
+      if (!legacyApprovalReady && !humanHandoffReady) return false;
+      return {
+        approvalJobs,
+        buttons,
+        humanHandoff: humanHandoffReady,
+        newMessageText,
+        publicJobs,
+        terminalJobs
+      };
     })()`, "public-submit boundary outcome");
   } catch (error) {
     const diagnostics = (await evaluate(panel, `(async () => ({
@@ -625,9 +669,9 @@ async function verifyPublicSubmitBoundary(panel, page) {
   }
   const blockedState = (await evaluate(page, `({ submitted: window.__submitted, status: document.querySelector("#status").textContent })`)).result.value;
   assert(!blockedState.submitted, `Public-submit boundary executed the action: ${JSON.stringify(blockedState)}`);
-  const approvalJobs = outcome.publicJobs.filter((job) => job.status === "approval" && job.pendingApproval);
+  const approvalJobs = outcome.approvalJobs;
   const hasExecutableApproval = outcome.buttons.includes("Approve once");
-  const humanHandoff = outcome.humanSignal && approvalJobs.length === 0 && !hasExecutableApproval;
+  const humanHandoff = outcome.humanHandoff;
   const decision = decidePublicSubmitScenario({ mode: publicSubmitContract, humanHandoff });
   certificationReport.record("post-approval-public-submit", decision.status, decision.reason);
   if (decision.status === "failed") assert(false, decision.reason);
@@ -649,6 +693,16 @@ async function verifyPublicSubmitBoundary(panel, page) {
     assert(deniedJob.status === "denied", `Legacy public-submit job did not resolve as denied: ${JSON.stringify(deniedJob)}`);
     await waitForComposerReady(panel, "public-submit denial");
   }
+  await waitForPageCondition(panel, `(async () => {
+    const jobs = (await chrome.storage.local.get("augmentorBrowserJobs")).augmentorBrowserJobs ?? [];
+    const matching = jobs.filter((job) => /Submit public form/i.test(job.goal ?? ""));
+    return matching.length > 0 && matching.every((job) =>
+      ["completed", "blocked", "denied", "cancelled", "failed"].includes(job.status) &&
+      !job.pendingApproval &&
+      !job.pageLock
+    );
+  })()`, "public-submit job settlement");
+  await waitForPageCondition(page, `document.querySelector("#resonantos-control-overlay")?.dataset.session !== "active"`, "public-submit overlay release");
   return blockedState;
 }
 
@@ -997,14 +1051,17 @@ try {
   );
   const blockedState = await verifyPublicSubmitBoundary(panel, page);
 
-  await evaluate(panel, `(() => { globalThis.__resonantosNextActionOverride = async ({ snapshot, history }) => ({
-    source: "test-next-action",
-    thought: "Verify iframe context is visible to the browser-control loop.",
-    status: snapshot?.text?.includes("Booking calendar frame") ? (history.length ? "done" : "continue") : "blocked",
-    action: snapshot?.text?.includes("Booking calendar frame") && !history.length ? { type: "read" } : null,
-    approvalReason: snapshot?.text?.includes("Booking calendar frame") ? null : "Iframe booking context was not visible.",
-    doneSummary: history.length ? "Iframe booking context was observed." : null
-  }); return true; })()`);
+  await evaluate(panel, `(() => { globalThis.__resonantosNextActionOverride = async ({ snapshot, history }) => {
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    return {
+      source: "test-next-action",
+      thought: "Verify iframe context is visible to the browser-control loop.",
+      status: snapshot?.text?.includes("Booking calendar frame") ? (history.length ? "done" : "continue") : "blocked",
+      action: snapshot?.text?.includes("Booking calendar frame") && !history.length ? { type: "read" } : null,
+      approvalReason: snapshot?.text?.includes("Booking calendar frame") ? null : "Iframe booking context was not visible.",
+      doneSummary: history.length ? "Iframe booking context was observed." : null
+    };
+  }; return true; })()`);
   await submitControlCommand(panel, `book a call now`);
   try {
     await waitForPageCondition(page, `document.querySelector("#resonantos-control-overlay")?.dataset.session === "active"`, "persistent control overlay session start");
@@ -1012,7 +1069,13 @@ try {
     const panelText = (await evaluate(panel, "document.body.innerText")).result.value;
     throw new Error(`${error instanceof Error ? error.message : String(error)}\nPanel text:\n${panelText}`);
   }
-  const iframePanelText = await waitForPanelText(panel, /Booking calendar frame|Iframe booking context was not visible/, "iframe context read");
+  let iframePanelText;
+  try {
+    iframePanelText = await waitForPanelText(panel, /Booking calendar frame|Iframe booking context was not visible/, "iframe context read");
+  } catch (error) {
+    const diagnostics = await browserJobDiagnostics(panel);
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\nBrowser job diagnostics:\n${JSON.stringify(diagnostics, null, 2)}`);
+  }
   assert(!/Iframe booking context was not visible/.test(iframePanelText), "Agent planner could not see iframe booking context.");
   await waitForComposerReady(panel, "iframe context read");
   await waitForPageCondition(page, `document.querySelector("#resonantos-control-overlay")?.dataset.session !== "active"`, "persistent control overlay session stop");

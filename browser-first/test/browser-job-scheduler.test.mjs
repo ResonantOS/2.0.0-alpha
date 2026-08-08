@@ -115,6 +115,34 @@ test("browser job scheduler focuses first queued job only when no active focus e
   await new Promise((resolve) => setTimeout(resolve, 0));
 });
 
+test("browser job scheduler replaces terminal focus when queued work starts", async () => {
+  let releaseQueued;
+  const gate = new Promise((resolve) => {
+    releaseQueued = resolve;
+  });
+  const harness = createHarness([
+    { id: "job-denied", goal: "Denied public submit", status: "denied" },
+    { id: "job-next", goal: "Read booking page", status: "queued", pageLock: { tabId: 2, siteKey: "booking.example" } }
+  ], { activeBrowserJob: "job-denied", maxConcurrent: 1 });
+  harness.scheduler = createBrowserJobScheduler({
+    browserJobStore: harness.store,
+    maxConcurrent: 1,
+    runJob: async () => {
+      await gate;
+      return { ok: true };
+    }
+  });
+  await harness.store.hydrate();
+
+  await harness.scheduler.tick();
+
+  assert.equal(harness.store.getActiveJobId(), "job-next");
+  assert.equal(harness.store.findJob("job-next").status, "running");
+
+  releaseQueued();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+});
+
 test("browser job scheduler leaves lock-conflicting queued jobs untouched", async () => {
   const harness = createHarness([
     { id: "running-a", goal: "Use DAO", status: "running", pageLock: { tabId: 1, siteKey: "dao.example", url: "https://dao.example/" } },
