@@ -53,6 +53,7 @@ runs/
 # Repository-local agent and analysis state
 .abacusai/
 .codex/
+.hover/
 .understand-anything/
 
 # Browser profile databases and report environments
