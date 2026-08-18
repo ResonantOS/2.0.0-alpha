@@ -4,6 +4,7 @@ import { createAddonDelegationHostService } from "../host/addon-delegation-host-
 
 const requiredHandlers = [
   "executeAddonsStatus",
+  "executeAgentHandoffHotRodRigTest",
   "executeAddonExecutionSettingsGet",
   "executeAddonExecutionSettingsUpdate",
   "executeOpenCodeStatus",
@@ -39,6 +40,7 @@ test("add-on delegation host service owns add-on, delegation, draft, and goal ro
 
   assert.deepEqual([...routes.keys()], [
     "GET /addons/status",
+    "GET /addons/agent-handoff-kit/hot-rod-rig-test",
     "GET /addons/execution-settings",
     "POST /addons/execution-settings",
     "GET /opencode/status",

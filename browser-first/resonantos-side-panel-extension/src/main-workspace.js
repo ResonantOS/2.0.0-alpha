@@ -15,6 +15,7 @@ import {
 } from "./lib/composer-runtime.js";
 import { applyAppearancePreferences } from "./lib/settings/appearance-section.js";
 import { renderAddOnsWorkspace } from "./lib/main-workspace-addons.js";
+import { renderAgentHandoffWorkspace } from "./lib/main-workspace-agent-handoff.js";
 import { renderArtifactsWorkspace } from "./lib/main-workspace-artifacts.js";
 import { createMainWorkspaceBrowserJobController } from "./lib/main-workspace-browser-job-controller.js";
 import {
@@ -152,7 +153,7 @@ let contextCompactNotice = "";
 let personalizationSettings = null;
 let initialSettingsSection = "overview";
 let messageActions = null;
-const allowedWorkspaces = new Set(["answer", "artifacts", "addons", "memory", "hermes", "opencode", "settings"]);
+const allowedWorkspaces = new Set(["answer", "artifacts", "addons", "memory", "hermes", "opencode", "agent-handoff", "settings"]);
 
 function parseWorkspaceDeepLink(hash = window.location.hash) {
   const normalized = String(hash ?? "").replace(/^#/, "").trim();
@@ -654,6 +655,10 @@ function renderMessages() {
     const initialMission = pendingWorkspaceAction?.workspace === "opencode" ? pendingWorkspaceAction.mission : "";
     pendingWorkspaceAction = null;
     renderOpenCodeWorkspace({ container: transcript, bridgeRequest, getBridgeRequest: () => bridgeRequest, initialMission });
+    return;
+  }
+  if (activeWorkspace === "agent-handoff") {
+    renderAgentHandoffWorkspace({ container: transcript, bridgeRequest, getBridgeRequest: () => bridgeRequest });
     return;
   }
   if (activeWorkspace === "settings") {

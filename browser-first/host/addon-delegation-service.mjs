@@ -1038,6 +1038,17 @@ export function createAddonDelegationService(dependencies) {
           deniedCapabilities: ["archive-knowledge-write"],
         },
         {
+          id: "addon.agent-handoff-kit",
+          name: "Agent Handoff Kit",
+          available: true,
+          mode: "handoff-package-addon",
+          trust: "host-mediated documentation package",
+          requestedCapabilities: ["agent-delegation", "archive-read", "archive-intake-write"],
+          grantedCapabilities: [],
+          deniedCapabilities: ["archive-intake-write"],
+          boundary: "Read-only handoff package. It presents ResonantOS and Hot Rod Rig context for coding agents, but does not execute shell commands, call providers, write trusted memory, or claim autonomous rig execution.",
+        },
+        {
           id: "addon.email",
           name: "Email",
           available: true,
@@ -1062,6 +1073,157 @@ export function createAddonDelegationService(dependencies) {
           boundary: "Draft packets only. Google Calendar handoff opens an event template for human review; ResonantOS does not schedule events.",
         },
       ],
+    };
+  }
+
+  async function executeAgentHandoffHotRodRigTest() {
+    const generatedAt = new Date().toISOString();
+    const checkResults = [];
+    const addCheck = (id, label, passed, detail = "", evidence = "") => {
+      checkResults.push({
+        id,
+        label,
+        passed: Boolean(passed),
+        detail,
+        evidence,
+      });
+    };
+    const readJsonFile = async (relativePath) => JSON.parse(await readFile(path.join(repoRoot, relativePath), "utf8"));
+    const readTextFile = async (relativePath) => readFile(path.join(repoRoot, relativePath), "utf8");
+    const existsRelative = (relativePath) => existsSync(path.join(repoRoot, relativePath));
+
+    const manifestPath = "public/addons/agent-handoff-kit.json";
+    const runbookPath = "docs/architecture/addon-runbooks/agent-handoff-kit/MASTER_AGENT_HANDOFF.md";
+    const packagePath = "docs/architecture/addon-runbooks/agent-handoff-kit/package-manifest.json";
+    const skillPath = "docs/architecture/addon-skills/agent-handoff-kit/AGENT_HANDOFF_ORCHESTRATION.md";
+    const rendererPath = "browser-first/resonantos-side-panel-extension/src/lib/main-workspace-agent-handoff.js";
+    const mainWorkspacePath = "browser-first/resonantos-side-panel-extension/src/main-workspace.js";
+    const addonsWorkspacePath = "browser-first/resonantos-side-panel-extension/src/lib/main-workspace-addons.js";
+
+    let manifest = {};
+    let packageManifest = {};
+    let runbook = "";
+    let renderer = "";
+    let mainWorkspace = "";
+    let addonsWorkspace = "";
+    try {
+      [manifest, packageManifest, runbook, renderer, mainWorkspace, addonsWorkspace] = await Promise.all([
+        readJsonFile(manifestPath),
+        readJsonFile(packagePath),
+        readTextFile(runbookPath),
+        readTextFile(rendererPath),
+        readTextFile(mainWorkspacePath),
+        readTextFile(addonsWorkspacePath),
+      ]);
+    } catch (error) {
+      addCheck("package-readable", "Package files are readable", false, error instanceof Error ? error.message : String(error), repoRoot);
+      return {
+        id: "agent-handoff-hot-rod-rig-test",
+        name: "Augmentor Hot Rod Rig add-on interface test",
+        status: "failed",
+        passed: false,
+        generatedAt,
+        summary: "Package files could not be read.",
+        checks: checkResults,
+      };
+    }
+
+    const index = await readJsonFile("public/addons/index.json").catch(() => []);
+    const devIndex = await readJsonFile("public/addons/dev-index.json").catch(() => []);
+    addCheck(
+      "catalogs-include-manifest",
+      "Bundled catalogs include the Agent Handoff Kit manifest",
+      Array.isArray(index) && Array.isArray(devIndex) && index.includes("agent-handoff-kit.json") && devIndex.includes("agent-handoff-kit.json"),
+      "index.json and dev-index.json both reference agent-handoff-kit.json.",
+      "public/addons/index.json; public/addons/dev-index.json"
+    );
+    addCheck(
+      "manifest-boundary",
+      "Manifest declares bounded, non-executing Hot Rod Rig handoff behavior",
+      manifest.id === "addon.agent-handoff-kit" &&
+        manifest.runtimeType === "ui-module" &&
+        manifest.archiveIntegration?.canWriteKnowledgePages === false &&
+        manifest.providerRequirements?.supportsPrivateCredentials === false &&
+        manifest.requestedCapabilities?.every?.((grant) => grant.granted === false),
+      "No requested capability is pre-granted; trusted knowledge writes and private credentials are disabled.",
+      manifestPath
+    );
+    const status = await executeAddonsStatus();
+    const addonStatus = status.addons.find((addon) => addon.id === "addon.agent-handoff-kit");
+    addCheck(
+      "host-status-boundary",
+      "Host status exposes the add-on without privileged execution",
+      addonStatus?.available === true &&
+        addonStatus?.mode === "handoff-package-addon" &&
+        Array.isArray(addonStatus?.grantedCapabilities) &&
+        addonStatus.grantedCapabilities.length === 0 &&
+        /does not execute shell commands/i.test(addonStatus?.boundary ?? ""),
+      "The live /addons/status entry is available and grants no shell/provider/memory-write power.",
+      "/addons/status"
+    );
+    addCheck(
+      "documents-exist",
+      "Runbook, package manifest, skill, and renderer documents exist",
+      [runbookPath, packagePath, skillPath, rendererPath].every(existsRelative),
+      "All handoff documents referenced by the add-on package are present.",
+      [runbookPath, packagePath, skillPath, rendererPath].join("; ")
+    );
+    const sources = Array.isArray(packageManifest.sourceEvidence) ? packageManifest.sourceEvidence : [];
+    const sourceNames = sources.map((source) => source.source);
+    addCheck(
+      "channel-evidence",
+      "Hot Rod Rig channel evidence is preserved",
+      ["#analog6", "#resonantos", "#logs", "#lux-wireless"].every((channel) => sourceNames.includes(channel)),
+      "The package manifest lists every relevant Hot Rod Rig Discord channel that was inspected.",
+      packagePath
+    );
+    addCheck(
+      "local-source-evidence",
+      "Local Hot Rod Rig source documents are listed",
+      sourceNames.some((source) => /HOT-ROD-RIG-V5\.3\.md$/.test(source)) &&
+        sourceNames.some((source) => /Z-RIG-TURBO-V5\.5-SPEC\.md$/.test(source)) &&
+        sourceNames.some((source) => /PANEL-TRUTH-REPORT\.md$/.test(source)),
+      "The package manifest includes HRR v5.3, Z-Rig v5.5, and PANEL-TRUTH evidence paths.",
+      packagePath
+    );
+    addCheck(
+      "truth-boundary",
+      "Runbook prevents unsupported autonomous rig claims",
+      /Do not claim a multi-agent run, autonomous panel, or full Z-Rig execution unless there is ledger/i.test(runbook) &&
+        /does not execute a Hot Rod Rig run/i.test(runbook),
+      "The master runbook treats Hot Rod Rig as operating discipline, not unsupported execution proof.",
+      runbookPath
+    );
+    addCheck(
+      "extension-route",
+      "Browser-first extension routes the add-on to the agent-handoff workspace",
+      /agent-handoff/.test(mainWorkspace) &&
+        /renderAgentHandoffWorkspace/.test(mainWorkspace) &&
+        /addon\.agent-handoff-kit/.test(addonsWorkspace),
+      "Main workspace and Add-ons workspace both know the Agent Handoff Kit route.",
+      `${mainWorkspacePath}; ${addonsWorkspacePath}`
+    );
+    addCheck(
+      "workspace-test-surface",
+      "Extension workspace renders the Hot Rod Rig test evidence surface",
+      /Augmentor Hot Rod Rig Test/.test(renderer) &&
+        /hot-rod-rig-test/.test(renderer) &&
+        /Verification Gates/.test(renderer),
+      "The renderer includes a bridge-backed Augmentor Hot Rod Rig test panel.",
+      rendererPath
+    );
+
+    const passed = checkResults.every((check) => check.passed);
+    return {
+      id: "agent-handoff-hot-rod-rig-test",
+      name: "Augmentor Hot Rod Rig add-on interface test",
+      status: passed ? "passed" : "failed",
+      passed,
+      generatedAt,
+      summary: passed
+        ? "Agent Handoff Kit passed the host-backed Hot Rod Rig package test for the ResonantOS Chrome extension interface."
+        : "Agent Handoff Kit did not satisfy every host-backed Hot Rod Rig package check.",
+      checks: checkResults,
     };
   }
 
@@ -1185,6 +1347,7 @@ export function createAddonDelegationService(dependencies) {
     executeAddonDraftTransition,
     executeAddonDraftProviderHandoff,
     executeAddonsStatus,
+    executeAgentHandoffHotRodRigTest,
     executeAddonExecutionSettingsGet,
     executeAddonExecutionSettingsUpdate,
     executeHermesDashboardStatus,

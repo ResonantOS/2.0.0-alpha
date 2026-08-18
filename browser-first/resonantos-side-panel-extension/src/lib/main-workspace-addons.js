@@ -26,6 +26,7 @@ function workspaceForAddon(addon) {
   if (addon.id === "addon.hermes") return "hermes";
   if (addon.id === "addon.opencode") return "opencode";
   if (addon.id === "addon.living-archive") return "memory";
+  if (addon.id === "addon.agent-handoff-kit") return "agent-handoff";
   return "";
 }
 

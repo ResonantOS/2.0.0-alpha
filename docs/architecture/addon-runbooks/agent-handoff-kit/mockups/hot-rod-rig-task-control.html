@@ -1,0 +1,972 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hot Rod Rig Task Control Mockup</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #070b0a;
+      --panel: #101714;
+      --panel-2: #141b1d;
+      --line: rgba(109, 224, 178, 0.18);
+      --line-strong: rgba(109, 224, 178, 0.34);
+      --text: #eef8f1;
+      --muted: #9cafaa;
+      --green: #4df0a4;
+      --amber: #f5be58;
+      --red: #ff7b65;
+      --blue: #77b7ff;
+      --violet: #c59cff;
+      --ink: #050806;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      min-height: 100vh;
+      margin: 0;
+      background:
+        linear-gradient(120deg, rgba(77, 240, 164, 0.08), transparent 32%),
+        linear-gradient(210deg, rgba(119, 183, 255, 0.08), transparent 38%),
+        var(--bg);
+      color: var(--text);
+      font: 14px/1.45 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    button,
+    input,
+    textarea,
+    select {
+      font: inherit;
+    }
+
+    .app {
+      display: grid;
+      grid-template-columns: 244px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    .sidebar {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 24px;
+      border-right: 1px solid rgba(238, 248, 241, 0.08);
+      background: rgba(12, 18, 16, 0.92);
+      padding: 18px 16px;
+    }
+
+    .brand,
+    .nav-item,
+    .profile {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .brand-mark,
+    .nav-icon {
+      display: grid;
+      flex: 0 0 auto;
+      place-items: center;
+      border-radius: 8px;
+      font-weight: 900;
+    }
+
+    .brand-mark {
+      width: 34px;
+      height: 34px;
+      border: 1px solid rgba(77, 240, 164, 0.45);
+      background: rgba(77, 240, 164, 0.16);
+      color: var(--green);
+    }
+
+    .brand strong,
+    .profile strong {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .nav {
+      display: grid;
+      align-content: start;
+      gap: 8px;
+    }
+
+    .nav-label {
+      margin: 12px 4px 4px;
+      color: rgba(156, 175, 170, 0.78);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .nav-item {
+      border-radius: 8px;
+      color: rgba(238, 248, 241, 0.76);
+      padding: 9px 10px;
+    }
+
+    .nav-item.active {
+      background: rgba(77, 240, 164, 0.12);
+      color: var(--text);
+    }
+
+    .nav-icon {
+      width: 22px;
+      height: 22px;
+      border: 1px solid rgba(238, 248, 241, 0.12);
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .profile {
+      align-items: flex-start;
+      border-top: 1px solid rgba(238, 248, 241, 0.08);
+      padding-top: 16px;
+    }
+
+    .profile small {
+      display: block;
+      color: var(--muted);
+    }
+
+    .content {
+      display: grid;
+      gap: 18px;
+      padding: 22px;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .crumbs,
+    .chip-row,
+    .actions,
+    .metric-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .crumbs span,
+    .chip,
+    .state-pill {
+      border: 1px solid rgba(238, 248, 241, 0.1);
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      padding: 5px 8px;
+    }
+
+    .chip[data-tone="green"],
+    .state-pill[data-tone="green"] {
+      border-color: rgba(77, 240, 164, 0.28);
+      color: var(--green);
+    }
+
+    .chip[data-tone="amber"],
+    .state-pill[data-tone="amber"] {
+      border-color: rgba(245, 190, 88, 0.32);
+      color: var(--amber);
+    }
+
+    .chip[data-tone="blue"],
+    .state-pill[data-tone="blue"] {
+      border-color: rgba(119, 183, 255, 0.32);
+      color: var(--blue);
+    }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid rgba(238, 248, 241, 0.12);
+      border-radius: 8px;
+      background: rgba(238, 248, 241, 0.06);
+      color: var(--text);
+      font-weight: 850;
+      padding: 9px 12px;
+    }
+
+    .button.primary {
+      border-color: rgba(77, 240, 164, 0.5);
+      background: var(--green);
+      color: var(--ink);
+    }
+
+    .button.warning {
+      border-color: rgba(245, 190, 88, 0.45);
+      background: rgba(245, 190, 88, 0.12);
+      color: var(--amber);
+    }
+
+    .button[disabled] {
+      cursor: not-allowed;
+      opacity: 0.52;
+    }
+
+    .button.primary[disabled] {
+      border-color: rgba(77, 240, 164, 0.2);
+      background: rgba(77, 240, 164, 0.14);
+      color: rgba(170, 230, 205, 0.72);
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 18px;
+      align-items: end;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background:
+        linear-gradient(135deg, rgba(77, 240, 164, 0.12), transparent 34%),
+        linear-gradient(225deg, rgba(197, 156, 255, 0.08), transparent 36%),
+        rgba(16, 23, 20, 0.82);
+      padding: 20px;
+    }
+
+    .eyebrow {
+      color: var(--green);
+      font-size: 11px;
+      font-weight: 950;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin: 0;
+    }
+
+    h1 {
+      max-width: 780px;
+      font-size: clamp(36px, 5vw, 62px);
+      letter-spacing: 0;
+      line-height: 0.96;
+    }
+
+    h2 {
+      color: rgba(238, 248, 241, 0.96);
+      font-size: 19px;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      color: rgba(238, 248, 241, 0.94);
+      font-size: 15px;
+      letter-spacing: 0;
+    }
+
+    .hero p {
+      max-width: 760px;
+      color: rgba(210, 224, 218, 0.78);
+    }
+
+    .hero-meter {
+      display: grid;
+      gap: 8px;
+      min-width: 280px;
+    }
+
+    .metric {
+      display: grid;
+      grid-template-columns: 92px minmax(0, 1fr);
+      gap: 8px;
+      align-items: center;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 760;
+    }
+
+    .bar {
+      height: 7px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: rgba(238, 248, 241, 0.08);
+    }
+
+    .bar span {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--green), var(--blue));
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(310px, 0.9fr) minmax(440px, 1.35fr) minmax(300px, 0.8fr);
+      gap: 14px;
+      align-items: start;
+    }
+
+    .stack {
+      display: grid;
+      gap: 14px;
+      min-width: 0;
+    }
+
+    .panel {
+      display: grid;
+      gap: 13px;
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(16, 23, 20, 0.78);
+      padding: 15px;
+    }
+
+    .panel-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: start;
+    }
+
+    .panel-header p {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .field-grid {
+      display: grid;
+      gap: 10px;
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      color: rgba(238, 248, 241, 0.86);
+      font-size: 12px;
+      font-weight: 850;
+    }
+
+    input,
+    textarea,
+    select {
+      width: 100%;
+      border: 1px solid rgba(238, 248, 241, 0.1);
+      border-radius: 8px;
+      background: rgba(5, 8, 6, 0.48);
+      color: var(--text);
+      outline: none;
+      padding: 10px 11px;
+    }
+
+    textarea {
+      min-height: 104px;
+      resize: vertical;
+    }
+
+    .two {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .mode-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .mode-card {
+      display: grid;
+      gap: 6px;
+      border: 1px solid rgba(238, 248, 241, 0.1);
+      border-radius: 8px;
+      background: rgba(5, 8, 6, 0.3);
+      color: rgba(238, 248, 241, 0.84);
+      padding: 10px;
+    }
+
+    .mode-card.active {
+      border-color: rgba(77, 240, 164, 0.48);
+      background: rgba(77, 240, 164, 0.12);
+    }
+
+    .mode-card strong {
+      font-size: 13px;
+    }
+
+    .mode-card small {
+      color: var(--muted);
+      line-height: 1.35;
+    }
+
+    .checklist,
+    .wave-list,
+    .ledger,
+    .artifact-list {
+      display: grid;
+      gap: 8px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .check,
+    .wave,
+    .event,
+    .artifact {
+      display: grid;
+      gap: 4px;
+      border: 1px solid rgba(238, 248, 241, 0.09);
+      border-radius: 8px;
+      background: rgba(5, 8, 6, 0.28);
+      padding: 10px;
+    }
+
+    .check {
+      grid-template-columns: auto minmax(0, 1fr);
+      align-items: start;
+    }
+
+    .status-dot {
+      width: 11px;
+      height: 11px;
+      margin-top: 4px;
+      border-radius: 999px;
+      background: var(--muted);
+    }
+
+    .status-dot.pass {
+      background: var(--green);
+    }
+
+    .status-dot.wait {
+      background: var(--amber);
+    }
+
+    .status-dot.info {
+      background: var(--blue);
+    }
+
+    .check strong,
+    .wave strong,
+    .event strong,
+    .artifact strong {
+      display: block;
+      color: rgba(238, 248, 241, 0.95);
+      font-size: 13px;
+    }
+
+    .check small,
+    .wave small,
+    .event small,
+    .artifact small {
+      display: block;
+      color: var(--muted);
+      line-height: 1.35;
+    }
+
+    .execution-board {
+      display: grid;
+      gap: 12px;
+    }
+
+    .pipeline {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .stage {
+      display: grid;
+      gap: 7px;
+      min-height: 96px;
+      border: 1px solid rgba(238, 248, 241, 0.1);
+      border-radius: 8px;
+      background: rgba(5, 8, 6, 0.3);
+      padding: 10px;
+    }
+
+    .stage.current {
+      border-color: rgba(245, 190, 88, 0.42);
+      background: rgba(245, 190, 88, 0.11);
+    }
+
+    .stage.done {
+      border-color: rgba(77, 240, 164, 0.34);
+    }
+
+    .stage.blocked {
+      border-color: rgba(255, 123, 101, 0.34);
+    }
+
+    .stage span {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 900;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .stage strong {
+      color: rgba(238, 248, 241, 0.94);
+    }
+
+    .stage small {
+      color: var(--muted);
+      line-height: 1.3;
+    }
+
+    .lane-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .lane {
+      display: grid;
+      gap: 10px;
+      border: 1px solid rgba(238, 248, 241, 0.1);
+      border-radius: 8px;
+      background: rgba(20, 27, 29, 0.72);
+      padding: 12px;
+    }
+
+    .lane[data-family="openai"] {
+      border-color: rgba(77, 240, 164, 0.24);
+    }
+
+    .lane[data-family="anthropic"] {
+      border-color: rgba(245, 190, 88, 0.24);
+    }
+
+    .lane[data-family="google"] {
+      border-color: rgba(119, 183, 255, 0.24);
+    }
+
+    .lane-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .lane code,
+    .event code,
+    .artifact code {
+      overflow: hidden;
+      color: rgba(238, 248, 241, 0.82);
+      font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .run-card {
+      display: grid;
+      gap: 10px;
+      border: 1px solid rgba(245, 190, 88, 0.32);
+      border-radius: 8px;
+      background: rgba(245, 190, 88, 0.1);
+      padding: 12px;
+    }
+
+    .run-card strong {
+      color: var(--amber);
+    }
+
+    .run-card p,
+    .run-card small {
+      color: rgba(255, 231, 184, 0.82);
+    }
+
+    .state-list {
+      display: grid;
+      gap: 8px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .state-list li {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      border-bottom: 1px solid rgba(238, 248, 241, 0.06);
+      color: var(--muted);
+      padding-bottom: 8px;
+    }
+
+    .state-list strong {
+      color: rgba(238, 248, 241, 0.9);
+    }
+
+    .footer-bar {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      border: 1px solid rgba(238, 248, 241, 0.12);
+      border-radius: 8px;
+      background: rgba(11, 16, 14, 0.94);
+      box-shadow: 0 20px 70px rgba(0, 0, 0, 0.35);
+      padding: 12px;
+    }
+
+    .footer-bar p {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    @media (max-width: 1180px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+
+      .pipeline {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 780px) {
+      .app {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        display: none;
+      }
+
+      .hero,
+      .topbar,
+      .footer-bar {
+        grid-template-columns: 1fr;
+        align-items: start;
+      }
+
+      .hero {
+        display: grid;
+      }
+
+      .hero-meter {
+        min-width: 0;
+      }
+
+      .two,
+      .mode-grid,
+      .lane-grid,
+      .pipeline {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" aria-label="ResonantOS navigation">
+      <div class="brand">
+        <div class="brand-mark">R</div>
+        <strong>ResonantOS</strong>
+      </div>
+      <nav class="nav">
+        <div class="nav-item"><span class="nav-icon">+</span><strong>New chat</strong></div>
+        <div class="nav-item"><span class="nav-icon">S</span><strong>Search chats</strong></div>
+        <div class="nav-item active"><span class="nav-icon">A</span><strong>Add-ons</strong></div>
+        <div class="nav-item"><span class="nav-icon">D</span><strong>Artifacts</strong></div>
+        <div class="nav-label">Tools</div>
+        <div class="nav-item"><span class="nav-icon">L</span><strong>Living Archive</strong></div>
+        <div class="nav-item"><span class="nav-icon">H</span><strong>Hermes</strong></div>
+        <div class="nav-item"><span class="nav-icon">O</span><strong>OpenCode</strong></div>
+      </nav>
+      <div class="profile">
+        <div class="brand-mark">R</div>
+        <div>
+          <strong>ResonantOS User</strong>
+          <small>Local sovereign profile</small>
+        </div>
+      </div>
+    </aside>
+
+    <main class="content">
+      <div class="topbar">
+        <div class="crumbs" aria-label="Workspace path">
+          <span>Add-ons</span>
+          <span>Agent Handoff Kit</span>
+          <span>Hot Rod Rig task control</span>
+        </div>
+        <div class="actions">
+          <button class="button" type="button">Save draft</button>
+          <button class="button warning" type="button">Export packet</button>
+          <button class="button primary" type="button" disabled>Start run</button>
+        </div>
+      </div>
+
+      <section class="hero">
+        <div class="stack">
+          <span class="eyebrow">Hot Rod Rig add-on mockup</span>
+          <h1>Task Control</h1>
+          <p>Evidence-bound intake and ledger-backed execution control for Micro, Standard, and Full Z-Rig workflows inside the ResonantOS extension.</p>
+          <div class="chip-row">
+            <span class="chip" data-tone="green">No shell grant</span>
+            <span class="chip" data-tone="blue">Orchestrator-owned state</span>
+            <span class="chip" data-tone="amber">Human approval required</span>
+          </div>
+        </div>
+        <div class="hero-meter" aria-label="Current run readiness">
+          <div class="metric"><span>Packet</span><div class="bar"><span style="width: 72%"></span></div></div>
+          <div class="metric"><span>Preflight</span><div class="bar"><span style="width: 58%"></span></div></div>
+          <div class="metric"><span>Ledger</span><div class="bar"><span style="width: 24%"></span></div></div>
+          <div class="metric"><span>Approval</span><div class="bar"><span style="width: 0%"></span></div></div>
+        </div>
+      </section>
+
+      <section class="layout">
+        <div class="stack">
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <span class="eyebrow">Task intake</span>
+                <h2>Run packet</h2>
+                <p>Drafts `run_config` and `task_description`.</p>
+              </div>
+              <span class="state-pill" data-tone="amber">Draft</span>
+            </div>
+            <div class="field-grid">
+              <label>
+                Objective
+                <textarea>Review the browser-first add-on execution boundary and propose a safe implementation plan with test evidence.</textarea>
+              </label>
+              <div class="two">
+                <label>
+                  Artifact type
+                  <select>
+                    <option>code package</option>
+                    <option>architecture</option>
+                    <option>security audit</option>
+                    <option>legal / patent</option>
+                  </select>
+                </label>
+                <label>
+                  Stakes
+                  <select>
+                    <option>elevated</option>
+                    <option>routine</option>
+                    <option>critical</option>
+                  </select>
+                </label>
+              </div>
+              <label>
+                Domain tags
+                <input value="browser-first, add-ons, Hot Rod Rig, provenance">
+              </label>
+              <label>
+                Target files / sources
+                <textarea>public/addons/agent-handoff-kit.json
+browser-first/resonantos-side-panel-extension/src/lib/main-workspace-agent-handoff.js
+docs/architecture/addon-runbooks/agent-handoff-kit/</textarea>
+              </label>
+              <label>
+                Acceptance gates
+                <textarea>Manifest validation passes
+Browser-first workspace opens
+No privileged execution capability is granted
+Ledger evidence backs all execution claims</textarea>
+              </label>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <span class="eyebrow">Mode lattice</span>
+                <h2>Recommendation</h2>
+              </div>
+              <span class="state-pill" data-tone="green">Standard</span>
+            </div>
+            <div class="mode-grid" role="group" aria-label="Mode selector">
+              <button class="mode-card" type="button">
+                <strong>Micro</strong>
+                <small>Single builder, deterministic verifier, narrow target.</small>
+              </button>
+              <button class="mode-card active" type="button">
+                <strong>Standard</strong>
+                <small>3 builders, synthesis, verifiers, red team, final panel.</small>
+              </button>
+              <button class="mode-card" type="button">
+                <strong>Full</strong>
+                <small>Critical stakes, expanded panels, additive waves.</small>
+              </button>
+            </div>
+            <ul class="checklist">
+              <li class="check"><span class="status-dot pass"></span><div><strong>Micro rejected</strong><small>Multiple files and security-sensitive boundaries exceed Micro.</small></div></li>
+              <li class="check"><span class="status-dot pass"></span><div><strong>Standard eligible</strong><small>Elevated stakes, deterministic gates, non-critical artifact class.</small></div></li>
+              <li class="check"><span class="status-dot wait"></span><div><strong>Full trigger watch</strong><small>Escalate if W1 reclassifies the task as critical.</small></div></li>
+            </ul>
+          </section>
+        </div>
+
+        <div class="stack">
+          <section class="panel execution-board">
+            <div class="panel-header">
+              <div>
+                <span class="eyebrow">Execution</span>
+                <h2>Wave board</h2>
+                <p>Only the orchestrator advances state and emits pause events.</p>
+              </div>
+              <span class="state-pill" data-tone="amber">Preflight pending</span>
+            </div>
+            <div class="pipeline" aria-label="Z-Rig run stages">
+              <div class="stage done"><span>Draft</span><strong>Packet</strong><small>Config and task description assembled.</small></div>
+              <div class="stage current"><span>W0</span><strong>Preflight</strong><small>Provider health, diversity, registry hash.</small></div>
+              <div class="stage"><span>W1</span><strong>Blueprint</strong><small>Requirements, risks, user journeys.</small></div>
+              <div class="stage"><span>W2</span><strong>Builders</strong><small>Independent bundles and output artifacts.</small></div>
+              <div class="stage"><span>W3-W5</span><strong>Synthesis + red team</strong><small>Agreement, verification, attack squads.</small></div>
+              <div class="stage blocked"><span>Pause</span><strong>Human gate</strong><small>Resume only with explicit decision.</small></div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <span class="eyebrow">Independent lanes</span>
+                <h2>Assigned seats</h2>
+              </div>
+              <span class="state-pill" data-tone="blue">3 families</span>
+            </div>
+            <div class="lane-grid">
+              <article class="lane" data-family="openai">
+                <div class="lane-top">
+                  <h3>Builder A</h3>
+                  <span class="chip" data-tone="green">OpenAI</span>
+                </div>
+                <code>iso_bndl_71cf</code>
+                <small>Role packet: structural implementer. Output path locked to `waves/w2/builder-a`.</small>
+                <span class="state-pill" data-tone="amber">Ready after W1</span>
+              </article>
+              <article class="lane" data-family="anthropic">
+                <div class="lane-top">
+                  <h3>Builder B</h3>
+                  <span class="chip" data-tone="amber">Anthropic</span>
+                </div>
+                <code>iso_bndl_b28e</code>
+                <small>Role packet: architecture and boundary analyst. Cannot read sibling outputs.</small>
+                <span class="state-pill" data-tone="amber">Ready after W1</span>
+              </article>
+              <article class="lane" data-family="google">
+                <div class="lane-top">
+                  <h3>Builder C</h3>
+                  <span class="chip" data-tone="blue">Google</span>
+                </div>
+                <code>iso_bndl_f03a</code>
+                <small>Role packet: verification-first builder. Incremental output writes enabled.</small>
+                <span class="state-pill" data-tone="amber">Ready after W1</span>
+              </article>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <span class="eyebrow">Gate evidence</span>
+                <h2>Preflight checks</h2>
+              </div>
+              <span class="state-pill" data-tone="amber">4/7</span>
+            </div>
+            <ul class="checklist">
+              <li class="check"><span class="status-dot pass"></span><div><strong>Task schema valid</strong><small>`task_description` has title, objective, acceptance criteria, constraints.</small></div></li>
+              <li class="check"><span class="status-dot pass"></span><div><strong>Mode selection resolved</strong><small>Standard selected with Micro rejection rationale.</small></div></li>
+              <li class="check"><span class="status-dot pass"></span><div><strong>Boundary preserved</strong><small>No requested shell, wallet, provider credential, or trusted memory grant.</small></div></li>
+              <li class="check"><span class="status-dot pass"></span><div><strong>Source bundle sealed</strong><small>Input paths hashed for W0.</small></div></li>
+              <li class="check"><span class="status-dot wait"></span><div><strong>Provider health</strong><small>Needs live family probes before W1 dispatch.</small></div></li>
+              <li class="check"><span class="status-dot wait"></span><div><strong>Escalation channel</strong><small>Primary operator route not yet pinged.</small></div></li>
+              <li class="check"><span class="status-dot wait"></span><div><strong>Human approval</strong><small>Start remains disabled until Tom approves the briefing.</small></div></li>
+            </ul>
+          </section>
+        </div>
+
+        <div class="stack">
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <span class="eyebrow">Run control</span>
+                <h2>State</h2>
+              </div>
+              <span class="state-pill" data-tone="amber">CREATED</span>
+            </div>
+            <ul class="state-list">
+              <li><strong>Run ID</strong><span>HRR-042</span></li>
+              <li><strong>State file</strong><span>run_state.json</span></li>
+              <li><strong>Registry</strong><span>pending hash</span></li>
+              <li><strong>Resume token</strong><span>not issued</span></li>
+              <li><strong>Namespace</strong><span>draft only</span></li>
+            </ul>
+            <div class="actions">
+              <button class="button primary" type="button">Run preflight</button>
+              <button class="button" type="button">Open packet</button>
+            </div>
+          </section>
+
+          <section class="run-card">
+            <strong>Human pause card preview</strong>
+            <p>When a gate fails or a critical finding appears, the run freezes here. Timeout escalates notification only.</p>
+            <div class="actions">
+              <button class="button warning" type="button">Retry with patch</button>
+              <button class="button" type="button">Resume</button>
+              <button class="button" type="button">Abort</button>
+            </div>
+            <small>No automatic approve, reject, or resume.</small>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <span class="eyebrow">Provenance</span>
+                <h2>Ledger</h2>
+              </div>
+              <span class="state-pill" data-tone="blue">Append-only</span>
+            </div>
+            <ol class="ledger">
+              <li class="event"><strong>packet_created</strong><small>operator: tom, mode candidate: Standard</small><code>evt_1001</code></li>
+              <li class="event"><strong>mode_selected</strong><small>Micro rejected, Standard selected</small><code>evt_1002</code></li>
+              <li class="event"><strong>source_bundle_hash</strong><small>9 inputs sealed for W0</small><code>sha256:8bb1...29af</code></li>
+              <li class="event"><strong>claim_scan</strong><small>No execution claims emitted yet</small><code>0 unsupported</code></li>
+            </ol>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <span class="eyebrow">Outputs</span>
+                <h2>Artifacts</h2>
+              </div>
+              <span class="state-pill">Preview</span>
+            </div>
+            <ul class="artifact-list">
+              <li class="artifact"><strong>run_config.json</strong><small>Draft config for mode, providers, contacts, bounds.</small><code>artifact pending</code></li>
+              <li class="artifact"><strong>task_description.json</strong><small>Objective, constraints, acceptance criteria, target files.</small><code>artifact pending</code></li>
+              <li class="artifact"><strong>disclosure footer</strong><small>Tool calls, models, spawned agents, unsupported claims.</small><code>runtime generated</code></li>
+            </ul>
+          </section>
+        </div>
+      </section>
+
+      <section class="footer-bar" aria-label="Mockup action footer">
+        <div>
+          <strong>Start remains gated.</strong>
+          <p>Preflight, provider diversity, escalation channel verification, and explicit human approval must pass before provider execution is available.</p>
+        </div>
+        <div class="actions">
+          <button class="button" type="button">Save review note</button>
+          <button class="button warning" type="button">Request approval</button>
+          <button class="button primary" type="button" disabled>Start W1</button>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

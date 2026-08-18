@@ -9,6 +9,7 @@ export function createAddonDelegationHostService(handlers = {}) {
   return {
     addonDelegationRoutes: [
       { method: "GET", path: "/addons/status", handler: required("executeAddonsStatus") },
+      { method: "GET", path: "/addons/agent-handoff-kit/hot-rod-rig-test", handler: required("executeAgentHandoffHotRodRigTest") },
       { method: "GET", path: "/addons/execution-settings", handler: required("executeAddonExecutionSettingsGet") },
       {
         method: "POST",

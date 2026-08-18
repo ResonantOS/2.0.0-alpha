@@ -1,0 +1,141 @@
+{
+  "id": "addon.agent-handoff-kit",
+  "name": "Agent Handoff Kit",
+  "version": "0.1.0",
+  "author": "Resonant Alpha",
+  "category": "orchestration",
+  "sdkVersion": "0.1.0",
+  "description": "A governed handoff package that gives Codex and other coding agents the ResonantOS context, Hot Rod Rig constraints, source map, and verification gates needed to continue work without process inflation.",
+  "runtimeType": "ui-module",
+  "surfaces": [
+    {
+      "id": "agent-handoff-workspace",
+      "type": "page",
+      "label": "Agent Handoff Kit",
+      "description": "Review the bounded agent handoff package, source evidence, implementation map, and deterministic verification gates.",
+      "shellNavigation": {
+        "sectionId": "agent-handoff",
+        "dockIcon": "agent-handoff",
+        "eyebrow": "Agent package",
+        "order": 65,
+        "requiredCapabilities": ["agent-delegation", "archive-read"]
+      }
+    }
+  ],
+  "requestedCapabilities": [
+    {
+      "capability": "agent-delegation",
+      "granted": false,
+      "scope": "workspace",
+      "revocationBehavior": "degrade"
+    },
+    {
+      "capability": "archive-read",
+      "granted": false,
+      "scope": "shared",
+      "revocationBehavior": "degrade"
+    },
+    {
+      "capability": "archive-intake-write",
+      "granted": false,
+      "scope": "intake-only",
+      "revocationBehavior": "degrade"
+    }
+  ],
+  "provenance": {
+    "tier": "curated-signed",
+    "verificationState": "verified",
+    "signed": true,
+    "signer": "ResonantOS bundled catalog"
+  },
+  "runtimeIsolation": {
+    "boundary": "shell-ui",
+    "supportsDegradedMode": true,
+    "requiresReviewedGrant": true
+  },
+  "providerRequirements": {
+    "sharedProfiles": [],
+    "supportsPrivateCredentials": false
+  },
+  "archiveIntegration": {
+    "readScopes": ["living-archive/context", "hot-rod-rig/context"],
+    "intakeWriteScopes": ["LivingArchive/INTAKE/agent-handoff"],
+    "canRequestIngest": true,
+    "canWriteKnowledgePages": false
+  },
+  "health": {
+    "strategy": "static-workspace-ready"
+  },
+  "workflowBoundaries": [
+    {
+      "id": "evidence-bound-agent-handoff",
+      "label": "Evidence-bound agent handoff",
+      "jobToBeDone": "Package the current ResonantOS task context so another coding agent can continue with explicit files, constraints, and verification gates.",
+      "userValue": "The human can transfer work without losing channel-derived Hot Rod Rig context or allowing unsupported execution claims.",
+      "repeatability": "workflow-package",
+      "owner": "augmentor",
+      "nonGoals": [
+        "Execute shell commands or provider calls by itself",
+        "Claim autonomous Hot Rod Rig completion without ledger evidence",
+        "Write trusted Living Archive knowledge pages directly",
+        "Bypass repository AGENTS.md instructions or human approval gates"
+      ]
+    }
+  ],
+  "skills": [
+    {
+      "id": "agent-handoff-orchestration",
+      "name": "Agent handoff orchestration",
+      "description": "Create a bounded coding-agent handoff from current repository evidence, Hot Rod Rig constraints, and deterministic verification requirements.",
+      "documentPath": "docs/architecture/addon-skills/agent-handoff-kit/AGENT_HANDOFF_ORCHESTRATION.md",
+      "invocation": "agent-suggested",
+      "requiredCapabilities": ["agent-delegation", "archive-read"],
+      "requiredTools": []
+    }
+  ],
+  "engineerSetup": {
+    "documentPath": "docs/architecture/addon-runbooks/agent-handoff-kit/MASTER_AGENT_HANDOFF.md",
+    "objective": "Continue implementing, testing, and auditing the Agent Handoff Kit as a ResonantOS browser-first add-on package.",
+    "requiredCapabilities": ["agent-delegation", "archive-read", "archive-intake-write"],
+    "allowedHostCommands": [
+      "npm test -- --run src/sdk/addons/public-manifests.test.ts",
+      "npm run test:browser-first",
+      "npm test -- --run",
+      "npm run build"
+    ],
+    "expectedInputs": [
+      "Repository instructions from AGENTS.md",
+      "Bundled add-on manifest and browser-first host code",
+      "Hot Rod Rig and Z-Rig source documents listed in the package manifest",
+      "Channel-derived context from #analog6, #resonantos, #logs, and #lux-wireless"
+    ],
+    "expectedOutputs": [
+      "Validated add-on manifest",
+      "Browser-first Agent Handoff Kit workspace",
+      "Master handoff runbook",
+      "Machine-readable package manifest",
+      "Deterministic test and build evidence"
+    ],
+    "requiresHumanApprovalBeforeExecution": false,
+    "auditLogRequired": true
+  },
+  "memoryAccess": {
+    "archiveReadMode": "read-only-context",
+    "archiveWriteMode": "intake-only",
+    "citationRequired": true,
+    "directKnowledgeWriteAllowed": false
+  },
+  "installHooks": {},
+  "compatibility": {
+    "shellVersion": "^0.1.0",
+    "platforms": ["macOS", "linux", "windows"]
+  },
+  "agents": [
+    {
+      "id": "agent-handoff-kit.package",
+      "displayName": "Agent Handoff Kit",
+      "trustTier": "addon",
+      "workspaceBehavior": "background"
+    }
+  ]
+}

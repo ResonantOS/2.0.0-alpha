@@ -3,6 +3,7 @@ import test from "node:test";
 import { JSDOM } from "jsdom";
 
 import { renderAddOnsWorkspace } from "../resonantos-side-panel-extension/src/lib/main-workspace-addons.js";
+import { renderAgentHandoffWorkspace } from "../resonantos-side-panel-extension/src/lib/main-workspace-agent-handoff.js";
 
 test("add-ons workspace renders registry status and governed open actions", async () => {
   const dom = new JSDOM(`<main id="root"></main>`, { url: "https://example.test/" });
@@ -54,6 +55,17 @@ test("add-ons workspace renders registry status and governed open actions", asyn
             requestedCapabilities: ["archive-read", "archive-intake-write", "archive-knowledge-write"],
             grantedCapabilities: ["archive-read", "archive-intake-write"],
             deniedCapabilities: ["archive-knowledge-write"]
+          },
+          {
+            id: "addon.agent-handoff-kit",
+            name: "Agent Handoff Kit",
+            available: true,
+            mode: "handoff-package-addon",
+            trust: "host-mediated documentation package",
+            requestedCapabilities: ["agent-delegation", "archive-read", "archive-intake-write"],
+            grantedCapabilities: [],
+            deniedCapabilities: ["archive-intake-write"],
+            boundary: "Read-only handoff package. It presents ResonantOS and Hot Rod Rig context for coding agents, but does not execute shell commands, call providers, write trusted memory, or claim autonomous rig execution."
           },
           {
             id: "addon.email",
@@ -225,10 +237,13 @@ test("add-ons workspace renders registry status and governed open actions", asyn
 
   assert.deepEqual(calls.map((call) => call[0]), ["/addons/status", "/addons/delegate/list", "/addons/draft/list"]);
   assert.match(container.textContent, /Replaceable capabilities, explicit trust/);
-  assert.match(container.textContent, /5 add-ons visible/);
+  assert.match(container.textContent, /6 add-ons visible/);
   assert.match(container.textContent, /Hermes/);
   assert.match(container.textContent, /OpenCode/);
   assert.match(container.textContent, /Living Archive/);
+  assert.match(container.textContent, /Agent Handoff Kit/);
+  assert.match(container.textContent, /handoff-package-addon/);
+  assert.match(container.textContent, /does not execute shell commands/);
   assert.match(container.textContent, /Email/);
   assert.match(container.textContent, /Calendar/);
   assert.match(container.textContent, /not trusted core agents/i);
@@ -253,11 +268,12 @@ test("add-ons workspace renders registry status and governed open actions", asyn
   assert.match(container.textContent, /Project update/);
   assert.match(container.textContent, /provider draft surfaces for human review only/);
   const buttons = [...container.querySelectorAll(".addon-card > .addon-card-actions button")];
-  assert.equal(buttons.length, 3);
+  assert.equal(buttons.length, 4);
   assert.equal(buttons.find((button) => /OpenCode/.test(button.textContent)).disabled, true);
   buttons.find((button) => /Hermes/.test(button.textContent)).click();
   buttons.find((button) => /Living Archive/.test(button.textContent)).click();
-  assert.deepEqual(opened, ["hermes", "memory"]);
+  buttons.find((button) => /Agent Handoff Kit/.test(button.textContent)).click();
+  assert.deepEqual(opened, ["hermes", "memory", "agent-handoff"]);
 
   const enableHermes = [...container.querySelectorAll(".addon-execution-panel button")]
     .find((button) => /Enable local execution/.test(button.textContent));
@@ -336,5 +352,61 @@ test("add-ons workspace reports bridge failures without exposing secrets", async
   assert.match(container.textContent, /Delegation review unavailable: host unavailable/);
   assert.match(container.textContent, /Draft review unavailable: host unavailable/);
   assert.equal(container.querySelector(".addons-status").dataset.tone, "error");
+  assert.doesNotMatch(container.textContent, /token|secret/i);
+});
+
+test("agent handoff workspace renders package evidence and verification gates", async () => {
+  const dom = new JSDOM(`<main id="root"></main>`, { url: "https://example.test/" });
+  globalThis.document = dom.window.document;
+  const container = dom.window.document.querySelector("#root");
+  const calls = [];
+  const bridgeRequest = async (route, options = {}) => {
+    calls.push([route, options.method ?? "GET"]);
+    if (route === "/addons/agent-handoff-kit/hot-rod-rig-test") {
+      return {
+        id: "agent-handoff-hot-rod-rig-test",
+        name: "Augmentor Hot Rod Rig add-on interface test",
+        status: "passed",
+        passed: true,
+        generatedAt: "2026-06-27T10:00:00.000Z",
+        summary: "Agent Handoff Kit passed the host-backed Hot Rod Rig package test for the ResonantOS Chrome extension interface.",
+        checks: [
+          {
+            id: "manifest-boundary",
+            label: "Manifest declares bounded, non-executing Hot Rod Rig handoff behavior",
+            passed: true,
+            detail: "No requested capability is pre-granted.",
+            evidence: "public/addons/agent-handoff-kit.json"
+          },
+          {
+            id: "truth-boundary",
+            label: "Runbook prevents unsupported autonomous rig claims",
+            passed: true,
+            detail: "Runbook requires ledger evidence.",
+            evidence: "MASTER_AGENT_HANDOFF.md"
+          }
+        ]
+      };
+    }
+    throw new Error(`Unexpected route ${route}`);
+  };
+
+  renderAgentHandoffWorkspace({ container, bridgeRequest });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.match(container.textContent, /Agent Handoff Kit/);
+  assert.match(container.textContent, /Package Files/);
+  assert.match(container.textContent, /Source Evidence/);
+  assert.match(container.textContent, /#analog6/);
+  assert.match(container.textContent, /Z-RIG-TURBO-V5.5-SPEC/);
+  assert.match(container.textContent, /Operating Rules/);
+  assert.match(container.textContent, /No autonomous Hot Rod Rig claim without ledger or tool evidence/);
+  assert.match(container.textContent, /npm run test:browser-first/);
+  assert.match(container.textContent, /Handoff, not rig execution/);
+  assert.match(container.textContent, /No shell, provider, wallet, public-send, schedule, or trusted memory-write authority is granted/i);
+  assert.match(container.textContent, /Augmentor Hot Rod Rig Test/);
+  assert.match(container.textContent, /Augmentor Hot Rod Rig add-on interface test: passed · 2\/2 checks passed/);
+  assert.match(container.textContent, /PASS · Manifest declares bounded/);
+  assert.deepEqual(calls, [["/addons/agent-handoff-kit/hot-rod-rig-test", "GET"]]);
   assert.doesNotMatch(container.textContent, /token|secret/i);
 });

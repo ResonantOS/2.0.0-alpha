@@ -1,0 +1,123 @@
+{
+  "packageId": "resonantos.agent-handoff-kit",
+  "addonId": "addon.agent-handoff-kit",
+  "version": "0.1.0",
+  "owner": "Resonant Alpha",
+  "objective": "Provide a master document and browser-first add-on package that lets another coding agent continue ResonantOS work with preserved Hot Rod Rig context and deterministic verification gates.",
+  "artifacts": [
+    {
+      "path": "public/addons/agent-handoff-kit.json",
+      "kind": "addon-manifest",
+      "purpose": "Registers the handoff kit in the Add-on SDK catalog."
+    },
+    {
+      "path": "docs/architecture/addon-runbooks/agent-handoff-kit/MASTER_AGENT_HANDOFF.md",
+      "kind": "master-runbook",
+      "purpose": "Self-contained instructions for another coding agent."
+    },
+    {
+      "path": "docs/architecture/addon-skills/agent-handoff-kit/AGENT_HANDOFF_ORCHESTRATION.md",
+      "kind": "addon-skill",
+      "purpose": "Skill-level workflow for preparing and auditing agent handoffs."
+    },
+    {
+      "path": "docs/architecture/addon-runbooks/agent-handoff-kit/package-manifest.json",
+      "kind": "machine-readable-package",
+      "purpose": "Structured source map, implementation targets, rules, and checks."
+    },
+    {
+      "path": "browser-first/resonantos-side-panel-extension/src/lib/main-workspace-agent-handoff.js",
+      "kind": "browser-first-workspace",
+      "purpose": "Read-only Chrome extension workspace for the handoff package."
+    },
+    {
+      "path": "docs/architecture/addon-runbooks/agent-handoff-kit/HOT_ROD_RIG_TASK_UI_MOCKUP.md",
+      "kind": "design-note",
+      "purpose": "Review note for a future Hot Rod Rig task ingestion and execution-control interface."
+    },
+    {
+      "path": "docs/architecture/addon-runbooks/agent-handoff-kit/mockups/hot-rod-rig-task-control.html",
+      "kind": "html-mockup",
+      "purpose": "Self-contained visual mockup of the proposed Hot Rod Rig task control workspace."
+    }
+  ],
+  "sourceEvidence": [
+    {
+      "source": "#analog6",
+      "kind": "discord-channel",
+      "summary": "Main Hot Rod Rig and Z-Rig specification history, including v5.3, v5.5.3, v5.6-v5.9, PANEL-TRUTH, and Micro/Standard/Full modes."
+    },
+    {
+      "source": "#resonantos",
+      "kind": "discord-channel",
+      "summary": "ResonantOS-specific planning and corrections that some prior rig runs were manual or ad hoc rather than full protocol executions."
+    },
+    {
+      "source": "#logs",
+      "kind": "discord-channel",
+      "summary": "Checkpoint and status records for v5.6-v5.9 and PANEL-TRUTH test evidence."
+    },
+    {
+      "source": "#lux-wireless",
+      "kind": "discord-channel",
+      "summary": "Zaphod/Z-Rig project-specific runs and transfer lessons."
+    },
+    {
+      "source": "/Users/dr.tom/.openclaw/workspace/HOT-ROD-RIG-V5.3.md",
+      "kind": "local-file",
+      "summary": "Zaphod protocol, role packets, output contract, wave structure, failure routing, and role packet library."
+    },
+    {
+      "source": "/Users/dr.tom/.openclaw/workspace/analog6/architecture/Z-RIG-TURBO-V5.5-SPEC.md",
+      "kind": "local-file",
+      "summary": "Unified v5.5.3 production specification with tiered modes, gates, mechanisms, and formal contracts."
+    },
+    {
+      "source": "/Users/dr.tom/.openclaw/workspace/output/PANEL-TRUTH-REPORT.md",
+      "kind": "local-file",
+      "summary": "Execution honesty constraint system with ledger, claim scanner, disclosure footer, and test-count evidence."
+    },
+    {
+      "source": "/Users/dr.tom/.openclaw/workspace/z-rig-orchestrator/Z-RIG-TURBO-COMPREHENSIVE-REPORT.md",
+      "kind": "local-file",
+      "summary": "Historical v5.5.3/v0.4.0 report and CLI/package notes, with caution to check current run evidence."
+    },
+    {
+      "source": "/Users/dr.tom/Documents/Codex/2026-06-26/hot-rod-rig-cross-channel-analysis/report/HOT-ROD-RIG-TRUTH-SYSTEM-CROSS-CHANNEL-CONSOLIDATED-REPORT.md",
+      "kind": "local-file",
+      "summary": "Cross-channel consolidated truth-system analysis."
+    }
+  ],
+  "implementationTargets": [
+    "public/addons/index.json",
+    "public/addons/dev-index.json",
+    "browser-first/host/addon-delegation-service.mjs",
+    "browser-first/resonantos-side-panel-extension/src/lib/main-workspace-addons.js",
+    "browser-first/resonantos-side-panel-extension/src/main-workspace.js",
+    "browser-first/test/main-workspace-addons.test.mjs"
+  ],
+  "verificationCommands": [
+    "npm test -- --run src/sdk/addons/public-manifests.test.ts",
+    "npm run test:browser-first",
+    "npm test -- --run",
+    "npm run build"
+  ],
+  "operatingRules": [
+    "Evidence beats assertions.",
+    "Do not claim autonomous Hot Rod Rig completion without ledger or tool evidence.",
+    "Use repository AGENTS.md and deterministic tests for coding work.",
+    "Keep this add-on read-only except for reviewed intake boundaries.",
+    "Do not grant shell, provider, wallet, external-send, external-schedule, or trusted memory-write authority.",
+    "Report failed or skipped checks plainly."
+  ],
+  "completionChecklist": [
+    "Manifest is listed in index.json and dev-index.json.",
+    "Manifest validation passes.",
+    "All manifest-declared documents exist.",
+    "Browser-first host status includes addon.agent-handoff-kit.",
+    "Add-ons workspace opens the agent-handoff workspace.",
+    "Workspace renders source evidence, rules, package files, and verification gates.",
+    "Browser-first tests cover the card and open action.",
+    "Build and tests have been run or explicitly reported as not run."
+  ]
+}
