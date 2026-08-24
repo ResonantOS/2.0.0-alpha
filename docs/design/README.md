@@ -4,6 +4,22 @@ Community-contributed design reference for ResonantOS. Nothing here is
 imported by the runtime; these are the visual contracts and source material
 for anyone building panels, add-ons, or app-shell UI.
 
+## Resonant Extension Framework V0.1 (proposal)
+
+Design-stage proposal for evolving the internal Add-on SDK V0 (ADR-018) into
+a governed add-on ecosystem: trust tiers, `.rpkg` packaging, certification,
+signing, and a developer CLI. Staged here pending acceptance as ADR-038.
+
+- [README](resonant-extension-framework/README.md) — package overview, staging, and terminology
+- [Proposal](resonant-extension-framework/PROPOSAL-resonant-extension-framework.md) — draft for ADR-038
+- [Add-on SDK spec](resonant-extension-framework/RESONANT_ADDON_SDK_SPEC_V0.1.md)
+- [Package and manifest spec](resonant-extension-framework/ADDON_PACKAGE_AND_MANIFEST_SPEC_V0.1.md)
+- [Certification and signing](resonant-extension-framework/ADDON_CERTIFICATION_AND_SIGNING_V0.1.md)
+- [Developer workflow and CLI](resonant-extension-framework/ADDON_DEVELOPER_WORKFLOW_AND_CLI_V0.1.md)
+- [Implementation roadmap](resonant-extension-framework/IMPLEMENTATION_ROADMAP_V0.1.md)
+- [Open design conflicts](resonant-extension-framework/OPEN_DESIGN_CONFLICTS_V0.1.md) — 13 unresolved questions for external review
+- [SDK reviewer agent](resonant-extension-framework/SDK_REVIEWER_AGENT_V0.1.md) — Augmentor/Logician review copilot for add-on certification
+
 ## ROSI — Resonant OS Interface design system
 
 Contributed by Michel Navarra (PR #208). Extracted from the live Browser
