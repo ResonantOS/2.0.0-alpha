@@ -18,8 +18,11 @@ signing, and a developer CLI. Staged here pending acceptance as ADR-038.
 - [Developer workflow and CLI](resonant-extension-framework/ADDON_DEVELOPER_WORKFLOW_AND_CLI_V0.1.md)
 - [Implementation roadmap](resonant-extension-framework/IMPLEMENTATION_ROADMAP_V0.1.md)
 - [Conflict resolutions](resonant-extension-framework/RESOLUTIONS_V0.1.md) — fork-author decisions on the 13 conflicts, carried into ADR-038
-- [External review feedback](resonant-extension-framework/EXTERNAL_REVIEW_FEEDBACK_V0.1.md) — first external review of this package, with verification record
 - [Open design conflicts](resonant-extension-framework/OPEN_DESIGN_CONFLICTS_V0.1.md) — 13 unresolved questions for external review
+
+- [External review feedback](resonant-extension-framework/EXTERNAL_REVIEW_FEEDBACK_V0.1.md) — first external review of this package, with verification record
+- [Code review feedback](resonant-extension-framework/ADDON_SDK_CODE_REVIEW_FEEDBACK_2026-08-24.md) — engineering review of the existing SDK and the public/third-party evolution path
+- [Personal/local plugin governance](resonant-extension-framework/ADDON_PERSONAL_PLUGIN_GOVERNANCE.md) — fork policy proposal for personal/local add-ons (SDK required, Resonant review optional)
 - [SDK reviewer agent](resonant-extension-framework/SDK_REVIEWER_AGENT_V0.1.md) — Augmentor/Logician review copilot for add-on certification
 
 ## ROSI — Resonant OS Interface design system

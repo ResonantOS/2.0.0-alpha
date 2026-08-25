@@ -13,6 +13,8 @@ This package contains a proposed architecture and implementation specification f
 - `OPEN_DESIGN_CONFLICTS_V0.1.md` — 13 unresolved design conflicts, prepared for external review
 - `RESOLUTIONS_V0.1.md` — fork-author decisions on the conflicts, carried forward into ADR-038
 - `EXTERNAL_REVIEW_FEEDBACK_V0.1.md` — first external review of this package, with verification record and disposition
+- `ADDON_SDK_CODE_REVIEW_FEEDBACK_2026-08-24.md` — engineering code review of the existing SDK and the path to public/third-party evolution
+- `ADDON_PERSONAL_PLUGIN_GOVERNANCE.md` — fork policy proposal for personal/local add-ons (SDK required, Resonant review optional)
 - `SDK_REVIEWER_AGENT_V0.1.md` — Augmentor/Logician agent that reviews add-on submissions and drafts certification decisions
 
 ## Staging
