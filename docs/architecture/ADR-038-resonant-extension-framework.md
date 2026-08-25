@@ -860,6 +860,8 @@ Source: `PROPOSAL-resonant-extension-framework.md` Consequences;
 
 ---
 
+**See also:** [ADR-040: Provider Fabric Boundary for External Agent Runtimes](ADR-040-provider-fabric-boundary-external-agent-runtimes.md) — applies the REF runtime boundary to external agent runtimes; locks the credential-mediation and provider-routing contract for add-ons like DeepSeek Harness or Agent Zero.
+
 ## Appendix A — Input Source Map
 
 Every claim in this outline is traceable to one of these sources.

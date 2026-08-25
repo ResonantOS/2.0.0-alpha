@@ -213,3 +213,5 @@ Routing still belongs to the provider fabric. The strategy profile is user-agree
 - Future provider UI, runtime health, and recovery UX must surface supported vs experimental distinctions clearly.
 - Chat UX must not assume streaming or abort support unless the chosen execution adapter explicitly declares it.
 - Contracts in `src/core/` should evolve toward `provider profile + runtime node + routing decision` instead of a single flattened provider concept.
+
+**See also:** [ADR-040: Provider Fabric Boundary for External Agent Runtimes](ADR-040-provider-fabric-boundary-external-agent-runtimes.md) — locks the boundary for third-party agent runtimes (DeepSeek Harness, Agent Zero) that want to use the provider fabric as consumers rather than providers.
