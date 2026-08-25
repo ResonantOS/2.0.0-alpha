@@ -112,8 +112,14 @@ test("createBridgeRequestHandler + grants store + audit ledger: two callers end-
     assert.equal(theftResponse.statusCode, 403);
 
     const lines = readFileSync(auditPath, "utf8").trim().split("\n");
-    assert.equal(lines.length, 2, "exactly the two authorised requests land in the ledger");
-    const callerIds = new Set(lines.map((line) => JSON.parse(line).callerId));
+    assert.equal(lines.length, 3, "two authorised + one denied cross-caller theft land in the ledger (H2)");
+    const records = lines.map((line) => JSON.parse(line));
+    const authorized = records.filter((record) => record.status === 200);
+    const denied = records.filter((record) => record.status === 403);
+    assert.equal(authorized.length, 2);
+    assert.equal(denied.length, 1);
+    assert.equal(denied[0].reason, "capability-denied");
+    const callerIds = new Set(authorized.map((record) => record.callerId));
     assert.equal(callerIds.size, 2);
     assert.ok(callerIds.has("alpha-caller"));
     assert.ok(callerIds.has("beta-caller"));

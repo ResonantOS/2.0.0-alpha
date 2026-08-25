@@ -1109,26 +1109,58 @@ export async function evaluateBridgeRequestForSelfTest({
       url,
       headers: normalizeHeaders(headers),
     };
+    const emitDenied = (reason, status, routePath = null, capability = null, callerIdOverride = null) => {
+      if (typeof auditSink !== "function") return;
+      const callerId = typeof callerIdOverride === "string" && callerIdOverride.length > 0 ? callerIdOverride : "anonymous";
+      auditSink({
+        callerId,
+        capability,
+        route: routePath,
+        method,
+        url,
+        status,
+        reason,
+        timestamp: new Date().toISOString(),
+      });
+    };
+    const emitAuthorized = (callerId, capability, routePath) => {
+      if (typeof auditSink !== "function") return;
+      auditSink({
+        callerId,
+        capability,
+        route: routePath,
+        method,
+        url,
+        status: 200,
+        reason: "authorized",
+        timestamp: new Date().toISOString(),
+      });
+    };
     if (method === "OPTIONS") {
       return { status: 204, payload: {} };
     }
     if (!isAuthorizedBridgeRequest(request, bridgeToken)) {
+      emitDenied("bridge-token", 401);
       return { status: 401, payload: { ok: false, error: "Unauthorized browser-first bridge request." } };
     }
     const route = compileRoutes(routes).get(routeKey(method, url));
     if (!route) {
+      emitDenied("unknown-route", 404);
       return { status: 404, payload: { ok: false, error: "Unknown browser-first bridge route." } };
     }
     if (route.requiredCapabilityBootstrap && !isAuthorizedCapabilityBootstrapRequest(request, capabilityBootstrapToken)) {
+      emitDenied("bootstrap-missing", 403, route.path, route.requiredCapability ?? null);
       return { status: 403, payload: { ok: false, error: "Bridge route requires capability bootstrap authorization." } };
     }
     if (!route.requiredCapability && !route.requiredCapabilityBootstrap) {
+      emitDenied("default-deny", 403, route.path, route.requiredCapability ?? null);
       return {
         status: 403,
         payload: { ok: false, error: "Bridge route declares no capability; refused by default." },
       };
     }
     if (route.requiredCapability && !isAuthorizedCapabilityRequest(request, bridgeCapabilityTokens, route.requiredCapability, perCallerGrants, tokenKey, callerGrantVerifier)) {
+      emitDenied("capability-denied", 403, route.path, route.requiredCapability ?? null);
       return { status: 403, payload: { ok: false, error: `Bridge route requires ${route.requiredCapability} capability.` } };
     }
     let callerId = "__extension__";
@@ -1155,19 +1187,21 @@ export async function evaluateBridgeRequestForSelfTest({
     }
     const payload = method === "POST" ? body : {};
     const result = await route.handler(payload, request);
+    emitAuthorized(callerId, route.requiredCapability ?? null, route.path);
+    return { status: 200, payload: { ok: true, ...result } };
+  } catch (error) {
     if (typeof auditSink === "function") {
       auditSink({
-        callerId,
-        capability: route.requiredCapability ?? null,
-        route: route.path,
+        callerId: "internal",
+        capability: null,
+        route: null,
         method,
         url,
-        status: 200,
+        status: 500,
+        reason: "internal-error",
         timestamp: new Date().toISOString(),
       });
     }
-    return { status: 200, payload: { ok: true, ...result } };
-  } catch (error) {
     return { status: 500, payload: { ok: false, error: error instanceof Error ? error.message : String(error) } };
   }
 }
