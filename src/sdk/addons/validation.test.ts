@@ -2,6 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { AddOnManifest } from "../../core/contracts";
+import { ADDON_CAPABILITIES } from "./contracts";
 import { validateAddOnManifest } from "./validation";
 
 const validManifest = (overrides: Partial<AddOnManifest> = {}): AddOnManifest => ({
@@ -803,5 +804,40 @@ describe("add-on SDK manifest validation", () => {
 
     expect(result.issues.filter((issue) => issue.code.startsWith("system-slot"))).toEqual([]);
     expect(result.valid).toBe(true);
+  });});
+
+describe("channel.send + channel.account-write capability additions (ADR-038 §12.1)", () => {
+  it("includes channel.send and channel.account-write in ADDON_CAPABILITIES", () => {
+    expect(ADDON_CAPABILITIES).toContain("channel.send");
+    expect(ADDON_CAPABILITIES).toContain("channel.account-write");
+  });
+
+  it("keeps the existing notifications capability for backward compat (channel-addon grants)", () => {
+    expect(ADDON_CAPABILITIES).toContain("notifications");
+  });
+
+  it("accepts a manifest requesting channel.send on a channel-addon runtime", () => {
+    const manifest = validManifest({
+      runtimeType: "channel-addon",
+      requestedCapabilities: [
+        {
+          capability: "channel.send",
+          granted: false,
+          scope: "self",
+          revocationBehavior: "hard-stop",
+        },
+        {
+          capability: "channel.account-write",
+          granted: false,
+          scope: "self",
+          revocationBehavior: "degrade",
+        },
+      ],
+    });
+    const result = validateAddOnManifest(manifest);
+    const channelIssues = result.issues.filter((issue) =>
+      issue.path?.includes("channel") && issue.severity === "error"
+    );
+    expect(channelIssues).toEqual([]);
   });
 });

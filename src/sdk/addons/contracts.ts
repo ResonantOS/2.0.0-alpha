@@ -73,6 +73,8 @@ export const ADDON_CAPABILITIES: readonly Capability[] = [
   "agent-delegation",
   "notifications",
   "device-integration",
+  "channel.send",
+  "channel.account-write",
 ];
 
 export const ADDON_SERVICE_PROTOCOLS: readonly AddOnServiceProtocol[] = [
