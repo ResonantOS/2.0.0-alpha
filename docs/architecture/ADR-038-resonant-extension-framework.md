@@ -8,11 +8,13 @@
 
 ## Decision Metadata
 
-- Decision status: **pending** (outline stage)
-- Supersedes: none (extends ADR-006, ADR-018; references ADR-023, ADR-024, ADR-026, ADR-034)
-- Alpha applicability: applies incrementally via the phases in `IMPLEMENTATION_ROADMAP_V0.1.md`
-- Owner: Add-on SDK / Core / Security
-- Decision date: **pending**
+- Decision status: **Deferred**
+- Superseded by: None
+- Alpha applicability: **Partial**
+- Owner: Add-on SDK
+- Decision date: **pending** (will be set when promoted to Accepted)
+
+Outline stage — every section below carries `pending` prose. The trust-tier mapping (`§4`), capability model (`§5`), and runtime boundary (`§7`) are locked enough to be cross-referenced from `RESOLUTIONS_V0.1.md`. Everything else is a shape proposal pending proposer review.
 - Source: forked from `PROPOSAL-resonant-extension-framework.md`, with the resolutions from `RESOLUTIONS_V0.1.md`, the conflict framing from `OPEN_DESIGN_CONFLICTS_V0.1.md`, the review-feedback notes (`EXTERNAL_REVIEW_FEEDBACK_V0.1.md`, `ADDON_SDK_CODE_REVIEW_FEEDBACK_2026-08-24.md`, `ADDON_PERSONAL_PLUGIN_GOVERNANCE.md`), and the runtime hardening notes (`docs/security-pipeline/REF_HARDENING_NOTES_V0.1.md`).
 
 ## 1. Decision
@@ -51,15 +53,45 @@ ADR-023 / ADR-024 (registry / commerce — deferred per C10)
 
 ## 4. Trust Model
 
-**pending.** Trust tier table, derived from `RESOLUTIONS_V0.1.md` C1
-(option a: Map only) and from `PROPOSAL-resonant-extension-framework.md`
-"Trust Tiers". Expected shape: the four-state core rule
-`VALID != VERIFIED != APPROVED != GRANTED` (from
-`ADDON_CERTIFICATION_AND_SIGNING_V0.1.md`) followed by the REF tier table
-that resolves to existing enums. The `personal-local` provenance tier
-proposed by `ADDON_PERSONAL_PLUGIN_GOVERNANCE.md` is recorded as a
-**deferred proposal pending a separate design decision** (see §12
-Open Decisions).
+The four-state core rule governs every add-on, regardless of trust tier:
+
+```text
+VALID != VERIFIED != APPROVED != GRANTED
+```
+
+`ADDON_CERTIFICATION_AND_SIGNING_V0.1.md` documents the rule in full. REF
+inherits it unchanged.
+
+REF's three trust tiers map onto the existing `AddOnProvenanceTier` enum
+(`bundled-core | curated-signed | enterprise-signed | sideloaded-unverified`)
+per `RESOLUTIONS_V0.1.md` C1 (option a — Map only). The mapping table:
+
+| REF tier | Existing enums |
+|---|---|
+| Developer / Sideloaded | `sideloaded-unverified` + `unverified` + `unreviewed` |
+| Verified | `curated-signed` + `verified` + `reviewed` |
+| Resonant Approved | `curated-signed` + `verified` + `approved`, bound to per-`(addonId, version)` approval record |
+
+`bundled-core` is first-party (trust-by-bundling, not signature). `enterprise-signed`
+is a future value with no V0.1 work. Per-version approval is mandatory — the
+package digest and manifest digest both bind to the approval record.
+
+### User policy for personal / self-built add-ons
+
+`ADDON_PERSONAL_PLUGIN_GOVERNANCE.md` records the user's policy: approved
+add-ons appear in the official listing stamped by the ResonantOS team;
+private or self-built add-ons are **not approved** and **may cause a
+ResonantOS crash requiring automatic recovery**. The chip-UI warning text
+is the user-facing surface for this consequence. The runtime contract
+itself does not distinguish "personal" from "sideloaded" by enum value —
+that distinction is a display concern in V0.1, recorded as the
+`personal-local` deferred item in §12.
+
+### The boundary the runtime enforces
+
+Capability grants (manifest declared → user-granted → host-mediated →
+audit-attributed via Phase 3.5) are authoritative regardless of trust
+tier. Approval is never a substitute for runtime authorization.
 
 ## 5. Capability Model
 
@@ -143,21 +175,38 @@ from `RESOLUTIONS_V0.1.md`:
   ed25519; first-party bundles remain trust-by-bundling in V0.1; key
   custody deferred to security pipeline.
 - **C12 package location** — `packages/addon-sdk/` from the start.
-- **`personal-local` provenance tier** — proposed by
-  `ADDON_PERSONAL_PLUGIN_GOVERNANCE.md`. Requires either a new
-  `AddOnProvenanceTier` enum value (option b) or a display-label-only
-  distinction over `sideloaded-unverified` (option a — current
-  `RESOLUTIONS_V0.1.md` C1 stance). **Decision pending.** The ADR
-  does not commit to either; this is a fork-policy question for the
-  author.
-- **Communication-channel capability refinement** — from
-  `ADDON_SDK_CODE_REVIEW_FEEDBACK_2026-08-24.md` Finding 3. Deferred
-  until the capability-mapping table (C5) is built.
-- **Public SDK external boundary** — from Finding 9 of the code-review
-  feedback. Not before an external fixture project proves SDK
-  consumption outside this monorepo.
-- **Post-V0.1 sandbox surface** — from C4 resolution. Re-opened when
-  the deferred M0 Test A is revisited.
+- **`personal-local` provenance tier** — **V0.1:** option (a) — `personal-local`
+  is a display label over `sideloaded-unverified`. The runtime contract
+  (`AddOnProvenanceTier`) is unchanged. The chip UI shows a distinct
+  badge for add-ons the user authored locally; the user-facing warning
+  text covers the consequence that loading such an add-on may crash
+  ResonantOS requiring automatic recovery. Runtime enforcement
+  (capability grants, host mediation, Phase 3.5 caller attribution) is
+  unchanged. **V1:** revisit if upstream ResonantOS requests a distinct
+  enum value.
+
+- **Add-on safety / auto-unplug mechanism** — **deferred.** A runtime
+  safety algorithm (small LLM or heuristic) that detects a failing
+  add-on, isolates it, and restores the system to a usable state is
+  needed to make the `personal-local` runtime story safe. The recovery
+  policy (auto-unplug all add-ons vs. auto-unplug only the offending
+  add-on) is **yet to be determined**. Deferred to a follow-on ADR,
+  candidate **ADR-039**.
+
+- **Communication-channel capability refinement** — deferred. The current
+  `communication-channel → notifications` mapping is too coarse for
+  third-party maturity. Subdivision into `channel.send`, `channel.receive`,
+  `channel.account-read`, `channel.account-write` is the chatgpt
+  `ADDON_SDK_CODE_REVIEW_FEEDBACK_2026-08-24.md` Finding 3
+  recommendation. Not introduced in V0.1; waits on the capability-mapping
+  table (C5) build-out.
+
+- **Post-V0.1 sandbox surface** — deferred. M0 Test A (Hello Resonant
+  with a UI surface) was deferred past V0.1 by `RESOLUTIONS_V0.1.md` C4.
+  The "what defines V0.1 done" exit criteria are: Phase 3.5 hardening
+  landed; M0 Test B (Local Files) and M0 Test C (Local AI) green; the
+  capability-mapping table operational; signing + registry metadata in
+  place per Phase 6/8. Only then is Test A reopened.
 
 ## 13. Fork Strategy and Hygiene
 
