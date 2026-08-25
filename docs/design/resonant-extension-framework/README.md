@@ -16,6 +16,8 @@ This package contains a proposed architecture and implementation specification f
 - `ADDON_SDK_CODE_REVIEW_FEEDBACK_2026-08-24.md` — engineering code review of the existing SDK and the path to public/third-party evolution
 - `ADDON_PERSONAL_PLUGIN_GOVERNANCE.md` — fork policy proposal for personal/local add-ons (SDK required, Resonant review optional)
 - `SDK_REVIEWER_AGENT_V0.1.md` — Augmentor/Logician agent that reviews add-on submissions and drafts certification decisions
+- `REGISTRY_METADATA_SCHEMA_V0.1.md` — C10 approved-release index schema (canonical JSON shape, verifier behavior, rotation)
+- `SIGNING_ARCHITECTURE_V0.1.md` — C11 ed25519 signing envelope, key ids, and verification behavior
 
 ## Staging
 

@@ -43,6 +43,14 @@ formal field rename lands when the SDK is extracted to
 The inline "risk class" and "trust tier" prose in this document refers
 to `capabilityRiskClass` and `releaseTrustTier` respectively.
 
+**See also:**
+
+- [`REGISTRY_METADATA_SCHEMA_V0.1.md`](REGISTRY_METADATA_SCHEMA_V0.1.md) —
+  the canonical approved-release index JSON schema and verifier behavior
+  (C10).
+- [`SIGNING_ARCHITECTURE_V0.1.md`](SIGNING_ARCHITECTURE_V0.1.md) — the
+  canonical ed25519 signing envelope and verification behavior (C11).
+
 ## Submission Pipeline
 
 ```text

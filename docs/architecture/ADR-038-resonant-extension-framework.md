@@ -646,6 +646,14 @@ to source documents, then the deferrals that survive V0.1.
   required for bundled). Key custody (offline root, rotating
   release-signing key, publisher keys, revocation metadata) is
   deferred to the security pipeline review.
+  **The architecture is landed in docs:**
+  `docs/design/resonant-extension-framework/SIGNING_ARCHITECTURE_V0.1.md`
+  defines the canonical signing envelope, key id format
+  (`<role>-<owner>-<year>`), trust tier signature requirements, the
+  canonical payload format, the verifier behavior, and the V0.1
+  algorithm allowlist (`ed25519` only). When the SDK package is
+  extracted (Phase 1), this becomes `packages/addon-sdk/sign.ts`
+  plus a typed verifier.
 - **C12 package location** — **V0.1:** `packages/addon-sdk/` (and
   `packages/addon-sdk-testing/`) from the start, per the §12 Public
   SDK External Boundary resolution. Single source of truth immediately;
