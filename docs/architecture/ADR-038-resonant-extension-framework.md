@@ -610,8 +610,16 @@ to source documents, then the deferrals that survive V0.1.
   parallel vocabulary in REF-produced artifacts. The existing
   `agents[].trustTier` field stays (it describes agent personas, not
   add-on release trust); renaming it is out of REF scope. The rename
-  touches `RESONANT_ADDON_SDK_SPEC_V0.1.md` and
-  `ADDON_CERTIFICATION_AND_SIGNING_V0.1.md` vocabulary.
+  is **landed in docs**: `RESONANT_ADDON_SDK_SPEC_V0.1.md` gains a
+  "REF Vocabulary" reference section and
+  `ADDON_CERTIFICATION_AND_SIGNING_V0.1.md` gains a "REF Vocabulary
+  (C9)" section with the canonical table and explicit values
+  (`developer`/`verified`/`approved` for `releaseTrustTier`;
+  `low`/`moderate`/`high`/`critical` for `capabilityRiskClass`).
+  The runtime fields `provenance.tier` and `agents[].trustTier`
+  keep their existing value sets for V0.1 backward compat; the
+  formal field rename lands when the SDK is extracted to
+  `packages/addon-sdk/`.
 - **C10 registry deferral** — **V0.1:** metadata format and signed
   approved-release index ship now as a versioned JSON document in the
   public SDK package; the live registry service is deferred per

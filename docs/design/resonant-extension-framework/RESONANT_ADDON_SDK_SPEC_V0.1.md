@@ -307,6 +307,23 @@ Agent add-ons must explicitly declare:
 
 Trusted memory writes remain intake-only unless a future policy explicitly expands the boundary.
 
+## REF Vocabulary
+
+The framework introduces two named REF fields that distinguish REF's
+distribution trust from the existing alpha runtime's `agents[].trustTier`:
+
+- `releaseTrustTier` — `developer` / `verified` / `approved`
+- `capabilityRiskClass` — `low` / `moderate` / `high` / `critical`
+
+These names are the canonical REF names per `OPEN_DESIGN_CONFLICTS_V0.1.md`
+C9 and `RESOLUTIONS_V0.1.md` C9. Existing fields (`provenance.tier`,
+`agents[].trustTier`) carry the same value set for V0.1 backward
+compat. Full field rename lands when the SDK is extracted to
+`packages/addon-sdk/`.
+
+See `ADDON_CERTIFICATION_AND_SIGNING_V0.1.md` "REF Vocabulary (C9)"
+for the canonical definition and allowed values.
+
 ## SDK Validation
 
 The SDK must provide:

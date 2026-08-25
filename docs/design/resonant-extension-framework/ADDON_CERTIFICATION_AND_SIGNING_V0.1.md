@@ -21,6 +21,28 @@ VALID != VERIFIED != APPROVED != GRANTED
 - **Approved**: ResonantOS review accepted this exact release for official distribution.
 - **Granted**: the current user or authorized policy allowed a requested capability on this machine.
 
+## REF Vocabulary (C9)
+
+The Resonant Extension Framework uses three named fields that must
+not be confused. Per `OPEN_DESIGN_CONFLICTS_V0.1.md` C9 and
+`RESOLUTIONS_V0.1.md` C9, the rename applies **in REF only** — the
+existing runtime field `agents[].trustTier` stays untouched.
+
+| REF name | Field meaning | Allowed values |
+| --- | --- | --- |
+| `releaseTrustTier` | Distribution trust level granted to a specific release by ResonantOS after certification | `developer`, `verified`, `approved` |
+| `capabilityRiskClass` | Risk class assigned to a capability by the certification pipeline; drives streamlined vs manual review and gates approval | `low`, `moderate`, `high`, `critical` |
+| `agents[].trustTier` *(legacy, unchanged)* | Existing trust label inside the agent subsystem, used by the alpha runtime | unchanged |
+
+The two REF names are the canonical names in this document and in
+the SDK Certification Report. Existing implementation fields
+(`provenance.tier`, etc.) may carry the same value set for V0.1; the
+formal field rename lands when the SDK is extracted to
+`packages/addon-sdk/` (Phase 1 of the implementation roadmap).
+
+The inline "risk class" and "trust tier" prose in this document refers
+to `capabilityRiskClass` and `releaseTrustTier` respectively.
+
 ## Submission Pipeline
 
 ```text
