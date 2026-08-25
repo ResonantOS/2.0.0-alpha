@@ -33,6 +33,8 @@ import {
 import { runBrowserFirstSelfTest } from "./browser-first-self-test-service.mjs";
 import { createAgentControlHostService } from "./agent-control-host-service.mjs";
 import { buildBridgeCapabilityTokens } from "./bridge-capability-tokens.mjs";
+import { createBridgeGrantsStore } from "./bridge-grants-store.mjs";
+import { createBridgeAuditLedger } from "./bridge-audit-ledger.mjs";
 import { createAddonDelegationHostService } from "./addon-delegation-host-service.mjs";
 import { createAddonDelegationService } from "./addon-delegation-service.mjs";
 import { createOpencodeHttpClient, ensureOpencodeServer } from "./opencode-client.mjs";
@@ -392,11 +394,40 @@ const capabilityBootstrapToken = args.get("capability-bootstrap-token") ??
   createBridgeToken();
 const bridgeCapabilityTokens = buildBridgeCapabilityTokens({ args, mint: createBridgeToken });
 
+// Phase 3.5 (caller-attributed capability tokens). The minimal launcher
+// constructs an in-memory grants store and a JSONL audit ledger and passes
+// both to startBridgeServerWithFallback so that every successful capability-
+// scoped bridge request carries caller attribution through to the audit log.
+// Production launcher (resonantos-bridge-full.mjs) is not yet wired; that
+// lands in a follow-up commit.
+// Seed minimal-launcher demo callers for the bundled add-ons so any
+// immediate caller-attribution exercises against the minimal launcher
+// observe distinct audit records. Minting happens here so auditSink sees
+// only authorised requests, not mint events.
+const minimalLauncherCallerGrants = (() => {
+  const grants = createBridgeGrantsStore();
+  // Two capabilities per caller is enough to demonstrate distinguishability
+  // without coupling the launcher to a specific add-on surface in V0.1.
+  grants.mintGrant("hermes", "provider-model-invoke");
+  grants.mintGrant("hermes", "agent-control-plan");
+  grants.mintGrant("opencode", "provider-model-invoke");
+  grants.mintGrant("resonant-context", "archive-read");
+  grants.mintGrant("resonator", "memory-source-manage");
+  return grants;
+})();
+const bridgeAuditFilePath = path.join(userRoot(), "BrowserFirst", "audit.jsonl");
+const bridgeAudit = createBridgeAuditLedger({
+  filePath: bridgeAuditFilePath,
+  onError: (error) => console.error("[bridge-audit-ledger] write failed:", error?.message ?? error),
+});
+
 const invokeBridgeRouteForSelfTest = createBridgeRouteSelfTestInvoker({
   bridgeToken,
   bridgeCapabilityTokens,
   capabilityBootstrapToken,
   routes: bridgeRoutes,
+  perCallerGrants: minimalLauncherCallerGrants.snapshot(),
+  auditSink: bridgeAudit.sink,
 });
 
 const selfTestHandled = await runBrowserFirstSelfTest({
@@ -430,12 +461,13 @@ const bridgeInfo = await startBridgeServerWithFallback({
   port: bridgePort,
   bridgeToken,
   bridgeCapabilityTokens,
+  perCallerGrants: minimalLauncherCallerGrants.snapshot(),
+  auditSink: bridgeAudit.sink,
   capabilityBootstrapToken,
   extensionOrigin: resonantExtensionOrigin,
   routes: bridgeRoutes,
   host: getBridgeHost(),
 });
-
 const activeBridgePort = bridgeInfo.actualPort;
 const bridgePublicUrl = getBridgePublicUrl(activeBridgePort);
 bridgePublicUrlHolder.value = bridgePublicUrl;
