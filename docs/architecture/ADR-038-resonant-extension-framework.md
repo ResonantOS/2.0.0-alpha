@@ -156,12 +156,20 @@ the safe-path-is-the-easy-path principle, the CLI commands
 (`create`, `validate`, `test`, `audit`, `package`, `submit`), and the
 mock-host contract from `addon-sdk-testing`.
 
-## 12. Open Decisions Carried Forward
+## 12. Decisions Recorded by This ADR
 
-**pending.** A short list of decisions this ADR records as
-**acknowledged, deferred to Phase N** rather than rediscovery work —
-mirroring the "Deferred without further decision needed now" section
-from `RESOLUTIONS_V0.1.md`:
+The §12 walk committed V0.1 decisions for every item previously deferred
+in `RESOLUTIONS_V0.1.md` (C6–C12), recorded two new rows surfaced by
+the framework package and the user’s policy on personal/local add-ons,
+and resolved the §4 trust-model commitment. The result is that every
+conflict on the framework roadmap has either a V0.1 commitment recorded
+below or an explicit deferral to a follow-on ADR.
+
+The section is structured as: V0.1 commitments first (these become
+implementation gates once the prose is filled in), then cross-references
+to source documents, then the deferrals that survive V0.1.
+
+### 12.1 V0.1 commitments
 
 - **C6 container format** — **V0.1:** `.rpkg` is the official package
   format per `ADDON_PACKAGE_AND_MANIFEST_SPEC_V0.1.md`. The
@@ -248,6 +256,43 @@ from `RESOLUTIONS_V0.1.md`:
   capability-mapping table operational; signing + registry metadata in
   place per Phase 6/8. Only then is Test A reopened.
 
+### 12.2 Cross-references
+
+Every V0.1 commitment above is grounded in source documents:
+
+| Decision | Source |
+|---|---|
+| §4 Trust Model mapping table | `RESOLUTIONS_V0.1.md` C1 + `PROPOSAL-resonant-extension-framework.md` Trust Tiers |
+| `personal-local` display-only stance | `ADDON_PERSONAL_PLUGIN_GOVERNANCE.md` + user policy |
+| `channel.send` / `channel.account-write` V0.1 additions | `ADDON_SDK_CODE_REVIEW_FEEDBACK_2026-08-24.md` Finding 3 |
+| `channel.receive` / `channel.account-read` V1 deferral | Same Finding 3 |
+| Public SDK external boundary inventory | Phase 0 deliverable; `IMPLEMENTATION_ROADMAP_V0.1.md` Phase 0 |
+| C6 `.rpkg` stays official | `ADDON_PACKAGE_AND_MANIFEST_SPEC_V0.1.md` + `check-repo-hygiene.mjs` amend |
+| C8 sideload enablement | `RESOLUTIONS_V0.1.md` C8 + Phase 3.5 hardening notes |
+| C9 naming (`releaseTrustTier`, `capabilityRiskClass`) | `RESOLUTIONS_V0.1.md` C9 |
+| C10 registry metadata format | `RESOLUTIONS_V0.1.md` C10 + ADR-023/024 |
+| C11 ed25519 signing | `RESOLUTIONS_V0.1.md` C11 |
+| C12 package location | `RESOLUTIONS_V0.1.md` C12 + §12 Public SDK boundary |
+
+### 12.3 Deferred to future ADRs
+
+Three items are recorded as deferred and not addressed in V0.1:
+
+- **Add-on safety / auto-unplug mechanism** — **deferred.** A runtime
+  safety algorithm (small LLM or heuristic) that detects a failing
+  add-on, isolates it, and restores the system to a usable state is
+  needed to make the `personal-local` runtime story safe. The recovery
+  policy (auto-unplug all add-ons vs. auto-unplug only the offending
+  add-on) is **yet to be determined**. Deferred to a follow-on ADR,
+  candidate **ADR-039**.
+
+- **Post-V0.1 sandbox surface** — deferred. M0 Test A (Hello Resonant
+  with a UI surface) was deferred past V0.1 by `RESOLUTIONS_V0.1.md` C4.
+  The "what defines V0.1 done" exit criteria are: Phase 3.5 hardening
+  landed; M0 Test B (Local Files) and M0 Test C (Local AI) green; the
+  capability-mapping table operational; signing + registry metadata in
+  place per Phase 6/8. Only then is Test A reopened.
+
 - **Resonant-OS vs Third-Party SDK capability separation** —
   **deferred to V1.** The 13 coarse manifest capabilities (plus the two
   `channel.*` additions from item 2) are currently all exposed as
@@ -264,6 +309,18 @@ from `RESOLUTIONS_V0.1.md`:
   the visibility-tier classification in the SDK spec and runtime.
   The classification table itself is a follow-on design call requiring
   review of each capability's blast radius.
+
+### 12.4 Summary
+
+- **9 V0.1 commitments** recorded (C6, C7, C8, C9, C10, C11, C12,
+  `personal-local`, `communication-channel`).
+- **1 §4 commitment** recorded (the trust-model mapping table).
+- **1 V0.1 commitment** recorded via cross-reference (public SDK external
+  boundary — depends on the Phase 0 inventory commit landing first; the
+  inventory is recorded as part of the §12 walk and is complete).
+- **3 deferrals** recorded (auto-unplug, Post-V0.1 sandbox, capability
+  separation).
+- **0 unresolved** items from the original §12 outline.
 
 - **Public SDK external boundary** — **V0.1 fork-only, soft cutover
   (alias):** create `packages/addon-sdk/` (and `packages/addon-sdk-testing/`)
