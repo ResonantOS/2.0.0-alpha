@@ -8,7 +8,7 @@
 - Owner: Add-on SDK / Core / Security
 - Decision date: 2026-08-24
 - Target: ResonantOS Alpha fork
-- Staging: design-stage proposal at `docs/design/resonant-extension-framework/`;
+- Staging: design-stage proposal at `docs/addons/resonant-extension-framework/`;
   on acceptance this becomes `docs/architecture/ADR-038-resonant-extension-framework.md`
 
 ## Decision

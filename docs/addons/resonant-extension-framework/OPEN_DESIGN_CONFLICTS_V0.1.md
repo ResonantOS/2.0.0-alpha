@@ -498,7 +498,7 @@ placed, or should it precede Phase 2?
   `assertValidAddOnManifest`) intentionally match existing code.
 - **ADR numbering:** the proposal targets **ADR-038** (ADR-031 is taken).
 - **Staging:** this package lives at
-  `docs/design/resonant-extension-framework/` and passes the repo's docs
+  `docs/addons/resonant-extension-framework/` and passes the repo's docs
   and release-scope gates as a design-stage proposal.
 
 ## Requested Output From the Reviewer

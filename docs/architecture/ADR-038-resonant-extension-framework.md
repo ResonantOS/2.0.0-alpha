@@ -128,7 +128,7 @@ work should extend the existing Add-on SDK decisions, not introduce an
 unrelated extension framework that duplicates manifests, capabilities,
 lifecycle, or runtime authority.
 
-The framework package (`docs/design/resonant-extension-framework/`)
+The framework package (`docs/addons/resonant-extension-framework/`)
 carries the design-stage documentation that this ADR accepts. On
 acceptance, the proposal becomes the body of this ADR and the
 specifications move to `docs/addons/`, per the framework README
@@ -630,7 +630,7 @@ to source documents, then the deferrals that survive V0.1.
   existing installations follow the revocation flow in
   `ADDON_PACKAGE_AND_MANIFEST_SPEC_V0.1.md`.
   **The schema is landed in docs:**
-  `docs/design/resonant-extension-framework/REGISTRY_METADATA_SCHEMA_V0.1.md`
+  `docs/addons/resonant-extension-framework/REGISTRY_METADATA_SCHEMA_V0.1.md`
   defines the canonical JSON shape, the verifier behavior, the rotation
   rules, and the compatibility guarantees. When the SDK package is
   extracted (Phase 1), this becomes `packages/addon-sdk/registry-metadata.schema.json`
@@ -647,7 +647,7 @@ to source documents, then the deferrals that survive V0.1.
   release-signing key, publisher keys, revocation metadata) is
   deferred to the security pipeline review.
   **The architecture is landed in docs:**
-  `docs/design/resonant-extension-framework/SIGNING_ARCHITECTURE_V0.1.md`
+  `docs/addons/resonant-extension-framework/SIGNING_ARCHITECTURE_V0.1.md`
   defines the canonical signing envelope, key id format
   (`<role>-<owner>-<year>`), trust tier signature requirements, the
   canonical payload format, the verifier behavior, and the V0.1
@@ -749,7 +749,7 @@ Three items are recorded as deferred and not addressed in V0.1:
   the visibility-tier classification in the SDK spec and runtime.
   The classification table itself is a follow-on design call requiring
   review of each capability's blast radius. **Deferred record landed:**
-  `docs/design/resonant-extension-framework/CAPABILITY_SEPARATION_V1.md`
+  `docs/addons/resonant-extension-framework/CAPABILITY_SEPARATION_V1.md`
   captures the proposed V1 shape (parallel `PublicCapability` and
   `InternalCapability` enums; SDK-owned mapping at the bridge
   boundary; V1 manifest validation rules; ADR pointer) so a future
@@ -866,18 +866,18 @@ Every claim in this outline is traceable to one of these sources.
 
 | Source | Path | Role in ADR |
 |---|---|---|
-| Original proposal | `docs/design/resonant-extension-framework/PROPOSAL-resonant-extension-framework.md` | Decision, principle, framework components, trust tiers, runtime boundary, replaceability |
-| Add-on SDK spec | `docs/design/resonant-extension-framework/RESONANT_ADDON_SDK_SPEC_V0.1.md` | §6 manifest, §11 SDK modules, lifecycle, tools, connectors, agents |
-| Package & manifest spec | `docs/design/resonant-extension-framework/ADDON_PACKAGE_AND_MANIFEST_SPEC_V0.1.md` | §6 `.rpkg`, manifest fields, publisher block, digests, signature envelope |
-| Certification & signing | `docs/design/resonant-extension-framework/ADDON_CERTIFICATION_AND_SIGNING_V0.1.md` | §10 pipeline, gates, review triggers, signing model, revocation |
-| Developer workflow | `docs/design/resonant-extension-framework/ADDON_DEVELOPER_WORKFLOW_AND_CLI_V0.1.md` | §11 CLI commands, mock host, reference add-ons, error codes |
-| Implementation roadmap | `docs/design/resonant-extension-framework/IMPLEMENTATION_ROADMAP_V0.1.md` | §8 Phase 3.5, §9 M0 test ordering, §13 suggested repo additions |
-| Open design conflicts | `docs/design/resonant-extension-framework/OPEN_DESIGN_CONFLICTS_V0.1.md` | §3 lineage grounding, §4-§7 conflict-driven decisions, §12 deferred |
-| Resolutions | `docs/design/resonant-extension-framework/RESOLUTIONS_V0.1.md` | §4 C1, §5 C5, §7 C3, §8 C2, §9 C4, §10 sequencing, §12 deferred C6-C12 |
-| External review | `docs/design/resonant-extension-framework/EXTERNAL_REVIEW_FEEDBACK_V0.1.md` | §13 fork strategy, alignment map |
-| SDK code-review feedback | `docs/design/resonant-extension-framework/ADDON_SDK_CODE_REVIEW_FEEDBACK_2026-08-24.md` | §12 communication-channel refinement; §12 external SDK boundary; §13 M0-first priority |
-| Personal/local governance | `docs/design/resonant-extension-framework/ADDON_PERSONAL_PLUGIN_GOVERNANCE.md` | §12 `personal-local` tier proposal (deferred) |
-| SDK Reviewer Agent | `docs/design/resonant-extension-framework/SDK_REVIEWER_AGENT_V0.1.md` | §10 dogfooded reviewer add-on |
+| Original proposal | `docs/addons/resonant-extension-framework/PROPOSAL-resonant-extension-framework.md` | Decision, principle, framework components, trust tiers, runtime boundary, replaceability |
+| Add-on SDK spec | `docs/addons/resonant-extension-framework/RESONANT_ADDON_SDK_SPEC_V0.1.md` | §6 manifest, §11 SDK modules, lifecycle, tools, connectors, agents |
+| Package & manifest spec | `docs/addons/resonant-extension-framework/ADDON_PACKAGE_AND_MANIFEST_SPEC_V0.1.md` | §6 `.rpkg`, manifest fields, publisher block, digests, signature envelope |
+| Certification & signing | `docs/addons/resonant-extension-framework/ADDON_CERTIFICATION_AND_SIGNING_V0.1.md` | §10 pipeline, gates, review triggers, signing model, revocation |
+| Developer workflow | `docs/addons/resonant-extension-framework/ADDON_DEVELOPER_WORKFLOW_AND_CLI_V0.1.md` | §11 CLI commands, mock host, reference add-ons, error codes |
+| Implementation roadmap | `docs/addons/resonant-extension-framework/IMPLEMENTATION_ROADMAP_V0.1.md` | §8 Phase 3.5, §9 M0 test ordering, §13 suggested repo additions |
+| Open design conflicts | `docs/addons/resonant-extension-framework/OPEN_DESIGN_CONFLICTS_V0.1.md` | §3 lineage grounding, §4-§7 conflict-driven decisions, §12 deferred |
+| Resolutions | `docs/addons/resonant-extension-framework/RESOLUTIONS_V0.1.md` | §4 C1, §5 C5, §7 C3, §8 C2, §9 C4, §10 sequencing, §12 deferred C6-C12 |
+| External review | `docs/addons/resonant-extension-framework/EXTERNAL_REVIEW_FEEDBACK_V0.1.md` | §13 fork strategy, alignment map |
+| SDK code-review feedback | `docs/addons/resonant-extension-framework/ADDON_SDK_CODE_REVIEW_FEEDBACK_2026-08-24.md` | §12 communication-channel refinement; §12 external SDK boundary; §13 M0-first priority |
+| Personal/local governance | `docs/addons/resonant-extension-framework/ADDON_PERSONAL_PLUGIN_GOVERNANCE.md` | §12 `personal-local` tier proposal (deferred) |
+| SDK Reviewer Agent | `docs/addons/resonant-extension-framework/SDK_REVIEWER_AGENT_V0.1.md` | §10 dogfooded reviewer add-on |
 | Runtime hardening notes | `docs/security-pipeline/REF_HARDENING_NOTES_V0.1.md` | §8 H1–H4 hardening is part of the runtime contract |
 | Upstream ADRs | `docs/architecture/ADR-006-*.md`, `ADR-018-*.md`, `ADR-023-*.md`, `ADR-024-*.md`, `ADR-026-*.md`, `ADR-034-*.md` | §3 lineage; §10 references |
 | Hardening implementation | branch `spike/caller-attributed-tokens`, commits `60c0129` `9e28f3f` `6617a63` `0d5f7ae` `779f16d` `92659c1` `a6ee86c` | §8 evidence; reviewable as a single squashed or cherry-picked commit when this fork merges back |

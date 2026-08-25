@@ -3,7 +3,7 @@
 ## Status
 
 Design-stage proposal, part of the Resonant Extension Framework V0.1
-package at `docs/design/resonant-extension-framework/`. Companion to
+package at `docs/addons/resonant-extension-framework/`. Companion to
 `ADDON_CERTIFICATION_AND_SIGNING_V0.1.md`; does not amend it.
 
 ## Purpose

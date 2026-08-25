@@ -4,26 +4,15 @@ Community-contributed design reference for ResonantOS. Nothing here is
 imported by the runtime; these are the visual contracts and source material
 for anyone building panels, add-ons, or app-shell UI.
 
-## Resonant Extension Framework V0.1 (proposal)
+## Resonant Extension Framework V0.1
 
-Design-stage proposal for evolving the internal Add-on SDK V0 (ADR-018) into
-a governed add-on ecosystem: trust tiers, `.rpkg` packaging, certification,
-signing, and a developer CLI. Staged here pending acceptance as ADR-038.
+The framework package lived here during design; on ADR-038 acceptance
+the proposal moved to [`docs/architecture/ADR-038-resonant-extension-framework.md`](../architecture/ADR-038-resonant-extension-framework.md)
+and the specifications moved to
+[`docs/addons/resonant-extension-framework/`](../addons/resonant-extension-framework/README.md).
+See that folder for the canonical list of framework specs, conflict
+documents, and resolution records.
 
-- [README](resonant-extension-framework/README.md) — package overview, staging, and terminology
-- [Proposal](resonant-extension-framework/PROPOSAL-resonant-extension-framework.md) — draft for ADR-038
-- [Add-on SDK spec](resonant-extension-framework/RESONANT_ADDON_SDK_SPEC_V0.1.md)
-- [Package and manifest spec](resonant-extension-framework/ADDON_PACKAGE_AND_MANIFEST_SPEC_V0.1.md)
-- [Certification and signing](resonant-extension-framework/ADDON_CERTIFICATION_AND_SIGNING_V0.1.md)
-- [Developer workflow and CLI](resonant-extension-framework/ADDON_DEVELOPER_WORKFLOW_AND_CLI_V0.1.md)
-- [Implementation roadmap](resonant-extension-framework/IMPLEMENTATION_ROADMAP_V0.1.md)
-- [Conflict resolutions](resonant-extension-framework/RESOLUTIONS_V0.1.md) — fork-author decisions on the 13 conflicts, carried into ADR-038
-- [Open design conflicts](resonant-extension-framework/OPEN_DESIGN_CONFLICTS_V0.1.md) — 13 unresolved questions for external review
-
-- [External review feedback](resonant-extension-framework/EXTERNAL_REVIEW_FEEDBACK_V0.1.md) — first external review of this package, with verification record
-- [Code review feedback](resonant-extension-framework/ADDON_SDK_CODE_REVIEW_FEEDBACK_2026-08-24.md) — engineering review of the existing SDK and the public/third-party evolution path
-- [Personal/local plugin governance](resonant-extension-framework/ADDON_PERSONAL_PLUGIN_GOVERNANCE.md) — fork policy proposal for personal/local add-ons (SDK required, Resonant review optional)
-- [SDK reviewer agent](resonant-extension-framework/SDK_REVIEWER_AGENT_V0.1.md) — Augmentor/Logician review copilot for add-on certification
 
 ## ROSI — Resonant OS Interface design system
 
