@@ -6,8 +6,9 @@
 > for the live review thread.
 >
 > **Lead reviewer:** Tom Pennington.
-> **Branch:** `feat/tab-referencing` @ `6db3141..994b51d`
+> **Branch:** `feat/tab-referencing` @ `6db3141..bcf1823`
 > **Base:** `ResonantOS/2.0.0-alpha:dev`
+> **PR #327 head:** `bcf1823e4b8f484298f0fa2446294de4647e1d68`
 
 ---
 
@@ -107,18 +108,17 @@ impact — the shims re-export the same symbols).
 | `npm run docs:check` | passes (Documentation contract validation passed.) |
 | `npm test` (`npx vitest run`) | 429/429 pass (41 test files, 10.5s wall) |
 | `npm run browser-first:audit-scope` | 0 manual-review items; informational warnings for the framework-package promotion (expected; fork-internal docs migration) |
+| `npm run test:browser-first` | **1055/1055 pass (37.3s wall)**; covers the bundled WIP from `994b51d` including `browser-first/test/tab-mention-typeahead.test.mjs` |
 | `npx tsc --noEmit` | clean |
 
 **Live-browser proof:** Not required for the REF walk (docs-and-tooling).
 The two runtime-shape additions (`channel.send`, `channel.account-write`
 additions; `.rpkg` hygiene allowlist) are covered by the 429 vitest
 cases including three new channel-capability tests
-(`validation.test.ts`). The bundled browser-first work
-(`994b51d`) carries its own new test file
-(`tab-mention-typeahead.test.mjs`, 131 lines) but was not run as
-part of the REF validation — its test surface lives under
-`browser-first/test/` and is exercised by `npm run test:browser-first`,
-not `npm test`.
+(`validation.test.ts`). The bundled browser-first work (`994b51d`)
+is covered by `npm run test:browser-first` (1055/1055 pass), which
+exercises the `tab-mention-typeahead.test.mjs` surface
+(131 lines) plus all preceding browser-first suites.
 
 ## Documentation
 
@@ -222,17 +222,16 @@ I'm specifically asking Tom for feedback on **four items**:
    the design is accepted.
 
 ## Status (what's verified, what's risky)
-
 - ✅ **Verified.** `npm run docs:check`, `npm test` (429/429),
   `npx tsc --noEmit`, all pass on every REF commit in this PR.
 - ✅ **Verified.** Each of the 24 REF commits individually passes
   docs:check + the relevant test subset before push.
-- ⚠ **Bundled WIP, not RE-verified.** Commit `994b51d` bundles
-  browser-first work from the WIP side branch. Its dedicated test
-  file (`tab-mention-typeahead.test.mjs`) was not run by the REF
-  validation suite — it lives under `browser-first/test/` and
-  is exercised by `npm run test:browser-first`. Reviewers should
-  run that suite separately to confirm the WIP green.
+- ✅ **Bundled WIP, RE-verified green.** Commit `994b51d` bundles
+  browser-first work from the WIP side branch. **Verified** via
+  `npm run test:browser-first`: **1055/1055 pass, 0 fail, 0 skip,
+  37.3s wall** (Node `--test` runner). The dedicated test file
+  `tab-mention-typeahead.test.mjs` (131 lines) is exercised under
+  that suite, on top of all preceding browser-first suites.
 - ⚠ **Risky.** This is a docs-heavy PR with two runtime-shape
   additions. Reviewers should especially scrutinize:
   - `src/core/contracts.ts` (capability union addition)
@@ -254,17 +253,20 @@ I'm specifically asking Tom for feedback on **four items**:
   snapshot from 2026-08-25; the squash onto `feat/tab-referencing`
   (`994b51d`) carries a calmer commit message and an updated
   reviewer note.
-- **PR head:** `feat/tab-referencing` @ `994b51d` (after squash)
-  + `?` (after REVIEW_PACKET commit). 26 commits ahead of
-  `upstream/dev` after this packet lands.
-- **Files in PR #327:** ~58 (40 from REF + 18 from bundled WIP).
+- **PR head:** `feat/tab-referencing` @ `bcf1823` (squashed WIP +
+  this review packet commit). 25 commits ahead of `upstream/dev`
+  (`530b753`); 0 behind. Branch is clean.
+- **Files in PR #327:** 59 (40 from REF + 18 from bundled WIP +
+  1 review packet, the last being this file).
 
 ## Reviewer Checklist (ResonantOS PR template)
 
 - [x] The branch targets `dev` and does not include unrelated work.
       (The bundled WIP is related in that it lives on the same
-      working branch; it is flagged as WIP and recoverable from the
-      side branch if reviewers want it split into a separate PR.)
+      working branch; it is **re-verified green** via
+      `npm run test:browser-first` (1055/1055) and is recoverable
+      from the side branch if reviewers want it split into a
+      separate PR.)
 - [ ] The linked issue and Project 2 fields reflect the intended
       release scope. (Tom — please fill or correct.)
 - [x] I reviewed module ownership and called out every cross-module
@@ -272,10 +274,12 @@ I'm specifically asking Tom for feedback on **four items**:
 - [x] I assessed security, privacy, secrets, and required human-only
       actions above.
 - [x] I added or updated tests for behavior changes (3 new
-      validation.test.ts cases for `channel.send` /
-      `channel.account-write`; 1 new check-repo-hygiene.test.mjs
-      case for `.rpkg` allowlist; 1 new tab-mention-typeahead.test.mjs
-      from the bundled WIP; full 429-test REF suite passes).
+  validation.test.ts cases for `channel.send` /
+  `channel.account-write`; 1 new check-repo-hygiene.test.mjs
+  case for `.rpkg` allowlist; 1 new tab-mention-typeahead.test.mjs
+  from the bundled WIP; full 429-test REF suite passes via
+  `npm test`; full 1055-test browser-first suite passes via
+  `npm run test:browser-first`).
 - [x] I recorded every relevant command and its actual result above.
 - [x] I attached redacted live-browser proof when the change
       requires it. (N/A for the REF walk; the bundled WIP carries
