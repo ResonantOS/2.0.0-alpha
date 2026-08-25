@@ -1009,9 +1009,17 @@ export async function writeBridgeConfig({
 // Returns the callerId when the caller is attributable via perCallerGrants,
 // otherwise returns the static-bridge fallback sentinel so the extension's
 // existing call path remains an explicit choice rather than a default.
+// Matches bridge-attributed-token.mjs's callerId allowlist pattern so an
+// attacker can't smuggle "../etc/passwd" or similar shapes through the
+// callerId header even before any token is verified.
+const CALLER_ID_HEADER_PATTERN = /^[a-z0-9][a-z0-9._-]{0,80}$/;
+
 function callerIdFromHeaders(request, perCallerGrants) {
   const headerValue = request.headers[bridgeCallerIdHeader];
   if (typeof headerValue !== "string" || headerValue.length === 0) {
+    return null;
+  }
+  if (!CALLER_ID_HEADER_PATTERN.test(headerValue)) {
     return null;
   }
   // Only recognise the header when a perCallerGrants store is configured;

@@ -95,3 +95,99 @@ test("createBridgeAuditLedger surfaces write errors through onError", () => {
     rmSync(tmp, { recursive: true, force: true });
   }
 });
+test("createBridgeAuditLedger redacts URL parameters in record fields before writing", () => {
+  const tmp = makeTempDir();
+  try {
+    const filePath = path.join(tmp, "audit.jsonl");
+    const ledger = createBridgeAuditLedger({ filePath });
+    ledger.sink({
+      callerId: "alpha-caller",
+      capability: "provider-credential-write",
+      route: "/providers/credentials",
+      method: "POST",
+      url: "/providers/credentials?token=secret-123&provider=openai",
+      status: 200,
+      reason: "authorized",
+      timestamp: "2026-08-24T12:34:56.000Z",
+    });
+    const body = readFileSync(filePath, "utf8");
+    assert.ok(!body.includes("secret-123"), "query string token must be redacted");
+    assert.ok(body.includes("REDACTED"), "redaction sentinel must be present");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("createBridgeAuditLedger redact:false preserves original content", () => {
+  const tmp = makeTempDir();
+  try {
+    const filePath = path.join(tmp, "audit.jsonl");
+    const ledger = createBridgeAuditLedger({ filePath, redact: false });
+    ledger.sink({
+      callerId: "alpha-caller",
+      capability: "provider-credential-write",
+      route: "/providers/credentials",
+      method: "POST",
+      url: "/providers/credentials?token=secret-123",
+      status: 200,
+      timestamp: "2026-08-24T12:34:56.000Z",
+    });
+    const body = readFileSync(filePath, "utf8");
+    assert.ok(body.includes("secret-123"), "redact:false preserves raw content");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("createBridgeAuditLedger rotates when maxBytes is exceeded", () => {
+  const tmp = makeTempDir();
+  try {
+    const filePath = path.join(tmp, "audit.jsonl");
+    // Tight maxBytes so we trigger rotation with one record.
+    const ledger = createBridgeAuditLedger({ filePath, maxBytes: 50 });
+    ledger.sink({ callerId: "alpha-caller", url: "/x" });
+    ledger.sink({ callerId: "alpha-caller", url: "/x" });
+    ledger.sink({ callerId: "alpha-caller", url: "/x" });
+    const line = "alpha-caller\n";
+    const primary = readFileSync(filePath, "utf8");
+    assert.ok(primary.length <= line.length * 5, "primary file kept small by rotation");
+    // Rotated sibling exists.
+    assert.ok(existsSync(`${filePath}.1`), "rotation creates <filePath>.1");
+    const rotated = readFileSync(`${filePath}.1`, "utf8");
+    assert.ok(rotated.length >= 1, "rotated file has at least the first batch");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("createBridgeAuditLedger rejects unsafe filePath", () => {
+  assert.throws(
+    () => createBridgeAuditLedger({ filePath: "" }),
+    /filePath/,
+  );
+  assert.throws(
+    () => createBridgeAuditLedger({ filePath: "/tmp/normal\0null" }),
+    /filePath/,
+    "NUL byte must be rejected",
+  );
+  assert.throws(
+    () => createBridgeAuditLedger({ filePath: "/tmp/../etc/passwd" }),
+    /filePath/,
+    ".. path component must be rejected",
+  );
+});
+
+test("createBridgeAuditLedger rejects bad maxBytes or maxFiles", () => {
+  const tmp = makeTempDir();
+  try {
+    const filePath = path.join(tmp, "audit.jsonl");
+    assert.throws(() => createBridgeAuditLedger({ filePath, maxBytes: 0 }), /maxBytes/);
+    assert.throws(() => createBridgeAuditLedger({ filePath, maxBytes: -1 }), /maxBytes/);
+    assert.throws(() => createBridgeAuditLedger({ filePath, maxFiles: 0 }), /maxFiles/);
+    assert.throws(() => createBridgeAuditLedger({ filePath, maxFiles: 1.5 }), /maxFiles/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+import { existsSync } from "node:fs";

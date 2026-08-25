@@ -105,3 +105,37 @@ test("verifyCallerAttributedToken (low-level) refuses tokens that don't bind the
     null,
   );
 });
+
+test("createBridgeGrantsStore honors callerIdAllowlist on mintGrant", () => {
+  const store = createBridgeGrantsStore({
+    tokenKey: TOKEN_KEY,
+    callerIdAllowlist: ["alpha-caller"],
+  });
+  store.mintGrant("alpha-caller", "provider-credential-write");
+  assert.throws(
+    () => store.mintGrant("rogue", "provider-credential-write"),
+    /Allowlist/i,
+    "minting a callerId outside the allowlist must throw",
+  );
+});
+
+test("createBridgeGrantsStore rejects a malformed callerIdAllowlist", () => {
+  assert.throws(
+    () => createBridgeGrantsStore({ tokenKey: TOKEN_KEY, callerIdAllowlist: ["", "ok"] }),
+    /Allowlist/i,
+  );
+  assert.throws(
+    () => createBridgeGrantsStore({ tokenKey: TOKEN_KEY, callerIdAllowlist: [42] }),
+    /Allowlist/i,
+  );
+});
+
+test("createBridgeGrantsStore without callerIdAllowlist is open (matches H1 tests)", () => {
+  const store = createBridgeGrantsStore({ tokenKey: TOKEN_KEY });
+  store.mintGrant("any-caller", "provider-credential-write");
+  assert.equal(
+    store.verifyCallerGrant("any-caller", "provider-credential-write",
+      store.lookupToken("any-caller", "provider-credential-write"))?.callerId,
+    "any-caller",
+  );
+});

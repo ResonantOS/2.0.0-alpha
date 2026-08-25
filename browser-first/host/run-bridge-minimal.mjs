@@ -5,6 +5,7 @@ import { existsSync, realpathSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { createHash } from "node:crypto";
 import {
   createBridgeToken,
   getBridgeHost,
@@ -405,8 +406,17 @@ const bridgeCapabilityTokens = buildBridgeCapabilityTokens({ args, mint: createB
 // observe distinct audit records. Minting happens here so auditSink sees
 // only authorised requests, not mint events.
 const bridgeTokenKey = createBridgeTokenKey();
+// Phase 3.5 H3 allowlist: only known add-on callerIds may mint grants. The
+// list is hard-coded at the launcher level because it represents the set of
+// bundled add-ons this minimal launcher is willing to serve. The audit line
+// below records the allowlist at boot so a misconfigured launcher is
+// observable in the launcher log.
+const minimalLauncherCallerIds = ["hermes", "opencode", "resonant-context", "resonator"];
 const minimalLauncherCallerGrants = (() => {
-  const grants = createBridgeGrantsStore({ tokenKey: bridgeTokenKey });
+  const grants = createBridgeGrantsStore({
+    tokenKey: bridgeTokenKey,
+    callerIdAllowlist: minimalLauncherCallerIds,
+  });
   grants.mintGrant("hermes", "provider-model-invoke");
   grants.mintGrant("hermes", "agent-control-plan");
   grants.mintGrant("opencode", "provider-model-invoke");
@@ -415,10 +425,20 @@ const minimalLauncherCallerGrants = (() => {
   return grants;
 })();
 const bridgeAuditFilePath = path.join(userRoot(), "BrowserFirst", "audit.jsonl");
-const bridgeAudit = createBridgeAuditLedger({
-  filePath: bridgeAuditFilePath,
-  onError: (error) => console.error("[bridge-audit-ledger] write failed:", error?.message ?? error),
-});
+let bridgeAudit;
+try {
+  bridgeAudit = createBridgeAuditLedger({
+    filePath: bridgeAuditFilePath,
+    onError: (error) => console.error("[bridge-audit-ledger] write failed:", error?.message ?? error),
+  });
+} catch (error) {
+  // Fail-fast (H3): a misconfigured audit ledger must not allow the bridge
+  // to start. Otherwise the launcher silently loses its only observability
+  // surface for caller-attributed requests.
+  console.error("[run-bridge-minimal] failed to initialise audit ledger:", error?.message ?? error);
+  console.error("[run-bridge-minimal] filePath:", bridgeAuditFilePath);
+  process.exit(1);
+}
 
 const invokeBridgeRouteForSelfTest = createBridgeRouteSelfTestInvoker({
   bridgeToken,
@@ -481,7 +501,23 @@ const bridgeConfigPath = await writeBridgeConfig({
   capabilityBootstrapToken,
   publicUrl: bridgePublicUrl,
 });
+// H3 startup log: caller count and grant count are observable at boot so a
+// misconfigured launcher doesn't silently ship with no add-ons authorised. We
+// also emit a SHA-256 fingerprint of the tokenKey (first 8 hex chars) so two
+// bridge processes can be told apart without leaking the key.
+const tokenKeyFingerprint = createHash("sha256")
+  .update(bridgeTokenKey)
+  .digest("hex")
+  .slice(0, 8);
 
+console.log(JSON.stringify({
+  event: "browser.first.caller_grants_ready",
+  callerCount: minimalLauncherCallerGrants.listCallers().length,
+  grantCount: minimalLauncherCallerGrants.listGrants().length,
+  callerIds: minimalLauncherCallerGrants.listCallers(),
+  tokenKeyFingerprint,
+  auditLedgerPath: bridgeAuditFilePath,
+}, null, 2));
 console.log(JSON.stringify({
   event: "browser.first.bridge_started",
   requestedPort: bridgeInfo.requestedPort,

@@ -1,4 +1,4 @@
-// In-memory per-caller grants store for Phase 3.5 — hardened (H1).
+// In-memory per-caller grants store for Phase 3.5 — hardened (H1 + H3).
 //
 // Backs the verifier of createBridgeRequestHandler's `perCallerGrants`
 // parameter path. Each caller is keyed by its callerId (an opaque string
@@ -15,6 +15,11 @@
 // restart, which means tokens minted during a previous run become
 // unverifiable on next start. Aligned with the in-memory grants store; see
 // RESOLUTIONS_V0.1.md, C2 option (a).
+//
+// H3 adds callerIdAllowlist. When supplied (non-empty array), any mintGrant
+// for a callerId not on the list throws. Revoke, lookup and verifyCallerGrant
+// are not affected — they only see what is already minted, and the store's
+// implicit invariant is "we only ever mint callers from the allowlist".
 //
 // Thread safety: all mutators run inside a single Node event-loop turn; no
 // locks needed.
@@ -35,6 +40,7 @@ function makeCallerBucket() {
 export function createBridgeGrantsStore({
   tokenKey,
   expiresInMs = 60 * 60 * 1000,
+  callerIdAllowlist,
 } = {}) {
   if (!Buffer.isBuffer(tokenKey) || tokenKey.length < 16) {
     throw new Error("createBridgeGrantsStore: tokenKey must be a Buffer of >=16 bytes");
@@ -42,7 +48,19 @@ export function createBridgeGrantsStore({
   if (!Number.isFinite(expiresInMs) || expiresInMs <= 0) {
     throw new Error("createBridgeGrantsStore: expiresInMs must be positive");
   }
+  let allowlist = null;
+  if (Array.isArray(callerIdAllowlist)) {
+    if (callerIdAllowlist.some((entry) => typeof entry !== "string" || entry.length === 0)) {
+      throw new Error("createBridgeGrantsStore: callerIdAllowlist entries must be non-empty strings");
+    }
+    allowlist = new Set(callerIdAllowlist);
+  }
   const callers = new Map();
+
+  function isCallerAllowed(callerId) {
+    if (allowlist === null) return true;
+    return allowlist.has(callerId);
+  }
 
   function getBucket(callerId) {
     let bucket = callers.get(callerId);
@@ -57,6 +75,9 @@ export function createBridgeGrantsStore({
   // callerId inside the signed payload; the caller-supplied header
   // (X-ResonantOS-Bridge-Caller-Id) is ignored on the per-caller path.
   function mintGrant(callerId, capability) {
+    if (!isCallerAllowed(callerId)) {
+      throw new Error(`mintGrant: callerId "${callerId}" is not in the allowlist`);
+    }
     const token = mintCallerAttributedToken({
       callerId,
       capability,
@@ -81,7 +102,6 @@ export function createBridgeGrantsStore({
     return bucket.capabilities.get(capability) ?? null;
   }
 
-  // The bridge's primary verifier: verify a caller-supplied token against
   // The bridge's primary verifier: verify a caller-supplied token against
   // the tokenKey, restricted to (callerId, capability). The store's own
   // state is consulted first — a revoked grant is verified as null even if
@@ -158,6 +178,7 @@ export function createBridgeGrantsStore({
     snapshot,
     listCallers,
     listGrants,
+    callerIdAllowlist: allowlist === null ? null : [...allowlist],
     tokenKey,
     expiresInMs,
   };
