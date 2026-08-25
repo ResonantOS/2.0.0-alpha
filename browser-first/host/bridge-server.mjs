@@ -1,6 +1,9 @@
 import { writeFile } from "node:fs/promises";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import http from "node:http";
+import { verifyCallerAttributedToken } from "./bridge-attributed-token.mjs";
+import { createBridgeGrantsStore } from "./bridge-grants-store.mjs";
+
 import https from "node:https";
 import net from "node:net";
 import path from "node:path";
@@ -1019,30 +1022,48 @@ function callerIdFromHeaders(request, perCallerGrants) {
   return headerValue;
 }
 
-function isAuthorizedCapabilityRequest(request, bridgeCapabilityTokens, requiredCapability, perCallerGrants) {
+function isAuthorizedCapabilityRequest(request, bridgeCapabilityTokens, requiredCapability, perCallerGrants, tokenKey, callerGrantVerifier) {
   if (!requiredCapability) {
     return false;
   }
   const callerId = callerIdFromHeaders(request, perCallerGrants);
-  // Per-caller path: when callerId is present and a grant exists for it,
-  // the capability token is the one keyed under that caller. Absence of
-  // any caller or any matching grant is treated as no token at all.
+  // H1: when a callerGrantVerifier is supplied (the grants store's
+  // verifyCallerGrant), prefer it. The verifier sees the live store state —
+  // including revocation — and is the single authority on caller-attributed
+  // grant validation. The static-token path below is reached only when no
+  // callerGrantVerifier is configured (legacy launchers).
+  if (typeof callerGrantVerifier === "function" && callerId && perCallerGrants && Object.prototype.hasOwnProperty.call(perCallerGrants, callerId)) {
+    const suppliedToken = request.headers[bridgeCapabilityHeader];
+    if (typeof suppliedToken !== "string" || suppliedToken.length === 0) return false;
+    return Boolean(callerGrantVerifier(callerId, requiredCapability, suppliedToken));
+  }
+  // Legacy callerAttributed path: verify the token against tokenKey, then
+  // also confirm the static mapping in the snapshot exists. The snapshot
+  // path can't see revocations done after the snapshot was taken — useful
+  // only for test fixtures and for launchers that haven't opted into the
+  // store-reference path.
   if (callerId && perCallerGrants && Object.prototype.hasOwnProperty.call(perCallerGrants, callerId)) {
+    if (Buffer.isBuffer(tokenKey)) {
+      const verified = verifyCallerAttributedToken({
+        token: request.headers[bridgeCapabilityHeader],
+        tokenKey,
+        requiredCapability,
+        expectedCallerId: callerId,
+      });
+      if (verified) return true;
+    }
     const callerGrants = perCallerGrants[callerId];
     const expectedToken = callerGrants && callerGrants[requiredCapability];
     return Boolean(expectedToken) && constantTimeEqual(request.headers[bridgeCapabilityHeader], expectedToken);
   }
-  // Static-token fallback for callers that pre-date per-caller attribution
-  // (the extension's own session, self-test paths, and any caller that does
-  // not send the X-ResonantOS-Bridge-Caller-Id header).
   const expectedToken = bridgeCapabilityTokens?.[requiredCapability];
   return Boolean(expectedToken) && constantTimeEqual(request.headers[bridgeCapabilityHeader], expectedToken);
 }
 
 function isAuthorizedCapabilityBootstrapRequest(request, capabilityBootstrapToken) {
   if (!capabilityBootstrapToken) return false;
-  return constantTimeEqual(request.headers[bridgeCapabilityBootstrapHeader], capabilityBootstrapToken);
-}
+   return constantTimeEqual(request.headers[bridgeCapabilityBootstrapHeader], capabilityBootstrapToken);
+ }
 
 export function scopedCapabilityTokenPayload(requestedCapabilities, bridgeCapabilityTokens) {
   const requested = Array.isArray(requestedCapabilities)
@@ -1076,6 +1097,8 @@ export async function evaluateBridgeRequestForSelfTest({
   bridgeToken,
   bridgeCapabilityTokens = {},
   perCallerGrants,
+  tokenKey,
+  callerGrantVerifier,
   auditSink,
   capabilityBootstrapToken,
   routes = [],
@@ -1105,13 +1128,31 @@ export async function evaluateBridgeRequestForSelfTest({
         payload: { ok: false, error: "Bridge route declares no capability; refused by default." },
       };
     }
-    if (route.requiredCapability && !isAuthorizedCapabilityRequest(request, bridgeCapabilityTokens, route.requiredCapability, perCallerGrants)) {
+    if (route.requiredCapability && !isAuthorizedCapabilityRequest(request, bridgeCapabilityTokens, route.requiredCapability, perCallerGrants, tokenKey, callerGrantVerifier)) {
       return { status: 403, payload: { ok: false, error: `Bridge route requires ${route.requiredCapability} capability.` } };
     }
-    const headerCaller = callerIdFromHeaders(request, perCallerGrants);
-    const callerId = headerCaller && perCallerGrants && Object.prototype.hasOwnProperty.call(perCallerGrants, headerCaller)
-      ? headerCaller
-      : "__extension__";
+    let callerId = "__extension__";
+    if (typeof callerGrantVerifier === "function") {
+      const suppliedToken = request.headers[bridgeCapabilityHeader];
+      const headerCaller = request.headers[bridgeCallerIdHeader];
+      if (typeof suppliedToken === "string" && typeof headerCaller === "string") {
+        const verified = callerGrantVerifier(headerCaller, route.requiredCapability, suppliedToken);
+        if (verified) callerId = verified.callerId ?? headerCaller;
+      }
+    } else if (Buffer.isBuffer(tokenKey)) {
+      const verified = verifyCallerAttributedToken({
+        token: request.headers[bridgeCapabilityHeader],
+        tokenKey,
+        requiredCapability: route.requiredCapability,
+        expectedCallerId: callerIdFromHeaders(request, perCallerGrants),
+      });
+      if (verified) callerId = verified.callerId;
+    } else {
+      const headerCaller = callerIdFromHeaders(request, perCallerGrants);
+      callerId = headerCaller && perCallerGrants && Object.prototype.hasOwnProperty.call(perCallerGrants, headerCaller)
+        ? headerCaller
+        : "__extension__";
+    }
     const payload = method === "POST" ? body : {};
     const result = await route.handler(payload, request);
     if (typeof auditSink === "function") {
@@ -1138,6 +1179,8 @@ export function createBridgeRequestHandler({
   bridgeToken,
   bridgeCapabilityTokens = {},
   perCallerGrants,
+  tokenKey,
+  callerGrantVerifier,
   auditSink,
   capabilityBootstrapToken,
   extensionOrigin,
@@ -1147,8 +1190,6 @@ export function createBridgeRequestHandler({
   dashboardProxyHandler = null,
   openPathPrefixes = getBridgeOpenProxyPrefixes({ allowedCidrs }),
 } = {}) {
-  // SECURITY: /api/capability-tokens is a built-in internal route. It requires
-  // both the bridge token and a separate capability-bootstrap token, and returns
   // only the capability names requested by the extension.
   const internalRoutes = [
     {
@@ -1209,6 +1250,8 @@ export function createBridgeRequestHandler({
         bridgeToken,
         bridgeCapabilityTokens,
         perCallerGrants,
+        tokenKey,
+        callerGrantVerifier,
         auditSink,
         capabilityBootstrapToken,
         routes: internalRoutes,
@@ -1232,6 +1275,8 @@ export async function startBridgeServer({
   bridgeToken,
   bridgeCapabilityTokens = {},
   perCallerGrants,
+  tokenKey,
+  callerGrantVerifier,
   auditSink,
   capabilityBootstrapToken,
   extensionOrigin,
@@ -1256,6 +1301,8 @@ export async function startBridgeServer({
     bridgeToken,
     bridgeCapabilityTokens,
     perCallerGrants,
+    tokenKey,
+    callerGrantVerifier,
     auditSink,
     capabilityBootstrapToken,
     extensionOrigin,
@@ -1320,6 +1367,8 @@ export async function startBridgeServersWithTls({
   bridgeToken,
   bridgeCapabilityTokens = {},
   perCallerGrants,
+  tokenKey,
+  callerGrantVerifier,
   auditSink,
   capabilityBootstrapToken,
   extensionOrigin,
@@ -1332,11 +1381,12 @@ export async function startBridgeServersWithTls({
 }) {
   const bindHost = host ?? getBridgeHost();
   const effectiveAllowedCidrs = allowedCidrs ?? getBridgeAllowedCidrs();
-  const effectiveOpenPathPrefixes = openPathPrefixes ?? getBridgeOpenProxyPrefixes({ host: bindHost, allowedCidrs: effectiveAllowedCidrs });
   const handle = createBridgeRequestHandler({
     bridgeToken,
     bridgeCapabilityTokens,
     perCallerGrants,
+    tokenKey,
+    callerGrantVerifier,
     auditSink,
     capabilityBootstrapToken,
     extensionOrigin,
@@ -1414,6 +1464,8 @@ export async function startBridgeServerWithFallback({
   bridgeToken,
   bridgeCapabilityTokens = {},
   perCallerGrants,
+  tokenKey,
+  callerGrantVerifier,
   auditSink,
   capabilityBootstrapToken,
   extensionOrigin,
@@ -1438,12 +1490,15 @@ export async function startBridgeServerWithFallback({
           )
         : [];
       const result = await startBridgeServersWithTls({
+
         httpPort: Number(candidate),
         httpsPort: httpsPortAttempts[0] ?? httpsPort ?? 0,
         tls,
         bridgeToken,
         bridgeCapabilityTokens,
         perCallerGrants,
+        tokenKey,
+        callerGrantVerifier,
         auditSink,
         capabilityBootstrapToken,
         extensionOrigin,

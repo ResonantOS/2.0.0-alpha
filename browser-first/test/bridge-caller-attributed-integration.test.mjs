@@ -1,8 +1,7 @@
-// Hook-up B integration: end-to-end caller attribution via the runtime
-// grants store and the JSONL audit ledger, exercised through the wired
-// createBridgeRequestHandler. This proves the seam laid down in hook-up A
-// (perCallerGrants + auditSink) is reachable from real factory output, not
-// just hard-coded literal grants.
+// Hook-up B integration + H1 caller-attributed tokens: end-to-end caller
+// attribution via the runtime grants store, the JSONL audit ledger, and the
+// HMAC-signed tokens. Exercised through the wired createBridgeRequestHandler
+// with perCallerGrants, tokenKey, and auditSink.
 
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -13,6 +12,7 @@ import test from "node:test";
 import { createBridgeRequestHandler } from "../host/bridge-server.mjs";
 import { createBridgeGrantsStore } from "../host/bridge-grants-store.mjs";
 import { createBridgeAuditLedger } from "../host/bridge-audit-ledger.mjs";
+import { createBridgeTokenKey } from "../host/bridge-token-key.mjs";
 
 function makeTempDir() {
   return mkdtempSync(path.join(tmpdir(), "resonant-bridge-integration-"));
@@ -45,11 +45,12 @@ function makeMockRequest({ url, method = "GET", headers, socketRemote = "127.0.0
   };
 }
 
-test("createBridgeRequestHandler + grants store + audit ledger: two callers end-to-end", async () => {
+test("createBridgeRequestHandler + grants store + audit ledger: two callers end-to-end (H1)", async () => {
   const tmp = makeTempDir();
   try {
     const auditPath = path.join(tmp, "audit.jsonl");
-    const grants = createBridgeGrantsStore();
+    const tokenKey = createBridgeTokenKey();
+    const grants = createBridgeGrantsStore({ tokenKey });
     const alphaToken = grants.mintGrant("alpha-caller", "provider-credential-write");
     const betaToken = grants.mintGrant("beta-caller", "provider-credential-write");
     const ledger = createBridgeAuditLedger({ filePath: auditPath });
@@ -58,6 +59,7 @@ test("createBridgeRequestHandler + grants store + audit ledger: two callers end-
       bridgeToken: "integration-bridge-token",
       bridgeCapabilityTokens: {},
       perCallerGrants: grants.snapshot(),
+      tokenKey,
       auditSink: ledger.sink,
       extensionOrigin: "chrome-extension://integration",
       routes: [
@@ -70,7 +72,6 @@ test("createBridgeRequestHandler + grants store + audit ledger: two callers end-
       ],
     });
 
-    // alpha-caller with its minted token — must succeed.
     const alphaResponse = makeMockResponse();
     await handler(makeMockRequest({
       url: "/providers/credentials/probe",
@@ -83,7 +84,6 @@ test("createBridgeRequestHandler + grants store + audit ledger: two callers end-
     assert.equal(alphaResponse.statusCode, 200);
     assert.equal(alphaResponse.body.probed, true);
 
-    // beta-caller with its minted token — must succeed.
     const betaResponse = makeMockResponse();
     await handler(makeMockRequest({
       url: "/providers/credentials/probe",
@@ -95,7 +95,11 @@ test("createBridgeRequestHandler + grants store + audit ledger: two callers end-
     }), betaResponse);
     assert.equal(betaResponse.statusCode, 200);
 
-    // Cross-caller theft: alpha-caller id, beta's token — must be rejected.
+    // H1 attacker case: alpha-caller id, beta's token — must be rejected.
+    // With caller-attributed tokens the token's signed payload binds callerId,
+    // so even if the client sets X-ResonantOS-Bridge-Caller-Id to "alpha-caller"
+    // and supplies beta's token, the verifier refuses because the token's
+    // embedded callerId is "beta-caller".
     const theftResponse = makeMockResponse();
     await handler(makeMockRequest({
       url: "/providers/credentials/probe",
@@ -107,7 +111,6 @@ test("createBridgeRequestHandler + grants store + audit ledger: two callers end-
     }), theftResponse);
     assert.equal(theftResponse.statusCode, 403);
 
-    // Confirm the JSONL ledger received distinct caller attribution.
     const lines = readFileSync(auditPath, "utf8").trim().split("\n");
     assert.equal(lines.length, 2, "exactly the two authorised requests land in the ledger");
     const callerIds = new Set(lines.map((line) => JSON.parse(line).callerId));
@@ -119,11 +122,12 @@ test("createBridgeRequestHandler + grants store + audit ledger: two callers end-
   }
 });
 
-test("grants store revocation is observable at the bridge", async () => {
+test("grants store revocation is observable at the bridge (H1 tokens)", async () => {
   const tmp = makeTempDir();
   try {
     const auditPath = path.join(tmp, "audit.jsonl");
-    const grants = createBridgeGrantsStore();
+    const tokenKey = createBridgeTokenKey();
+    const grants = createBridgeGrantsStore({ tokenKey });
     const token = grants.mintGrant("alpha-caller", "provider-credential-write");
     grants.revoke("alpha-caller", "provider-credential-write");
     const ledger = createBridgeAuditLedger({ filePath: auditPath });
@@ -131,10 +135,9 @@ test("grants store revocation is observable at the bridge", async () => {
     const handler = createBridgeRequestHandler({
       bridgeToken: "integration-bridge-token",
       bridgeCapabilityTokens: {},
-      // Re-snapshot after revocation — the bridge reads from perCallerGrants
-      // only at request time, so post-revoke snapshots reflect the
-      // up-to-date state.
       perCallerGrants: grants.snapshot(),
+      tokenKey,
+      callerGrantVerifier: grants.verifyCallerGrant.bind(grants),
       auditSink: ledger.sink,
       extensionOrigin: "chrome-extension://integration",
       routes: [

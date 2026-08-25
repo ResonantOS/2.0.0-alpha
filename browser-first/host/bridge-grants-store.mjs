@@ -1,32 +1,46 @@
-// In-memory per-caller grants store for Phase 3.5.
+// In-memory per-caller grants store for Phase 3.5 — hardened (H1).
 //
-// Backs createBridgeRequestHandler's `perCallerGrants` parameter. Each caller
-// is keyed by its callerId (the value the extension sends in
-// X-ResonantOS-Bridge-Caller-Id). Each caller has a map of
-// capability → capability-token. Tokens are minted with createBridgeToken;
-// tokens are opaque to this module — verification happens in
-// isAuthorizedCapabilityRequest by comparing the request header against the
-// looked-up token.
+// Backs the verifier of createBridgeRequestHandler's `perCallerGrants`
+// parameter path. Each caller is keyed by its callerId (an opaque string
+// like "hermes" / "opencode" / "resonant-context" / "resonator"). Each
+// caller has a map of capability → minted caller-attributed token string.
 //
-// Lifetime: per-bridge-process. Lost on restart. Persisted-grants durability
-// is deferred to a follow-up (the C2 resolution recorded option (a) is the
-// in-memory cut).
+// Tokens are produced by bridge-attributed-token.mjs's
+// mintCallerAttributedToken, which signs a JSON payload with HMAC-SHA256
+// using a tokenKey supplied at store creation. The callerId is embedded
+// inside the token itself (not in any header), so a forged caller-id header
+// cannot change attribution.
+//
+// Lifetime: per-bridge-process. tokenKey is regenerated on every bridge
+// restart, which means tokens minted during a previous run become
+// unverifiable on next start. Aligned with the in-memory grants store; see
+// RESOLUTIONS_V0.1.md, C2 option (a).
 //
 // Thread safety: all mutators run inside a single Node event-loop turn; no
 // locks needed.
 
-import { createBridgeToken } from "./bridge-server.mjs";
+import {
+  mintCallerAttributedToken,
+  verifyCallerAttributedToken,
+} from "./bridge-attributed-token.mjs";
 
 function makeCallerBucket() {
   return {
     capabilities: new Map(),
     mintedAt: new Map(),
+    expiresAt: new Map(),
   };
 }
 
-export function createBridgeGrantsStore({ mint = createBridgeToken } = {}) {
-  if (typeof mint !== "function") {
-    throw new Error("createBridgeGrantsStore requires a mint() function.");
+export function createBridgeGrantsStore({
+  tokenKey,
+  expiresInMs = 60 * 60 * 1000,
+} = {}) {
+  if (!Buffer.isBuffer(tokenKey) || tokenKey.length < 16) {
+    throw new Error("createBridgeGrantsStore: tokenKey must be a Buffer of >=16 bytes");
+  }
+  if (!Number.isFinite(expiresInMs) || expiresInMs <= 0) {
+    throw new Error("createBridgeGrantsStore: expiresInMs must be positive");
   }
   const callers = new Map();
 
@@ -39,30 +53,54 @@ export function createBridgeGrantsStore({ mint = createBridgeToken } = {}) {
     return bucket;
   }
 
-  // Mint a fresh capability token for `callerId` on `capability`. Idempotent
-  // only in the sense that calling twice yields two different tokens; the
-  // second call replaces the first (typical for token rotation).
+  // Mint a fresh caller-attributed capability token. The token binds the
+  // callerId inside the signed payload; the caller-supplied header
+  // (X-ResonantOS-Bridge-Caller-Id) is ignored on the per-caller path.
   function mintGrant(callerId, capability) {
-    if (typeof callerId !== "string" || callerId.length === 0) {
-      throw new Error("mintGrant requires a non-empty callerId.");
-    }
-    if (typeof capability !== "string" || capability.length === 0) {
-      throw new Error("mintGrant requires a non-empty capability name.");
-    }
-    const token = mint();
+    const token = mintCallerAttributedToken({
+      callerId,
+      capability,
+      tokenKey,
+      expiresInMs,
+    });
     const bucket = getBucket(callerId);
+    const expiresAt = new Date(Date.now() + expiresInMs).toISOString();
     bucket.capabilities.set(capability, token);
     bucket.mintedAt.set(capability, new Date().toISOString());
+    bucket.expiresAt.set(capability, expiresAt);
     return token;
   }
 
-  // Returns the token for the given (callerId, capability), or null if either
-  // is unknown. This is the lookup bridge-server's isAuthorizedCapabilityRequest
-  // performs internally once we pass `snapshot()` as perCallerGrants.
+  // Returns the issued token for the given (callerId, capability), or null
+  // if either is unknown. Useful for diagnostic logging — the bridge does
+  // not compare this against the request header directly anymore; see
+  // verifyCallerGrant.
   function lookupToken(callerId, capability) {
     const bucket = callers.get(callerId);
     if (!bucket) return null;
     return bucket.capabilities.get(capability) ?? null;
+  }
+
+  // The bridge's primary verifier: verify a caller-supplied token against
+  // The bridge's primary verifier: verify a caller-supplied token against
+  // the tokenKey, restricted to (callerId, capability). The store's own
+  // state is consulted first — a revoked grant is verified as null even if
+  // the supplied token's HMAC still checks out. Returns
+  // { callerId, capability, expiresAt } on success, null on any failure
+  // (revoked, unknown caller, unknown capability, bad signature, expired,
+  // wrong capability, wrong callerId).
+  function verifyCallerGrant(callerId, capability, suppliedToken, { now = Date.now() } = {}) {
+    if (typeof suppliedToken !== "string" || suppliedToken.length === 0) return null;
+    const bucket = callers.get(callerId);
+    if (!bucket) return null;
+    if (!bucket.capabilities.has(capability)) return null;
+    return verifyCallerAttributedToken({
+      token: suppliedToken,
+      tokenKey,
+      requiredCapability: capability,
+      expectedCallerId: callerId,
+      now,
+    });
   }
 
   // Remove a single capability for a caller, or all capabilities if
@@ -73,15 +111,19 @@ export function createBridgeGrantsStore({ mint = createBridgeToken } = {}) {
     if (capability === undefined) {
       bucket.capabilities.clear();
       bucket.mintedAt.clear();
+      bucket.expiresAt.clear();
     } else {
       bucket.capabilities.delete(capability);
       bucket.mintedAt.delete(capability);
+      bucket.expiresAt.delete(capability);
     }
     return true;
   }
 
   // Snapshot suitable for createBridgeRequestHandler's `perCallerGrants`
-  // argument: a plain object { callerId: { capability: token } }.
+  // argument: { callerId: { capability: token } }. With H1's caller-attributed
+  // tokens, this snapshot is still useful as a quick lookup; the bridge's
+  // verifier now uses the tokenKey-bearing verify path instead.
   function snapshot() {
     const out = {};
     for (const [callerId, bucket] of callers.entries()) {
@@ -90,17 +132,33 @@ export function createBridgeGrantsStore({ mint = createBridgeToken } = {}) {
     return out;
   }
 
-  // List the callerIds currently in the store. Useful for tests and for the
-  // launcher's status log.
+  // List the callerIds currently in the store. Useful for the launcher's
+  // boot log and for tests.
   function listCallers() {
     return [...callers.keys()];
+  }
+
+  // List the (callerId, capability) pairs. Useful for the boot log; never
+  // includes token contents.
+  function listGrants() {
+    const out = [];
+    for (const [callerId, bucket] of callers.entries()) {
+      for (const capability of bucket.capabilities.keys()) {
+        out.push({ callerId, capability });
+      }
+    }
+    return out;
   }
 
   return {
     mintGrant,
     lookupToken,
+    verifyCallerGrant,
     revoke,
     snapshot,
     listCallers,
+    listGrants,
+    tokenKey,
+    expiresInMs,
   };
 }

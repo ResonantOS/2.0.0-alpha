@@ -35,7 +35,7 @@ import { createAgentControlHostService } from "./agent-control-host-service.mjs"
 import { buildBridgeCapabilityTokens } from "./bridge-capability-tokens.mjs";
 import { createBridgeGrantsStore } from "./bridge-grants-store.mjs";
 import { createBridgeAuditLedger } from "./bridge-audit-ledger.mjs";
-import { createAddonDelegationHostService } from "./addon-delegation-host-service.mjs";
+import { createBridgeTokenKey } from "./bridge-token-key.mjs";
 import { createAddonDelegationService } from "./addon-delegation-service.mjs";
 import { createOpencodeHttpClient, ensureOpencodeServer } from "./opencode-client.mjs";
 import { createOpencodeSessionHandlers, createOpencodeSessionHostService } from "./opencode-session-host-service.mjs";
@@ -404,10 +404,9 @@ const bridgeCapabilityTokens = buildBridgeCapabilityTokens({ args, mint: createB
 // immediate caller-attribution exercises against the minimal launcher
 // observe distinct audit records. Minting happens here so auditSink sees
 // only authorised requests, not mint events.
+const bridgeTokenKey = createBridgeTokenKey();
 const minimalLauncherCallerGrants = (() => {
-  const grants = createBridgeGrantsStore();
-  // Two capabilities per caller is enough to demonstrate distinguishability
-  // without coupling the launcher to a specific add-on surface in V0.1.
+  const grants = createBridgeGrantsStore({ tokenKey: bridgeTokenKey });
   grants.mintGrant("hermes", "provider-model-invoke");
   grants.mintGrant("hermes", "agent-control-plan");
   grants.mintGrant("opencode", "provider-model-invoke");
@@ -427,6 +426,8 @@ const invokeBridgeRouteForSelfTest = createBridgeRouteSelfTestInvoker({
   capabilityBootstrapToken,
   routes: bridgeRoutes,
   perCallerGrants: minimalLauncherCallerGrants.snapshot(),
+  tokenKey: bridgeTokenKey,
+  callerGrantVerifier: minimalLauncherCallerGrants.verifyCallerGrant.bind(minimalLauncherCallerGrants),
   auditSink: bridgeAudit.sink,
 });
 
@@ -461,9 +462,11 @@ const bridgeInfo = await startBridgeServerWithFallback({
   port: bridgePort,
   bridgeToken,
   bridgeCapabilityTokens,
-  perCallerGrants: minimalLauncherCallerGrants.snapshot(),
-  auditSink: bridgeAudit.sink,
   capabilityBootstrapToken,
+  perCallerGrants: minimalLauncherCallerGrants.snapshot(),
+  tokenKey: bridgeTokenKey,
+  callerGrantVerifier: minimalLauncherCallerGrants.verifyCallerGrant.bind(minimalLauncherCallerGrants),
+  auditSink: bridgeAudit.sink,
   extensionOrigin: resonantExtensionOrigin,
   routes: bridgeRoutes,
   host: getBridgeHost(),
