@@ -45,10 +45,15 @@ function createHarness(overrides = {}) {
     }
   };
   const controller = createTabContextController({
-    addMessage: async (role, content) => events.push(["message", role, content]),
+    addMessage: async (role, content, options) => events.push(options ? ["message", role, content, options] : ["message", role, content]),
     chrome,
     getControlledTabId: () => controlledTabId,
     isReadableBrowserTab: (tab) => /^https?:\/\//i.test(String(tab?.url ?? "")),
+    readTabPage: overrides.readTabPage ?? (async (tab) => ({
+      ok: true,
+      tab,
+      snapshot: { title: tab.title, url: tab.url, text: `Visible text of ${tab.title}` }
+    })),
     refreshTabContext: async () => events.push(["refresh"]),
     renderSitePermissionPanel: async (tab) => events.push(["render-site", tab?.id ?? null]),
     setContextMeter: (value) => events.push(["meter", value]),
@@ -197,4 +202,56 @@ test("tab context controller delegates a single unambiguous mention to the singl
   assert.equal(result?.id, 2);
   assert.equal(harness.getControlledTabId(), 2);
   assert.ok(harness.events.some((event) => event[0] === "message" && /Using @tab context:/.test(event[2])));
+});
+test("tab context controller scopes quoted mentions: captures content, posts provenance chips, consumes once", async () => {
+  const harness = createHarness();
+  const result = await harness.controller.resolveScopedTabContext('what do @"ResonantOS" and @"Manolo Booking" say');
+
+  assert.equal(result.contexts.length, 2);
+  assert.equal(result.contexts[0].tabId, 1);
+  assert.match(result.contexts[0].text, /Visible text of ResonantOS/);
+  assert.equal(result.contexts[1].tabId, 2);
+
+  const summary = harness.events.find((event) => event[0] === "message" && /Scoped to 2 referenced tabs/.test(event[2]));
+  assert.ok(summary, "provenance summary is posted");
+  assert.deepEqual(summary[3]?.chips, [
+    { title: "ResonantOS", url: "https://resonantos.com/" },
+    { title: "Manolo Booking", url: "https://manoloremiddi.com/booking" }
+  ]);
+  // Scoping never activates or binds a tab.
+  assert.equal(harness.getControlledTabId(), null);
+  assert.equal(harness.events.some((event) => event[0] === "tab-update"), false);
+
+  const consumed = harness.controller.consumeScopedTabContexts();
+  assert.equal(consumed.length, 2);
+  assert.deepEqual(harness.controller.consumeScopedTabContexts(), [], "scope is consumed once and cannot leak into a later turn");
+});
+
+test("tab context controller fails loudly on an unresolved quoted reference and never widens scope", async () => {
+  const harness = createHarness();
+  const result = await harness.controller.resolveScopedTabContext('summarize @"Closed Tab"');
+
+  assert.equal(result.contexts.length, 0);
+  assert.ok(harness.events.some((event) =>
+    event[0] === "message" && /"Closed Tab" could not be resolved/.test(event[2]) && /scope was not widened/.test(event[2])
+  ));
+  assert.equal(harness.controller.consumeScopedTabContexts().length, 0);
+});
+
+test("tab context controller keeps unresolved bare mentions silent in the scoped path", async () => {
+  const harness = createHarness();
+  await harness.controller.resolveScopedTabContext('sum @"ResonantOS" and @nothing-matches-this');
+
+  assert.equal(harness.events.some((event) => event[0] === "message" && /nothing-matches-this/.test(String(event[2]))), false);
+  assert.equal(harness.controller.consumeScopedTabContexts().length, 1);
+});
+
+test("tab context controller skips unreadable captures with a visible reason", async () => {
+  const harness = createHarness({
+    readTabPage: async (tab) => ({ ok: false, tab, error: "receiving end does not exist" })
+  });
+  const result = await harness.controller.resolveScopedTabContext('sum @"ResonantOS"');
+
+  assert.equal(result.contexts.length, 0);
+  assert.ok(harness.events.some((event) => event[0] === "message" && /could not read "ResonantOS"/.test(event[2])));
 });

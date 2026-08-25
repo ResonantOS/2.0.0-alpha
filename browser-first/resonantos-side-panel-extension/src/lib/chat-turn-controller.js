@@ -87,6 +87,22 @@ export function pageContextForSnapshot(snapshot) {
   ].filter(Boolean).join("\n\n");
 }
 
+// Budgeted, sanitized per-tab context blocks for explicitly scoped requests
+// (#252). The total budget is split evenly across referenced tabs (with a
+// floor) so N referenced tabs cannot crowd out conversation history; every
+// block carries title/URL provenance.
+export function tabContextsForScopedTabs(contexts, { totalBudget = 12000 } = {}) {
+  const list = Array.isArray(contexts) ? contexts.filter((context) => context && (context.text || context.title)) : [];
+  if (!list.length) return [];
+  const perTab = Math.max(1500, Math.floor(totalBudget / list.length));
+  return list.map((context) => ({
+    tabId: context.tabId ?? null,
+    title: safeContextText(context.title, 160),
+    url: safeContextUrl(context.url),
+    text: safeContextText(context.text, perTab)
+  }));
+}
+
 export function runtimeContextForAttachments(attachments) {
   return attachments.length
     ? `Composer attachments:\n${attachments.map((item) => `- ${item.name}: ${item.content ?? item.summary}`).join("\n")}`
@@ -107,7 +123,8 @@ export function createChatTurnController({
   chatSessionStore,
   clearActivitySoon,
   clearAttachments,
-  getLastSnapshot,
+    consumeScopedTabContexts = () => [],
+getLastSnapshot,
   getModel,
   getSurface = () => "side-panel",
   getSystemPrompt = () => "",
@@ -120,7 +137,7 @@ export function createChatTurnController({
   const bridge = () => (typeof getBridgeRequest === "function" ? getBridgeRequest() : bridgeRequest);
   let activeAbortController = null;
 
-  async function bridgeChat({ signal } = {}) {
+  async function bridgeChat({ signal, tabContexts = [] } = {}) {
     const attachments = chatSessionStore.getAttachments();
     return bridge()("/augmentor/chat", {
       method: "POST",
@@ -132,6 +149,7 @@ export function createChatTurnController({
         thinkingDepth: getThinkingDepth(),
         systemPrompt: getSystemPrompt(),
         pageContext: pageContextForSnapshot(getLastSnapshot()),
+        tabContexts,
         runtimeContext: runtimeContextForAttachments(attachments),
         messages: providerMessagesFromHistory(chatSessionStore.getMessages(), maxHistoryMessages)
       }
@@ -145,10 +163,14 @@ export function createChatTurnController({
     setStatus("Thinking");
     setActivity("thinking", "Thinking", "Calling the selected model route");
     try {
-      const result = await bridgeChat({ signal: activeAbortController.signal });
+      const tabContexts = tabContextsForScopedTabs(consumeScopedTabContexts());
+      const result = await bridgeChat({ signal: activeAbortController.signal, tabContexts });
       setStatus("Writing");
       setActivity("writing", "Writing response", result.model || getModel());
-      await addMessage("assistant", result.reply, { usage: result.usage ?? { providerId: result.providerId, model: result.model } });
+      await addMessage("assistant", result.reply, {
+        usage: result.usage ?? { providerId: result.providerId, model: result.model },
+        chips: tabContexts.map(({ title, url }) => ({ title, url }))
+      });
       // Make a route fallback visible: the preferred model was unavailable and a
       // different one answered. Surfaced as a system notice with recovery guidance
       // rather than silently swapping the user's route.

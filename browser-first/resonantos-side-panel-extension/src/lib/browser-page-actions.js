@@ -264,6 +264,26 @@ export function createBrowserPageActions(deps) {
     return responses.find((response) => response?.error) ?? { ok: false, error: "No frame handled this browser action." };
   }
 
+  const CONTENT_SCRIPT_FILES = [
+    "src/lib/resonant-context.js",
+    "src/lib/context-plugins.js",
+    "src/lib/resonator.js",
+    "src/lib/control-overlay.js",
+    "src/lib/content-field-safety.js",
+    "src/lib/content-inline-actions.js",
+    "src/lib/content-control-refs.js",
+    "src/content.js"
+  ];
+
+  async function injectContentScripts(tabId) {
+    if (!chrome.scripting?.executeScript) return false;
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: CONTENT_SCRIPT_FILES
+    }).catch(() => undefined);
+    return true;
+  }
+
   async function readSpecificTabPage(tab, { includeBlocked = false } = {}) {
     if (!tab?.id || !isReadableBrowserTab(tab)) {
       return { ok: false, tab, error: "Tab is not a readable web page." };
@@ -272,10 +292,19 @@ export function createBrowserPageActions(deps) {
     if (siteMode === "blocked" && !includeBlocked) {
       return { ok: false, tab, error: `Assistant is blocked on ${siteKeyForUrl(tab.url)}.` };
     }
-    const response = await sendContentActionToFrames(tab.id, {
+    const message = {
       channel: "resonantos.browser_first.content",
       type: "read_page"
-    });
+    };
+    let response = await sendContentActionToFrames(tab.id, message);
+    // A background tab may never have received the content script (e.g. it was
+    // open before the extension loaded). Inject and retry once — same recovery
+    // sendContentAction uses for the active tab.
+    if (!response?.ok && /receiving end|connection|No readable frame returned page context/i.test(response?.error ?? "")) {
+      if (await injectContentScripts(tab.id)) {
+        response = await sendContentActionToFrames(tab.id, message);
+      }
+    }
     return response?.ok
       ? { ok: true, tab, snapshot: response.snapshot }
       : { ok: false, tab, error: response?.error ?? "No readable page context returned." };
@@ -303,21 +332,7 @@ export function createBrowserPageActions(deps) {
     if (firstAttempt?.ok || !shouldInjectContentScript) {
       return firstAttempt;
     }
-    if (chrome.scripting?.executeScript) {
-      await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        files: [
-          "src/lib/resonant-context.js",
-          "src/lib/context-plugins.js",
-          "src/lib/resonator.js",
-          "src/lib/control-overlay.js",
-          "src/lib/content-field-safety.js",
-          "src/lib/content-inline-actions.js",
-          "src/lib/content-control-refs.js",
-          "src/content.js"
-        ]
-      }).catch(() => undefined);
-    } else {
+    if (!await injectContentScripts(tab.id)) {
       await chrome.tabs.reload(tab.id);
       await sleep(1200);
     }
@@ -1040,6 +1055,7 @@ export function createBrowserPageActions(deps) {
     openBrowserUrl,
     prepareDaoWorkflowGuidance,
     readActivePage,
+    readSpecificTabPage,
     refreshTabContext,
     runResonatorCommand,
     scrollActivePage,

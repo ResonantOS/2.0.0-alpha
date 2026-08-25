@@ -5,7 +5,8 @@ import {
   createChatTurnController,
   pageContextForSnapshot,
   providerMessagesFromHistory,
-  runtimeContextForAttachments
+  runtimeContextForAttachments,
+  tabContextsForScopedTabs
 } from "../resonantos-side-panel-extension/src/lib/chat-turn-controller.js";
 
 test("chat turn controller builds compact page and runtime context", () => {
@@ -87,7 +88,7 @@ test("chat turn controller filters provider messages to recent user/assistant tu
   ]);
 });
 
-function createHarness({ fail = false, failureError = new Error("provider down"), systemPrompt = "" } = {}) {
+function createHarness({ fail = false, failureError = new Error("provider down"), systemPrompt = "", scopedContexts = [] } = {}) {
   const events = [];
   const attachments = [{ name: "notes.md", content: "notes" }];
   const messages = [
@@ -107,6 +108,7 @@ function createHarness({ fail = false, failureError = new Error("provider down")
     },
     clearActivitySoon: () => events.push(["clearActivitySoon"]),
     clearAttachments: async () => events.push(["clearAttachments"]),
+    consumeScopedTabContexts: () => scopedContexts,
     getLastSnapshot: () => ({ title: "Page", url: "https://example.com/", text: "Visible" }),
     getModel: () => "MiniMax-M3",
     getSystemPrompt: () => systemPrompt,
@@ -167,4 +169,57 @@ test("chat turn controller replaces raw fetch failures with bridge setup guidanc
   assert.match(message, /ResonantOS bridge is unreachable/);
   assert.match(message, /Settings > Bridge Target/);
   assert.doesNotMatch(message, /Failed to fetch/);
+});
+test("tabContextsForScopedTabs budgets and sanitizes per-tab context blocks", () => {
+  assert.deepEqual(tabContextsForScopedTabs(null), []);
+  assert.deepEqual(tabContextsForScopedTabs([]), []);
+  assert.deepEqual(tabContextsForScopedTabs([null, {}]), []);
+
+  const contexts = tabContextsForScopedTabs([
+    { tabId: 1, title: "Alpha", url: "https://alpha.test/", text: "alpha text" },
+    { tabId: 2, title: "Beta", url: "https://beta.test/", text: "B".repeat(9000) }
+  ]);
+  assert.equal(contexts.length, 2);
+  assert.equal(contexts[0].text, "alpha text");
+  assert.equal(contexts[1].text.length, 6000, "12000-char budget is split evenly across referenced tabs");
+
+  const single = tabContextsForScopedTabs([{ tabId: 1, title: "Alpha", url: "https://alpha.test/", text: "A".repeat(20000) }]);
+  assert.equal(single[0].text.length, 12000, "a single referenced tab gets the whole budget");
+});
+
+test("chat turn controller attaches tab contexts and provenance chips for scoped requests", async () => {
+  const skLive = ["sk", "live", "TABS", "ECRET"].join("-");
+  const harness = createHarness({
+    scopedContexts: [
+      { tabId: 1, mention: "Alpha News", title: "Alpha News", url: "https://alpha.test/", text: "Alpha visible text" },
+      { tabId: 2, mention: "Beta Report", title: "Beta Report", url: `https://beta.test/?token=${skLive}`, text: "Beta visible text" }
+    ]
+  });
+
+  await harness.controller.runChatTurn();
+
+  const bridgeEvent = harness.events.find((event) => event[0] === "bridge");
+  const tabContexts = bridgeEvent[2].body.tabContexts;
+  assert.equal(tabContexts.length, 2);
+  assert.equal(tabContexts[0].tabId, 1);
+  assert.equal(tabContexts[0].title, "Alpha News");
+  assert.match(tabContexts[0].text, /Alpha visible text/);
+  assert.doesNotMatch(tabContexts[1].url, /token=/, "referenced tab URLs are stripped of query secrets");
+
+  const assistant = harness.events.find((event) => event[0] === "message" && event[1] === "assistant");
+  assert.deepEqual(assistant[3]?.chips, [
+    { title: "Alpha News", url: "https://alpha.test/" },
+    { title: "Beta Report", url: "https://beta.test/" }
+  ], "assistant reply carries the request-side provenance chips");
+});
+
+test("chat turn controller sends no tab contexts for unscoped requests", async () => {
+  const harness = createHarness();
+
+  await harness.controller.runChatTurn();
+
+  const bridgeEvent = harness.events.find((event) => event[0] === "bridge");
+  assert.deepEqual(bridgeEvent[2].body.tabContexts, []);
+  const assistant = harness.events.find((event) => event[0] === "message" && event[1] === "assistant");
+  assert.deepEqual(assistant[3]?.chips, []);
 });

@@ -13,6 +13,7 @@ function createHarness({ resumableControlRun = false } = {}) {
     allowControlPreflightOnceForTaskClass: handler("allow-control-once"),
     bindMentionedTab: handler("bind"),
     resolveComparisonContext: handler("compare"),
+    resolveScopedTabContext: handler("scoped"),
     cancelBrowserJob: handler("cancel"),
     approveControlPreflight: handler("approve-control"),
     continueBrowserJob: handler("continue"),
@@ -339,4 +340,32 @@ test("side panel command router treats email-handled prose as not having @tab me
   await harness.router.respondToCommand("email bob@acme.com, sue@corp.io re: plan");
   assert.equal(harness.calls.some((call) => call[0] === "compare"), false);
   assert.ok(harness.calls.some((call) => call[0] === "bind"));
+});
+test("side panel command router routes quoted mentions without a compare verb to explicit tab scoping", async () => {
+  const harness = createHarness();
+
+  // @"…" is the deliberate form the composer typeahead inserts (#252): quoted
+  // mentions scope the request to those tabs even with no compare verb.
+  await harness.router.respondToCommand('what do @"Alpha News" and @"Beta Report" say');
+  assert.ok(harness.calls.some((call) => call[0] === "scoped" && call[1] === 'what do @"Alpha News" and @"Beta Report" say'));
+  assert.equal(harness.calls.some((call) => call[0] === "compare"), false);
+  assert.equal(harness.calls.some((call) => call[0] === "bind" && call[1] === 'what do @"Alpha News" and @"Beta Report" say'), false);
+});
+
+test("side panel command router routes a single quoted mention to scoping, not the bare bind", async () => {
+  const harness = createHarness();
+
+  await harness.router.respondToCommand('summarize @"Alpha News"');
+  assert.ok(harness.calls.some((call) => call[0] === "scoped" && call[1] === 'summarize @"Alpha News"'));
+  assert.equal(harness.calls.some((call) => call[0] === "bind" && call[1] === 'summarize @"Alpha News"'), false);
+});
+
+test("side panel command router keeps the compare verb winning over quoted mentions", async () => {
+  const harness = createHarness();
+
+  // Explicit comparison intent keeps the #220 path exactly; scoping is the
+  // no-verb path only.
+  await harness.router.respondToCommand('compare @"Alpha News" and @"Beta Report"');
+  assert.ok(harness.calls.some((call) => call[0] === "compare" && call[1] === 'compare @"Alpha News" and @"Beta Report"'));
+  assert.equal(harness.calls.some((call) => call[0] === "scoped"), false);
 });
