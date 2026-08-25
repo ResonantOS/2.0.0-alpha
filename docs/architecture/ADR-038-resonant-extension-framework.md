@@ -748,7 +748,13 @@ Three items are recorded as deferred and not addressed in V0.1:
   separate"). V0.1 keeps the current all-public surface; V1 introduces
   the visibility-tier classification in the SDK spec and runtime.
   The classification table itself is a follow-on design call requiring
-  review of each capability's blast radius.
+  review of each capability's blast radius. **Deferred record landed:**
+  `docs/design/resonant-extension-framework/CAPABILITY_SEPARATION_V1.md`
+  captures the proposed V1 shape (parallel `PublicCapability` and
+  `InternalCapability` enums; SDK-owned mapping at the bridge
+  boundary; V1 manifest validation rules; ADR pointer) so a future
+  ADR can pick up the work without rediscovery. No V0.1 contract
+  changes.
 
 ### 12.4 Summary
 

@@ -50,6 +50,9 @@ to `capabilityRiskClass` and `releaseTrustTier` respectively.
   (C10).
 - [`SIGNING_ARCHITECTURE_V0.1.md`](SIGNING_ARCHITECTURE_V0.1.md) — the
   canonical ed25519 signing envelope and verification behavior (C11).
+- [`CAPABILITY_SEPARATION_V1.md`](CAPABILITY_SEPARATION_V1.md) — the
+  deferred V1 design record for splitting `PublicCapability` from
+  `InternalCapability` (no V0.1 contract change).
 
 ## Submission Pipeline
 

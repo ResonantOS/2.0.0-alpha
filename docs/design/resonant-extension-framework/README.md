@@ -18,6 +18,7 @@ This package contains a proposed architecture and implementation specification f
 - `SDK_REVIEWER_AGENT_V0.1.md` — Augmentor/Logician agent that reviews add-on submissions and drafts certification decisions
 - `REGISTRY_METADATA_SCHEMA_V0.1.md` — C10 approved-release index schema (canonical JSON shape, verifier behavior, rotation)
 - `SIGNING_ARCHITECTURE_V0.1.md` — C11 ed25519 signing envelope, key ids, and verification behavior
+- `CAPABILITY_SEPARATION_V1.md` — deferred V1 design for splitting Public vs Internal capabilities (no V0.1 contract change)
 
 ## Staging
 
