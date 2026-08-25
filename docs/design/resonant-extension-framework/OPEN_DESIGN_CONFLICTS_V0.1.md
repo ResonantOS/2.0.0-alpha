@@ -507,3 +507,67 @@ placed, or should it precede Phase 2?
 2. Conflicts missing from this list.
 3. A revised priority order, if different.
 4. Any conflict where the honest answer is "do not build this in V0.1."
+
+---
+
+## Resolutions (2026-08-24, fork author)
+
+Decisions on the six conflicts the roadmap depends on. Recorded for traceable carry into the ADR-038 draft.
+
+### C1 — Trust tiers: option (a) Map only + a per-(addonId, version) approval record
+
+**Decision:** (a) for vocabulary; layer per-version approval records on top so the "Verified vs Approved" distinction survives.
+
+Keep the existing `AddOnProvenanceTier`, `ManifestVerificationState`, and `AddOnRegistryReviewState` enums. Map REF tiers onto them per the table in C1. Add a per-(addonId, version) approval record stored alongside the add-on in the registry: presence of a record with status `approved` and `packageDigest` equal to the package's digest is what distinguishes Resonant Approved from Verified. This honours the version-specific-approval invariant from the proposal without forking the domain model.
+
+`bundled-core` stays as a separate trust root (signed by bundling, not signature) and is documented as such. `enterprise-signed` remains a future value; no work in V0.1.
+
+### C2 — Capability tokens: option (a) Per-caller grant store at the dispatcher, as Phase 3.5
+
+**Decision:** (a) for V0.1; record (b) as the target for any UI-embedded third-party code.
+
+Extend `isAuthorizedCapabilityRequest` (`browser-first/host/bridge-server.mjs`) from a static route→token map to a grant store keyed `(callerId, capability, scope)`. Mint per-add-on tokens at grant time using the existing requested/granted/denied record shape. Stop passing the bootstrap-derived credential set into iframes; iframes receive only the per-caller, scope-bounded token.
+
+Phase 3.5 is hard-pinned *before* Phase 4 (host install + lifecycle) and *before* any M0 reference test that exercises enforcement (Tests B and C). Phase 3.5 is the gate.
+
+### C3 — Manifest systems: option (c) Scope-exclude browser-first from REF, with an explicit boundary
+
+**Decision:** (c) for V0.1; document the boundary so it cannot be routed around.
+
+`browser-first/addons/*` are declared *extension-internal modules* — first-party code shipped inside the Chrome extension — and are out of REF scope. The boundary is the privilege boundary, not the directory boundary: anything reachable from extension content scripts without going through the Phase 3.5 bridge-caller-token machinery is first-party and may be unreachable to third-party add-ons. This is the only option that does not require migrating the existing `resonant-context` and `resonator` add-ons in V0.1.
+
+The boundary clause to put in ADR-038: *third-party add-on code cannot invoke any bridge route that is not gated by a caller-attributed token minted under Phase 3.5; the browser-first executable content scripts remain first-party because they are not in the add-on loader path.*
+
+### C4 — Executable surface: option (a) V0.1 is declarative-only
+
+**Decision:** (a). M0 Test A is deferred past V0.1.
+
+V0.1 add-ons are manifest + host-mediated tools + local services; no shipped third-party code runs in the shell. M0 Test A (Hello Resonant with a UI surface) is removed from the M0 milestone and renamed to "post-V0.1 sandbox surface" in the roadmap. Options (b) and (c) — extending the iframe model or building a sandboxed module runner — both depend on a Phase 3.5 that doesn't exist yet. Building C4 before C2 would require rolling back the iframe-credential containment from C2.
+
+The V0.1 cut is honest: it delivers the external ecosystem's *enforcement* half (trust tiers, capability model, lifecycle, certification, signing, registry) without its *code-running* half.
+
+### C5 — Capability mapping: option (a) Single mapping table owned by the SDK package
+
+**Decision:** (a). The mapping table is an SDK export, consumed by both validation and the bridge.
+
+Ship the manifest-capability → bridge-route-capability mapping as a versioned data file inside the public SDK package. Validation warns when a requested manifest capability maps to nothing. The bridge authorises at route granularity using the same data. This makes the mapping the developer-facing contract instead of an unwritten assumption.
+
+Migration order to avoid breaking the 16 bundled manifests in `public/addons/`: introduce the mapping in Phase 1 alongside the SDK extraction; back-fill existing manifests in Phase 0's inventory deliverable; deprecation window starts after M0.
+
+### C13 — Sequencing: revised order adopted
+
+**Decision:** Insert Phase 3.5 *between* Phase 3 and Phase 4 (not before Phase 2; the SDK extraction and packaging work does not depend on it). Re-order M0 tests: **Test B (Local Files) → Test C (Local AI) → Test A (UI surface, deferred past V0.1)**.
+
+Phase 3.5 gates Tests B and C; Test A drops out of V0.1 entirely (see C4). Keeping Phase 3.5 after Phase 2 lets `.rpkg` packaging and the developer CLI land in parallel with the security work.
+
+### Deferred (no decision needed today)
+
+- **C6** container format: chosen git-tarball-with-deterministic-permissions unless the security pipeline vetoes; defer until Phase 2 starts.
+- **C7** compatibility evaluation: install + launch (option b); small, fold into Phase 1.
+- **C8** sideload enablement: option (a), enabled + hardened; security-pipeline review is its own gate before any Tier 1 exists.
+- **C9** naming: option (a) — rename in REF only (`releaseTrustTier`, `capabilityRiskClass`); leave `agents[].trustTier` alone.
+- **C10** registry deferral: option (a) — inherit the deferral; metadata format and signed approved-release index now, live service later per ADR-023/024.
+- **C11** signing architecture: native `crypto.sign` / `crypto.verify` ed25519 (no subprocess); first-party bundles remain trust-by-bundling in V0.1; key custody decision deferred to security pipeline.
+- **C12** package location: `packages/addon-sdk/` from the start (option a); pay the registration cost once.
+
+These are recorded so the ADR-038 draft carries them as "acknowledged, deferred to Phase N" rather than rediscovery work.

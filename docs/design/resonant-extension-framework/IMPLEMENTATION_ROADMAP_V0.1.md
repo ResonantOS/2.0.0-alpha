@@ -102,9 +102,22 @@ A package can be built, inspected, hashed, and rejected safely before installati
 
 ### Exit Gate
 
-A new reference add-on can be created and packaged without editing ResonantOS source.
 
-## Phase 4 — Host Install and Lifecycle
+## Phase 3.5 — Caller-Attributed Capability Tokens
+
+**Gate phase.** Hard-pinned before Phase 4 and before any M0 reference test that exercises enforcement (Tests B and C). Closes C2.
+
+### Deliverables
+
+- extend `isAuthorizedCapabilityRequest` (`browser-first/host/bridge-server.mjs`) from a static route→token map to a grant store keyed `(callerId, capability, scope)`;
+- mint per-add-on tokens at grant time using the existing requested/granted/denied record shape;
+- remove bootstrap-derived credential set from `lib/addon-iframe.js`; iframes receive only the per-caller, scope-bounded token;
+- audit-trail hook that records callerId on every authorised request.
+
+### Exit Gate
+
+
+## Phase 4 — Host Install and Lifecycle (gated on 3.5)
 
 ### Deliverables
 
@@ -122,6 +135,7 @@ A new reference add-on can be created and packaged without editing ResonantOS so
 The Hello Resonant reference add-on completes the full lifecycle.
 
 ## Phase 5 — Certification Harness
+
 
 ### Deliverables
 
@@ -189,9 +203,13 @@ Do not add marketplace commerce in this phase.
 
 ## M0 Reference Tests
 
-### Test A — Hello Resonant
+**Order:** Test B → Test C → Test A.
 
-Must prove:
+Test A is deferred past V0.1 (see C4 resolution: V0.1 is declarative-only; no third-party code runs in the shell). Tests B and C are gated on Phase 3.5.
+
+### Test A — Hello Resonant (deferred past V0.1)
+
+Must prove, *when revisited after the post-V0.1 sandbox surface ships*:
 
 - external scaffold;
 - manifest validation;
@@ -202,6 +220,7 @@ Must prove:
 - UI surface;
 - disable;
 - remove.
+
 
 ### Test B — Local Files
 

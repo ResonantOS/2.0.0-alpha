@@ -11,6 +11,7 @@ This package contains a proposed architecture and implementation specification f
 - `ADDON_DEVELOPER_WORKFLOW_AND_CLI_V0.1.md` — developer workflow and CLI
 - `IMPLEMENTATION_ROADMAP_V0.1.md` — phased implementation plan
 - `OPEN_DESIGN_CONFLICTS_V0.1.md` — 13 unresolved design conflicts, prepared for external review
+- `RESOLUTIONS_V0.1.md` — fork-author decisions on the conflicts, carried forward into ADR-038
 - `EXTERNAL_REVIEW_FEEDBACK_V0.1.md` — first external review of this package, with verification record and disposition
 - `SDK_REVIEWER_AGENT_V0.1.md` — Augmentor/Logician agent that reviews add-on submissions and drafts certification decisions
 
