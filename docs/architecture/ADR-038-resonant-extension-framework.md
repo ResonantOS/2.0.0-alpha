@@ -629,6 +629,12 @@ to source documents, then the deferrals that survive V0.1.
   rotation: a release removed from the index is no longer installable;
   existing installations follow the revocation flow in
   `ADDON_PACKAGE_AND_MANIFEST_SPEC_V0.1.md`.
+  **The schema is landed in docs:**
+  `docs/design/resonant-extension-framework/REGISTRY_METADATA_SCHEMA_V0.1.md`
+  defines the canonical JSON shape, the verifier behavior, the rotation
+  rules, and the compatibility guarantees. When the SDK package is
+  extracted (Phase 1), this becomes `packages/addon-sdk/registry-metadata.schema.json`
+  plus a typed loader.
 - **C11 signing architecture** — **V0.1:** native
   `crypto.sign` / `crypto.verify` ed25519 via Node’s built-in
   `crypto` module. Publisher signature format:
