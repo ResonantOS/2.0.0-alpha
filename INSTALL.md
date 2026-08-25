@@ -17,6 +17,13 @@ node --version
 npm --version
 ```
 
+If you use nvm, the repository's `.nvmrc` will pin the right version
+automatically when you `cd` into the directory:
+
+```bash
+nvm use    # reads .nvmrc -> 22.13.0
+```
+
 ## Install Dependencies
 
 For a fresh clone, start from the active development branch:
@@ -98,6 +105,66 @@ For a basic manual check, confirm that the bridge terminal reports
 connection error. Do not paste the generated config or full diagnostics into a
 public issue.
 
+## Test The DeepSeek Harness Addon (addon SDK testing)
+
+The `addon.deepseek-harness` addon (ADR-040 §9) is the canonical
+external-agent-runtime exemplar. You can exercise its full boundary contract
+**without installing Cordis or setting any provider key** by using the
+in-repo Cordis stub. Four scripts cover this:
+
+| Script | What it proves |
+| --- | --- |
+| `npm run deepseek-harness:smoke` | The manifest is conformant to the SDK boundary contract (F1-F10 all pass against the mock host). |
+| `npm run test:external-agent-runtime` | The bridge-side dispatcher resolves the manifest, validates per-caller grants via Phase 3.5, builds an OpenAI-compatible request, posts to a Cordis endpoint, and records the audit ledger. |
+| `npm run test:phase35` | The Phase 3.5 kernel (caller-attributed grants, HMAC tokens, audit ledger, denied audit) works as expected. |
+| `npm run cordis-stub:start` | Boots the in-repo Cordis stub HTTP server at `http://127.0.0.1:3080`. |
+
+Run them in order:
+
+```bash
+# 1. Verify the manifest conforms to the SDK boundary contract
+npm run deepseek-harness:smoke
+
+# 2. Verify the dispatcher round-trips through a Cordis endpoint
+#    (boots the stub on a random port for each test; no manual setup needed)
+npm run test:external-agent-runtime
+
+# 3. Verify the Phase 3.5 kernel
+npm run test:phase35
+
+# 4. Optionally, boot the stub standalone to poke it by hand
+npm run cordis-stub:start &
+sleep 1
+curl -s http://127.0.0.1:3080/health
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"model":"deepseek-chat","messages":[{"role":"user","content":"hello"}]}' \
+  http://127.0.0.1:3080/api/v1/chat/completions
+kill %1
+```
+
+### Talking to real DeepSeek (optional, requires Cordis)
+
+The above proves the boundary contract end-to-end against a stub. To
+exercise a **real** DeepSeek Harness via the dispatcher:
+
+1. Install the Cordis-kernel runtime and bind it to `127.0.0.1:3080`
+   (the manifest's `service.entrypoint`). Cordis is not packaged by
+   this repo; install instructions live with Cordis upstream.
+2. Export `DEEPSEEK_API_KEY` in the shell that runs Cordis. The
+   dispatcher does **not** read this key directly; Cordis does. See
+   `.env.example` for the full list of optional env vars.
+3. Boot the bridge with Phase 3.5 enabled:
+   ```bash
+   npm run browser-first:bridge
+   ```
+4. Send a delegated reasoning request through the dispatcher. The
+   request shape is documented in ADR-040 §4 and exercised by
+   `browser-first/test/external-agent-runtime-dispatcher.test.mjs`.
+
+If you do not yet have Cordis installed, the dispatcher still
+round-trips, but it talks to the in-repo stub at `127.0.0.1:3080`,
+not real DeepSeek. That is the "tests pass on a fresh clone" baseline.
+
 ## Troubleshooting
 
 - **The extension cannot reach the bridge:** confirm the bridge is still
@@ -111,6 +178,17 @@ public issue.
 - **Credentials appeared in Git output:** stop, remove them from the working
   tree without publishing them, rotate exposed credentials, and follow
   [SECURITY.md](SECURITY.md).
+- **`deepseek-harness:smoke` reports "F10: FAIL (code=fixture-mismatch)":**
+  this is expected when the manifest declares
+  `providerRequirements.allowExperimentalAuth: true`. The smoke script
+  treats F10 as N/A in that case. If you see F10 fail on a manifest
+  that does NOT declare experimental auth, that is a real failure —
+  the manifest is misconfigured for that scenario.
+- **`test:external-agent-runtime` reports "upstream-unreachable":**
+  the stub has shut down before the dispatcher could reach it. The
+  test boots its own ephemeral stub; if you see this in CI, check
+  that `node:http.createServer().listen(0)` is permitted by your
+  network policy.
 
 Installation complete. Continue with the contribution workflow in
 [CONTRIBUTING.md](CONTRIBUTING.md) or use the
