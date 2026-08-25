@@ -661,6 +661,25 @@ to source documents, then the deferrals that survive V0.1.
   package. Pay the registration cost once (root `package.json`,
   CI install/audit blocks, release scope audit, docs links, module
   ownership) rather than migrating it incrementally.
+  **Cutover landed (soft, fork-only):** `packages/addon-sdk/` now
+  contains the canonical 5 source files (`contracts.ts`,
+  `validation.ts`, `registry.ts`, `surface-routing.ts`, `index.ts`),
+  plus `package.json` and `README.md` documenting the intended public
+  surface. `src/sdk/addons/*.ts` are re-export shims pointing at the
+  new package. `tsconfig.json` `include` extends to `packages/addon-sdk/src`.
+  All 429 vitest tests pass through the shims unchanged. The package
+  is **not yet published** to npm; the manifest is a documentation
+  artifact recording the intended public boundary for the future
+  Phase 1 extraction. `packages/addon-sdk-testing/` lands in a
+  follow-on (B4.5 in the §B engineering walk).
+
+See also:
+  [ADR-040: Provider Fabric Boundary for External Agent Runtimes](ADR-040-provider-fabric-boundary-external-agent-runtimes.md)
+  — applies the REF runtime boundary to third-party agent runtimes
+  (DeepSeek Harness, Agent Zero); the boundary rules (no raw credentials,
+  no provider selection, host-mediated tool surface, scoped
+  filesystem/shell, capability-gated mediation) apply to any add-on
+  declaring both `providers` and `agent-delegation` capabilities.
 - **`personal-local` provenance tier** — **V0.1:** option (a) — `personal-local`
   is a display label over `sideloaded-unverified`. The runtime contract
   (`AddOnProvenanceTier`) is unchanged. The chip UI shows a distinct

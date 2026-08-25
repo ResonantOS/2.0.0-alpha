@@ -1,33 +1,7 @@
-// Intent citation: docs/architecture/ADR-018-addon-sdk-v0.md
+// Re-export shim \u2014 public SDK surface lives at packages/addon-sdk/.
+// This shim keeps existing internal imports working during the soft cutover.
+// See ADR-038 \u00a712.1 C12 row "Public SDK External Boundary" and ADR-040 \u00a73.
+//
+// Source of truth: packages/addon-sdk/src/index.ts
 
-export type {
-  AddOnAugmentorSkill,
-  AddOnArtifactReference,
-  AddOnConnectorDefinition,
-  AddOnHookDefinition,
-  AddOnEngineerSetupRunbook,
-  AddOnRegistryEntry,
-  AddOnRegistryReviewState,
-  AddOnRegistrySource,
-  AddOnManifest,
-  AddOnScriptDefinition,
-  AddOnSkillDefinition,
-  AddOnToolDefinition,
-  AddOnWorkflowBoundary,
-  Capability,
-  CapabilityGrant,
-} from "../../core/contracts";
-export {
-  ADDON_CAPABILITIES,
-  ADDON_SDK_VERSION,
-  ADDON_SERVICE_PROTOCOLS,
-  type AddOnManifestSource,
-  type AddOnManifestValidationResult,
-  type AddOnSdkManifest,
-  type AddOnValidationIssue,
-} from "./contracts";
-export { createAddOnRegistryEntry, createAddOnRegistrySnapshot } from "./registry";
-export type { AddOnRegistryBuildInput, AddOnRegistryEntryOptions, AddOnRegistrySnapshot } from "./registry";
-export { createAddOnSurfaceDockRoutes } from "./surface-routing";
-export type { AddOnSurfaceDockRoute } from "./surface-routing";
-export { assertValidAddOnManifest, validateAddOnManifest } from "./validation";
+export * from "../../../packages/addon-sdk/src/index";

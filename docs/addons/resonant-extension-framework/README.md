@@ -20,6 +20,9 @@ This package contains a proposed architecture and implementation specification f
 - [`SIGNING_ARCHITECTURE_V0.1.md`](SIGNING_ARCHITECTURE_V0.1.md) — C11 ed25519 signing envelope, key ids, and verification behavior
 - [`CAPABILITY_SEPARATION_V1.md`](CAPABILITY_SEPARATION_V1.md) — deferred V1 design for splitting Public vs Internal capabilities (no V0.1 contract change)
 
+The package's source code lives at [`packages/addon-sdk/`](../../../packages/addon-sdk/README.md)
+(fork-only soft cutover per ADR-038 §12.1 C12).
+
 ## Staging
 
 This package was staged at `docs/design/resonant-extension-framework/`
