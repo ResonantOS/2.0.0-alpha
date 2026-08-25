@@ -210,6 +210,23 @@ from `RESOLUTIONS_V0.1.md`:
   capability-mapping table operational; signing + registry metadata in
   place per Phase 6/8. Only then is Test A reopened.
 
+- **Resonant-OS vs Third-Party SDK capability separation** —
+  **deferred to V1.** The 13 coarse manifest capabilities (plus the two
+  `channel.*` additions from item 2) are currently all exposed as
+  public SDK surface. Resonant-OS devs see internal capabilities (likely
+  candidates: `shell`, `browser-control`, `device-integration`,
+  `network`) that third-party authors should not be able to request.
+  Capability classification: each capability gets a visibility tier
+  (Resonant-OS-internal, curated-approved-only, public). The
+  third-party SDK rejects capability names above its visibility tier at
+  `validateAddOnManifest` time, per chatgpt
+  `ADDON_SDK_CODE_REVIEW_FEEDBACK_2026-08-24.md` Finding 6
+  ("SDK validation, approval, and runtime authority must stay
+  separate"). V0.1 keeps the current all-public surface; V1 introduces
+  the visibility-tier classification in the SDK spec and runtime.
+  The classification table itself is a follow-on design call requiring
+  review of each capability's blast radius.
+
 - **Public SDK external boundary** — **V0.1 fork-only, soft cutover
   (alias):** create `packages/addon-sdk/` (and `packages/addon-sdk-testing/`)
   as the public SDK contract boundary. `src/sdk/addons/` becomes a
