@@ -120,3 +120,12 @@ the exact commands and live Chrome checks performed.
 Use the [ADR Index](architecture/README.md). An ADR's decision status and its
 applicability to the current Alpha are separate facts; historical and deferred
 records do not redefine the runtime boundary.
+
+## Review Packets
+
+Dated review packets snapshot the state of work submitted to upstream
+reviewers. Each packet links to the live PR and records the commits,
+validation results, and review asks at the time of submission.
+
+- [2026-08-25: REF V0.1 + ADR-040 + packages/addon-sdk/ soft cutover](REVIEW_PACKET_2026-08-25.md) — PR #327
+
