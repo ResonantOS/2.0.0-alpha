@@ -54,6 +54,14 @@ const MODE_RUNNERS: Readonly<Record<FailureModeId, FailureModeRunner>> = {
   F10: runF10ExperimentalRoute,
 };
 
+/**
+ * All ten §7 mode ids, in their canonical order. Useful for callers
+ * that want to drive the full grid (e.g. cross-addon test suites).
+ */
+export const FAILURE_MODE_IDS: readonly FailureModeId[] = [
+  "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10",
+];
+
 export interface RunOptions {
   /** Optional pre-built mock host. Useful for sharing state across modes in one test. */
   host?: MockHost;
