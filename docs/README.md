@@ -45,6 +45,12 @@ then read the [Alpha Runtime Boundary](architecture/ALPHA_RUNTIME_BOUNDARY.md)
 and [Module Ownership](architecture/MODULE-OWNERSHIP.md). Preserve bridge-token,
 capability-token, loopback, secret, and human-only action boundaries.
 
+For caller-attributed capability tokens, audit emission, redaction, and
+rotation — the Phase 3.5 runtime hardening landed on branch
+`spike/caller-attributed-tokens` — see
+[REF Hardening Notes V0.1](security-pipeline/REF_HARDENING_NOTES_V0.1.md)
+in this branch.
+
 ## Change Provider Routing
 
 Read [ADR-005: Provider Fabric Routing](architecture/ADR-005-provider-fabric-routing.md),
