@@ -210,6 +210,21 @@ from `RESOLUTIONS_V0.1.md`:
   capability-mapping table operational; signing + registry metadata in
   place per Phase 6/8. Only then is Test A reopened.
 
+- **Public SDK external boundary** — **V0.1 fork-only, soft cutover
+  (alias):** create `packages/addon-sdk/` (and `packages/addon-sdk-testing/`)
+  as the public SDK contract boundary. `src/sdk/addons/` becomes a
+  thin re-export shim pointing at the new package. Single source of
+  truth immediately; consumers don't notice the change.
+  **Gated on:** Phase 0 inventory commit landing first — the inventory
+  identifies which `src/core/contracts.ts` imports block external
+  packaging, so the cutover is informed rather than blind.
+  **V1:** upstream rebase is its own problem; `UPSTREAM_DELTA.md`
+  records the fork-only status. The cutover is prerequisite to M0
+  (external fixture project compiles and validates while importing only
+  the SDK package) and to Phase 4 (host install + lifecycle), per the
+  chatgpt `ADDON_SDK_CODE_REVIEW_FEEDBACK_2026-08-24.md` Findings 9
+  and 10.
+
 ## 13. Fork Strategy and Hygiene
 
 **pending.** From `EXTERNAL_REVIEW_FEEDBACK_V0.1.md` "Fork Strategy
