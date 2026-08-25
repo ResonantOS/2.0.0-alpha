@@ -9,21 +9,16 @@
 //
 // Per ADR-040 §8, `recursive-mas.json` pre-dates and satisfies this
 // ADR. This test guards that claim. Per ADR-040 §9,
-// `deepseek-harness-resonant.json` is the canonical new external
+// `addon.deepseek-harness.json` is the canonical new external
 // runtime exemplar; this test guards that claim too.
 //
-// What this test does NOT do:
-//   - It does not start any real DeepSeek / RecursiveMAS process.
-//   - It does not exercise the real ResonantOS host.
-//
-// What this test DOES:
-//   - Validates the manifest against `validateAddOnManifest`.
-//   - Confirms the manifest declares the §3 conjunction.
-//   - For every failure mode F1–F10, drives the manifest through
-//     `runAddOnFailureMode` and asserts the §7 expected deny code +
-//     audit reason. A passing test means the manifest is conformant
-//     for the purpose of Phase 3.5 boundary mediation; the real-host
-//     integration test is a separate concern.
+// F10 is special: it asserts the deny path for an *undeclared*
+// experimental route. If the manifest declares
+// `providerRequirements.allowExperimentalAuth: true`, F10 is
+// inapplicable and we treat it as a `fixture-mismatch` (which is what
+// the runner returns) rather than a failure. Addons that declare
+// experimental auth should pass F10 trivially; this test ensures the
+// runner doesn't crash.
 
 import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
@@ -39,7 +34,6 @@ import type { AddOnManifest } from "../../../src/core/contracts.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-// packages/addon-sdk-testing/test/ -> ../../.. -> worktree root
 const repoRoot = resolve(__dirname, "..", "..", "..");
 
 interface CrossAddonCase {
@@ -49,7 +43,7 @@ interface CrossAddonCase {
 
 const cases: readonly CrossAddonCase[] = [
   {
-    path: "examples/addons/deepseek-harness-resonant.json",
+    path: "examples/addons/addon.deepseek-harness.json",
     id: "addon.deepseek-harness",
   },
   {
@@ -66,13 +60,7 @@ const loadManifest = (relPath: string): AddOnManifest => {
 const declaredCapabilities = (manifest: AddOnManifest): Set<string> =>
   new Set((manifest.requestedCapabilities ?? []).map((g) => g.capability));
 
-// The F-runner takes `ExternalAgentRuntimeManifest`, which is
-// `AddOnManifest & { callerId: string }`. Each cross-addon manifest is a
-// pure `AddOnManifest`; attach a per-manifest caller id derived from the
-// addon id so the audit record's `callerId` field is distinguishable.
-const withCallerId = (
-  manifest: AddOnManifest,
-): ExternalAgentRuntimeManifest => {
+const withCallerId = (manifest: AddOnManifest): ExternalAgentRuntimeManifest => {
   const callerId = `caller.${manifest.id}`;
   return { ...manifest, callerId };
 };
@@ -83,6 +71,8 @@ describe("cross-addon: every shipped external-agent-runtime manifest passes F1�
       const manifest = loadManifest(relPath);
       const declared = declaredCapabilities(manifest);
       const annotated = withCallerId(manifest);
+      const declaresExperimentalAuth =
+        manifest.providerRequirements?.allowExperimentalAuth === true;
 
       it("loads from disk", () => {
         expect(manifest.id).toBe(id);
@@ -113,6 +103,12 @@ describe("cross-addon: every shipped external-agent-runtime manifest passes F1�
           expect(report.expected).toBeDefined();
           expect(typeof report.expected.code).toBe("string");
           expect(typeof report.actual.code).toBe("string");
+          // F10 is the only mode whose pass condition is conditional
+          // on `allowExperimentalAuth`. For addons that declare it,
+          // F10 returns fixture-mismatch and that's acceptable here.
+          if (modeId === "F10" && declaresExperimentalAuth) {
+            expect(report.actual.code).toBe("fixture-mismatch");
+          }
         });
       }
     });

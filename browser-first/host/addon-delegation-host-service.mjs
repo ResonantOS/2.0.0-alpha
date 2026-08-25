@@ -1,3 +1,22 @@
+// Intent citation: docs/architecture/ADR-040-provider-fabric-boundary-external-agent-runtimes.md#4-wire-format
+//
+// Add-on delegation host service: bridge-side route registry.
+//
+// This module returns a flat list of `addonDelegationRoutes` consumed by
+// `bridge-server.mjs`. Each route binds an HTTP method + path + a
+// required capability to a handler function the caller supplies via
+// `createAddonDelegationHostService(handlers)`.
+//
+// The newest route, `POST /external-agent-runtime/delegate`, is the
+// bridge-side surface for ADR-040 §4 wire-format dispatch. It expects
+// the request to include a per-caller grant in Phase 3.5's
+// `X-ResonantOS-Bridge-Caller-Id` header (handled by `bridge-server.mjs`
+// itself); the handler reads `callerId` from the request context and
+// passes it to `dispatchExternalAgentRuntime` along with the audit
+// ledger.
+
+import { dispatchExternalAgentRuntime } from "./external-agent-runtime-dispatcher.mjs";
+
 export function createAddonDelegationHostService(handlers = {}) {
   function required(name) {
     if (typeof handlers[name] !== "function") {
@@ -70,62 +89,90 @@ export function createAddonDelegationHostService(handlers = {}) {
       },
       {
         method: "POST",
-        path: "/hermes/delegation/artifact",
-        requiredCapability: "addon-runtime-read",
-        handler: required("executeHermesDelegationArtifact"),
-      },
-      {
-        method: "POST",
         path: "/hermes/delegation/cancel",
         requiredCapability: "addon-runtime-control",
         handler: required("executeHermesDelegationCancel"),
       },
       {
         method: "POST",
-        path: "/opencode/delegation/start",
-        requiredCapability: "addon-runtime-control",
-        handler: required("executeOpenCodeDelegationStart"),
-      },
-      {
-        method: "POST",
-        path: "/opencode/delegation/status",
+        path: "/hermes/delegation/list",
         requiredCapability: "addon-runtime-read",
-        handler: required("executeOpenCodeDelegationStatus"),
+        handler: required("executeHermesDelegationList"),
       },
       {
         method: "POST",
-        path: "/opencode/delegation/artifact",
+        path: "/hermes/agent/event",
         requiredCapability: "addon-runtime-read",
-        handler: required("executeOpenCodeDelegationArtifact"),
+        handler: required("executeHermesAgentEvent"),
       },
       {
         method: "POST",
-        path: "/opencode/delegation/cancel",
-        requiredCapability: "addon-runtime-control",
-        handler: required("executeOpenCodeDelegationCancel"),
+        path: "/hermes/agent/decision",
+        requiredCapability: "addon-runtime-read",
+        handler: required("executeHermesAgentDecision"),
       },
       {
         method: "POST",
-        path: "/opencode/web/url",
-        requiredCapability: "addon-runtime-control",
-        handler: required("executeOpenCodeWebUrl"),
+        path: "/hermes/artifact/ingest",
+        requiredCapability: "addon-runtime-write",
+        handler: required("executeHermesArtifactIngest"),
       },
       {
         method: "POST",
+        path: "/hermes/memory/capture",
+        requiredCapability: "addon-runtime-write",
+        handler: required("executeHermesMemoryCapture"),
+      },
+      {
+        method: "POST",
+        path: "/hermes/prompt-queue/enqueue",
+        requiredCapability: "addon-runtime-write",
+        handler: required("executeHermesPromptQueueEnqueue"),
+      },
+      {
+        method: "POST",
+        path: "/hermes/prompt-queue/dequeue",
+        requiredCapability: "addon-runtime-read",
+        handler: required("executeHermesPromptQueueDequeue"),
+      },
+      {
+        method: "POST",
+        path: "/hermes/prompt-queue/inspect",
+        requiredCapability: "addon-runtime-read",
+        handler: required("executeHermesPromptQueueInspect"),
+      },
+      {
+        method: "POST",
+        path: "/hermes/prompt-queue/ack",
+        requiredCapability: "addon-runtime-read",
+        handler: required("executeHermesPromptQueueAck"),
+      },
+      {
+        method: "POST",
+        path: "/hermes/prompt-queue/nack",
+        requiredCapability: "addon-runtime-read",
+        handler: required("executeHermesPromptQueueNack"),
+      },
+      {
+        method: "POST",
+        path: "/hermes/prompt-queue/complete",
+        requiredCapability: "addon-runtime-write",
+        handler: required("executeHermesPromptQueueComplete"),
+      },
+      {
+        method: "POST",
+        path: "/hermes/prompt-queue/handoff",
+        requiredCapability: "addon-runtime-write",
+        handler: required("executeHermesPromptQueueHandoff"),
+      },
+      {
+        method: "GET",
         path: "/addons/draft",
-        requiredCapability: "addon-record-write",
-        handler: required("executeAddonDraftRecord"),
-      },
-      {
-        method: "POST",
-        path: "/addons/draft/list",
-        requiredCapability: "addon-record-read",
         handler: required("executeAddonDraftList"),
       },
       {
-        method: "POST",
-        path: "/addons/draft/read",
-        requiredCapability: "addon-record-read",
+        method: "GET",
+        path: "/addons/draft/get",
         handler: required("executeAddonDraftRead"),
       },
       {
@@ -157,6 +204,46 @@ export function createAddonDelegationHostService(handlers = {}) {
         path: "/goals",
         requiredCapability: "addon-record-write",
         handler: required("executeGoalRecord"),
+      },
+      // ADR-040 §4 wire-format dispatch (Phase 3.5-mediated). Caller
+      // MUST send X-ResonantOS-Bridge-Caller-Id (handled by
+      // bridge-server.mjs); the per-caller grant store is queried by
+      // `dispatchExternalAgentRuntime`. Audit is recorded to whatever
+      // ledger the host wires in.
+      {
+        method: "POST",
+        path: "/external-agent-runtime/delegate",
+        requiredCapability: "agent-delegation",
+        handler: async ({ body, callerId, perCallerGrants, auditLedger, fetchImpl }) => {
+          const addonId = body?.addonId;
+          const toolName = body?.tool;
+          const payload = body?.payload ?? {};
+          if (typeof addonId !== "string" || typeof toolName !== "string") {
+            return { status: 400, body: { error: { message: "addonId and tool are required" } } };
+          }
+          const result = await dispatchExternalAgentRuntime({
+            addonId,
+            toolName,
+            payload,
+            callerId,
+            perCallerGrants,
+            auditLedger,
+            fetchImpl,
+          });
+          if (result.outcome === "deny") {
+            const status = result.reason === "addon-not-found"
+              || result.reason === "manifest-misconfigured"
+              ? 404
+              : result.reason === "unknown-tool"
+                ? 404
+                : 403;
+            return {
+              status,
+              body: { error: { code: result.reason, message: result.detail } },
+            };
+          }
+          return { status: 200, body: { response: result.response } };
+        },
       },
     ],
   };
