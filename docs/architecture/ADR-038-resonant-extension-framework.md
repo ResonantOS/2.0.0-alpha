@@ -170,16 +170,49 @@ from `RESOLUTIONS_V0.1.md`:
   `tests/fixtures/`. The security pipeline validates `.rpkg` packages
   separately; the hygiene rule is not the security boundary.
 - **C7 compatibility evaluation** — install + launch; fold into Phase 1.
-- **C8 sideload enablement** — enable + harden; security-pipeline gate
-  before Tier 1 exists.
-- **C9 naming** — rename in REF only (`releaseTrustTier`,
-  `capabilityRiskClass`); leave `agents[].trustTier` alone.
-- **C10 registry deferral** — metadata format and signed approved-release
-  index now, live service later per ADR-023/024.
-- **C11 signing architecture** — native `crypto.sign` / `crypto.verify`
-  ed25519; first-party bundles remain trust-by-bundling in V0.1; key
-  custody deferred to security pipeline.
-- **C12 package location** — `packages/addon-sdk/` from the start.
+- **C8 sideload enablement** — **V0.1:** enable + harden; security-pipeline
+  review is its own gate before Tier 1 (Developer/Sideloaded) add-ons
+  can be installed. The runtime has `hasCommandHost()` hardcoded
+  `false` today; the enable step unblocks the path through the
+  host-mediated capability broker (per `RESOLUTIONS_V0.1.md` C2 / Phase
+  3.5 hardening, already landed). Per `ADDON_PERSONAL_PLUGIN_GOVERNANCE.md`,
+  the personal/local tier follows the same enablement gate with the
+  user-facing warning covering the auto-unplug safety policy (deferred to
+  ADR-039).
+- **C9 naming** — **V0.1:** rename in REF only — `releaseTrustTier`
+  (releases) and `capabilityRiskClass` (capabilities) replace any
+  parallel vocabulary in REF-produced artifacts. The existing
+  `agents[].trustTier` field stays (it describes agent personas, not
+  add-on release trust); renaming it is out of REF scope. The rename
+  touches `RESONANT_ADDON_SDK_SPEC_V0.1.md` and
+  `ADDON_CERTIFICATION_AND_SIGNING_V0.1.md` vocabulary.
+- **C10 registry deferral** — **V0.1:** metadata format and signed
+  approved-release index ship now as a versioned JSON document in the
+  public SDK package; the live registry service is deferred per
+  ADR-023/024. The approved-release index carries per-(`addonId`,
+  `version`) records: `packageDigest`, `manifestDigest`,
+  `publisherKeyId`, `reviewId`, `signerKeyId`, `signedAt`. Index
+  rotation: a release removed from the index is no longer installable;
+  existing installations follow the revocation flow in
+  `ADDON_PACKAGE_AND_MANIFEST_SPEC_V0.1.md`.
+- **C11 signing architecture** — **V0.1:** native
+  `crypto.sign` / `crypto.verify` ed25519 via Node’s built-in
+  `crypto` module. Publisher signature format:
+  `{ algorithm: ed25519, keyId, addonId, version, packageSha256,
+  signedAt, reviewId }` (mirrors the envelope in
+  `ADDON_PACKAGE_AND_MANIFEST_SPEC_V0.1.md`, with `algorithm` set to
+  ed25519). First-party bundles remain trust-by-bundling in V0.1
+  (`bundled-core` provenance tier; per-version approval records not
+  required for bundled). Key custody (offline root, rotating
+  release-signing key, publisher keys, revocation metadata) is
+  deferred to the security pipeline review.
+- **C12 package location** — **V0.1:** `packages/addon-sdk/` (and
+  `packages/addon-sdk-testing/`) from the start, per the §12 Public
+  SDK External Boundary resolution. Single source of truth immediately;
+  `src/sdk/addons/` becomes a re-export shim pointing at the new
+  package. Pay the registration cost once (root `package.json`,
+  CI install/audit blocks, release scope audit, docs links, module
+  ownership) rather than migrating it incrementally.
 - **`personal-local` provenance tier** — **V0.1:** option (a) — `personal-local`
   is a display label over `sideloaded-unverified`. The runtime contract
   (`AddOnProvenanceTier`) is unchanged. The chip UI shows a distinct
