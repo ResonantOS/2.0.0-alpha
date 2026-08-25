@@ -257,6 +257,98 @@ test("bridge distinguishes two callers with overlapping grants (M0 Test B kernel
   assert.ok(callerIds.has("beta-caller"));
 });
 
+// Hook-up A: the wired request handler (createBridgeRequestHandler) honours
+// perCallerGrants and auditSink when supplied, and rejects/forwards correctly
+// when they're absent. Production stays dormant until run-bridge-minimal (or
+// any future launcher) passes these — see hook-up B.
+test("createBridgeRequestHandler threads perCallerGrants and auditSink end-to-end", async () => {
+  const { createBridgeRequestHandler } = await import("../host/bridge-server.mjs");
+  const bridgeToken = "wired-bridge-token";
+  const perCallerGrants = {
+    "alpha-caller": { "provider-credential-write": "alpha-cred-token" },
+    "beta-caller": { "provider-credential-write": "beta-cred-token" },
+  };
+  const auditRecords = [];
+  const auditSink = (record) => { auditRecords.push(record); };
+  const routes = [
+    {
+      method: "GET",
+      path: "/providers/credentials/probe",
+      requiredCapability: "provider-credential-write",
+      handler: async () => ({ probed: true }),
+    },
+  ];
+  const handler = createBridgeRequestHandler({
+    bridgeToken,
+    bridgeCapabilityTokens: {},
+    perCallerGrants,
+    auditSink,
+    extensionOrigin: "chrome-extension://test",
+    routes,
+  });
+  function makeRequest(headers, body) {
+    return {
+    method: "GET",
+    url: "/providers/credentials/probe",
+    headers,
+    };
+  }
+
+  function makeResponse() {
+    const headers = {};
+    const response = {
+      statusCode: 0,
+      body: null,
+      _headers: headers,
+      writeHead(status, headerObj) {
+        response.statusCode = status;
+        Object.assign(headers, headerObj);
+      },
+      setHeader(name, value) { headers[name.toLowerCase()] = value; },
+      getHeader(name) { return headers[name.toLowerCase()]; },
+      end(payload) {
+        response.body = payload ? JSON.parse(payload) : null;
+      },
+    };
+    return response;
+  }
+
+  // alpha-caller with its token — must succeed.
+  const alphaResponse = makeResponse();
+  await handler(makeRequest({
+    "X-ResonantOS-Bridge-Token": bridgeToken,
+    "X-ResonantOS-Bridge-Capability-Token": "alpha-cred-token",
+    "X-ResonantOS-Bridge-Caller-Id": "alpha-caller",
+  }), alphaResponse);
+  assert.equal(alphaResponse.statusCode, 200, "alpha-caller request must 200");
+  assert.equal(alphaResponse.body.probed, true);
+
+  // beta-caller with its token — must succeed and record distinct caller.
+  const betaResponse = makeResponse();
+  await handler(makeRequest({
+    "X-ResonantOS-Bridge-Token": bridgeToken,
+    "X-ResonantOS-Bridge-Capability-Token": "beta-cred-token",
+    "X-ResonantOS-Bridge-Caller-Id": "beta-caller",
+  }), betaResponse);
+  assert.equal(betaResponse.statusCode, 200);
+
+  // Wrong token, valid caller header — must be rejected.
+  const wrongResponse = makeResponse();
+  await handler(makeRequest({
+    "X-ResonantOS-Bridge-Token": bridgeToken,
+    "X-ResonantOS-Bridge-Capability-Token": "rogue-token",
+    "X-ResonantOS-Bridge-Caller-Id": "alpha-caller",
+  }), wrongResponse);
+  assert.equal(wrongResponse.statusCode, 403);
+
+  const successes = auditRecords.filter((record) => record.status === 200);
+  assert.equal(successes.length, 2);
+  const callerIds = new Set(successes.map((record) => record.callerId));
+  assert.equal(callerIds.size, 2, "audit must record distinct callerIds");
+  assert.ok(callerIds.has("alpha-caller"));
+  assert.ok(callerIds.has("beta-caller"));
+});
+
 test("bridge client sends scoped capability headers without localhost binding", async () => {
   const bridgeToken = "general-test-token";
   const capabilityToken = "credential-write-test-token";
