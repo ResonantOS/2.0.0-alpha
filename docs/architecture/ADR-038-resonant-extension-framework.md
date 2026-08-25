@@ -215,9 +215,15 @@ from `RESOLUTIONS_V0.1.md`:
   as the public SDK contract boundary. `src/sdk/addons/` becomes a
   thin re-export shim pointing at the new package. Single source of
   truth immediately; consumers don't notice the change.
-  **Gated on:** Phase 0 inventory commit landing first — the inventory
-  identifies which `src/core/contracts.ts` imports block external
-  packaging, so the cutover is informed rather than blind.
+  **Inventory complete (Phase 0 deliverable):** 5 SDK source files
+  move (`src/sdk/addons/{contracts,validation,registry,surface-routing,index}.ts`),
+  4 SDK test files move with them. `src/core/contracts.ts` re-exports
+  the SDK types so runtime code (chat, browser-tools, delegation,
+  logician, memory-provider, policies, runtime) keeps importing from
+  `src/core/contracts.ts` without churn. `src/modules/` consumers
+  (chip UI, settings, etc.) also unchanged — they only need the
+  add-on types, which continue to flow through `src/core/contracts.ts`.
+  No runtime blast radius; the cutover is mechanical.
   **V1:** upstream rebase is its own problem; `UPSTREAM_DELTA.md`
   records the fork-only status. The cutover is prerequisite to M0
   (external fixture project compiles and validates while importing only
