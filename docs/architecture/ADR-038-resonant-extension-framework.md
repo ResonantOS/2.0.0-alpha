@@ -163,7 +163,12 @@ mock-host contract from `addon-sdk-testing`.
 mirroring the "Deferred without further decision needed now" section
 from `RESOLUTIONS_V0.1.md`:
 
-- **C6 container format** — git-tarball with deterministic permissions.
+- **C6 container format** — **V0.1:** `.rpkg` is the official package
+  format per `ADDON_PACKAGE_AND_MANIFEST_SPEC_V0.1.md`. The
+  `scripts/check-repo-hygiene.mjs` archive-zip rule is amended to add
+  `.rpkg` to the allowlist (one-line change). Test fixtures live under
+  `tests/fixtures/`. The security pipeline validates `.rpkg` packages
+  separately; the hygiene rule is not the security boundary.
 - **C7 compatibility evaluation** — install + launch; fold into Phase 1.
 - **C8 sideload enablement** — enable + harden; security-pipeline gate
   before Tier 1 exists.
