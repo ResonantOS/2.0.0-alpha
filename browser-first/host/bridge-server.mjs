@@ -9,11 +9,12 @@ const bridgeTokenHeader = "x-resonantos-bridge-token";
 export const bridgeTokenHeaderName = "X-ResonantOS-Bridge-Token";
 const bridgeCapabilityHeader = "x-resonantos-bridge-capability-token";
 export const bridgeCapabilityHeaderName = "X-ResonantOS-Bridge-Capability-Token";
+const bridgeCallerIdHeader = "x-resonantos-bridge-caller-id";
+const bridgeCallerIdHeaderName = "X-ResonantOS-Bridge-Caller-Id";
 const bridgeCapabilityBootstrapHeader = "x-resonantos-capability-bootstrap-token";
 const bridgeCapabilityBootstrapHeaderName = "X-ResonantOS-Capability-Bootstrap-Token";
 
 // ResonantOS bridge network configuration
-// (read by startBridgeServer / writeBridgeConfig)
 //
 // RESONANTOS_BRIDGE_HOST   - bind address (default 127.0.0.1; use 0.0.0.0 to
 //                            expose to LAN/Tailscale, or a specific IP)
@@ -1002,10 +1003,38 @@ export async function writeBridgeConfig({
   return configPath;
 }
 
-function isAuthorizedCapabilityRequest(request, bridgeCapabilityTokens, requiredCapability) {
+// Returns the callerId when the caller is attributable via perCallerGrants,
+// otherwise returns the static-bridge fallback sentinel so the extension's
+// existing call path remains an explicit choice rather than a default.
+function callerIdFromHeaders(request, perCallerGrants) {
+  const headerValue = request.headers[bridgeCallerIdHeader];
+  if (typeof headerValue !== "string" || headerValue.length === 0) {
+    return null;
+  }
+  // Only recognise the header when a perCallerGrants store is configured;
+  // otherwise treat it as if absent so the static-token path keeps working.
+  if (!perCallerGrants || typeof perCallerGrants !== "object") {
+    return null;
+  }
+  return headerValue;
+}
+
+function isAuthorizedCapabilityRequest(request, bridgeCapabilityTokens, requiredCapability, perCallerGrants) {
   if (!requiredCapability) {
     return false;
   }
+  const callerId = callerIdFromHeaders(request, perCallerGrants);
+  // Per-caller path: when callerId is present and a grant exists for it,
+  // the capability token is the one keyed under that caller. Absence of
+  // any caller or any matching grant is treated as no token at all.
+  if (callerId && perCallerGrants && Object.prototype.hasOwnProperty.call(perCallerGrants, callerId)) {
+    const callerGrants = perCallerGrants[callerId];
+    const expectedToken = callerGrants && callerGrants[requiredCapability];
+    return Boolean(expectedToken) && constantTimeEqual(request.headers[bridgeCapabilityHeader], expectedToken);
+  }
+  // Static-token fallback for callers that pre-date per-caller attribution
+  // (the extension's own session, self-test paths, and any caller that does
+  // not send the X-ResonantOS-Bridge-Caller-Id header).
   const expectedToken = bridgeCapabilityTokens?.[requiredCapability];
   return Boolean(expectedToken) && constantTimeEqual(request.headers[bridgeCapabilityHeader], expectedToken);
 }
@@ -1046,6 +1075,8 @@ export async function evaluateBridgeRequestForSelfTest({
   body = {},
   bridgeToken,
   bridgeCapabilityTokens = {},
+  perCallerGrants,
+  auditSink,
   capabilityBootstrapToken,
   routes = [],
 } = {}) {
@@ -1074,11 +1105,26 @@ export async function evaluateBridgeRequestForSelfTest({
         payload: { ok: false, error: "Bridge route declares no capability; refused by default." },
       };
     }
-    if (route.requiredCapability && !isAuthorizedCapabilityRequest(request, bridgeCapabilityTokens, route.requiredCapability)) {
+    if (route.requiredCapability && !isAuthorizedCapabilityRequest(request, bridgeCapabilityTokens, route.requiredCapability, perCallerGrants)) {
       return { status: 403, payload: { ok: false, error: `Bridge route requires ${route.requiredCapability} capability.` } };
     }
+    const headerCaller = callerIdFromHeaders(request, perCallerGrants);
+    const callerId = headerCaller && perCallerGrants && Object.prototype.hasOwnProperty.call(perCallerGrants, headerCaller)
+      ? headerCaller
+      : "__extension__";
     const payload = method === "POST" ? body : {};
     const result = await route.handler(payload, request);
+    if (typeof auditSink === "function") {
+      auditSink({
+        callerId,
+        capability: route.requiredCapability ?? null,
+        route: route.path,
+        method,
+        url,
+        status: 200,
+        timestamp: new Date().toISOString(),
+      });
+    }
     return { status: 200, payload: { ok: true, ...result } };
   } catch (error) {
     return { status: 500, payload: { ok: false, error: error instanceof Error ? error.message : String(error) } };

@@ -171,6 +171,91 @@ test("bridge refuses undeclared routes by default while preserving declared capa
   assert.equal(bootstrapOnly.status, 200);
   assert.equal(bootstrapOnly.payload.bootstrapped, true);
 });
+// Kernel of M0 Test B (Local Files): two distinct callers, overlapping but
+// distinct grants on the same capability, must be observably distinguishable
+// to the bridge — both at the route handler and in the audit log.
+test("bridge distinguishes two callers with overlapping grants (M0 Test B kernel)", async () => {
+  const bridgeToken = "general-test-token";
+  const alphaToken = "alpha-credential-token";
+  const betaToken = "beta-credential-token";
+  const routes = [
+    {
+      method: "POST",
+      path: "/providers/credentials",
+      requiredCapability: "provider-credential-write",
+      handler: async () => ({ saved: true }),
+    },
+  ];
+  const perCallerGrants = {
+    "alpha-caller": { "provider-credential-write": alphaToken },
+    "beta-caller": { "provider-credential-write": betaToken },
+  };
+  const auditRecords = [];
+  const auditSink = (record) => { auditRecords.push(record); };
+
+  // Beta caller requests write — they have the capability, but the audit log
+  // must record their caller identity, not just the capability.
+  const betaRequest = await evaluateBridgeRequestForSelfTest({
+    method: "POST",
+    url: "/providers/credentials",
+    headers: {
+      "X-ResonantOS-Bridge-Token": bridgeToken,
+      "X-ResonantOS-Bridge-Capability-Token": betaToken,
+      "X-ResonantOS-Bridge-Caller-Id": "beta-caller",
+    },
+    body: { providerId: "shared-minimax" },
+    bridgeToken,
+    bridgeCapabilityTokens: {},
+    perCallerGrants,
+    auditSink,
+    routes,
+  });
+  assert.equal(betaRequest.status, 200, "beta-caller has grant, must succeed");
+
+  // Alpha caller requests write — different grant, different token.
+  const alphaRequest = await evaluateBridgeRequestForSelfTest({
+    method: "POST",
+    url: "/providers/credentials",
+    headers: {
+      "X-ResonantOS-Bridge-Token": bridgeToken,
+      "X-ResonantOS-Bridge-Capability-Token": alphaToken,
+      "X-ResonantOS-Bridge-Caller-Id": "alpha-caller",
+    },
+    body: { providerId: "shared-minimax" },
+    bridgeToken,
+    bridgeCapabilityTokens: {},
+    perCallerGrants,
+    auditSink,
+    routes,
+  });
+  assert.equal(alphaRequest.status, 200, "alpha-caller has grant, must succeed");
+
+  // A wrong-but-same-shape token for a caller with no grant must be rejected
+  // — this is the kernel of M0 Test B's "denied unauthorized action".
+  const unattributedRequest = await evaluateBridgeRequestForSelfTest({
+    method: "POST",
+    url: "/providers/credentials",
+    headers: {
+      "X-ResonantOS-Bridge-Token": bridgeToken,
+      "X-ResonantOS-Bridge-Capability-Token": "rogue-token",
+    },
+    body: { providerId: "shared-minimax" },
+    bridgeToken,
+    bridgeCapabilityTokens: {},
+    perCallerGrants,
+    auditSink,
+    routes,
+  });
+  assert.equal(unattributedRequest.status, 403, "rogue token must be rejected");
+
+  // Audit log must carry distinct callerId for each authorised request.
+  const successful = auditRecords.filter((record) => record.status === 200);
+  assert.equal(successful.length, 2, "two successful requests recorded");
+  const callerIds = new Set(successful.map((record) => record.callerId));
+  assert.equal(callerIds.size, 2, "callerIds must be distinguishable in audit");
+  assert.ok(callerIds.has("alpha-caller"));
+  assert.ok(callerIds.has("beta-caller"));
+});
 
 test("bridge client sends scoped capability headers without localhost binding", async () => {
   const bridgeToken = "general-test-token";
