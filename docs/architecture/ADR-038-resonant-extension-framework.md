@@ -193,13 +193,15 @@ from `RESOLUTIONS_V0.1.md`:
   add-on) is **yet to be determined**. Deferred to a follow-on ADR,
   candidate **ADR-039**.
 
-- **Communication-channel capability refinement** — deferred. The current
-  `communication-channel → notifications` mapping is too coarse for
-  third-party maturity. Subdivision into `channel.send`, `channel.receive`,
-  `channel.account-read`, `channel.account-write` is the chatgpt
-  `ADDON_SDK_CODE_REVIEW_FEEDBACK_2026-08-24.md` Finding 3
-  recommendation. Not introduced in V0.1; waits on the capability-mapping
-  table (C5) build-out.
+- **Communication-channel capability refinement** — **V0.1:** add
+  `channel.send` and `channel.account-write` as new manifest
+  capabilities alongside the existing `notifications.send`. The chatgpt
+  `ADDON_SDK_CODE_REVIEW_FEEDBACK_2026-08-24.md` Finding 3 subdivisions
+  into `channel.receive` and `channel.account-read` are deferred to
+  V1. `notifications.send` remains for V0.1 backward-compat. The SDK
+  spec records the migration in
+  `RESONANT_ADDON_SDK_SPEC_V0.1.md` Capability Model section. The C5
+  mapping table picks up the new entries in the same file.
 
 - **Post-V0.1 sandbox surface** — deferred. M0 Test A (Hello Resonant
   with a UI surface) was deferred past V0.1 by `RESOLUTIONS_V0.1.md` C4.
