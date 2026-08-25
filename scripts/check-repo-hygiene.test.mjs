@@ -61,6 +61,24 @@ test("classifyPath rejects generated, local-state, archive, and environment path
   }
 });
 
+test("classifyPath accepts the official .rpkg package format", () => {
+  // .rpkg is the official Resonant Extension Framework package format
+  // (per docs/design/resonant-extension-framework/ADDON_PACKAGE_AND_MANIFEST_SPEC_V0.1.md
+  // and ADR-038 §12.1 C6). Hygiene rule distinguishes official format
+  // from ad-hoc ZIP archives; only .rpkg passes.
+  const accepted = [
+    "packages/example-notes/example-notes-1.0.0.rpkg",
+    "tests/fixtures/example-1.0.0.rpkg",
+    "PUBLIC/example.rpkg",
+  ];
+  for (const path of accepted) {
+    const violation = classifyPath(path, fileStat());
+    assert.equal(violation, null, `expected ${path} to pass hygiene`);
+  }
+  // A .zip alongside an .rpkg in the same directory is still rejected.
+  assert.ok(classifyPath("release/example.zip", fileStat()));
+});
+
 test("classifyPath rejects browser profile databases and recognized profile roots", () => {
   for (const name of ["Cookies", "cookies", "LOGIN DATA", "History", "Web Data", "Local State"]) {
     assert.equal(classifyPath(`fixtures/${name}`, fileStat())?.rule, "browser-profile");
