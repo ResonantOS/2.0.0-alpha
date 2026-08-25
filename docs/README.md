@@ -72,10 +72,15 @@ review, promotion, or trusted-memory writes.
 ## Change An Add-On
 
 Read [ADR-006: Add-On Runtime SDK](architecture/ADR-006-addon-runtime-sdk.md),
+[ADR-018: Add-on SDK V0](architecture/ADR-018-addon-sdk-v0.md), and
+[ADR-038: Resonant Extension Framework](architecture/ADR-038-resonant-extension-framework.md) (pending — extends ADR-006/018 toward public/third-party add-ons), and
 [ADR-023: Add-On Repository And Registry](architecture/ADR-023-addon-repository-registry-model.md),
 [Add-On Lifecycle Uninstall Design](addons/addon-lifecycle-uninstall-design.md),
-and [Module Ownership](architecture/MODULE-OWNERSHIP.md). For the separate
-controlled Chromium package, use its
+and [Module Ownership](architecture/MODULE-OWNERSHIP.md). The Resonant
+Extension Framework proposal package (design-stage, pending ADR-038
+acceptance) lives at
+[Framework package README](design/resonant-extension-framework/README.md).
+For the separate controlled Chromium package, use its
 [component README](../addons/resonant-browser-host/README.md).
 
 ## Change Documentation

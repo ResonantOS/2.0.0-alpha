@@ -108,6 +108,7 @@ Add-on skill contracts:
 | [ADR-035](ADR-035-electron-host-rust-core-runtime.md) | Superseded | Not applicable | [ADR-037](ADR-037-browser-first-chromium-resonantos.md) | Browser architecture | Historical desktop-host direction; its components do not ship in Alpha. |
 | [ADR-036: Resonant Browser Host Architecture](ADR-036-wallet-capable-browser-host.md) | Superseded | Not applicable | [ADR-037](ADR-037-browser-first-chromium-resonantos.md) | Browser architecture | Historical external-browser sidecar direction; it is not the Alpha package. |
 | [ADR-037: Browser-First Chromium ResonantOS](ADR-037-browser-first-chromium-resonantos.md) | Accepted | Partial | - | Browser architecture | Browser-contained product direction applies; Alpha is the unpacked Chrome extension plus bridge, not a custom Chromium build. |
+| [ADR-038: Resonant Extension Framework](ADR-038-resonant-extension-framework.md) | Pending | Partial | - | Add-on SDK | Outline stage; extends ADR-006/018, records RESOLUTIONS_V0.1.md as the conflict-resolution input, and references the runtime hardening notes for the Phase 3.5 caller-attributed bridge work. |
 
 ## Authority Rules
 
