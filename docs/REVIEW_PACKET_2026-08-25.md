@@ -6,9 +6,9 @@
 > for the live review thread.
 >
 > **Lead reviewer:** Tom Pennington.
-> **Branch:** `feat/tab-referencing` @ `6db3141..bcf1823`
+> **Branch:** `feat/tab-referencing` @ `6db3141..53c67ac`
 > **Base:** `ResonantOS/2.0.0-alpha:dev`
-> **PR #327 head:** `bcf1823e4b8f484298f0fa2446294de4647e1d68`
+> **PR #327 head:** `53c67ac5c6b000804ad5de5a99201f845435374a`
 
 ---
 
