@@ -19,7 +19,7 @@ Formalizes ResonantOS's existing add-on architecture as the
 capabilities (plus `channel.send` / `channel.account-write`), the
 `.rpkg` package format, the four-state `releaseTrustTier` /
 `capabilityRiskClass` trust model, the Phase 3.5 caller-attributed
-bridge enforcement, and the certification pipeline. Adds ADR-040 to
+bridge enforcement, and the certification pipeline. Adds ADR-056 to
 lock the provider-fabric boundary for external agent runtimes (DeepSeek
 Harness, Agent Zero, etc.). Lands a soft fork-only SDK cutover at
 `packages/addon-sdk/`.
@@ -35,7 +35,7 @@ retained on `origin` as a recovery point).
 ## Scope
 
 - **In scope.** REF V0.1 design material accepted into the architecture
-  tree as ADR-038 with drafted prose; ADR-040 boundary for external
+  tree as ADR-055 with drafted prose; ADR-056 boundary for external
   agent runtimes; `packages/addon-sdk/` soft cutover; three new
   framework-package docs (registry metadata schema, signing
   architecture, capability separation deferred record); REF
@@ -47,15 +47,15 @@ retained on `origin` as a recovery point).
   mock host (B4 follow-on); runtime sideload enablement C8 (gated on
   security-pipeline review); the two anticipated third-party add-ons
   (`addon.deepseek-harness`, `addon.agentzero`) — these land in
-  separate PRs once Tom has reacted to ADR-040.
+  separate PRs once Tom has reacted to ADR-056.
 
 **Linked issue / Project 2:** No specific issue. The framework
 package intake (commits `410e508`, `9d244e4`, `2b6d6d6`, `1ea17e7`)
 was authored as a fork-internal proposal; this PR is the formal
 acceptance pass.
 
-**Project 2 release scope:** Adds a Deferred ADR (ADR-038), a
-new ADR (ADR-040), and a new directory tree (`packages/`).
+**Project 2 release scope:** Adds a Deferred ADR (ADR-055), a
+new ADR (ADR-056), and a new directory tree (`packages/`).
 Adds `channel.send` / `channel.account-write` capabilities
 (additive; no existing add-on breaks). Does not change the Alpha
 shipped runtime; this is pre-acceptance foundation work.
@@ -64,9 +64,9 @@ shipped runtime; this is pre-acceptance foundation work.
 
 ## Modules And Ownership
 
-- `docs/architecture/ADR-038-resonant-extension-framework.md`
+- `docs/architecture/ADR-055-resonant-extension-framework.md`
   (new; Add-on SDK owner)
-- `docs/architecture/ADR-040-provider-fabric-boundary-external-agent-runtimes.md`
+- `docs/architecture/ADR-056-provider-fabric-boundary-external-agent-runtimes.md`
   (new; Provider host / Delegation owner)
 - `docs/addons/resonant-extension-framework/` (15 docs moved from
   `docs/design/`; Add-on SDK owner)
@@ -93,10 +93,10 @@ impact — the shims re-export the same symbols).
   security pipeline still validates `.rpkg` packages separately
   per the certification spec.
 - **Required human handoff or approval boundary:** None added by
-  this PR. ADR-040 §3 Rule 8 (approval-before-irreversible-work)
+  this PR. ADR-056 §3 Rule 8 (approval-before-irreversible-work)
   records the boundary for *future* add-ons that integrate as
   external agent runtimes; no such add-on is included here.
-- **Secret-handling impact:** ADR-040 §4 explicitly forbids raw
+- **Secret-handling impact:** ADR-056 §4 explicitly forbids raw
   credentials from reaching third-party agent runtimes. Phase 3.5
   caller-attributed token design (the runtime enforcement) is the
   mechanism. No production keys touched by this PR.
@@ -125,8 +125,8 @@ exercises the `tab-mention-typeahead.test.mjs` surface
 **Documentation impact:** Substantial. The user-visible docs
 tree changed in two ways:
 
-1. **New ADRs.** ADR-038 (REF) at draft/deferred status with full
-   prose and §12 commitments/deferrals; ADR-040 (External Agent
+1. **New ADRs.** ADR-055 (REF) at draft/deferred status with full
+   prose and §12 commitments/deferrals; ADR-056 (External Agent
    Runtime Boundary) at draft/deferred status.
 2. **Framework package promotion.** 15 docs moved from
    `docs/design/resonant-extension-framework/` (design stage) to
@@ -137,13 +137,13 @@ tree changed in two ways:
    (deferred V1 record).
 4. **SDK package docs.** `packages/addon-sdk/README.md` (114 lines,
    public boundary documentation), `packages/addon-sdk/package.json`
-   (intent field points at ADR-038 C12 and ADR-040).
+   (intent field points at ADR-055 C12 and ADR-056).
 5. **This review packet.** `docs/REVIEW_PACKET_2026-08-25.md`
    (this file; archived PR description).
 
 `docs/README.md` updated to link to the framework package and to
-ADR-040 in the "Change An Add-On" section. `docs/architecture/README.md`
-ADR index gains the ADR-040 row.
+ADR-056 in the "Change An Add-On" section. `docs/architecture/README.md`
+ADR index gains the ADR-056 row.
 
 ## Architecture (one-paragraph for reviewers new to REF)
 
@@ -163,7 +163,7 @@ manifest declares, SDK validates, certification evaluates, signature
 identifies, user grants, host enforces. Approval is never a substitute
 for runtime authorization.
 
-ADR-040 applies this architecture to the specific case where the
+ADR-056 applies this architecture to the specific case where the
 add-on *itself* is an external agent runtime (DeepSeek Harness,
 Agent Zero, etc.). The boundary: ResonantOS holds the keys, picks
 the model, grants the capabilities; the runtime does the work. The
@@ -175,8 +175,8 @@ declared, scoped, and audited at the bridge.
 
 | Status | Item |
 | --- | --- |
-| ✅ Landed in this PR | REF V0.1 design record (ADR-038) with full prose |
-| ✅ Landed in this PR | Provider-fabric boundary for external agent runtimes (ADR-040) |
+| ✅ Landed in this PR | REF V0.1 design record (ADR-055) with full prose |
+| ✅ Landed in this PR | Provider-fabric boundary for external agent runtimes (ADR-056) |
 | ✅ Landed in this PR | `packages/addon-sdk/` soft cutover (re-export shim approach) |
 | ✅ Landed in this PR | `.rpkg` format accepted by hygiene rule (C6) |
 | ✅ Landed in this PR | `channel.send` / `channel.account-write` capability additions (C5) |
@@ -186,20 +186,20 @@ declared, scoped, and audited at the bridge.
 | ⏸ Deferred | `packages/addon-sdk-testing/` mock host (B4 follow-on) |
 | ⏸ Deferred | Phase 1 actual SDK extraction (npm workspace, install wiring, CI install/audit blocks) |
 | ⏸ Deferred | Runtime sideload enablement C8 (gated on security-pipeline review) |
-| ⏸ Deferred | `addon.deepseek-harness` and `addon.agentzero` add-on manifests (separate PRs once ADR-040 is accepted) |
+| ⏸ Deferred | `addon.deepseek-harness` and `addon.agentzero` add-on manifests (separate PRs once ADR-056 is accepted) |
 | ⏸ Deferred | Phase 3.5 → 4 → 5-8 implementation (certification, signing, registry, lifecycle) |
 
 ## Plan (what I want Tom to react to)
 
 I'm specifically asking Tom for feedback on **four items**:
 
-1. **ADR-040 §3 Rule 1 (no raw credentials) + §4 Credential Mediation.**
+1. **ADR-056 §3 Rule 1 (no raw credentials) + §4 Credential Mediation.**
    Is the routed-handle contract (`routingDecisionId` + opaque
    provider profile id + expires-at) the right wire format? The
    alternative is per-request inline routing (no persistent decision),
    which would simplify revocation but add latency on every call.
 
-2. **ADR-040 §7 Failure Modes F1–F10.** Are these the right negative
+2. **ADR-056 §7 Failure Modes F1–F10.** Are these the right negative
    tests? F1 (credential exfiltration), F2 (provider self-selection),
    F3 (workspace escape), F4 (capability escalation), F5 (undeclared
    tool), F6 (audit bypass), F7 (approval skip), F8 (stale routing
@@ -207,9 +207,9 @@ I'm specifically asking Tom for feedback on **four items**:
    attempt without declaration). I expect Tom to want to add F11-F15
    for cross-runtime isolation, replay attacks, etc.
 
-3. **ADR-038 §12 (REF V0.1 commitments and deferrals).** The §12
+3. **ADR-055 §12 (REF V0.1 commitments and deferrals).** The §12
    walk committed 9 V0.1 items and deferred 3 to future ADRs
-   (auto-unplug → ADR-039; post-V0.1 sandbox; capability separation
+   (auto-unplug → ADR-057; post-V0.1 sandbox; capability separation
    V1 → future). Are these the right deferrals? The capability
    separation deferral in particular trades V1 internal-only
    capabilities for V0.1 pragmatism.

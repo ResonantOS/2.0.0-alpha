@@ -64,7 +64,7 @@ test("classifyPath rejects generated, local-state, archive, and environment path
 test("classifyPath accepts the official .rpkg package format", () => {
   // .rpkg is the official Resonant Extension Framework package format
   // (per docs/addons/resonant-extension-framework/ADDON_PACKAGE_AND_MANIFEST_SPEC_V0.1.md
-  // and ADR-038 §12.1 C6). Hygiene rule distinguishes official format
+  // and ADR-055 §12.1 C6). Hygiene rule distinguishes official format
   // from ad-hoc ZIP archives; only .rpkg passes.
   const accepted = [
     "packages/example-notes/example-notes-1.0.0.rpkg",

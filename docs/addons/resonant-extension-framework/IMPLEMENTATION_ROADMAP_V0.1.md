@@ -247,7 +247,7 @@ Must prove:
 ```text
 docs/
 +-- architecture/
-|   +-- ADR-038-resonant-extension-framework.md
+|   +-- ADR-055-resonant-extension-framework.md
 |
 +-- add-ons/
     +-- RESONANT_ADDON_SDK_SPEC_V0.1.md

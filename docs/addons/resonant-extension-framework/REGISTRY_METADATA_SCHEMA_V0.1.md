@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Per `RESOLUTIONS_V0.1.md` C10 and `ADR-038` §12.1 (C10 row), REF V0.1
+Per `RESOLUTIONS_V0.1.md` C10 and `ADR-055` §12.1 (C10 row), REF V0.1
 ships a **metadata format and signed approved-release index** as a
 versioned JSON document. The live registry service is deferred to
 ADR-023 / ADR-024.
@@ -126,6 +126,6 @@ by the ResonantOS release process; it is not part of the V0.1 schema.
 
 - `RESOLUTIONS_V0.1.md` C10
 - `OPEN_DESIGN_CONFLICTS_V0.1.md` C10
-- `ADR-038-resonant-extension-framework.md` §12.1 (C10 row)
+- `ADR-055-resonant-extension-framework.md` §12.1 (C10 row)
 - `ADDON_PACKAGE_AND_MANIFEST_SPEC_V0.1.md`
 - `ADDON_CERTIFICATION_AND_SIGNING_V0.1.md`

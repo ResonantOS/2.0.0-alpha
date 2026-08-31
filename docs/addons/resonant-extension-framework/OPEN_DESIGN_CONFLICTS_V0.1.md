@@ -50,7 +50,7 @@ second artifact type.
 
 The full proposal lives beside this document:
 
-- `PROPOSAL-resonant-extension-framework.md` (draft for ADR-038)
+- `PROPOSAL-resonant-extension-framework.md` (draft for ADR-055)
 - `RESONANT_ADDON_SDK_SPEC_V0.1.md`
 - `ADDON_PACKAGE_AND_MANIFEST_SPEC_V0.1.md`
 - `ADDON_CERTIFICATION_AND_SIGNING_V0.1.md`
@@ -183,7 +183,7 @@ exists yet)? Does "Verified" require a new provenance tier value, or is it
 
 **Options:**
 
-- **(a) Map only.** Keep existing enums; ADR-038 documents the mapping.
+- **(a) Map only.** Keep existing enums; ADR-055 documents the mapping.
   Cheapest; no migration; but "Verified vs Approved" distinction lives
   only in review state, which is registry-derived today, not stored per
   release.
@@ -386,7 +386,7 @@ relationship between REF and those deferrals is unstated.
   review-record schema now; the live registry *service* remains deferred
   per ADR-023/024. Approved-release index lives as a signed JSON document
   in a git repository until a service exists.
-- **(b) Supersede.** ADR-038 declares the registry in-scope and
+- **(b) Supersede.** ADR-055 declares the registry in-scope and
   un-defers ADR-023. Larger commitment; needs staffing reality check.
 
 **Question for reviewer:** (a) or (b)? If (a), what is the minimal signed
@@ -485,7 +485,7 @@ placed, or should it precede Phase 2?
 | 6 | C13 sequencing | Cheap to fix now, expensive to fix later |
 | 7 | C7 compatibility evaluation | Small, early, load-bearing |
 | 8 | C8 sideload enablement | Security review needed before Tier 1 exists |
-| 9 | C10 registry deferral | Scope honesty for ADR-038 |
+| 9 | C10 registry deferral | Scope honesty for ADR-055 |
 | 10 | C11 signing architecture | Needed by Phase 6, not before |
 | 11 | C6 container format | Needed by Phase 2, low risk either way |
 | 12 | C12 package location | Reversible decision |
@@ -496,7 +496,7 @@ placed, or should it precede Phase 2?
 - **Terminology:** the unit is an **add-on**; "plugin" is retired.
   Proposed API names (`defineAddon`, `validateAddOnManifest`,
   `assertValidAddOnManifest`) intentionally match existing code.
-- **ADR numbering:** the proposal targets **ADR-038** (ADR-031 is taken).
+- **ADR numbering:** the proposal targets **ADR-055** (ADR-031 is taken).
 - **Staging:** this package lives at
   `docs/addons/resonant-extension-framework/` and passes the repo's docs
   and release-scope gates as a design-stage proposal.
@@ -512,7 +512,7 @@ placed, or should it precede Phase 2?
 
 ## Resolutions (2026-08-24, fork author)
 
-Decisions on the six conflicts the roadmap depends on. Recorded for traceable carry into the ADR-038 draft.
+Decisions on the six conflicts the roadmap depends on. Recorded for traceable carry into the ADR-055 draft.
 
 ### C1 — Trust tiers: option (a) Map only + a per-(addonId, version) approval record
 
@@ -536,7 +536,7 @@ Phase 3.5 is hard-pinned *before* Phase 4 (host install + lifecycle) and *before
 
 `browser-first/addons/*` are declared *extension-internal modules* — first-party code shipped inside the Chrome extension — and are out of REF scope. The boundary is the privilege boundary, not the directory boundary: anything reachable from extension content scripts without going through the Phase 3.5 bridge-caller-token machinery is first-party and may be unreachable to third-party add-ons. This is the only option that does not require migrating the existing `resonant-context` and `resonator` add-ons in V0.1.
 
-The boundary clause to put in ADR-038: *third-party add-on code cannot invoke any bridge route that is not gated by a caller-attributed token minted under Phase 3.5; the browser-first executable content scripts remain first-party because they are not in the add-on loader path.*
+The boundary clause to put in ADR-055: *third-party add-on code cannot invoke any bridge route that is not gated by a caller-attributed token minted under Phase 3.5; the browser-first executable content scripts remain first-party because they are not in the add-on loader path.*
 
 ### C4 — Executable surface: option (a) V0.1 is declarative-only
 
@@ -570,4 +570,4 @@ Phase 3.5 gates Tests B and C; Test A drops out of V0.1 entirely (see C4). Keepi
 - **C11** signing architecture: native `crypto.sign` / `crypto.verify` ed25519 (no subprocess); first-party bundles remain trust-by-bundling in V0.1; key custody decision deferred to security pipeline.
 - **C12** package location: `packages/addon-sdk/` from the start (option a); pay the registration cost once.
 
-These are recorded so the ADR-038 draft carries them as "acknowledged, deferred to Phase N" rather than rediscovery work.
+These are recorded so the ADR-055 draft carries them as "acknowledged, deferred to Phase N" rather than rediscovery work.

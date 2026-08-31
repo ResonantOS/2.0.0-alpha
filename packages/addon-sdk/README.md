@@ -3,7 +3,7 @@
 Public Resonant Extension Framework (REF) add-on SDK for ResonantOS.
 
 > **Fork-only soft cutover.** This package directory is the public SDK
-> surface per ADR-038 §12.1 C12 (Public SDK External Boundary). It is
+> surface per ADR-055 §12.1 C12 (Public SDK External Boundary). It is
 > **not yet published** to npm. The source files here are the canonical
 > implementation; the corresponding files under `src/sdk/addons/` in this
 > repository are re-export shims that keep existing internal imports
@@ -33,7 +33,7 @@ This package provides the **add-on author-facing** portion of REF V0.1:
 The runtime kernel of REF — capability grant enforcement, the bridge,
 the host, the capability-token system — is **not** in this package. It
 lives in `browser-first/host/*`, `src/core/`, and the security-pipeline
-docs. Per ADR-038 §7 Runtime Boundary and ADR-040 §3 Boundary Rules,
+docs. Per ADR-055 §7 Runtime Boundary and ADR-056 §3 Boundary Rules,
 the host retains all privilege enforcement; this package is
 declarative-only.
 
@@ -70,7 +70,7 @@ that re-export from this package.
 
 ## Capability additions
 
-V0.1 adds two capabilities to the public list per ADR-038 §12.1 C5
+V0.1 adds two capabilities to the public list per ADR-055 §12.1 C5
 communication-channel refinement:
 
 - `channel.send` — outbound channel messages
@@ -82,7 +82,7 @@ Telegram channel add-on).
 
 ## Naming
 
-Per ADR-038 §12.1 C9 (REF Vocabulary), the canonical REF names are:
+Per ADR-055 §12.1 C9 (REF Vocabulary), the canonical REF names are:
 
 - `releaseTrustTier` (`developer` / `verified` / `approved`)
 - `capabilityRiskClass` (`low` / `moderate` / `high` / `critical`)
@@ -93,7 +93,7 @@ rename lands when the SDK is fully extracted.
 
 ## Reference implementations
 
-Two concrete add-ons are anticipated to use this package under ADR-040:
+Two concrete add-ons are anticipated to use this package under ADR-056:
 
 1. **`addon.deepseek-harness`** — local-service add-on bridging
    ResonantOS to the DeepSeek Harness (https://deepseek.com/harness/)
@@ -103,12 +103,12 @@ Two concrete add-ons are anticipated to use this package under ADR-040:
    runtime.
 
 Both manifests will be siblings of `examples/addons/recursive-mas.json`
-and will exercise every ADR-040 §3 boundary rule.
+and will exercise every ADR-056 §3 boundary rule.
 
 ## See also
 
-- `docs/architecture/ADR-038-resonant-extension-framework.md` (REF)
-- `docs/architecture/ADR-040-provider-fabric-boundary-external-agent-runtimes.md` (provider-fabric boundary)
+- `docs/architecture/ADR-055-resonant-extension-framework.md` (REF)
+- `docs/architecture/ADR-056-provider-fabric-boundary-external-agent-runtimes.md` (provider-fabric boundary)
 - `docs/addons/resonant-extension-framework/RESONANT_ADDON_SDK_SPEC_V0.1.md` (SDK spec)
 - `docs/addons/resonant-extension-framework/ADDON_PACKAGE_AND_MANIFEST_SPEC_V0.1.md` (`.rpkg` package format)
 - `docs/addons/resonant-extension-framework/RESOLUTIONS_V0.1.md` C12 (this package's location)

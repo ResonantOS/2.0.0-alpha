@@ -461,12 +461,12 @@ The architectural boundary to protect above everything else is:
 Findings in this review thread through the rest of the framework package:
 
 - **Finding 1 (system-slot gating):** aligns with `RESONANT_ADDON_SDK_SPEC_V0.1.md`'s capability-grant model and is operationalised by the `sdk/p1b-p1e-slots-provenance` work referenced in `EXTERNAL_REVIEW_FEEDBACK_V0.1.md`.
-- **Finding 2 (one source of truth for slot→capability):** no shared `SYSTEM_SLOT_CAPABILITY` constant exists yet. Recorded here as a future deliverable for ADR-038.
-- **Finding 3 (`communication-channel → notifications`):** a capability-model refinement that should not block ADR-038's framing pass; deferred until the capability-mapping table (C5 in `OPEN_DESIGN_CONFLICTS_V0.1.md`) is built.
+- **Finding 2 (one source of truth for slot→capability):** no shared `SYSTEM_SLOT_CAPABILITY` constant exists yet. Recorded here as a future deliverable for ADR-055.
+- **Finding 3 (`communication-channel → notifications`):** a capability-model refinement that should not block ADR-055's framing pass; deferred until the capability-mapping table (C5 in `OPEN_DESIGN_CONFLICTS_V0.1.md`) is built.
 - **Findings 4 & 5 (fail-closed provenance):** confirm `RESOLUTIONS_V0.1.md`'s C1 mapping decision (option a) — provenance is mapped onto existing enums rather than replaced.
 - **Finding 6 (six-axis separation):** restates the package's own Core Principle ("Manifest declares. Certification evaluates. Signature identifies. User grants. Host enforces.").
 - **Finding 7 (personal/local):** threads into `ADDON_PERSONAL_PLUGIN_GOVERNANCE.md`, which proposes a `personal-local` provenance tier. No current conflict; requires adding a new enum value, which is a non-C1 decision.
-- **Findings 8 & 9 (no second architecture; no private-core imports):** directly motivate `RESOLUTIONS_V0.1.md`'s reframe direction: extend ADR-006/ADR-018, do not replace them. The public-SDK boundary is ADR-038 work.
+- **Findings 8 & 9 (no second architecture; no private-core imports):** directly motivate `RESOLUTIONS_V0.1.md`'s reframe direction: extend ADR-006/ADR-018, do not replace them. The public-SDK boundary is ADR-055 work.
 - **Finding 10 (M0 first):** the package's own `IMPLEMENTATION_ROADMAP_V0.1.md` agrees; M0 Test A (Hello Resonant with UI surface) was deferred past V0.1 by the resolution of C4; M0 Test B (Local Files) is the smallest enforcement probe and runs first.
 - **Finding 11 (certification layering):** restates the package's design intent; no decision required here.
 
@@ -475,7 +475,7 @@ Findings in this review thread through the rest of the framework package:
 This is a feedback document, not an accepted decision. Carry the findings
 into:
 
-1. The ADR-038 draft (forthcoming), with the cross-references above
+1. The ADR-055 draft (forthcoming), with the cross-references above
    resolved into specific edits.
 2. `RESOLUTIONS_V0.1.md` only where a new resolution is required
    (specifically: `personal-local` provenance tier from Finding 7, and

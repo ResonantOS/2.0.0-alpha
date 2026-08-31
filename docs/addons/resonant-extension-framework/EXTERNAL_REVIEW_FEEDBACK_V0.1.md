@@ -101,8 +101,8 @@ The parts judged to add real value beyond the existing system — keep these:
   and ADR-018. The revision path is to reframe explicitly as
   "Add-on SDK V0 → Public Third-Party SDK V1", extending ADR-006/ADR-018
   rather than restating them. This package's staging at `docs/design/`
-  (pending acceptance as ADR-038) already avoids premature promotion; the
-  reframing still needs to happen before any ADR-038 draft.
+  (pending acceptance as ADR-055) already avoids premature promotion; the
+  reframing still needs to happen before any ADR-055 draft.
 - The main long-term engineering risk the review flags matches this
   package's own guiding rule: the public SDK contract must not couple back
   into private core implementation types. Keep "do not move privilege into
@@ -129,7 +129,7 @@ Claims checked against the fork on 2026-08-24:
 Route this feedback into the resolution of `OPEN_DESIGN_CONFLICTS_V0.1.md`:
 
 1. Reframe the package as the public evolution of ADR-006/ADR-018 before any
-   ADR-038 draft.
+   ADR-055 draft.
 2. Carry the "keep" list above into `IMPLEMENTATION_ROADMAP_V0.1.md` as the
    external-layer scope.
 3. Add `UPSTREAM_DELTA.md` to the roadmap's fork-hygiene deliverables.

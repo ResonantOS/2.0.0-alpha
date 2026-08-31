@@ -6,7 +6,7 @@
 so the V1 separation work can be picked up without rediscovery. It does
 **not** modify any V0.1 contract.
 
-Per `ADR-038-resonant-extension-framework.md` §12.3 (Resonant-OS vs
+Per `ADR-055-resonant-extension-framework.md` §12.3 (Resonant-OS vs
 Third-Party SDK capability separation row) and `RESOLUTIONS_V0.1.md`
 C10 deferred work, the V1 separation is out of scope for V0.1 but
 must be planned.
@@ -87,18 +87,18 @@ the host-side mapping outcome (`allowed` / `denied-by-mapping` /
 
 ## ADR pointer
 
-When this work is picked up, it lands as ADR-039 (or whichever number
+When this work is picked up, it lands as ADR-057 (or whichever number
 is next in the architecture sequence). The ADR should:
 
 1. Confirm the public SDK surface and what stays internal.
 2. Lock the mapping table ownership (per C5: SDK-owned data).
 3. Record the V1 manifest validation rules.
 4. Record the runtime grant migration plan.
-5. Update ADR-038 §12.3 to remove this deferral row.
+5. Update ADR-055 §12.3 to remove this deferral row.
 
 ## Source
 
-- `ADR-038-resonant-extension-framework.md` §12.3 (Resonant-OS vs
+- `ADR-055-resonant-extension-framework.md` §12.3 (Resonant-OS vs
   Third-Party SDK capability separation row)
 - `RESOLUTIONS_V0.1.md` C5 (mapping table ownership)
 - `RESOLUTIONS_V0.1.md` C3 (privilege-not-directory boundary)

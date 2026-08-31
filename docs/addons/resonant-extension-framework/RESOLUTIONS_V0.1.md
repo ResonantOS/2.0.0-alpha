@@ -2,11 +2,11 @@
 
 Decisions recorded 2026-08-24 by the fork author on the six conflicts the
 roadmap depends on. Each cites the chosen option, the reasoning, and the
-specific files or symbols affected. Carried into the ADR-038 draft.
+specific files or symbols affected. Carried into the ADR-055 draft.
 
 The same resolutions also appear as an appendix in
 `OPEN_DESIGN_CONFLICTS_V0.1.md`. This document is the canonical record
-referenced by `IMPLEMENTATION_ROADMAP_V0.1.md`, ADR-038 drafts, and any
+referenced by `IMPLEMENTATION_ROADMAP_V0.1.md`, ADR-055 drafts, and any
 later external review.
 
 ## C1 — Trust tiers
@@ -55,7 +55,7 @@ privilege, not directory: anything reachable from extension content
 scripts without going through the Phase 3.5 bridge-caller-token
 machinery is first-party and out of REF scope.
 
-Boundary clause for ADR-038:
+Boundary clause for ADR-055:
 
 > Third-party add-on code cannot invoke any bridge route that is not
 > gated by a caller-attributed token minted under Phase 3.5. The
@@ -113,7 +113,7 @@ M0 order: Test B (Local Files) → Test C (Local AI) → Test A (deferred)
 
 ## Deferred without further decision needed now
 
-These are recorded so ADR-038 carries "acknowledged, deferred to Phase
+These are recorded so ADR-055 carries "acknowledged, deferred to Phase
 N" rather than rediscovery work.
 
 - **C6** container format: git-tarball with deterministic permissions;

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Per `RESOLUTIONS_V0.1.md` C11 and `ADR-038` §12.1 (C11 row), REF V0.1
+Per `RESOLUTIONS_V0.1.md` C11 and `ADR-055` §12.1 (C11 row), REF V0.1
 uses native `crypto.sign` / `crypto.verify` ed25519 via Node's built-in
 crypto module. First-party bundles remain trust-by-bundling in V0.1;
 key custody (offline root, rotating release-signing key, publisher
@@ -139,7 +139,7 @@ security pipeline review. The V0.1 minimum:
 
 - `RESOLUTIONS_V0.1.md` C11
 - `OPEN_DESIGN_CONFLICTS_V0.1.md` C11
-- `ADR-038-resonant-extension-framework.md` §12.1 (C11 row)
+- `ADR-055-resonant-extension-framework.md` §12.1 (C11 row)
 - `ADDON_PACKAGE_AND_MANIFEST_SPEC_V0.1.md`
 - `ADDON_CERTIFICATION_AND_SIGNING_V0.1.md`
 - `REGISTRY_METADATA_SCHEMA_V0.1.md`

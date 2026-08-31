@@ -1,4 +1,4 @@
-# ADR-038 — Resonant Extension Framework
+# ADR-055 — Resonant Extension Framework
 
 > **Draft.** The ADR's body prose is drafted from the framework package and
 > the resolution documents. The §12 walk is complete; every conflict
@@ -107,21 +107,21 @@ Principle; `OPEN_DESIGN_CONFLICTS_V0.1.md` Background in Sixty Seconds;
 
 ## 3. Lineage
 
-ADR-038 is an evolution of existing work, not a replacement.
+ADR-055 is an evolution of existing work, not a replacement.
 
 ```text
 ADR-006 Add-on Runtime & SDK
     ↓
 ADR-018 Add-on SDK V0  (binding internal standard, src/sdk/addons)
     ↓
-ADR-038 Resonant Extension Framework (public evolution; declarative-only V0.1)
+ADR-055 Resonant Extension Framework (public evolution; declarative-only V0.1)
     ↓
 ADR-023 / ADR-024 (registry / commerce — deferred per C10)
 ```
 
 ADR-006 establishes the Add-on Runtime & SDK with manifest validation,
 provenance, capabilities, and host mediation. ADR-018 establishes the
-binding internal standard at `src/sdk/addons/`. ADR-038 extends both
+binding internal standard at `src/sdk/addons/`. ADR-055 extends both
 toward a public, third-party-capable contract.
 
 `ADDON_SDK_CODE_REVIEW_FEEDBACK_2026-08-24.md` Finding 8 makes the
@@ -608,7 +608,7 @@ to source documents, then the deferrals that survive V0.1.
   3.5 hardening, already landed). Per `ADDON_PERSONAL_PLUGIN_GOVERNANCE.md`,
   the personal/local tier follows the same enablement gate with the
   user-facing warning covering the auto-unplug safety policy (deferred to
-  ADR-039).
+  ADR-057).
 - **C9 naming** — **V0.1:** rename in REF only — `releaseTrustTier`
   (releases) and `capabilityRiskClass` (capabilities) replace any
   parallel vocabulary in REF-produced artifacts. The existing
@@ -678,7 +678,7 @@ to source documents, then the deferrals that survive V0.1.
   follow-on (B4.5 in the §B engineering walk).
 
 See also:
-  [ADR-040: Provider Fabric Boundary for External Agent Runtimes](ADR-040-provider-fabric-boundary-external-agent-runtimes.md)
+  [ADR-056: Provider Fabric Boundary for External Agent Runtimes](ADR-056-provider-fabric-boundary-external-agent-runtimes.md)
   — applies the REF runtime boundary to third-party agent runtimes
   (DeepSeek Harness, Agent Zero); the boundary rules (no raw credentials,
   no provider selection, host-mediated tool surface, scoped
@@ -700,7 +700,7 @@ See also:
   needed to make the `personal-local` runtime story safe. The recovery
   policy (auto-unplug all add-ons vs. auto-unplug only the offending
   add-on) is **yet to be determined**. Deferred to a follow-on ADR,
-  candidate **ADR-039**.
+  candidate **ADR-057**.
 
 - **Communication-channel capability refinement** — **V0.1:** add
   `channel.send` and `channel.account-write` as new manifest
@@ -747,7 +747,7 @@ Three items are recorded as deferred and not addressed in V0.1:
   needed to make the `personal-local` runtime story safe. The recovery
   policy (auto-unplug all add-ons vs. auto-unplug only the offending
   add-on) is **yet to be determined**. Deferred to a follow-on ADR,
-  candidate **ADR-039**.
+  candidate **ADR-057**.
 
 - **Post-V0.1 sandbox surface** — deferred. M0 Test A (Hello Resonant
   with a UI surface) was deferred past V0.1 by `RESOLUTIONS_V0.1.md` C4.
@@ -844,7 +844,7 @@ framework package README "Intended Repository Target".
 
 ## 14. Consequence Summary
 
-ADR-038 enables:
+ADR-055 enables:
 
 - Third-party developers receive a stable target via
   `@resonantos/addon-sdk` (§12.1, public SDK boundary).
@@ -861,7 +861,7 @@ ADR-038 enables:
 - The existing Add-on SDK can evolve toward a public package without
   rewriting the kernel architecture (§3 Lineage).
 
-ADR-038 does **not** require, and explicitly defers:
+ADR-055 does **not** require, and explicitly defers:
 
 - a commercial marketplace (per `PROPOSAL-resonant-extension-framework.md`
   Non-Goals for V0.1; ADR-024 deferred);
@@ -885,11 +885,11 @@ Source: `PROPOSAL-resonant-extension-framework.md` Consequences;
 
 ---
 
-**See also:** [ADR-040: Provider Fabric Boundary for External Agent Runtimes](ADR-040-provider-fabric-boundary-external-agent-runtimes.md) — applies the REF runtime boundary to external agent runtimes; locks the credential-mediation and provider-routing contract for add-ons like DeepSeek Harness or Agent Zero.
+**See also:** [ADR-056: Provider Fabric Boundary for External Agent Runtimes](ADR-056-provider-fabric-boundary-external-agent-runtimes.md) — applies the REF runtime boundary to external agent runtimes; locks the credential-mediation and provider-routing contract for add-ons like DeepSeek Harness or Agent Zero.
 
 ## 15. Maintainer Disposition Reconciliation (2026-08-31)
 
-This section records ADR-038 against the upstream maintainer's actual
+This section records ADR-055 against the upstream maintainer's actual
 release-scope dispositions. It is not a review of REF — the maintainer has
 not reviewed this ADR or PR #327. These dispositions are *maintainer
 precedents that constrain how REF should be proposed*: scope/timing
@@ -899,7 +899,7 @@ from the upstream issue comment record on 2026-08-31.
 
 ### 15.1 Already consistent with maintainer direction
 
-| ADR-038 position | Maintainer disposition |
+| ADR-055 position | Maintainer disposition |
 |---|---|
 | REF is "extension of, not replacement for, ADR-006/ADR-018" (§1) | #215 close-out: add-ons ship as governed visible capabilities over the existing SDK; no competing runtime |
 | Browser-first Alpha boundary; no runtime change until checkpoint ADRs land (§14) | #109/#180/#215: only work blocking the Chrome extension + local browser-first bridge is in the Alpha critical path |
@@ -942,7 +942,7 @@ surface Tom can accept now. The five distribution items and their spec
 documents land with the beta.2 distribution work, not with the Alpha SDK
 boundary.
 
-ADR-038 already defers the marketplace and distribution machinery (§14,
+ADR-055 already defers the marketplace and distribution machinery (§14,
 §12.3); this section pins those deferrals to the maintainer's beta.2
 boundary rather than to ADR-023/024 alone. Tom's #180 finding — disable
 retains every granted capability and a single re-enable restores full grants
@@ -953,7 +953,7 @@ contract in §16.
 
 ### 15.3 Still requiring maintainer decision
 
-ADR-038 cannot move from Deferred to Accepted without upstream answers to:
+ADR-055 cannot move from Deferred to Accepted without upstream answers to:
 
 1. **REF terminology.** Whether "Resonant Extension Framework" is accepted as
    the governance-architecture name, vs. "Add-on SDK V1" (§1; the naming
@@ -964,20 +964,20 @@ ADR-038 cannot move from Deferred to Accepted without upstream answers to:
    demonstration (§13).
 3. **Acceptance subset.** Which of the 9 V0.1 commitments (§12.4) the
    maintainer wants accepted now, vs. held as fork-experimental.
-4. **Transition.** How ADR-038 moves from Deferred to Accepted /
+4. **Transition.** How ADR-055 moves from Deferred to Accepted /
    partially-accepted (proposer review, then maintainer acceptance), and
    whether "Alpha applicability: Partial" is the right frame.
 
-### 15.4 Separate decision — ADR-040
+### 15.4 Separate decision — ADR-056
 
-ADR-040 (Provider Fabric Boundary for External Agent Runtimes) is its own
+ADR-056 (Provider Fabric Boundary for External Agent Runtimes) is its own
 architecture decision and must not be required to accept the basic SDK
-boundary. The relevant maintainer precedent for ADR-040 is #137, not this
+boundary. The relevant maintainer precedent for ADR-056 is #137, not this
 ADR: governed Hermes delegation packets, an embedded dashboard, and visible
 failure/recovery are accepted; raw external-runtime prompt execution is
 outside the Alpha MVP guarantee until a safer handoff surface exists (a
 file/stdin/authenticated local API path with deterministic evidence return).
-Keep ADR-038 and ADR-040 reviewable independently.
+Keep ADR-055 and ADR-056 reviewable independently.
 
 ## 16. Add-on Lifecycle Security Contract
 

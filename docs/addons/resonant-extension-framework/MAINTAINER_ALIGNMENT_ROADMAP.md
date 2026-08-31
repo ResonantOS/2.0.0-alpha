@@ -21,38 +21,30 @@ Security requirements become mandatory at the boundary where third-party code ac
 | # | Recommendation | State | Evidence |
 |---|---|---|---|
 | 0 | Verify Tom's feedback rather than trust the sweep | Done | GitHub API read of #109/#180/#215/#137; zero reviews/comments from `tompennington` on #327–#331 |
-| 1 | Reframe ADR-038 as evolution, not replacement | Done | ADR-038 §1: "extension of, not replacement for, ADR-006 and ADR-018" |
-| 2 | Divide SDK Core V0.1 from Distribution/Lifecycle beta.2 | Done (status) | ADR-038 §15.2 re-classifies C6/C7/C8/C10/C11 as beta.2 distribution deferrals |
-| 3 | Gate signing/.rpkg/registry/sideload behind "activates when third-party install exists" | Done (documented) | ADR-038 §15.2 cites #109: "becomes gating the moment a remote/marketplace registry or extension-side sideload lands" |
-| 4 | Uninstall/revocation/re-consent as a first-class contract (#180) | Done | ADR-038 §16 — four-transition lifecycle contract (disable/enable/uninstall/update), grounded in the #180 audit |
+| 1 | Reframe ADR-055 as evolution, not replacement | Done | ADR-055 §1: "extension of, not replacement for, ADR-006 and ADR-018" |
+| 2 | Divide SDK Core V0.1 from Distribution/Lifecycle beta.2 | Done (status) | ADR-055 §15.2 re-classifies C6/C7/C8/C10/C11 as beta.2 distribution deferrals |
+| 3 | Gate signing/.rpkg/registry/sideload behind "activates when third-party install exists" | Done (documented) | ADR-055 §15.2 cites #109: "becomes gating the moment a remote/marketplace registry or extension-side sideload lands" |
+| 4 | Uninstall/revocation/re-consent as a first-class contract (#180) | Done | ADR-055 §16 — four-transition lifecycle contract (disable/enable/uninstall/update), grounded in the #180 audit |
 | 5 | PR #327 too large — decompose | Done | Split into #327 (REF) + #334 (tab-referencing); original history on `backup/tab-referencing-pre-split` |
-| 6 | "Maintainer-alignment patch" as the next move | Done | ADR-038 §15 reconciliation + §15.2 re-classification + split |
-| 7 | Keep the DeepSeek/external-runtime experiment | Intact | ADR-040 lives in #327; external-runtime PRs #329–#331 unaffected |
+| 6 | "Maintainer-alignment patch" as the next move | Done | ADR-055 §15 reconciliation + §15.2 re-classification + split |
+| 7 | Keep the DeepSeek/external-runtime experiment | Intact | ADR-056 lives in #327; external-runtime PRs #329–#331 unaffected |
+| 8 | Resolve the ADR double-claim (fork hygiene) | Done | REF renumbered ADR-038→055, ADR-040→056, ADR-039→057 (153 refs + 2 renames); CP branch retains ADR-038–054 |
 
 ## Remaining
 
-### Phase 1 — unblocked
+### Phase 1 — blocked on Tom
 
-1. **Resolve the ADR-038 double-claim.** `feat/tab-referencing` (#327) assigns ADR-038 = REF; `feat/dev-external-agent-runtimes-panel` (#331) assigns ADR-038 = Add-on Runtime Identity. One must renumber before either merges to `dev` (which tops out at ADR-037).
-
-### Phase 2 — blocked on Tom
-
-3. **Review #327 + #334**, and answer ADR-038 §15.3:
+1. **Review #327 + #334**, and answer ADR-055 §15.3:
    - REF-vs-"Add-on SDK V1" terminology;
    - `packages/addon-sdk/` as the long-term public boundary;
    - which V0.1 subset to accept now;
    - the Deferred → Accepted transition path.
 
-### Phase 3 — parallel CP workstream
+### Phase 2 — parallel CP workstream
 
-4. CP-7 redaction/export/retention/deletion tests; CP-5 assistant-only output-filtering parity; CP-6 executor UI; CP-9 "declare stable" (blocked on live harness validation + OpenClaw key).
+2. CP-7 redaction/export/retention/deletion tests; CP-5 assistant-only output-filtering parity; CP-6 executor UI; CP-9 "declare stable" (blocked on live harness validation + OpenClaw key).
 
 ## Sequencing
 
-```text
-Phase 1 (do now)           Phase 2 (blocked)           Phase 3 (parallel)
---------------------       --------------------        --------------------
-1. ADR-038 renumber       → clean merge surface        3. CP-7 tests
-       │                      (Tom reviews #327/#334)     CP-5 filtering
-       └────────────────► all converge at Accepted ────► CP-9 stable
-```
+1. Tom reviews #327 + #334 and answers ADR-055 §15.3 → Deferred → Accepted.
+2. In parallel: CP-7 tests, CP-5 filtering, CP-6 UI → CP-9 stable.

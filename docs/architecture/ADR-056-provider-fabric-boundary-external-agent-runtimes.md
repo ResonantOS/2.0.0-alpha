@@ -1,4 +1,4 @@
-# ADR-040: Provider Fabric Boundary for External Agent Runtimes
+# ADR-056: Provider Fabric Boundary for External Agent Runtimes
 
 ## Decision Metadata
 
@@ -7,17 +7,17 @@
 - Alpha applicability: Applies
 - Owner: Provider host / Delegation
 - Decision date: **pending** (will be set on acceptance)
-- Source: derived from ADR-005 ("Routing authority belongs to ResonantOS policy, not to add-ons"), ADR-015 ("Add-on agents are delegation targets, not trusted equals of Augmentor"), ADR-038 §7 Runtime Boundary and §8 Phase 3.5 caller-attributed capability tokens; modeled against `examples/addons/recursive-mas.json` (local-service add-on pattern) and proposed integrations with DeepSeek Harness (https://deepseek.com/harness/) and Agent Zero (https://www.agent-zero.ai/).
+- Source: derived from ADR-005 ("Routing authority belongs to ResonantOS policy, not to add-ons"), ADR-015 ("Add-on agents are delegation targets, not trusted equals of Augmentor"), ADR-055 §7 Runtime Boundary and §8 Phase 3.5 caller-attributed capability tokens; modeled against `examples/addons/recursive-mas.json` (local-service add-on pattern) and proposed integrations with DeepSeek Harness (https://deepseek.com/harness/) and Agent Zero (https://www.agent-zero.ai/).
 
 ## 1. Decision
 
-External agent runtimes — third-party systems that themselves can plan, call tools, and execute multi-step agentic loops — are integrated into ResonantOS as **local-service add-ons** under ADR-038's manifest contract. They are governed by a strict boundary that prevents them from holding raw provider credentials, choosing their own provider profile, or executing outside the host-mediated service boundary.
+External agent runtimes — third-party systems that themselves can plan, call tools, and execute multi-step agentic loops — are integrated into ResonantOS as **local-service add-ons** under ADR-055's manifest contract. They are governed by a strict boundary that prevents them from holding raw provider credentials, choosing their own provider profile, or executing outside the host-mediated service boundary.
 
 ResonantOS owns:
 
 - **Provider credentials.** The provider fabric (ADR-005) is the only authority that holds raw API keys, OAuth tokens, and provider secrets. External agent runtimes never receive raw credentials.
 - **Provider routing.** The policy engine is the only authority that chooses the provider profile, runtime node, model, auth tier, and fallback route for any model request. External agent runtimes request routing decisions; they do not make them.
-- **Capability grants.** The host (per ADR-015 and ADR-038 §8) is the only authority that grants, scopes, and revokes capabilities on external agent runtimes.
+- **Capability grants.** The host (per ADR-015 and ADR-055 §8) is the only authority that grants, scopes, and revokes capabilities on external agent runtimes.
 - **Lifecycle.** The host installs, enables, monitors, disables, and removes external agent runtimes under the standard add-on lifecycle.
 
 The external agent runtime owns:
@@ -45,7 +45,7 @@ These rules apply to any add-on whose manifest declares the `providers` capabili
 
 **Rule 4 — Scoped filesystem and shell.** Filesystem and shell capabilities granted to the runtime are scoped to the runtime's task workspace by default. The runtime MAY request a broader scope via a `grantPreset` (which the user must accept explicitly per ADR-015 §Delegation Quality Rules). The host enforces scope at every mediation; the runtime cannot escape its workspace by direct file or shell access.
 
-**Rule 5 — Capability-gated mediation.** Every privileged action by the runtime (file read/write, shell exec, network, archive read/write, knowledge page write) goes through a host-mediated bridge route. The runtime holds no privileged capability directly. The bridge enforces caller-attributed capability tokens (ADR-038 §8 Phase 3.5); tokens minted for the runtime's `callerId` are scoped to the runtime's current grant set and cannot be transferred.
+**Rule 5 — Capability-gated mediation.** Every privileged action by the runtime (file read/write, shell exec, network, archive read/write, knowledge page write) goes through a host-mediated bridge route. The runtime holds no privileged capability directly. The bridge enforces caller-attributed capability tokens (ADR-055 §8 Phase 3.5); tokens minted for the runtime's `callerId` are scoped to the runtime's current grant set and cannot be transferred.
 
 **Rule 6 — Delegation Packet only.** The runtime accepts work only via an ADR-015 Delegation Packet. It MUST NOT accept free-form user prompts directly. The packet's `mission`, `context`, `providerPolicy`, `costPolicy`, `allowedTools`, `forbiddenActions`, `capabilityGrants`, and `verificationRequirements` are authoritative; the runtime MAY add local notes but MUST NOT relax the packet's constraints.
 
@@ -95,7 +95,7 @@ The runtime uses the `routingDecisionId` to make subsequent calls (streaming, fo
 
 **What the runtime sees:** opaque IDs and the model name. **What the runtime never sees:** the API key, OAuth token, base URL secret, or any provider-internal auth material.
 
-This mirrors the Phase 3.5 caller-attributed capability token design (ADR-038 §8): an opaque, scoped, expiring handle that the host can revoke at any time. Revoking a routing decision mid-task causes the runtime's next model call to fail with `routing-decision-revoked`; the runtime is expected to surface this to its calling agent and request a new decision.
+This mirrors the Phase 3.5 caller-attributed capability token design (ADR-055 §8): an opaque, scoped, expiring handle that the host can revoke at any time. Revoking a routing decision mid-task causes the runtime's next model call to fail with `routing-decision-revoked`; the runtime is expected to surface this to its calling agent and request a new decision.
 
 ## 5. Model Routing
 
@@ -145,7 +145,7 @@ External agent runtimes declared as local-service add-ons declare their capabili
 | `archive-intake-write` | Optional | If the runtime returns artifacts via intake (recommended for delegation returns). |
 | `ui-embedding` | Optional | Only if the runtime surfaces a panel inside ResonantOS. |
 | `notifications` | Optional | Long-running task status notifications. |
-| `memory-provider` | V1 deferred | Per ADR-038 §12.3 (capability separation deferred). Runtime may store its own memory locally; the host does not consume it as a memory-provider slot until V1. |
+| `memory-provider` | V1 deferred | Per ADR-055 §12.3 (capability separation deferred). Runtime may store its own memory locally; the host does not consume it as a memory-provider slot until V1. |
 | `browser-control` | Optional | Only if the runtime hosts a headless browser. |
 | `channel.send` / `channel.account-write` | N/A | External agent runtimes are not channels. Channels (Telegram, Discord, etc.) use these; runtimes do not. |
 
@@ -183,11 +183,11 @@ Each F-number becomes a test case in `packages/addon-sdk-testing/` (B4 deliverab
 
 **With ADR-015 (Delegation Fabric).** Tightened. ADR-015 established that add-on agents are delegation targets; this ADR adds the credential and provider-selection constraints that make that policy enforceable for external agent runtimes. The Delegation Packet's `providerPolicy` field (newly formalized in this ADR) is the runtime's input to the routing request.
 
-**With ADR-038 (REF).** Compatible. ADR-038 §7 Runtime Boundary and §8 Phase 3.5 caller-attributed tokens are the mechanism this ADR relies on. The Phase 3.5 hardened bridge is what prevents the runtime from directly invoking privileged routes. The C2 / option (a) "per-caller grant store" decision (ADR-038 §8) is what gives the runtime a `callerId` distinguishable from first-party subsystems.
+**With ADR-055 (REF).** Compatible. ADR-055 §7 Runtime Boundary and §8 Phase 3.5 caller-attributed tokens are the mechanism this ADR relies on. The Phase 3.5 hardened bridge is what prevents the runtime from directly invoking privileged routes. The C2 / option (a) "per-caller grant store" decision (ADR-055 §8) is what gives the runtime a `callerId` distinguishable from first-party subsystems.
 
 **With `examples/addons/recursive-mas.json`.** Compatible. The recursive-mas manifest is an existing local-service add-on with `providers` + `agent-delegation`. It pre-dates this ADR but satisfies its rules in their current form; no manifest changes required. The recursive-mas runbook (`docs/architecture/addon-runbooks/recursive-mas/ENGINEER_SETUP.md`) should be reviewed against §4 (Credential Mediation) and either confirmed compliant or amended.
 
-**With future ADRs (V1 capability separation).** Per ADR-038 §12.3, the V1 split between `PublicCapability` and `InternalCapability` may introduce a new visibility tier for "delegation-routing primitives" that this ADR doesn't constrain. External agent runtimes declared under this ADR are always at the public tier; they cannot request V1-internal capabilities.
+**With future ADRs (V1 capability separation).** Per ADR-055 §12.3, the V1 split between `PublicCapability` and `InternalCapability` may introduce a new visibility tier for "delegation-routing primitives" that this ADR doesn't constrain. External agent runtimes declared under this ADR are always at the public tier; they cannot request V1-internal capabilities.
 
 ## 9. Reference Implementations
 
@@ -207,17 +207,17 @@ These are explicit deferrals, not omissions:
 
 - **ProviderProfileId exposure in the routed handle.** §4 includes `providerProfileId` in the routed handle for observability. Some teams argue this leaks routing intent to the runtime. Argument: the runtime needs to know which profile it's on for logging and user-facing explanations. Counter-argument: opaque IDs are sufficient; the host can map back at audit time. **Deferred to a follow-on review.** Current decision: include for V0.1; remove in V1 if it proves leaky.
 
-- **Cross-runtime credential isolation.** When two runtimes are installed (DSH and A0), can one runtime's routing decision be presented to another as its own? **Expected: no.** The routed handle binds to the `callerId` of the requesting runtime. Cross-presentation is a denial-audit event. This is a Phase 3.5 enforcement property; ADR-038 §8 records it. **No follow-on work needed; just calling it out.**
+- **Cross-runtime credential isolation.** When two runtimes are installed (DSH and A0), can one runtime's routing decision be presented to another as its own? **Expected: no.** The routed handle binds to the `callerId` of the requesting runtime. Cross-presentation is a denial-audit event. This is a Phase 3.5 enforcement property; ADR-055 §8 records it. **No follow-on work needed; just calling it out.**
 
 - **Runtime-supplied model name as a hint.** Some external agent runtimes have hard-coded "I prefer model X" defaults. §5 lets the runtime pass `modelHints` but not a hard selection. Some teams want a `modelPreference: "strict"` flag that causes the policy engine to fail rather than substitute. **Deferred to V1.**
 
-- **Long-running task support.** DeepSeek Harness sessions can run for hours; Agent Zero subordinates can persist. §3 Rule 7's audit-before-return implies every tool call is logged. For a 4-hour agent loop with 2000 tool calls, the audit volume is large. **No ADR-040 change; logged as a future perf concern for the audit pipeline.**
+- **Long-running task support.** DeepSeek Harness sessions can run for hours; Agent Zero subordinates can persist. §3 Rule 7's audit-before-return implies every tool call is logged. For a 4-hour agent loop with 2000 tool calls, the audit volume is large. **No ADR-056 change; logged as a future perf concern for the audit pipeline.**
 
 ## 11. Source
 
 - ADR-005: Provider Fabric & Routing (`docs/architecture/ADR-005-provider-fabric-routing.md`)
 - ADR-015: Delegation Fabric, Add-on Catalog, and Native Tool Fabric (`docs/architecture/ADR-015-delegation-fabric-addon-catalog-native-tools.md`)
-- ADR-038: Resonant Extension Framework (`docs/architecture/ADR-038-resonant-extension-framework.md`), especially §7 Runtime Boundary, §8 Phase 3.5, §12.3 deferred capability separation
+- ADR-055: Resonant Extension Framework (`docs/architecture/ADR-055-resonant-extension-framework.md`), especially §7 Runtime Boundary, §8 Phase 3.5, §12.3 deferred capability separation
 - `src/core/contracts.ts` AddOnManifest `providerRequirements` block (lines 547-555)
 - `src/sdk/addons/contracts.ts` AddOnSdkManifest (lines 26-43)
 - `examples/addons/recursive-mas.json` (canonical local-service add-on pattern)

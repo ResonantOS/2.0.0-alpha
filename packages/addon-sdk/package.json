@@ -1,7 +1,7 @@
 {
   "name": "@resonantos/addon-sdk",
   "version": "0.1.0",
-  "description": "Public Resonant Extension Framework (REF) add-on SDK \u2014 manifest contract, capability model, validator, registry, and surface-routing helpers. See ADR-038 \u00a712.1 C12 (Public SDK External Boundary) and ADR-040.",
+  "description": "Public Resonant Extension Framework (REF) add-on SDK \u2014 manifest contract, capability model, validator, registry, and surface-routing helpers. See ADR-055 \u00a712.1 C12 (Public SDK External Boundary) and ADR-056.",
   "license": "MIT",
   "type": "module",
   "private": true,
@@ -26,11 +26,11 @@
     "manifest",
     "validation"
   ],
-  "intent": "Fork-only soft cutover per ADR-038 \u00a712.1 C12. The package is not yet published; this manifest records the intended public boundary. When the SDK is extracted to a real workspace (Phase 1 of the implementation roadmap), the source files in src/ become the published surface and the existing src/sdk/addons/ shims in this repo are removed.",
+  "intent": "Fork-only soft cutover per ADR-055 \u00a712.1 C12. The package is not yet published; this manifest records the intended public boundary. When the SDK is extracted to a real workspace (Phase 1 of the implementation roadmap), the source files in src/ become the published surface and the existing src/sdk/addons/ shims in this repo are removed.",
   "sourceLocation": "src/sdk/addons/ (shims \u2014 keep for backward compat); canonical: packages/addon-sdk/src/",
   "seeAlso": [
-    "docs/architecture/ADR-038-resonant-extension-framework.md",
-    "docs/architecture/ADR-040-provider-fabric-boundary-external-agent-runtimes.md",
+    "docs/architecture/ADR-055-resonant-extension-framework.md",
+    "docs/architecture/ADR-056-provider-fabric-boundary-external-agent-runtimes.md",
     "docs/addons/resonant-extension-framework/RESONANT_ADDON_SDK_SPEC_V0.1.md",
     "docs/addons/resonant-extension-framework/ADDON_PACKAGE_AND_MANIFEST_SPEC_V0.1.md"
   ]

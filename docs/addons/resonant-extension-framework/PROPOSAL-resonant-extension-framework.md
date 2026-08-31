@@ -1,4 +1,4 @@
-# Proposal: Resonant Extension Framework (draft for ADR-038)
+# Proposal: Resonant Extension Framework (draft for ADR-055)
 
 ## Decision Metadata
 
@@ -9,7 +9,7 @@
 - Decision date: 2026-08-24
 - Target: ResonantOS Alpha fork
 - Staging: design-stage proposal at `docs/addons/resonant-extension-framework/`;
-  on acceptance this becomes `docs/architecture/ADR-038-resonant-extension-framework.md`
+  on acceptance this becomes `docs/architecture/ADR-055-resonant-extension-framework.md`
 
 ## Decision
 

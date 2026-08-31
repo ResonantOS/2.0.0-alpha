@@ -272,7 +272,7 @@ export function classifyPath(path, stat, options = {}) {
 
   // .rpkg is the official Resonant Extension Framework package format
   // (per docs/addons/resonant-extension-framework/ADDON_PACKAGE_AND_MANIFEST_SPEC_V0.1.md
-  // and ADR-038 §12.1 C6). The hygiene rule distinguishes the official
+  // and ADR-055 §12.1 C6). The hygiene rule distinguishes the official
   // format from ad-hoc ZIP archives; only .rpkg passes.
   if (normalizedPath.toLowerCase().endsWith(".rpkg")) {
     // Allow official package format; downstream checks (signing, manifest

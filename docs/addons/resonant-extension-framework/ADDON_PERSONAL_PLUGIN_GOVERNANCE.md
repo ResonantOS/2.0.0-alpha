@@ -171,7 +171,7 @@ Cross-cuts with the framework package:
 
 This is a proposed fork policy, not an accepted decision. Carry into:
 
-1. The ADR-038 draft: the `personal-local` provenance tier (if
+1. The ADR-055 draft: the `personal-local` provenance tier (if
    accepted) becomes an additional enum value with the same fail-closed
    guarantees as the others.
 2. `RESOLUTIONS_V0.1.md` — when C8 is reopened (sideload enablement), the

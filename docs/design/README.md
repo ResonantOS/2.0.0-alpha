@@ -6,8 +6,8 @@ for anyone building panels, add-ons, or app-shell UI.
 
 ## Resonant Extension Framework V0.1
 
-The framework package lived here during design; on ADR-038 acceptance
-the proposal moved to [`docs/architecture/ADR-038-resonant-extension-framework.md`](../architecture/ADR-038-resonant-extension-framework.md)
+The framework package lived here during design; on ADR-055 acceptance
+the proposal moved to [`docs/architecture/ADR-055-resonant-extension-framework.md`](../architecture/ADR-055-resonant-extension-framework.md)
 and the specifications moved to
 [`docs/addons/resonant-extension-framework/`](../addons/resonant-extension-framework/README.md).
 See that folder for the canonical list of framework specs, conflict

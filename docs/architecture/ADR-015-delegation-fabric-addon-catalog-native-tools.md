@@ -448,4 +448,4 @@ References:
 - OpenClaw compatibility is maintained through generated `TASK.md`, but ResonantOS owns the stronger structured packet.
 - LangGraph can be evaluated without making it foundational too early.
 
-**See also:** [ADR-040: Provider Fabric Boundary for External Agent Runtimes](ADR-040-provider-fabric-boundary-external-agent-runtimes.md) — extends the delegation-fabric policy to external agent runtimes by locking credential mediation, provider-routing authority, and capability enforcement at the bridge boundary.
+**See also:** [ADR-056: Provider Fabric Boundary for External Agent Runtimes](ADR-056-provider-fabric-boundary-external-agent-runtimes.md) — extends the delegation-fabric policy to external agent runtimes by locking credential mediation, provider-routing authority, and capability enforcement at the bridge boundary.

@@ -73,9 +73,9 @@ review, promotion, or trusted-memory writes.
 
 Read [ADR-006: Add-On Runtime SDK](architecture/ADR-006-addon-runtime-sdk.md),
 [ADR-018: Add-on SDK V0](architecture/ADR-018-addon-sdk-v0.md),
-[ADR-038: Resonant Extension Framework](architecture/ADR-038-resonant-extension-framework.md)
+[ADR-055: Resonant Extension Framework](architecture/ADR-055-resonant-extension-framework.md)
 (extends ADR-006/018 toward public/third-party add-ons), and
-[ADR-040: Provider Fabric Boundary for External Agent Runtimes](architecture/ADR-040-provider-fabric-boundary-external-agent-runtimes.md)
+[ADR-056: Provider Fabric Boundary for External Agent Runtimes](architecture/ADR-056-provider-fabric-boundary-external-agent-runtimes.md)
 (boundary for third-party agent runtimes like DeepSeek Harness or Agent Zero),
 [ADR-023: Add-On Repository And Registry](architecture/ADR-023-addon-repository-registry-model.md),
 [Add-On Lifecycle Uninstall Design](addons/addon-lifecycle-uninstall-design.md),
@@ -127,5 +127,5 @@ Dated review packets snapshot the state of work submitted to upstream
 reviewers. Each packet links to the live PR and records the commits,
 validation results, and review asks at the time of submission.
 
-- [2026-08-25: REF V0.1 + ADR-040 + packages/addon-sdk/ soft cutover](REVIEW_PACKET_2026-08-25.md) — PR #327
+- [2026-08-25: REF V0.1 + ADR-056 + packages/addon-sdk/ soft cutover](REVIEW_PACKET_2026-08-25.md) — PR #327
 
