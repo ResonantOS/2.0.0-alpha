@@ -24,7 +24,7 @@ Security requirements become mandatory at the boundary where third-party code ac
 | 1 | Reframe ADR-038 as evolution, not replacement | Done | ADR-038 §1: "extension of, not replacement for, ADR-006 and ADR-018" |
 | 2 | Divide SDK Core V0.1 from Distribution/Lifecycle beta.2 | Done (status) | ADR-038 §15.2 re-classifies C6/C7/C8/C10/C11 as beta.2 distribution deferrals |
 | 3 | Gate signing/.rpkg/registry/sideload behind "activates when third-party install exists" | Done (documented) | ADR-038 §15.2 cites #109: "becomes gating the moment a remote/marketplace registry or extension-side sideload lands" |
-| 4 | Uninstall/revocation/re-consent as a first-class contract (#180) | **Partial** | §15.2 records only `disable ≠ uninstall ≠ re-authorize`; the full lifecycle contract is ADR-038 §16 (in progress) |
+| 4 | Uninstall/revocation/re-consent as a first-class contract (#180) | Done | ADR-038 §16 — four-transition lifecycle contract (disable/enable/uninstall/update), grounded in the #180 audit |
 | 5 | PR #327 too large — decompose | Done | Split into #327 (REF) + #334 (tab-referencing); original history on `backup/tab-referencing-pre-split` |
 | 6 | "Maintainer-alignment patch" as the next move | Done | ADR-038 §15 reconciliation + §15.2 re-classification + split |
 | 7 | Keep the DeepSeek/external-runtime experiment | Intact | ADR-040 lives in #327; external-runtime PRs #329–#331 unaffected |
@@ -33,13 +33,7 @@ Security requirements become mandatory at the boundary where third-party code ac
 
 ### Phase 1 — unblocked
 
-1. **Close the Amendment-4 gap.** Draft ADR-038 §16: the add-on lifecycle security contract —
-   - `disable` — execution impossible, configuration preserved;
-   - `enable` — no silent re-authorization of materially changed grants;
-   - `uninstall` — atomic revoke of all grants, terminate associated runtimes, remove host residue (`Settings/addon-execution.json`, `DelegationArtifacts/`);
-   - `update` — diff the capability manifest, require fresh consent for expanded authority.
-   Grounded in Tom's #180 audit.
-2. **Resolve the ADR-038 double-claim.** `feat/tab-referencing` (#327) assigns ADR-038 = REF; `feat/dev-external-agent-runtimes-panel` (#331) assigns ADR-038 = Add-on Runtime Identity. One must renumber before either merges to `dev` (which tops out at ADR-037).
+1. **Resolve the ADR-038 double-claim.** `feat/tab-referencing` (#327) assigns ADR-038 = REF; `feat/dev-external-agent-runtimes-panel` (#331) assigns ADR-038 = Add-on Runtime Identity. One must renumber before either merges to `dev` (which tops out at ADR-037).
 
 ### Phase 2 — blocked on Tom
 
@@ -58,8 +52,7 @@ Security requirements become mandatory at the boundary where third-party code ac
 ```text
 Phase 1 (do now)           Phase 2 (blocked)           Phase 3 (parallel)
 --------------------       --------------------        --------------------
-1. ADR-038 §16 lifecycle → feeds §15.3 answers        4. CP-7 tests
-2. ADR-038 renumber       → clean merge surface          CP-5 filtering
-       │                      (Tom reviews #327/#334)    CP-6 UI
+1. ADR-038 renumber       → clean merge surface        3. CP-7 tests
+       │                      (Tom reviews #327/#334)     CP-5 filtering
        └────────────────► all converge at Accepted ────► CP-9 stable
 ```

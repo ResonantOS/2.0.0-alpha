@@ -16,6 +16,7 @@
 - Owner: Add-on SDK
 - Decision date: **pending** (will be set when promoted to Accepted)
 - Maintainer disposition reconciliation: §15 (recorded 2026-08-31; upstream #109, #180, #215, #137)
+- Lifecycle security contract: §16 (recorded 2026-08-31; per #180 audit)
 
 The trust-tier mapping (§4), capability model (§5), and runtime boundary (§7) are locked enough to be cross-referenced from `RESOLUTIONS_V0.1.md`. The remaining sections (1, 2, 3, 6, 8, 9, 10, 11, 13, 14) are drafted prose from existing source documents, ready for reviewer shaping.
 - Source: forked from `PROPOSAL-resonant-extension-framework.md`, with the resolutions from `RESOLUTIONS_V0.1.md`, the conflict framing from `OPEN_DESIGN_CONFLICTS_V0.1.md`, the review-feedback notes (`EXTERNAL_REVIEW_FEEDBACK_V0.1.md`, `ADDON_SDK_CODE_REVIEW_FEEDBACK_2026-08-24.md`, `ADDON_PERSONAL_PLUGIN_GOVERNANCE.md`), and the runtime hardening notes (`docs/security-pipeline/REF_HARDENING_NOTES_V0.1.md`).
@@ -947,7 +948,8 @@ boundary rather than to ADR-023/024 alone. Tom's #180 finding — disable
 retains every granted capability and a single re-enable restores full grants
 with no re-consent prompt (`src/modules/addons/controller.ts:58-89`) — is a
 beta.2 security follow-up and is **not** resolved by V0.1. The distinction
-to preserve is `disable ≠ uninstall ≠ re-authorize`.
+to preserve is `disable ≠ uninstall ≠ re-authorize` — now a first-class
+contract in §16.
 
 ### 15.3 Still requiring maintainer decision
 
@@ -977,6 +979,64 @@ outside the Alpha MVP guarantee until a safer handoff surface exists (a
 file/stdin/authenticated local API path with deterministic evidence return).
 Keep ADR-038 and ADR-040 reviewable independently.
 
+## 16. Add-on Lifecycle Security Contract
+
+Recorded 2026-08-31, per the maintainer's beta.2 disposition on #180 and the
+external review recommendation. This makes disable/uninstall/re-authorization
+a first-class security contract — the invariant the lifecycle implementation
+must satisfy when install/update/uninstall land (beta.2). The current build
+has no install path, so only `disable` is live today (#215, #180).
+
+### 16.1 The four transitions
+
+| Transition | Contract |
+|---|---|
+| `disable` | Execution becomes impossible; configuration and grants are preserved. |
+| `enable` | Execution resumes only with grants the user has consented to; materially changed grants are never silently restored. |
+| `uninstall` | Atomic: revoke every grant, terminate associated runtimes, remove or reconcile host-managed residue. |
+| `update` | Diff the old and new capability manifest; expanded authority requires fresh consent before it takes effect. |
+
+### 16.2 Disable ≠ enable ≠ re-authorize
+
+The #180 audit established the behavior this contract forbids:
+
+- Disable retains every granted capability and all configuration; a single
+  re-enable restores full grants with **no re-consent prompt**
+  (`src/modules/addons/controller.ts:58-89`; state persisted via
+  `src/core/runtime.ts:1369-1380`).
+- Host-side residue has no deletion path: `Settings/addon-execution.json`
+  entries and `DelegationArtifacts/` accumulate indefinitely.
+
+Invariant: **a grant is never restored by a lifecycle transition; it is only
+re-established by explicit user consent.**
+
+### 16.3 Uninstall residue
+
+`uninstall` must reconcile:
+
+- granted capabilities — revoked, not hidden;
+- `Settings/addon-execution.json` — the add-on's record removed;
+- `DelegationArtifacts/` and per-add-on host state — removed or archived per
+  retention policy;
+- credentials the add-on introduced (the #180 audit's example: a stored
+  Telegram bot token) — removed, never orphaned.
+
+### 16.4 Update consent
+
+`update` is a capability-model diff, not a byte replacement:
+
+1. diff old vs new manifest capabilities;
+2. a newly-requested capability is **not** active until the user grants it;
+3. narrowed authority takes effect immediately (removals are always safe);
+4. the diff is auditable — recorded, never silent.
+
+### 16.5 Scope and timing
+
+- **V0.1 (now):** the contract is recorded; `disable` is the only live
+  transition, and the #180 exposure is bounded (no install path, disabled
+  add-ons cannot execute).
+- **beta.2:** `uninstall`, `update`, and residue reconciliation are
+  implementation gates, sequenced with the distribution work (#109, #215).
 
 ## Appendix A — Input Source Map
 
