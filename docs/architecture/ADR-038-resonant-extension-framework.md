@@ -589,6 +589,8 @@ implementation gates once the prose is filled in), then cross-references
 to source documents, then the deferrals that survive V0.1.
 
 ### 12.1 V0.1 commitments
+> **Re-classified 2026-08-31 (§15.2):** C6, C7, C8, C10, C11 below are beta.2
+> distribution deferrals, not V0.1 commitments. See §15.2 for the mapping.
 
 - **C6 container format** — **V0.1:** `.rpkg` is the official package
   format per `ADDON_PACKAGE_AND_MANIFEST_SPEC_V0.1.md`. The
@@ -718,7 +720,7 @@ See also:
 
 ### 12.2 Cross-references
 
-Every V0.1 commitment above is grounded in source documents:
+Every commitment above is grounded in source documents:
 
 | Decision | Source |
 |---|---|
@@ -778,14 +780,16 @@ Three items are recorded as deferred and not addressed in V0.1:
 
 ### 12.4 Summary
 
-- **9 V0.1 commitments** recorded (C6, C7, C8, C9, C10, C11, C12,
-  `personal-local`, `communication-channel`).
+- **4 V0.1 commitments** recorded (C9, C12, `personal-local`,
+  `communication-channel`) — the SDK contract boundary.
+- **5 beta.2 distribution deferrals** recorded (C6, C7, C8, C10, C11) —
+  re-classified per §15.2.
 - **1 §4 commitment** recorded (the trust-model mapping table).
 - **1 V0.1 commitment** recorded via cross-reference (public SDK external
   boundary — depends on the Phase 0 inventory commit landing first; the
   inventory is recorded as part of the §12 walk and is complete).
-- **3 deferrals** recorded (auto-unplug, Post-V0.1 sandbox, capability
-  separation).
+- **3 future-ADR deferrals** recorded (auto-unplug, Post-V0.1 sandbox,
+  capability separation).
 - **0 unresolved** items from the original §12 outline.
 
 - **Public SDK external boundary** — **V0.1 fork-only, soft cutover
@@ -917,6 +921,25 @@ V0.1 SDK-contract scope:
 - install / update / uninstall lifecycle;
 - marketplace/store distribution;
 - complete grant cleanup on disable/uninstall.
+
+These map to §12.1 commitments as follows — re-classified here from "V0.1
+commitment" to "beta.2 distribution deferral":
+
+| §12.1 label | Re-classified |
+|---|---|
+| C6 `.rpkg` container format | beta.2 — spec drafted in `ADDON_PACKAGE_AND_MANIFEST_SPEC_V0.1.md`; install path not in Alpha |
+| C7 compatibility evaluation (install + launch) | beta.2 — install lifecycle |
+| C8 sideload enablement | beta.2 — #109: sideload hardening is gated on an install path existing |
+| C10 registry metadata | beta.2 — spec drafted in `REGISTRY_METADATA_SCHEMA_V0.1.md`; live registry deferred per ADR-023/024 |
+| C11 signing architecture | beta.2 — spec drafted in `SIGNING_ARCHITECTURE_V0.1.md`; verification "becomes gating the moment a remote/marketplace registry or extension-side sideload lands" (#109) |
+
+This re-classification supersedes the "V0.1 commitment" labeling of C6, C7,
+C8, C10, and C11 in §12.1. The V0.1 SDK-contract commitments are C9
+(vocabulary), C12 (`packages/addon-sdk/` boundary), `personal-local`, and
+`communication-channel` — the manifest, validation, capability, and boundary
+surface Tom can accept now. The five distribution items and their spec
+documents land with the beta.2 distribution work, not with the Alpha SDK
+boundary.
 
 ADR-038 already defers the marketplace and distribution machinery (§14,
 §12.3); this section pins those deferrals to the maintainer's beta.2
