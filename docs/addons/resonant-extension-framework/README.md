@@ -19,6 +19,7 @@ This package contains a proposed architecture and implementation specification f
 - [`REGISTRY_METADATA_SCHEMA_V0.1.md`](REGISTRY_METADATA_SCHEMA_V0.1.md) — C10 approved-release index schema (canonical JSON shape, verifier behavior, rotation)
 - [`SIGNING_ARCHITECTURE_V0.1.md`](SIGNING_ARCHITECTURE_V0.1.md) — C11 ed25519 signing envelope, key ids, and verification behavior
 - [`CAPABILITY_SEPARATION_V1.md`](CAPABILITY_SEPARATION_V1.md) — deferred V1 design for splitting Public vs Internal capabilities (no V0.1 contract change)
+- [`MAINTAINER_ALIGNMENT_ROADMAP.md`](MAINTAINER_ALIGNMENT_ROADMAP.md) — status/sequencing roadmap tracking the maintainer-alignment work (done vs remaining)
 
 The package's source code lives at [`packages/addon-sdk/`](../../../packages/addon-sdk/README.md)
 (fork-only soft cutover per ADR-038 §12.1 C12).
