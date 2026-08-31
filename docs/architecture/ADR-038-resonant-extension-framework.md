@@ -15,6 +15,7 @@
 - Alpha applicability: **Partial**
 - Owner: Add-on SDK
 - Decision date: **pending** (will be set when promoted to Accepted)
+- Maintainer disposition reconciliation: §15 (recorded 2026-08-31; upstream #109, #180, #215, #137)
 
 The trust-tier mapping (§4), capability model (§5), and runtime boundary (§7) are locked enough to be cross-referenced from `RESOLUTIONS_V0.1.md`. The remaining sections (1, 2, 3, 6, 8, 9, 10, 11, 13, 14) are drafted prose from existing source documents, ready for reviewer shaping.
 - Source: forked from `PROPOSAL-resonant-extension-framework.md`, with the resolutions from `RESOLUTIONS_V0.1.md`, the conflict framing from `OPEN_DESIGN_CONFLICTS_V0.1.md`, the review-feedback notes (`EXTERNAL_REVIEW_FEEDBACK_V0.1.md`, `ADDON_SDK_CODE_REVIEW_FEEDBACK_2026-08-24.md`, `ADDON_PERSONAL_PLUGIN_GOVERNANCE.md`), and the runtime hardening notes (`docs/security-pipeline/REF_HARDENING_NOTES_V0.1.md`).
@@ -880,6 +881,79 @@ Source: `PROPOSAL-resonant-extension-framework.md` Consequences;
 ---
 
 **See also:** [ADR-040: Provider Fabric Boundary for External Agent Runtimes](ADR-040-provider-fabric-boundary-external-agent-runtimes.md) — applies the REF runtime boundary to external agent runtimes; locks the credential-mediation and provider-routing contract for add-ons like DeepSeek Harness or Agent Zero.
+
+## 15. Maintainer Disposition Reconciliation (2026-08-31)
+
+This section records ADR-038 against the upstream maintainer's actual
+release-scope dispositions. It is not a review of REF — the maintainer has
+not reviewed this ADR or PR #327. These dispositions are *maintainer
+precedents that constrain how REF should be proposed*: scope/timing
+decisions captured in the upstream issue record (#109, #180, #215, #137),
+each drafted via Claude Code as noted in the issue comments. They are read
+from the upstream issue comment record on 2026-08-31.
+
+### 15.1 Already consistent with maintainer direction
+
+| ADR-038 position | Maintainer disposition |
+|---|---|
+| REF is "extension of, not replacement for, ADR-006/ADR-018" (§1) | #215 close-out: add-ons ship as governed visible capabilities over the existing SDK; no competing runtime |
+| Browser-first Alpha boundary; no runtime change until checkpoint ADRs land (§14) | #109/#180/#215: only work blocking the Chrome extension + local browser-first bridge is in the Alpha critical path |
+| Governed, bundled/local catalog; host-mediated delegation; capability-gated (§4, §7) | #215: catalog is fixed and locally bundled, no install path, delegation has a six-state lifecycle |
+| Privileged authority stays with the host, never with signature/manifest (§2, §7, §8) | #215 + #109: capability enforcement is host-owned; signing is a beta.2 distribution concern |
+| Delegation before public installation (§8 Phase 3.5, §13) | #215: governed delegation is accepted at beta.1 with no marketplace/install path |
+| Failure/recovery visibility is part of the contract (§14) | #137: delegation failure states remain visible with recovery guidance; artifacts return with secret-redacted failures |
+
+### 15.2 Explicitly beta.2 / deferred — do not claim in Alpha
+
+Per #109 (deferred to beta.2; signing/hash verification "becomes gating the
+moment a remote/marketplace registry or extension-side sideload lands") and
+#180 (deferred to beta.2 as a security item — the highest-priority follow-up
+from the #215 audit), the following are distribution/lifecycle scope, not
+V0.1 SDK-contract scope:
+
+- remote registry / marketplace;
+- public sideload enablement as a shipping path;
+- signature/hash verification as a distribution gate;
+- install / update / uninstall lifecycle;
+- marketplace/store distribution;
+- complete grant cleanup on disable/uninstall.
+
+ADR-038 already defers the marketplace and distribution machinery (§14,
+§12.3); this section pins those deferrals to the maintainer's beta.2
+boundary rather than to ADR-023/024 alone. Tom's #180 finding — disable
+retains every granted capability and a single re-enable restores full grants
+with no re-consent prompt (`src/modules/addons/controller.ts:58-89`) — is a
+beta.2 security follow-up and is **not** resolved by V0.1. The distinction
+to preserve is `disable ≠ uninstall ≠ re-authorize`.
+
+### 15.3 Still requiring maintainer decision
+
+ADR-038 cannot move from Deferred to Accepted without upstream answers to:
+
+1. **REF terminology.** Whether "Resonant Extension Framework" is accepted as
+   the governance-architecture name, vs. "Add-on SDK V1" (§1; the naming
+   alternative is recorded in
+   `docs/addons/resonant-extension-framework/EXTERNAL_REVIEW_FEEDBACK_V0.1.md`).
+2. **Public package boundary.** Whether `packages/addon-sdk/` is the desired
+   long-term public SDK boundary (§12.1 C12), or only a fork-local
+   demonstration (§13).
+3. **Acceptance subset.** Which of the 9 V0.1 commitments (§12.4) the
+   maintainer wants accepted now, vs. held as fork-experimental.
+4. **Transition.** How ADR-038 moves from Deferred to Accepted /
+   partially-accepted (proposer review, then maintainer acceptance), and
+   whether "Alpha applicability: Partial" is the right frame.
+
+### 15.4 Separate decision — ADR-040
+
+ADR-040 (Provider Fabric Boundary for External Agent Runtimes) is its own
+architecture decision and must not be required to accept the basic SDK
+boundary. The relevant maintainer precedent for ADR-040 is #137, not this
+ADR: governed Hermes delegation packets, an embedded dashboard, and visible
+failure/recovery are accepted; raw external-runtime prompt execution is
+outside the Alpha MVP guarantee until a safer handoff surface exists (a
+file/stdin/authenticated local API path with deterministic evidence return).
+Keep ADR-038 and ADR-040 reviewable independently.
+
 
 ## Appendix A — Input Source Map
 
