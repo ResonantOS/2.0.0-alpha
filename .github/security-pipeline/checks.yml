@@ -1220,6 +1220,15 @@
         "browser-first/host",
         "src"
       ]
+    },
+    {
+      "id": "subprocess-no-shell-string",
+      "family": "runtime-hardening",
+      "policy": "block",
+      "adapter": "subprocess-no-shell-string",
+      "surfaces": [
+        "."
+      ]
     }
   ]
 }
