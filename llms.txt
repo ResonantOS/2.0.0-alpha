@@ -1,0 +1,17 @@
+# ResonantOS 2.0.0-alpha
+
+> The browser-first alpha of ResonantOS: the operating layer for cultivating a trusted AI strategist, then giving it a modular ecosystem of tools, memory, specialists, and community stewardship. Where a human and a trusted AI meet to think, work, and remember together.
+
+Docs:
+- [AGENTS.md](AGENTS.md): Agent operating contract — repository mission, runtime boundaries, evidence rules. Start of the five-file path.
+- [CONTRIBUTING.md](CONTRIBUTING.md): Contribution rules — run the alpha first, choose work from GitHub issues, feature branches target `dev`, PR titles prefixed by area.
+- [INSTALL.md](INSTALL.md): Supported runtime setup — npm install, `browser-first:bridge`, load the Chrome extension unpacked.
+- [docs/README.md](docs/README.md): Architecture and component references.
+
+Code:
+- [src/sdk/addons/](src/sdk/addons/): The add-on SDK and manifest validator — the modular specialist layer (add-ons declare a manifest, capabilities, and runtime type).
+- [browser-first/](browser-first/): The Chrome Manifest V3 side-panel extension and the authenticated local Node bridge (loopback by default).
+
+Project:
+- [Website](https://resonantos.com): Product overview, whitepaper, symbiotic licence.
+- [Economy research](https://github.com/ResonantOS/resonantos-economy-research): The governed research tower behind the contribution economy — "a research wind tunnel, not an economy factory."
