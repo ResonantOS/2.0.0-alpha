@@ -265,10 +265,14 @@ async function startOpencodeServer({
     children.delete(child);
     // Only drop the singleton entry this child owns: a stale child's late exit must not
     // clobber a newer server registered under the same key (stop->start, stale-health respawn).
-    if (inflight.get(key)?.serverInfo?.process === child) inflight.delete(key);
-    try {
-      Promise.resolve(pidRecord.clear(directory)).catch(() => {});
-    } catch { /* noop */ }
+    const registered = inflight.get(key)?.serverInfo?.process;
+    if (registered === child) inflight.delete(key);
+    // Likewise only clear the pid record when no newer server is registered under this key.
+    if (registered === undefined || registered === child) {
+      try {
+        Promise.resolve(pidRecord.clear(directory)).catch(() => {});
+      } catch { /* noop */ }
+    }
   });
 
   const announcedPortPromise = waitForAnnouncedPort(child, spawnPort, maxWaitMs);

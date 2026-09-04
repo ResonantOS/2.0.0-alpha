@@ -370,6 +370,25 @@ test("fails closed if the child exits before becoming ready", async () => {
   );
 });
 
+test("a stale child's late exit does not clear the newer server's pid record", async () => {
+  resetOpencodeServerSingletonForTests();
+  const ops = [];
+  let spawns = 0;
+  const children = [];
+  const pid = { read: async () => null, write: async (_d, rec) => { ops.push(["write", rec.pid]); }, clear: () => { ops.push(["clear"]); }, isAlive: () => false, commandOf: () => "", kill: () => {} };
+  const env = { OPENCODE_SERVER_PASSWORD: "pid-late-exit-secret" };
+  const expectedHeader = basicAuthHeader("opencode", env.OPENCODE_SERVER_PASSWORD);
+  const base = { command: "/bin/opencode", env, pidRecord: pid, processImpl: fakeProcess(), sleep: immediateSleep, pollMs: 1, maxWaitMs: 100,
+    fetchImpl: authedFetch(expectedHeader, []), spawnImpl: () => { spawns += 1; const c = fakeChild(45123 + spawns); c.pid = 5000 + spawns; children.push(c); return c; } };
+  const first = await ensureTestOpencodeServer(base);
+  forgetOpencodeServer(first);
+  await ensureTestOpencodeServer(base);
+  const before = ops.length;
+  children[0].emit("exit", 0); // stale child exits late
+  assert.deepEqual(ops.slice(before), []); // must not clear the newer server's record
+  assert.deepEqual(ops[ops.length - 1], ["write", 5002]);
+});
+
 test("a stale child's late exit does not clobber the newer singleton entry", async () => {
   resetOpencodeServerSingletonForTests();
   let spawns = 0;
