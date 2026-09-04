@@ -403,8 +403,8 @@ export function renderOpenCodeWorkspace({ container, bridgeRequest, getBridgeReq
     const sessionId = info.sessionId;
     const source = createOpenCodeBridgeSource({
       // Idempotent: return the already-known session so subscribe + prompt share it.
-      startSession: async () => ({ sessionId, eventUrl: info.eventUrl }),
-      openEventStream: (eventUrl) => fetch(eventUrl),
+      startSession: async () => ({ sessionId, eventUrl: info.eventUrl, eventAuthorization: info.eventAuthorization }),
+      openEventStream: (eventUrl) => fetch(eventUrl, info.eventAuthorization ? { headers: { Authorization: info.eventAuthorization } } : undefined),
       postJson: (path, body) => bridge()(path, { method: "POST", body })
     });
     const seeds = seedEventsFromMessages(seedMessages);
@@ -509,7 +509,7 @@ export function renderOpenCodeWorkspace({ container, bridgeRequest, getBridgeReq
       const list = await bridge()("/opencode/sessions/list", { method: "POST", body: {} });
       const history = await bridge()("/opencode/session/messages", { method: "POST", body: { sessionId } });
       await loadPickerOptions();
-      mountSession({ sessionId, eventUrl: list.eventUrl, baseUrl: list.baseUrl }, history.messages ?? [], { loadDiffOnMount: true });
+      mountSession({ sessionId, eventUrl: list.eventUrl, baseUrl: list.baseUrl, eventAuthorization: list.eventAuthorization }, history.messages ?? [], { loadDiffOnMount: true });
       setStatus(taskStatus, "");
     } catch (error) {
       setStatus(taskStatus, opencodeStatusMessage(error, "Could not resume OpenCode session"), "error");
