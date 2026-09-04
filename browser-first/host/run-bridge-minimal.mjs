@@ -179,20 +179,20 @@ const addonDelegationService = createAddonDelegationService({
 const { executeAddonsStatus } = addonDelegationService;
 const { addonDelegationRoutes } = createAddonDelegationHostService(addonDelegationService);
 
-// Live OpenCode session: the bridge starts (reuses) `opencode serve` on a
-// ResonantOS-dedicated port and proxies session/prompt/permission; the extension
-// streams the server's /event bus directly (host_permissions cover 127.0.0.1).
-const opencodeSessionPort = Number(process.env.RESONANTOS_OPENCODE_PORT ?? 4231);
+// Live OpenCode session: the bridge starts (reuses) `opencode serve` on an
+// ephemeral loopback port with a bridge-minted credential and proxies
+// session/prompt/permission; the extension streams the server's /event bus
+// directly (host_permissions cover 127.0.0.1).
 const opencodeSessionHandlers = createOpencodeSessionHandlers({
   ensureServer: () => ensureOpencodeServer({
     fetchImpl: (...args) => fetch(...args),
     spawnImpl: (cmd, cmdArgs, opts) => spawn(cmd, cmdArgs, opts),
     command: resolveOpenCodeCommand(),
     hostname: "127.0.0.1",
-    port: opencodeSessionPort,
+    port: process.env.RESONANTOS_OPENCODE_PORT ? Number(process.env.RESONANTOS_OPENCODE_PORT) : undefined,
     env: process.env,
   }),
-  createClient: (baseUrl) => createOpencodeHttpClient({ fetchImpl: (...args) => fetch(...args), baseUrl }),
+  createClient: (baseUrl, opts = {}) => createOpencodeHttpClient({ fetchImpl: (...args) => fetch(...args), baseUrl, ...opts }),
 });
 const { opencodeSessionRoutes } = createOpencodeSessionHostService(opencodeSessionHandlers);
 
