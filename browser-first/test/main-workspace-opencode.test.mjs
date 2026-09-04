@@ -513,6 +513,52 @@ test("opencode external cockpit interstitial gates URL issuance and opens with n
   }
 });
 
+test("cockpit open does not window.open when requiresCredential", async () => {
+  const { container, cleanup, window } = setupDom();
+  const openCalls = [];
+  window.open = (...args) => {
+    openCalls.push(args);
+    return null;
+  };
+  const bridgeRequest = async (route) => {
+    if (route === "/opencode/status") {
+      return {
+        installed: true,
+        executionEnabled: true,
+        command: "/usr/local/bin/opencode",
+        model: "openai/gpt-5.4-mini",
+        detail: "OpenCode runtime was detected.",
+      };
+    }
+    if (route === "/opencode/web/url") {
+      return { url: "http://127.0.0.1:45123/", requiresCredential: true };
+    }
+    throw new Error(`Unexpected route ${route}`);
+  };
+
+  try {
+    renderOpenCodeWorkspace({ container, bridgeRequest });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const cockpitButton = [...container.querySelectorAll("button")]
+      .find((button) => button.textContent === "Open full cockpit (external, ungoverned)");
+    cockpitButton.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const cockpitOpen = [...container.querySelectorAll("button")]
+      .find((button) => button.textContent === "Open in browser tab");
+    cockpitOpen.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const cockpitStatus = container.querySelector(".opencode-cockpit-status");
+    assert.deepEqual(openCalls, []);
+    assert.match(cockpitStatus.textContent, /disabled/);
+    assert.equal(cockpitOpen.disabled, false);
+  } finally {
+    cleanup();
+  }
+});
+
 test("event stream carries Authorization when the bridge returns eventAuthorization (start path)", async () => {
   const { container, cleanup } = setupDom();
   const fetches = [];

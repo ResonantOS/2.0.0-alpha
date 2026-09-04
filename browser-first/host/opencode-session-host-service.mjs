@@ -39,7 +39,7 @@ export function createOpenCodeWebUrlHandler({ executionEnabled, ensureServer, ap
       event: "webCockpitUrlIssued",
       url,
     });
-    return { url };
+    return serverInfo?.auth ? { url, requiresCredential: true } : { url };
   };
 }
 

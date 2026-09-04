@@ -250,6 +250,11 @@ export function renderOpenCodeWorkspace({ container, bridgeRequest, getBridgeReq
     cockpitStatus.textContent = "Issuing local OpenCode cockpit URL…";
     try {
       const result = await bridge()("/opencode/web/url", { method: "POST", body: {} });
+      if (result?.requiresCredential) {
+        cockpitConfirm.hidden = true;
+        cockpitStatus.textContent = "OpenCode cockpit handoff is disabled while the server is credential-protected (restored by #321).";
+        return;
+      }
       const url = String(result?.url ?? "");
       window.open(url, "_blank", "noopener,noreferrer");
       cockpitConfirm.hidden = true;

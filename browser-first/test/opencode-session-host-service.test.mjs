@@ -313,3 +313,22 @@ test("web url handler ensures serve, returns a 127.0.0.1 root url, and appends a
   assert.equal(audit[0].url, "http://127.0.0.1:4231/");
   assert.doesNotThrow(() => new Date(audit[0].at).toISOString());
 });
+
+test("web url handler returns requiresCredential and never leaks the credential", async () => {
+  const audit = [];
+  const executeOpenCodeWebUrl = createOpenCodeWebUrlHandler({
+    executionEnabled: async () => true,
+    ensureServer: async () => ({
+      baseUrl: "http://127.0.0.1:45123",
+      auth: { username: "opencode", password: "s3cret", header: "Basic x" }
+    }),
+    appendAuditEntry: async (entry) => audit.push(entry),
+  });
+
+  const result = await executeOpenCodeWebUrl({ body: { enableOpenCodeExecution: true } });
+
+  assert.deepEqual(result, { url: "http://127.0.0.1:45123/", requiresCredential: true });
+  assert.equal(JSON.stringify(audit).includes("s3cret"), false);
+  assert.equal(JSON.stringify(audit).includes("Basic x"), false);
+  assert.equal(audit[0].url, "http://127.0.0.1:45123/");
+});
