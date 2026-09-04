@@ -54,7 +54,7 @@ export function opencodeServeBaseUrl(serverInfo = {}) {
 export async function pickFreeLoopbackPort({
   netImpl = net,
   hostname = DEFAULT_HOST,
-  avoid = [4000 + 96, 4000 + 231],
+  avoid = [4096, 4231], // port-literal-allowlist: avoid-set — ports we refuse to pick, never ones we bind by default
   attempts = 8
 } = {}) {
   const avoided = new Set(avoid);
@@ -85,6 +85,23 @@ export async function opencodeServerHealthy({ fetchImpl, baseUrl, headers = {}, 
   try {
     const res = await fetchImpl(`${baseUrl}/doc`, { method: "GET", headers: { ...headers }, signal: controller?.signal });
     return Boolean(res && res.ok);
+  } catch {
+    return false;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+// Deliberate enforcement check: a request WITHOUT the credential must be rejected.
+// A 2xx here means the listener does not require the bridge credential (a foreign
+// or misconfigured server) and must never be adopted, whatever the authed probe said.
+export async function opencodeServerEnforcesAuth({ fetchImpl, baseUrl, timeoutMs = 1500 } = {}) {
+  if (typeof fetchImpl !== "function") return false;
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  try {
+    const res = await fetchImpl(`${baseUrl}/doc`, { method: "GET", signal: controller?.signal });
+    return Boolean(res) && (res.status === 401 || res.status === 403);
   } catch {
     return false;
   } finally {
@@ -174,7 +191,8 @@ export async function ensureOpencodeServer({
   const key = `${command}|${hostname}|${directory}|${explicitPort}`;
   if (inflight.has(key)) {
     const info = await inflight.get(key);
-    if (await opencodeServerHealthy({ fetchImpl, baseUrl: info.baseUrl, headers: { Authorization: info.auth.header } })) {
+    if (await opencodeServerHealthy({ fetchImpl, baseUrl: info.baseUrl, headers: { Authorization: info.auth.header } })
+      && await opencodeServerEnforcesAuth({ fetchImpl, baseUrl: info.baseUrl })) {
       return { ...info, spawned: false };
     }
     inflight.delete(key);
@@ -241,9 +259,13 @@ async function startOpencodeServer({
     stdio: ["ignore", "pipe", "ignore"]
   });
   children.add(child);
+  let exited = false;
   child.once?.("exit", () => {
+    exited = true;
     children.delete(child);
-    inflight.delete(key);
+    // Only drop the singleton entry this child owns: a stale child's late exit must not
+    // clobber a newer server registered under the same key (stop->start, stale-health respawn).
+    if (inflight.get(key)?.serverInfo?.process === child) inflight.delete(key);
     try {
       Promise.resolve(pidRecord.clear(directory)).catch(() => {});
     } catch { /* noop */ }
@@ -254,7 +276,14 @@ async function startOpencodeServer({
   const baseUrl = opencodeBaseUrl({ hostname, port: announcedPort });
   const deadline = startedAt + maxWaitMs;
   while (true) {
+    if (exited) {
+      throw new Error("OpenCode server exited before becoming ready.");
+    }
     if (await opencodeServerHealthy({ fetchImpl, baseUrl, headers: { Authorization: header } })) {
+      if (!(await opencodeServerEnforcesAuth({ fetchImpl, baseUrl }))) {
+        try { child?.kill?.(); } catch { /* noop */ }
+        throw new Error("OpenCode server does not enforce the bridge credential; refusing to adopt it.");
+      }
       installShutdownHooks(processImpl);
       await pidRecord.write(directory, { pid: child.pid, port: announcedPort, startedAt: Date.now() });
       return { key, baseUrl, spawned: true, process: child, directory, auth: { username, password, header } };

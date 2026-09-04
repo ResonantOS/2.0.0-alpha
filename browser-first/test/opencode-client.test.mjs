@@ -159,24 +159,26 @@ test("pickFreeLoopbackPort default net implementation returns a bindable non-def
   await new Promise((resolve) => server.close(resolve));
 });
 
-test("does not reuse a pre-existing server that answers /doc without auth (spawns anyway)", async () => {
+test("does not reuse a pre-existing server that answers /doc without auth (spawns, then refuses to adopt an auth-ignoring listener)", async () => {
   resetOpencodeServerSingletonForTests();
   let spawns = 0;
-  const result = await ensureTestOpencodeServer({
-    fetchImpl: async () => okRes(),
-    spawnImpl: () => {
-      spawns += 1;
-      return fakeChild();
-    },
-    command: "/bin/opencode",
-    pidRecord: noPid,
-    processImpl: fakeProcess(),
-    sleep: immediateSleep,
-    pollMs: 1,
-    maxWaitMs: 100
-  });
+  await assert.rejects(
+    () => ensureTestOpencodeServer({
+      fetchImpl: async () => okRes(),
+      spawnImpl: () => {
+        spawns += 1;
+        return fakeChild();
+      },
+      command: "/bin/opencode",
+      pidRecord: noPid,
+      processImpl: fakeProcess(),
+      sleep: immediateSleep,
+      pollMs: 1,
+      maxWaitMs: 100
+    }),
+    /does not enforce/
+  );
   assert.equal(spawns, 1);
-  assert.equal(result.spawned, true);
 });
 
 test("ensureOpencodeServer spawns and waits for readiness when the server is down", async () => {
@@ -305,7 +307,7 @@ test("ensureOpencodeServer returns the base URL from the announcement", async ()
   assert.equal(result.baseUrl, "http://127.0.0.1:45123");
 });
 
-test("ensureOpencodeServer probes only with the generated auth header", async () => {
+test("readiness probes with the header first, then confirms a no-header request is rejected", async () => {
   resetOpencodeServerSingletonForTests();
   const calls = [];
   const env = { OPENCODE_SERVER_PASSWORD: "probe-secret" };
@@ -321,9 +323,85 @@ test("ensureOpencodeServer probes only with the generated auth header", async ()
     pollMs: 1,
     maxWaitMs: 100
   });
-  assert.ok(calls.length > 0);
-  assert.equal(calls.every((call) => call.auth === expectedHeader), true);
-  assert.equal(calls.some((call) => call.auth === null), false);
+  assert.ok(calls.length > 1);
+  assert.equal(calls.every((call) => call.auth === expectedHeader || call.auth === null), true);
+  // exactly one deliberate no-header enforcement check, and only after an authed 200
+  assert.equal(calls.filter((call) => call.auth === null).length, 1);
+  assert.equal(calls.findIndex((call) => call.auth === null) > calls.findIndex((call) => call.auth === expectedHeader), true);
+});
+
+test("refuses to adopt a listener that answers 200 without the credential", async () => {
+  resetOpencodeServerSingletonForTests();
+  const child = fakeChild();
+  await assert.rejects(
+    () => ensureTestOpencodeServer({
+      fetchImpl: async () => ({ ok: true, status: 200, text: async () => "{}" }),
+      spawnImpl: () => child,
+      command: "/bin/opencode",
+      env: { RESONANTOS_OPENCODE_PORT: "45123" },
+      pidRecord: noPid,
+      processImpl: fakeProcess(),
+      sleep: immediateSleep,
+      pollMs: 1,
+      maxWaitMs: 100
+    }),
+    /does not enforce/
+  );
+  assert.equal(child.killed, true);
+});
+
+test("fails closed if the child exits before becoming ready", async () => {
+  resetOpencodeServerSingletonForTests();
+  const child = fakeChild(45123, { announce: false });
+  setTimeout(() => child.emit("exit", 1), 5);
+  await assert.rejects(
+    () => ensureTestOpencodeServer({
+      fetchImpl: async () => ({ ok: false, status: 401, text: async () => "" }),
+      spawnImpl: () => child,
+      command: "/bin/opencode",
+      env: {},
+      pidRecord: noPid,
+      processImpl: fakeProcess(),
+      sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 5))),
+      pollMs: 5,
+      maxWaitMs: 400
+    }),
+    /exited before/
+  );
+});
+
+test("a stale child's late exit does not clobber the newer singleton entry", async () => {
+  resetOpencodeServerSingletonForTests();
+  let spawns = 0;
+  const children = [];
+  const env = { OPENCODE_SERVER_PASSWORD: "late-exit-secret" };
+  const expectedHeader = basicAuthHeader("opencode", env.OPENCODE_SERVER_PASSWORD);
+  const base = { command: "/bin/opencode", env, pidRecord: noPid, processImpl: fakeProcess(), sleep: immediateSleep, pollMs: 1, maxWaitMs: 100,
+    fetchImpl: authedFetch(expectedHeader, []), spawnImpl: () => { spawns += 1; const c = fakeChild(45123 + spawns); children.push(c); return c; } };
+  const first = await ensureTestOpencodeServer(base);
+  forgetOpencodeServer(first);
+  const second = await ensureTestOpencodeServer(base);
+  assert.equal(spawns, 2);
+  children[0].emit("exit", 0); // stale child exits late
+  const third = await ensureTestOpencodeServer(base);
+  assert.equal(spawns, 2);
+  assert.equal(third.baseUrl, second.baseUrl);
+  assert.equal(third.spawned, false);
+});
+
+test("a reused singleton must still reject no-header requests", async () => {
+  resetOpencodeServerSingletonForTests();
+  let spawns = 0;
+  const env = { OPENCODE_SERVER_PASSWORD: "reuse-secret" };
+  const expectedHeader = basicAuthHeader("opencode", env.OPENCODE_SERVER_PASSWORD);
+  const base = { spawnImpl: () => { spawns += 1; return fakeChild(); }, command: "/bin/opencode", env, pidRecord: noPid, processImpl: fakeProcess(), sleep: immediateSleep, pollMs: 1, maxWaitMs: 100 };
+  await ensureTestOpencodeServer({ ...base, fetchImpl: authedFetch(expectedHeader, []) });
+  // the server behind the singleton now ignores auth (e.g. replaced by a foreign listener)
+  await assert.rejects(
+    () => ensureTestOpencodeServer({ ...base, fetchImpl: async () => ({ ok: true, status: 200, text: async () => "{}" }) }),
+    /does not enforce/
+  );
+  assert.equal(spawns, 2);
 });
 
 test("ensureOpencodeServer exposes operator-provided auth metadata", async () => {
@@ -546,7 +624,9 @@ test("RESONANTOS_OPENCODE_PORT controls serve args and fallback base URL without
     maxWaitMs: 20
   });
   assert.deepEqual(spawned.args.slice(-2), ["--port", "4231"]);
-  assert.equal(calls.every((call) => call.auth === expectedHeader), true);
+  // authed probes plus exactly one deliberate no-header enforcement check
+  assert.equal(calls.every((call) => call.auth === expectedHeader || call.auth === null), true);
+  assert.equal(calls.filter((call) => call.auth === null).length, 1);
   assert.equal(result.baseUrl, "http://127.0.0.1:4231");
 });
 
@@ -705,7 +785,8 @@ test("secrets are not present in safe serialized server info or module logging",
 });
 
 test("module source does not contain removed default port literals", () => {
-  const source = readFileSync(new URL("../host/opencode-client.mjs", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../host/opencode-client.mjs", import.meta.url), "utf8")
+    .split("\n").filter((line) => !line.includes("port-literal-allowlist")).join("\n");
   assert.equal(/\b(4096|4231)\b/.test(source), false);
 });
 

@@ -93,7 +93,7 @@ The iframe is broken. Work top-down:
 
 ## OpenCode server binding
 
-- **Default:** the bridge picks a free loopback port itself (never 4096 or 4231 — note that `opencode serve --port 0` would otherwise reuse 4096 whenever it is free), spawns `opencode serve --hostname 127.0.0.1 --port <picked>`, and confirms the port against the `opencode server listening on http://127.0.0.1:<port>` line; the OpenCode server binds to an ephemeral loopback port and the bridge mints a random Basic-auth credential for it. The bridge logs the chosen port. Nothing listens on the old fixed port 4231.
+- **Default:** the bridge picks a free loopback port itself (never 4096 or 4231 — note that `opencode serve --port 0` would otherwise reuse 4096 whenever it is free), spawns `opencode serve --hostname 127.0.0.1 --port <picked>`, and confirms the port against the `opencode server listening on http://127.0.0.1:<port>` line; the OpenCode server binds to an ephemeral loopback port and the bridge mints a random Basic-auth credential for it. The chosen port is recorded in `~/ResonantOS_User/BrowserFirst/opencode-server.json` once the server is ready (and is visible via `lsof -nP -iTCP -sTCP:LISTEN | grep opencode`). Nothing listens on the old fixed port 4231.
 - **Override:** `RESONANTOS_OPENCODE_PORT=<port>` pins the port for debugging; the credential is still required. If the bridge environment already sets `OPENCODE_SERVER_PASSWORD`, that operator-set password is respected instead of a minted one.
 - **How to confirm:**
   ```bash
@@ -101,7 +101,7 @@ The iframe is broken. Work top-down:
   curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:<port>/doc   # -> 401
   ```
 - **Residual exposure (documented, not fixed here):** the password is present in the `opencode serve` child environment (readable by other processes of the same user, and inherited by any subprocess OpenCode itself spawns) — env is the only secret channel the binary supports. A bridge killed with `SIGKILL` can leave an authenticated orphan on a random port until the next bridge start reaps it via the PID record. The extension's `/event` fetch relies on MV3 `host_permissions` to send the header cross-origin. These are tracked under #326 and #321.
-- **Recovery:** if the bridge reports "did not announce a listening port", check the opencode binary version (`opencode --version`, expected ≥ 1.18) and confirm `opencode serve --port 0` prints the listening line.
+- **Recovery:** if the bridge reports "did not announce a listening port", check the opencode binary version (`opencode --version`, expected ≥ 1.18) and confirm `opencode serve --hostname 127.0.0.1 --port <any free port>` prints the listening line.
 
 ## See also
 
