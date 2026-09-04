@@ -75,6 +75,7 @@ a security issue** — that is a boundary regression, not a feature.
 | Every route `403`s | capability-token map drift → run `bridge-capability-token-consistency.test.mjs`; re-audit the launcher map (#200) |
 | Provider won't route / "no available route" | no credential or model disabled → *Settings › Providers* / *Routing* (the error message names the fix) |
 | WebSocket `code 1006` in chat/model panel | Caddy TLS ALPN not pinned to `http/1.1` → bridge setup runbook, Bug 3 |
+| OpenCode session shows `401` / event stream never connects | extension and bridge version skew (extension lacks the auth header) → reload the extension; confirm the bridge and extension are from the same build |
 
 ## 6. Add-ons: what "disable" does and does not do
 
@@ -94,11 +95,17 @@ install path for third-party add-ons in this build, and no uninstall flow
   the bridge by per-route capability tokens — they are not per-chip toggles.
   The one live control is each add-on's local CLI execution switch.
 
-OpenCode's full cockpit opens the native OpenCode UI in a separate browser tab.
-It is local and ungoverned: actions there bypass ResonantOS approvals, audit,
-and redaction, and the tab carries no ResonantOS banner. ResonantOS logs only
-that it issued the URL as `webCockpitUrlIssued`; cockpit actions themselves are
-not observable or audited by ResonantOS. Never expose the URL off-machine.
+The OpenCode server the bridge runs is now credential-protected and bound to
+an ephemeral loopback port instead of the old fixed port 4231. While that
+protection is in place, the **cockpit handoff button is disabled** — the panel
+shows "OpenCode cockpit handoff is disabled while the server is
+credential-protected" instead of opening a tab. Governed cockpit access (a
+proxied handoff that carries the credential) is tracked in #321. The governed
+OpenCode workspace inside the side panel keeps working unaffected. Testers
+should verify that opening `http://127.0.0.1:4231/` directly fails to connect,
+and that no OpenCode URL is ever shown in the panel. ResonantOS still logs
+that it issued the URL as `webCockpitUrlIssued`; the event is still emitted
+with the plain URL even though the panel no longer surfaces it.
 
 ## 7. Recording evidence
 

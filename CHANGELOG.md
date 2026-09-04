@@ -6,6 +6,16 @@ in [docs/STATUS.md](docs/STATUS.md); planned work lives in
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Security
+
+- OpenCode's local server now binds to an ephemeral loopback port with a bridge-minted credential; unauthenticated access to the former fixed port 4231 is closed, the bridge and side panel authenticate their requests and event stream, and orphaned servers are reaped on the next bridge start (#320).
+
+### Changed
+
+- The OpenCode cockpit handoff button is disabled while the server is credential-protected; governed cockpit access returns with the bridge reverse proxy (#321).
+
 ## [2.0.0-beta.1] - 2026-08-22
 
 ### Added
