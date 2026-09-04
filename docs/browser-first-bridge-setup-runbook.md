@@ -93,7 +93,7 @@ The iframe is broken. Work top-down:
 
 ## OpenCode server binding
 
-- **Default:** the bridge spawns `opencode serve --hostname 127.0.0.1 --port 0` and reads the announced port from the `opencode server listening on http://127.0.0.1:<port>` line; the OpenCode server binds to an ephemeral loopback port and the bridge mints a random Basic-auth credential for it. The bridge logs the chosen port. Nothing listens on the old fixed port 4231.
+- **Default:** the bridge picks a free loopback port itself (never 4096 or 4231 — note that `opencode serve --port 0` would otherwise reuse 4096 whenever it is free), spawns `opencode serve --hostname 127.0.0.1 --port <picked>`, and confirms the port against the `opencode server listening on http://127.0.0.1:<port>` line; the OpenCode server binds to an ephemeral loopback port and the bridge mints a random Basic-auth credential for it. The bridge logs the chosen port. Nothing listens on the old fixed port 4231.
 - **Override:** `RESONANTOS_OPENCODE_PORT=<port>` pins the port for debugging; the credential is still required. If the bridge environment already sets `OPENCODE_SERVER_PASSWORD`, that operator-set password is respected instead of a minted one.
 - **How to confirm:**
   ```bash

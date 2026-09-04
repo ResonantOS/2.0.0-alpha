@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
+import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
@@ -14,6 +15,7 @@ import {
   ensureOpencodeServer,
   forgetOpencodeServer,
   opencodeBaseUrl,
+  pickFreeLoopbackPort,
   opencodeServeBaseUrl,
   opencodeServerHealthy,
   resetOpencodeServerSingletonForTests
@@ -75,6 +77,35 @@ function fakeProcess() {
 }
 
 const immediateSleep = async () => {};
+const pickedTestPort = async () => 45123;
+
+function ensureTestOpencodeServer(options) {
+  return ensureOpencodeServer({ pickEphemeralPort: pickedTestPort, ...options });
+}
+
+function fakeNetImpl(ports) {
+  const servers = [];
+  return {
+    servers,
+    createServer: () => {
+      const port = ports.shift();
+      const server = new EventEmitter();
+      server.closed = false;
+      server.listen = (_requestedPort, _hostname, callback) => {
+        server.port = port;
+        queueMicrotask(callback);
+        return server;
+      };
+      server.address = () => ({ port: server.port });
+      server.close = (callback) => {
+        server.closed = true;
+        queueMicrotask(callback);
+      };
+      servers.push(server);
+      return server;
+    }
+  };
+}
 
 test("opencodeServerHealthy is true only when the /doc probe succeeds", async () => {
   assert.equal(await opencodeServerHealthy({ fetchImpl: async () => okRes(), baseUrl: "http://x" }), true);
@@ -82,10 +113,56 @@ test("opencodeServerHealthy is true only when the /doc probe succeeds", async ()
   assert.equal(await opencodeServerHealthy({ fetchImpl: async () => { throw new Error("conn refused"); }, baseUrl: "http://x" }), false);
 });
 
+test("pickFreeLoopbackPort skips known OpenCode defaults and returns another free port", async () => {
+  const netImpl = fakeNetImpl([4096, 4231, 51000]);
+  const port = await pickFreeLoopbackPort({ netImpl });
+  assert.equal(port, 51000);
+  assert.equal(netImpl.servers.length, 3);
+  assert.deepEqual(netImpl.servers.map((server) => server.closed), [true, true, true]);
+});
+
+test("pickFreeLoopbackPort rejects when every attempt reports an avoided port", async () => {
+  const netImpl = fakeNetImpl(Array.from({ length: 8 }, () => 4096));
+  await assert.rejects(() => pickFreeLoopbackPort({ netImpl }), /free loopback port/);
+  assert.equal(netImpl.servers.every((server) => server.closed), true);
+});
+
+test("pickFreeLoopbackPort default net implementation returns a bindable non-default loopback port", async (t) => {
+  const probe = net.createServer();
+  try {
+    await new Promise((resolve, reject) => {
+      probe.once("error", reject);
+      probe.listen(0, "127.0.0.1", resolve);
+    });
+  } catch (error) {
+    if (error?.code === "EPERM") {
+      t.skip("loopback listen is denied by this sandbox");
+      return;
+    }
+    throw error;
+  } finally {
+    try {
+      if (probe.listening) await new Promise((resolve) => probe.close(resolve));
+    } catch { /* noop */ }
+  }
+
+  const port = await pickFreeLoopbackPort();
+  assert.equal(Number.isInteger(port), true);
+  assert.equal(port >= 1024 && port <= 65535, true);
+  assert.equal(port === 4096 || port === 4231, false);
+
+  const server = net.createServer();
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", resolve);
+  });
+  await new Promise((resolve) => server.close(resolve));
+});
+
 test("does not reuse a pre-existing server that answers /doc without auth (spawns anyway)", async () => {
   resetOpencodeServerSingletonForTests();
   let spawns = 0;
-  const result = await ensureOpencodeServer({
+  const result = await ensureTestOpencodeServer({
     fetchImpl: async () => okRes(),
     spawnImpl: () => {
       spawns += 1;
@@ -107,7 +184,7 @@ test("ensureOpencodeServer spawns and waits for readiness when the server is dow
   let spawned = null;
   const env = { OPENCODE_SERVER_PASSWORD: "ready-secret" };
   const expectedHeader = basicAuthHeader("opencode", env.OPENCODE_SERVER_PASSWORD);
-  const result = await ensureOpencodeServer({
+  const result = await ensureTestOpencodeServer({
     fetchImpl: authedFetch(expectedHeader, []),
     spawnImpl: (cmd, args, opts) => {
       spawned = { cmd, args, opts };
@@ -118,12 +195,13 @@ test("ensureOpencodeServer spawns and waits for readiness when the server is dow
     env,
     pidRecord: noPid,
     processImpl: fakeProcess(),
+    pickEphemeralPort: pickedTestPort,
     sleep: immediateSleep,
     pollMs: 1,
     maxWaitMs: 100
   });
   assert.ok(spawned, "spawned a server");
-  assert.deepEqual(spawned.args, ["serve", "--hostname", "127.0.0.1", "--port", "0"]);
+  assert.deepEqual(spawned.args, ["serve", "--hostname", "127.0.0.1", "--port", "45123"]);
   assert.equal(spawned.opts.cwd, "/repo/root");
   assert.equal(result.spawned, true);
   assert.equal(result.directory, "/repo/root");
@@ -132,7 +210,7 @@ test("ensureOpencodeServer spawns and waits for readiness when the server is dow
 test("ensureOpencodeServer refuses to start without a resolved command", async () => {
   resetOpencodeServerSingletonForTests();
   await assert.rejects(
-    () => ensureOpencodeServer({
+    () => ensureTestOpencodeServer({
       fetchImpl: async () => errRes(503),
       command: "",
       spawnImpl: () => ({}),
@@ -162,7 +240,7 @@ test("ensureOpencodeServer uses default serve args and piped stdout", async () =
   resetOpencodeServerSingletonForTests();
   let spawned = null;
   const env = { OPENCODE_SERVER_PASSWORD: "default-secret" };
-  await ensureOpencodeServer({
+  await ensureTestOpencodeServer({
     fetchImpl: authedFetch(basicAuthHeader("opencode", env.OPENCODE_SERVER_PASSWORD), []),
     spawnImpl: (cmd, args, opts) => {
       spawned = { cmd, args, opts };
@@ -172,11 +250,12 @@ test("ensureOpencodeServer uses default serve args and piped stdout", async () =
     env,
     pidRecord: noPid,
     processImpl: fakeProcess(),
+    pickEphemeralPort: pickedTestPort,
     sleep: immediateSleep,
     pollMs: 1,
     maxWaitMs: 100
   });
-  assert.deepEqual(spawned.args, ["serve", "--hostname", "127.0.0.1", "--port", "0"]);
+  assert.deepEqual(spawned.args, ["serve", "--hostname", "127.0.0.1", "--port", "45123"]);
   assert.deepEqual(spawned.opts.stdio, ["ignore", "pipe", "ignore"]);
 });
 
@@ -184,7 +263,7 @@ test("ensureOpencodeServer mints unique default child passwords", async () => {
   const passwords = [];
   const run = async () => {
     resetOpencodeServerSingletonForTests();
-    await ensureOpencodeServer({
+    await ensureTestOpencodeServer({
       fetchImpl: async (_url, init = {}) => (
         init?.headers?.Authorization === basicAuthHeader("opencode", passwords.at(-1)) ? okRes() : errRes(401)
       ),
@@ -212,7 +291,7 @@ test("ensureOpencodeServer mints unique default child passwords", async () => {
 test("ensureOpencodeServer returns the base URL from the announcement", async () => {
   resetOpencodeServerSingletonForTests();
   const env = { OPENCODE_SERVER_PASSWORD: "announce-secret" };
-  const result = await ensureOpencodeServer({
+  const result = await ensureTestOpencodeServer({
     fetchImpl: authedFetch(basicAuthHeader("opencode", env.OPENCODE_SERVER_PASSWORD), []),
     spawnImpl: () => fakeChild(),
     command: "/bin/opencode",
@@ -231,7 +310,7 @@ test("ensureOpencodeServer probes only with the generated auth header", async ()
   const calls = [];
   const env = { OPENCODE_SERVER_PASSWORD: "probe-secret" };
   const expectedHeader = basicAuthHeader("opencode", env.OPENCODE_SERVER_PASSWORD);
-  await ensureOpencodeServer({
+  await ensureTestOpencodeServer({
     fetchImpl: authedFetch(expectedHeader, calls),
     spawnImpl: () => fakeChild(),
     command: "/bin/opencode",
@@ -251,7 +330,7 @@ test("ensureOpencodeServer exposes operator-provided auth metadata", async () =>
   resetOpencodeServerSingletonForTests();
   const env = { OPENCODE_SERVER_PASSWORD: "operator-known-secret" };
   const expectedHeader = basicAuthHeader("opencode", env.OPENCODE_SERVER_PASSWORD);
-  const result = await ensureOpencodeServer({
+  const result = await ensureTestOpencodeServer({
     fetchImpl: authedFetch(expectedHeader, []),
     spawnImpl: () => fakeChild(),
     command: "/bin/opencode",
@@ -270,7 +349,7 @@ test("concurrent ensureOpencodeServer calls share one spawn", async () => {
   resetOpencodeServerSingletonForTests();
   let spawns = 0;
   const env = { OPENCODE_SERVER_PASSWORD: "concurrent-secret" };
-  const ensure = () => ensureOpencodeServer({
+  const ensure = () => ensureTestOpencodeServer({
     fetchImpl: authedFetch(basicAuthHeader("opencode", env.OPENCODE_SERVER_PASSWORD), []),
     spawnImpl: () => {
       spawns += 1;
@@ -293,7 +372,7 @@ test("sequential ensureOpencodeServer reuses the singleton until reset", async (
   resetOpencodeServerSingletonForTests();
   let spawns = 0;
   const env = { OPENCODE_SERVER_PASSWORD: "reuse-secret" };
-  const ensure = () => ensureOpencodeServer({
+  const ensure = () => ensureTestOpencodeServer({
     fetchImpl: authedFetch(basicAuthHeader("opencode", env.OPENCODE_SERVER_PASSWORD), []),
     spawnImpl: () => {
       spawns += 1;
@@ -329,7 +408,7 @@ test("stale singleton health failure starts a fresh server", async () => {
     if (rejectOld && spawns === 1) return errRes(401);
     return okRes();
   };
-  const ensure = () => ensureOpencodeServer({
+  const ensure = () => ensureTestOpencodeServer({
     fetchImpl,
     spawnImpl: () => {
       spawns += 1;
@@ -353,7 +432,7 @@ test("forgetOpencodeServer makes the next ensure spawn again", async () => {
   resetOpencodeServerSingletonForTests();
   let spawns = 0;
   const env = { OPENCODE_SERVER_PASSWORD: "forget-secret" };
-  const ensure = () => ensureOpencodeServer({
+  const ensure = () => ensureTestOpencodeServer({
     fetchImpl: authedFetch(basicAuthHeader("opencode", env.OPENCODE_SERVER_PASSWORD), []),
     spawnImpl: () => {
       spawns += 1;
@@ -377,7 +456,7 @@ test("child exit clears the opencode singleton", async () => {
   resetOpencodeServerSingletonForTests();
   let spawns = 0;
   const env = { OPENCODE_SERVER_PASSWORD: "exit-secret" };
-  const ensure = () => ensureOpencodeServer({
+  const ensure = () => ensureTestOpencodeServer({
     fetchImpl: authedFetch(basicAuthHeader("opencode", env.OPENCODE_SERVER_PASSWORD), []),
     spawnImpl: () => {
       spawns += 1;
@@ -397,33 +476,59 @@ test("child exit clears the opencode singleton", async () => {
   assert.equal(spawns, 2);
 });
 
-test("ensureOpencodeServer rejects and kills when no dynamic port is announced", async () => {
+test("ensureOpencodeServer rejects and kills when an unannounced picked port never becomes ready", async () => {
   resetOpencodeServerSingletonForTests();
   const child = fakeChild(45123, { announce: false });
   await assert.rejects(
-    () => ensureOpencodeServer({
+    () => ensureTestOpencodeServer({
       fetchImpl: async () => errRes(401),
       spawnImpl: () => child,
       command: "/bin/opencode",
       env: {},
       pidRecord: noPid,
       processImpl: fakeProcess(),
+      pickEphemeralPort: pickedTestPort,
       sleep: immediateSleep,
       pollMs: 1,
       maxWaitMs: 20
     }),
-    /announce/
+    /did not become ready/
   );
   assert.equal(child.killed, true);
 });
 
-test("RESONANTOS_OPENCODE_PORT controls serve args and fallback base URL", async () => {
+test("ensureOpencodeServer falls back to the picked port when no announcement arrives but readiness succeeds", async () => {
+  resetOpencodeServerSingletonForTests();
+  const child = fakeChild(45123, { announce: false });
+  const env = { OPENCODE_SERVER_PASSWORD: "fallback-secret" };
+  const expectedHeader = basicAuthHeader("opencode", env.OPENCODE_SERVER_PASSWORD);
+  const result = await ensureTestOpencodeServer({
+    fetchImpl: async (url, init = {}) => (
+      String(url) === "http://127.0.0.1:45123/doc" && init?.headers?.Authorization === expectedHeader
+        ? okRes()
+        : errRes(401)
+    ),
+    spawnImpl: () => child,
+    command: "/bin/opencode",
+    env,
+    pidRecord: noPid,
+    processImpl: fakeProcess(),
+    pickEphemeralPort: pickedTestPort,
+    sleep: immediateSleep,
+    pollMs: 1,
+    maxWaitMs: 20
+  });
+  assert.equal(result.baseUrl, "http://127.0.0.1:45123");
+  assert.equal(child.killed, false);
+});
+
+test("RESONANTOS_OPENCODE_PORT controls serve args and fallback base URL without picking an ephemeral port", async () => {
   resetOpencodeServerSingletonForTests();
   const calls = [];
   let spawned = null;
   const env = { RESONANTOS_OPENCODE_PORT: "4231", OPENCODE_SERVER_PASSWORD: "env-port-secret" };
   const expectedHeader = basicAuthHeader("opencode", env.OPENCODE_SERVER_PASSWORD);
-  const result = await ensureOpencodeServer({
+  const result = await ensureTestOpencodeServer({
     fetchImpl: authedFetch(expectedHeader, calls),
     spawnImpl: (cmd, args, opts) => {
       spawned = { cmd, args, opts };
@@ -433,6 +538,9 @@ test("RESONANTOS_OPENCODE_PORT controls serve args and fallback base URL", async
     env,
     pidRecord: noPid,
     processImpl: fakeProcess(),
+    pickEphemeralPort: async () => {
+      throw new Error("explicit ports must not pick an ephemeral port");
+    },
     sleep: immediateSleep,
     pollMs: 1,
     maxWaitMs: 20
@@ -447,7 +555,7 @@ test("operator password is passed only through child env and derives the header"
   let childEnv = null;
   const env = { OPENCODE_SERVER_PASSWORD: "operator-secret" };
   const expectedHeader = basicAuthHeader("opencode", env.OPENCODE_SERVER_PASSWORD);
-  const result = await ensureOpencodeServer({
+  const result = await ensureTestOpencodeServer({
     fetchImpl: authedFetch(expectedHeader, []),
     spawnImpl: (_cmd, _args, opts) => {
       childEnv = opts.env;
@@ -469,7 +577,7 @@ test("stdout keeps draining after the listening announcement", async () => {
   resetOpencodeServerSingletonForTests();
   const child = fakeChild();
   const env = { OPENCODE_SERVER_PASSWORD: "drain-secret" };
-  await ensureOpencodeServer({
+  await ensureTestOpencodeServer({
     fetchImpl: authedFetch(basicAuthHeader("opencode", env.OPENCODE_SERVER_PASSWORD), []),
     spawnImpl: () => child,
     command: "/bin/opencode",
@@ -491,7 +599,7 @@ test("shutdown hooks kill children and install only once", async () => {
   const processImpl = fakeProcess();
   const child = fakeChild();
   const env = { OPENCODE_SERVER_PASSWORD: "hook-secret" };
-  const ensure = () => ensureOpencodeServer({
+  const ensure = () => ensureTestOpencodeServer({
     fetchImpl: authedFetch(basicAuthHeader("opencode", env.OPENCODE_SERVER_PASSWORD), []),
     spawnImpl: () => child,
     command: "/bin/opencode",
@@ -515,7 +623,7 @@ test("pidRecord cleans stale opencode serve processes and records the new child"
   const run = async (commandOf) => {
     resetOpencodeServerSingletonForTests();
     const env = { OPENCODE_SERVER_PASSWORD: `pid-secret-${writes.length}` };
-    await ensureOpencodeServer({
+    await ensureTestOpencodeServer({
       fetchImpl: authedFetch(basicAuthHeader("opencode", env.OPENCODE_SERVER_PASSWORD), []),
       spawnImpl: () => fakeChild(),
       command: "/bin/opencode",
@@ -580,7 +688,7 @@ test("createDefaultPidRecord stores state under the user root and can round-trip
 test("secrets are not present in safe serialized server info or module logging", async () => {
   resetOpencodeServerSingletonForTests();
   const env = { OPENCODE_SERVER_PASSWORD: "very-secret-password" };
-  const result = await ensureOpencodeServer({
+  const result = await ensureTestOpencodeServer({
     fetchImpl: authedFetch(basicAuthHeader("opencode", env.OPENCODE_SERVER_PASSWORD), []),
     spawnImpl: () => fakeChild(),
     command: "/bin/opencode",

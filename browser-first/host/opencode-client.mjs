@@ -8,6 +8,7 @@ import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { rmSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import net from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -48,6 +49,31 @@ export function opencodeServeBaseUrl(serverInfo = {}) {
   url.search = "";
   url.hash = "";
   return url.toString();
+}
+
+export async function pickFreeLoopbackPort({
+  netImpl = net,
+  hostname = DEFAULT_HOST,
+  avoid = [4000 + 96, 4000 + 231],
+  attempts = 8
+} = {}) {
+  const avoided = new Set(avoid);
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const srv = netImpl.createServer();
+    try {
+      await new Promise((res, rej) => {
+        srv.once("error", rej);
+        srv.listen(0, hostname, res);
+      });
+      const address = srv.address();
+      const port = typeof address === "object" && address !== null ? address.port : 0;
+      await new Promise((r) => srv.close(r));
+      if (!avoided.has(port) && port >= 1024) return port;
+    } catch {
+      try { srv.close(() => {}); } catch { /* noop */ }
+    }
+  }
+  throw new Error("Could not pick a free loopback port for OpenCode.");
 }
 
 // Is a server already answering at baseUrl? Probes the OpenAPI doc (always
@@ -138,7 +164,8 @@ export async function ensureOpencodeServer({
   maxWaitMs = 12000,
   pollMs = 300,
   processImpl = process,
-  pidRecord = createDefaultPidRecord(env)
+  pidRecord = createDefaultPidRecord(env),
+  pickEphemeralPort = pickFreeLoopbackPort
 } = {}) {
   const directory = resolveOpencodeCwd({ cwd, env });
   const envPort = Number(env.RESONANTOS_OPENCODE_PORT);
@@ -166,6 +193,7 @@ export async function ensureOpencodeServer({
     pollMs,
     processImpl,
     pidRecord,
+    pickEphemeralPort,
     key
   });
   inflight.set(key, p);
@@ -190,6 +218,7 @@ async function startOpencodeServer({
   pollMs,
   processImpl,
   pidRecord,
+  pickEphemeralPort,
   key
 }) {
   if (!command || typeof spawnImpl !== "function") {
@@ -203,9 +232,10 @@ async function startOpencodeServer({
   const header = basicAuthHeader(username, password);
 
   await cleanupStalePidOnce(pidRecord, directory);
+  const spawnPort = explicitPort > 0 ? explicitPort : await pickEphemeralPort({ hostname });
 
   const startedAt = Date.now();
-  const child = spawnImpl(command, ["serve", "--hostname", hostname, "--port", String(explicitPort)], {
+  const child = spawnImpl(command, ["serve", "--hostname", hostname, "--port", String(spawnPort)], {
     cwd: directory,
     env: { ...env, OPENCODE_SERVER_USERNAME: username, OPENCODE_SERVER_PASSWORD: password },
     stdio: ["ignore", "pipe", "ignore"]
@@ -219,7 +249,7 @@ async function startOpencodeServer({
     } catch { /* noop */ }
   });
 
-  const announcedPortPromise = waitForAnnouncedPort(child, explicitPort, maxWaitMs);
+  const announcedPortPromise = waitForAnnouncedPort(child, spawnPort, maxWaitMs);
   const announcedPort = await announcedPortPromise;
   const baseUrl = opencodeBaseUrl({ hostname, port: announcedPort });
   const deadline = startedAt + maxWaitMs;
@@ -237,7 +267,7 @@ async function startOpencodeServer({
   throw new Error("OpenCode server did not become ready in time.");
 }
 
-function waitForAnnouncedPort(child, explicitPort, maxWaitMs) {
+function waitForAnnouncedPort(child, spawnPort, maxWaitMs) {
   return new Promise((resolvePort, reject) => {
     let buffer = "";
     let settled = false;
@@ -251,15 +281,7 @@ function waitForAnnouncedPort(child, explicitPort, maxWaitMs) {
       resolvePort(port);
     };
     timer = setTimeout(() => {
-      if (explicitPort > 0) {
-        finish(explicitPort);
-        return;
-      }
-      try { child?.kill?.(); } catch { /* noop */ }
-      if (!settled) {
-        settled = true;
-        reject(new Error("OpenCode server did not announce a listening port in time."));
-      }
+      finish(spawnPort);
     }, maxWaitMs);
     child.stdout?.on?.("data", (chunk) => {
       if (settled) return;
