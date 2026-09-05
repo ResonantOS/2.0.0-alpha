@@ -9,7 +9,7 @@ import {
   parseDraftPacketMarkdown,
 } from "./addon-draft-connectors.mjs";
 import { dashboardProxyUrl } from "./bridge-server.mjs";
-import { ensureOpencodeServer } from "./opencode-client.mjs";
+import { ensureOpencodeServer, peekOpencodeServer } from "./opencode-client.mjs";
 import { createOpenCodeWebUrlHandler } from "./opencode-session-host-service.mjs";
 
 const DEFAULT_OPENCODE_MODEL = "openai/gpt-5.4-mini";
@@ -176,6 +176,7 @@ export function createAddonDelegationService(dependencies) {
     opencodeCommand,
     opencodeRuntimeDiagnostics,
     ensureOpenCodeServer = ensureOpencodeServer,
+    peekOpenCodeServer = peekOpencodeServer,
     platform = process.platform,
     redactPathForDiagnostics,
     readProviderSecrets = async () => ({}),
@@ -1256,6 +1257,9 @@ except BaseException as exc:
       port: process.env.RESONANTOS_OPENCODE_PORT ? Number(process.env.RESONANTOS_OPENCODE_PORT) : undefined,
       env: process.env,
     }),
+    // #343: never spawn a server just to refuse the cockpit handoff — peek the
+    // registered singleton first; only an already-running server yields a URL.
+    peekServer: () => peekOpenCodeServer({ command: opencodeCommand(), hostname: "127.0.0.1", env: process.env }),
     appendAuditEntry: appendAddonGovernanceAuditEntry,
   });
 
