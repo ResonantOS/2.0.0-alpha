@@ -66,3 +66,6 @@ never place credentials, private data, or unredacted security details in a
 public issue.
 
 ResonantOS is licensed under the [MIT License](LICENSE.txt).
+
+
+<!-- Security scan triggered at 2026-09-04 12:56:22 -->
