@@ -39,6 +39,6 @@
   });
 })();
 
-export const INLINE_RESTRICTED_SCHEMES = globalThis.ResonantOSInlineActionSurfaceGate.INLINE_RESTRICTED_SCHEMES;
-export const inlineActionRestrictedScheme = globalThis.ResonantOSInlineActionSurfaceGate.inlineActionRestrictedScheme;
-export const inlineActionAllowedForLocationGate = globalThis.ResonantOSInlineActionSurfaceGate.inlineActionAllowedForLocationGate;
+// Classic content script: the API is published on globalThis above. Do NOT add
+// `export` here — manifest content_scripts are not modules and a SyntaxError
+// silently disables this whole file on every page.

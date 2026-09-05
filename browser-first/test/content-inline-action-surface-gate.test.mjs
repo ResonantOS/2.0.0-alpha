@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
+// The gate is a CLASSIC content script (see content-scripts-parse-as-classic.test.mjs):
+// import it for its side effect and read the API it publishes on globalThis.
+import "../resonantos-side-panel-extension/src/lib/content-inline-action-surface-gate.js";
+const {
   INLINE_RESTRICTED_SCHEMES,
   inlineActionRestrictedScheme,
   inlineActionAllowedForLocationGate
-} from "../resonantos-side-panel-extension/src/lib/content-inline-action-surface-gate.js";
+} = globalThis.ResonantOSInlineActionSurfaceGate;
 
 test("inline-action surface gate exposes the same restricted-scheme prefixes as control-target-classification (#219)", () => {
   // The two sources of truth must agree. control-target-classification.js
