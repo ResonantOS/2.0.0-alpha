@@ -173,3 +173,18 @@ Augmentor may use the skill to guide high-level human collaboration with the add
 - The SDK must document both manifest shape and grant semantics.
 - A signing and registry model becomes part of the product, not just build tooling.
 - Contracts in `src/core/` should evolve to express provenance tier and verification state directly.
+
+## Amendment 2026-09 — credential-protected OpenCode server (#320, #339)
+
+The OpenCode add-on runtime's local server (`opencode serve`) is spawned by the
+bridge on a **bridge-picked ephemeral loopback port** (never 4096/4231) under a
+**bridge-minted Basic-auth credential** (`OPENCODE_SERVER_PASSWORD`). Readiness is
+fail-closed: the server must answer 200 with the credential and 401 without it
+before it is adopted. Consumers forward the credential; the side panel receives
+it as `eventAuthorization` in session start/list responses (only when the server
+is credential-protected) and sends it on its `/event` stream. `/opencode/web/url`
+returns `requiresCredential: true` and the panel disables the direct cockpit
+handoff until a governed proxy exists (#321). The same seam is used by both bridge
+layouts (session handlers and the cockpit-URL handler) via one per-process
+singleton. Residuals tracked: credential visible in the child environment (#326),
+orphan on SIGKILL until the next bridge start reaps it (#343).

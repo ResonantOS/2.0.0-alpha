@@ -96,16 +96,17 @@ install path for third-party add-ons in this build, and no uninstall flow
   The one live control is each add-on's local CLI execution switch.
 
 The OpenCode server the bridge runs is now credential-protected and bound to
-an ephemeral loopback port instead of the old fixed port 4231. While that
-protection is in place, the **cockpit handoff button is disabled** — the panel
-shows "OpenCode cockpit handoff is disabled while the server is
-credential-protected" instead of opening a tab. Governed cockpit access (a
-proxied handoff that carries the credential) is tracked in #321. The governed
-OpenCode workspace inside the side panel keeps working unaffected. Testers
-should verify that opening `http://127.0.0.1:4231/` directly fails to connect,
-and that no OpenCode URL is ever shown in the panel. ResonantOS still logs
-that it issued the URL as `webCockpitUrlIssued`; the event is still emitted
-with the plain URL even though the panel no longer surfaces it.
+an ephemeral loopback port instead of the old fixed port 4231. The cockpit
+button stays visible; clicking it opens the confirmation step, and while the
+server is credential-protected the panel then shows "OpenCode cockpit handoff
+is disabled while the server is credential-protected (restored by #321)" and
+opens no tab. Governed cockpit access (a proxied handoff that carries the
+credential) is tracked in #321. The governed OpenCode workspace inside the
+side panel keeps working unaffected. Testers should verify that opening
+`http://127.0.0.1:4231/` directly fails to connect and that no OpenCode URL is
+ever shown in the panel. ResonantOS still logs that it issued the URL as
+`webCockpitUrlIssued`; the event is still emitted with the plain URL even
+though the panel no longer surfaces it.
 
 ## 7. Recording evidence
 
