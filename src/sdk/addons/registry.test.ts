@@ -73,6 +73,30 @@ describe("add-on registry snapshot", () => {
     expect(entry.reviewState).toBe("unreviewed");
   });
 
+  it("installation defaults never promote a partial provenance block (#345, defaults.ts path)", () => {
+    const tierOnly = createDefaultInstallation(manifest("addon.tier-only", { provenance: { tier: "curated-signed" } as never }), "bundled");
+    expect(tierOnly.provenanceTier).toBe("curated-signed");
+    expect(tierOnly.verificationState).toBe("unverified");
+    const stateOnly = createDefaultInstallation(manifest("addon.state-only", { provenance: { verificationState: "verified" } as never }), "bundled");
+    expect(stateOnly.provenanceTier).toBe("sideloaded-unverified");
+    expect(stateOnly.verificationState).toBe("verified");
+    const empty = createDefaultInstallation(manifest("addon.empty", { provenance: {} as never }), "bundled");
+    expect(empty.provenanceTier).toBe("sideloaded-unverified");
+    expect(empty.verificationState).toBe("unverified");
+  });
+
+  it("snapshot path keeps a partial provenance block least-trusted even with an installation record (#345)", () => {
+    const addon = manifest("addon.partial-snapshot", { provenance: { verificationState: "verified" } as never });
+    const snapshot = createAddOnRegistrySnapshot({
+      bundled: [addon],
+      sideloaded: [],
+      installations: { [addon.id]: createDefaultInstallation(addon, "bundled") },
+    });
+    const entry = snapshot.byId[addon.id];
+    expect(entry?.provenanceTier).toBe("sideloaded-unverified");
+    expect(entry?.reviewState).toBe("unreviewed");
+  });
+
   it("keeps an empty provenance block least-trusted and unreviewed", () => {
     const addon = manifest("addon.empty-provenance", {
       provenance: {} as never,
