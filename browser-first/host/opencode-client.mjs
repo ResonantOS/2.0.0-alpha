@@ -21,6 +21,7 @@ const inflight = new Map();
 const children = new Set();
 let hooksInstalled = false;
 let stalePidCleanupDone = false;
+let stalePidSkipWrite = false;
 
 export function basicAuthHeader(username, password) {
   return "Basic " + Buffer.from(`${username}:${password}`, "utf8").toString("base64");
@@ -114,6 +115,7 @@ export function resetOpencodeServerSingletonForTests() {
   children.clear();
   hooksInstalled = false;
   stalePidCleanupDone = false;
+  stalePidSkipWrite = false;
 }
 
 export function forgetOpencodeServer(serverInfo) {
@@ -124,6 +126,16 @@ export function forgetOpencodeServer(serverInfo) {
   for (const [key, value] of inflight.entries()) {
     if (value === serverInfo || value?.serverInfo === serverInfo) inflight.delete(key);
   }
+}
+
+// Look up the registered singleton (if any) WITHOUT spawning. Returns the stored
+// server info, or null when nothing is registered (or a spawn is still in flight).
+export function peekOpencodeServer({ command, hostname = DEFAULT_HOST, cwd, env = process.env } = {}) {
+  const directory = resolveOpencodeCwd({ cwd, env });
+  const envPort = Number(env.RESONANTOS_OPENCODE_PORT);
+  const explicitPort = Number.isInteger(envPort) && envPort > 0 ? envPort : 0;
+  const key = `${command}|${hostname}|${directory}|${explicitPort}`;
+  return inflight.get(key)?.serverInfo ?? null;
 }
 
 export function createDefaultPidRecord(env = process.env) {
@@ -191,7 +203,8 @@ export async function ensureOpencodeServer({
   const key = `${command}|${hostname}|${directory}|${explicitPort}`;
   if (inflight.has(key)) {
     const info = await inflight.get(key);
-    if (await opencodeServerHealthy({ fetchImpl, baseUrl: info.baseUrl, headers: { Authorization: info.auth.header } })
+    if (info?.auth?.header
+      && await opencodeServerHealthy({ fetchImpl, baseUrl: info.baseUrl, headers: { Authorization: info.auth.header } })
       && await opencodeServerEnforcesAuth({ fetchImpl, baseUrl: info.baseUrl })) {
       return { ...info, spawned: false };
     }
@@ -249,7 +262,7 @@ async function startOpencodeServer({
     : randomBytes(32).toString("base64url");
   const header = basicAuthHeader(username, password);
 
-  await cleanupStalePidOnce(pidRecord, directory);
+  const skipWrite = await cleanupStalePidOnce(pidRecord, directory, processImpl);
   const spawnPort = explicitPort > 0 ? explicitPort : await pickEphemeralPort({ hostname });
 
   const startedAt = Date.now();
@@ -267,11 +280,19 @@ async function startOpencodeServer({
     // clobber a newer server registered under the same key (stop->start, stale-health respawn).
     const registered = inflight.get(key)?.serverInfo?.process;
     if (registered === child) inflight.delete(key);
-    // Likewise only clear the pid record when no newer server is registered under this key.
+    // Likewise only clear the pid record when no newer server is registered under this key,
+    // and only when THIS process owns the recorded server (a foreign bridge's record is left).
     if (registered === undefined || registered === child) {
-      try {
-        Promise.resolve(pidRecord.clear(directory)).catch(() => {});
-      } catch { /* noop */ }
+      (async () => {
+        try {
+          const record = await pidRecord.read(directory);
+          if (record?.owner === processImpl.pid) {
+            try {
+              await pidRecord.clear(directory);
+            } catch { /* noop */ }
+          }
+        } catch { /* noop */ }
+      })();
     }
   });
 
@@ -289,7 +310,9 @@ async function startOpencodeServer({
         throw new Error("OpenCode server does not enforce the bridge credential; refusing to adopt it.");
       }
       installShutdownHooks(processImpl);
-      await pidRecord.write(directory, { pid: child.pid, port: announcedPort, startedAt: Date.now() });
+      if (!skipWrite) {
+        await pidRecord.write(directory, { owner: processImpl.pid, pid: child.pid, port: announcedPort, startedAt: Date.now() });
+      }
       return { key, baseUrl, spawned: true, process: child, directory, auth: { username, password, header } };
     }
     if (Date.now() >= deadline) break;
@@ -325,13 +348,20 @@ function waitForAnnouncedPort(child, spawnPort, maxWaitMs) {
   });
 }
 
-async function cleanupStalePidOnce(pidRecord, directory) {
-  if (stalePidCleanupDone) return;
+async function cleanupStalePidOnce(pidRecord, directory, processImpl) {
+  if (stalePidCleanupDone) return stalePidSkipWrite;
   stalePidCleanupDone = true;
   const stale = await pidRecord.read(directory);
-  if (stale?.pid && pidRecord.isAlive(stale.pid) && /opencode\s+serve/.test(pidRecord.commandOf(stale.pid))) {
-    pidRecord.kill(stale.pid);
+  if (stale?.pid) {
+    const ownerAlive = stale.owner != null && pidRecord.isAlive(stale.owner);
+    if (ownerAlive && stale.owner !== processImpl.pid) {
+      // A LIVE other bridge/process owns this server: never kill it, never overwrite its record.
+      stalePidSkipWrite = true;
+    } else if (pidRecord.isAlive(stale.pid) && /\bopencode(?:\.exe|\.cmd)?\s+serve\b/i.test(pidRecord.commandOf(stale.pid))) {
+      pidRecord.kill(stale.pid);
+    }
   }
+  return stalePidSkipWrite;
 }
 
 function installShutdownHooks(processImpl) {
