@@ -73,6 +73,39 @@ describe("add-on registry snapshot", () => {
     expect(entry.reviewState).toBe("unreviewed");
   });
 
+  it("keeps an empty provenance block least-trusted and unreviewed", () => {
+    const addon = manifest("addon.empty-provenance", {
+      provenance: {} as never,
+    });
+    const entry = createAddOnRegistryEntry(addon, { registrySource: "bundled-catalog" });
+
+    expect(entry.provenanceTier).toBe("sideloaded-unverified");
+    expect(entry.verificationState).toBe("unverified");
+    expect(entry.reviewState).toBe("unreviewed");
+  });
+
+  it("does not promote a provenance block that only declares a tier", () => {
+    const addon = manifest("addon.tier-only", {
+      provenance: { tier: "curated-signed" } as never,
+    });
+    const entry = createAddOnRegistryEntry(addon, { registrySource: "bundled-catalog" });
+
+    expect(entry.provenanceTier).toBe("curated-signed");
+    expect(entry.verificationState).toBe("unverified");
+    expect(entry.reviewState).toBe("unreviewed");
+  });
+
+  it("does not promote a provenance block that only declares verification state", () => {
+    const addon = manifest("addon.verification-only", {
+      provenance: { verificationState: "verified" } as never,
+    });
+    const entry = createAddOnRegistryEntry(addon, { registrySource: "bundled-catalog" });
+
+    expect(entry.provenanceTier).toBe("sideloaded-unverified");
+    expect(entry.verificationState).toBe("verified");
+    expect(entry.reviewState).toBe("unreviewed");
+  });
+
   it("keeps a signed bundled manifest verified (P1-e)", () => {
     const addon = manifest("addon.signed", {
       provenance: {

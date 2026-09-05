@@ -101,6 +101,37 @@ describe("add-on SDK manifest validation", () => {
     expect(result.valid).toBe(true);
   });
 
+  it("warns exactly once when provenance is present but incomplete", () => {
+    const result = validateAddOnManifest(
+      validManifest({
+        provenance: {} as never,
+      }),
+    );
+    const warnings = result.issues.filter((issue) => issue.code === "provenance-incomplete");
+
+    expect(result.valid).toBe(true);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatchObject({
+      severity: "warning",
+      path: "provenance",
+    });
+    expect(warnings[0]?.message).toContain("tier");
+    expect(warnings[0]?.message).toContain("verificationState");
+  });
+
+  it("does not warn about provenance when the provenance block is complete", () => {
+    const result = validateAddOnManifest(validManifest());
+
+    expect(result.issues.some((issue) => issue.code === "provenance-incomplete")).toBe(false);
+  });
+
+  it("does not warn about provenance when provenance is absent", () => {
+    const { provenance: _provenance, ...manifest } = validManifest();
+    const result = validateAddOnManifest(manifest);
+
+    expect(result.issues.some((issue) => issue.code === "provenance-incomplete")).toBe(false);
+  });
+
   it("accepts explicit workflow scaffolding contracts for packaged add-on work", () => {
     const result = validateAddOnManifest(
       validManifest({

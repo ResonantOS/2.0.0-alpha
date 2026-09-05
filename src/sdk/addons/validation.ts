@@ -1146,6 +1146,22 @@ export const validateAddOnManifest = (
     }
   }
 
+  if (isRecord(candidate.provenance)) {
+    const provenance = candidate.provenance;
+    const missingProvenanceFields = (["tier", "verificationState"] as const).filter(
+      (field) => provenance[field] === undefined,
+    );
+    if (missingProvenanceFields.length > 0) {
+      pushIssue(
+        issues,
+        "warning",
+        "provenance-incomplete",
+        "provenance",
+        `provenance is incomplete; missing ${missingProvenanceFields.join(" and ")}.`,
+      );
+    }
+  }
+
   if (source === "sideload" && isRecord(candidate.provenance) && candidate.provenance.tier !== "sideloaded-unverified") {
     pushIssue(
       issues,
