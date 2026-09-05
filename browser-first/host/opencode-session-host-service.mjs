@@ -6,7 +6,7 @@
 // /event bus; that streaming glue is bridge-server-specific and is registered
 // alongside these request/response routes.
 
-import { opencodeServeBaseUrl } from "./opencode-client.mjs";
+import { forgetOpencodeServer as defaultForgetOpencodeServer, opencodeServeBaseUrl } from "./opencode-client.mjs";
 
 export function createOpenCodeWebUrlError(message) {
   const error = new Error(message);
@@ -39,7 +39,7 @@ export function createOpenCodeWebUrlHandler({ executionEnabled, ensureServer, ap
       event: "webCockpitUrlIssued",
       url,
     });
-    return { url };
+    return serverInfo?.auth ? { url, requiresCredential: true } : { url };
   };
 }
 
@@ -131,14 +131,17 @@ export function createOpencodeSessionHostService(handlers = {}) {
 // Real handler logic, dependency-injected. `ensureServer()` brings up (or reuses)
 // `opencode serve` and returns { baseUrl }; `createClient(baseUrl)` builds the
 // HTTP client. A single client is memoized per bridge process.
-export function createOpencodeSessionHandlers({ ensureServer, createClient }) {
+export function createOpencodeSessionHandlers({ ensureServer, createClient, forgetOpencodeServer = defaultForgetOpencodeServer }) {
   let client = null;
   let serverInfo = null;
 
   async function ensureClient() {
     if (client) return client;
     serverInfo = await ensureServer();
-    client = createClient(serverInfo.baseUrl, { directory: serverInfo.directory });
+    const opts = serverInfo?.auth?.header
+      ? { directory: serverInfo.directory, headers: { Authorization: serverInfo.auth.header } }
+      : { directory: serverInfo.directory };
+    client = createClient(serverInfo.baseUrl, opts);
     return client;
   }
 
@@ -150,7 +153,9 @@ export function createOpencodeSessionHandlers({ ensureServer, createClient }) {
       const session = await c.createSession();
       const sessionId = session?.id ?? session?.sessionID ?? session?.sessionId ?? "";
       if (!sessionId) throw new Error("OpenCode did not return a session id.");
-      return { ok: true, sessionId, eventUrl: c.eventUrl?.() ?? "", baseUrl: serverInfo?.baseUrl ?? "" };
+      const response = { ok: true, sessionId, eventUrl: c.eventUrl?.() ?? "", baseUrl: serverInfo?.baseUrl ?? "" };
+      if (serverInfo?.auth?.header) response.eventAuthorization = serverInfo.auth.header;
+      return response;
     },
     executeOpenCodeSessionPrompt: async (req) => {
       const { sessionId, text, agent, model } = bodyOf(req);
@@ -169,7 +174,7 @@ export function createOpencodeSessionHandlers({ ensureServer, createClient }) {
     executeOpenCodeSessionsList: async () => {
       const c = await ensureClient();
       const sessions = await c.listSessions();
-      return {
+      const response = {
         ok: true,
         eventUrl: c.eventUrl?.() ?? "",
         baseUrl: serverInfo?.baseUrl ?? "",
@@ -180,6 +185,8 @@ export function createOpencodeSessionHandlers({ ensureServer, createClient }) {
           updated: s.time?.updated ?? s.time?.created ?? 0
         })).filter((s) => s.id)
       };
+      if (serverInfo?.auth?.header) response.eventAuthorization = serverInfo.auth.header;
+      return response;
     },
     executeOpenCodeSessionMessages: async (req) => {
       const { sessionId } = bodyOf(req);
@@ -230,6 +237,7 @@ export function createOpencodeSessionHandlers({ ensureServer, createClient }) {
     },
     executeOpenCodeSessionStop: async () => {
       try { serverInfo?.process?.kill?.(); } catch { /* noop */ }
+      try { forgetOpencodeServer?.(serverInfo); } catch {}
       client = null;
       serverInfo = null;
       return { ok: true };

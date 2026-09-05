@@ -93,6 +93,28 @@ test("start ensures the server once, creates a session, and returns its id + eve
   assert.deepEqual(calls.at(-1), ["prompt", "s1", "go", { agent: "build", model: undefined }]);
 });
 
+test("start forwards the bridge-minted Authorization header to the client and returns eventAuthorization", async () => {
+  const calls = [];
+  let clientOptions = null;
+  const authorization = "Basic b3BlbmNvZGU6cHc=";
+  const handlers = createOpencodeSessionHandlers({
+    ensureServer: async () => ({
+      baseUrl: "http://127.0.0.1:45123",
+      directory: "/repo/root",
+      auth: { username: "opencode", password: "pw", header: authorization }
+    }),
+    createClient: (_baseUrl, options) => {
+      clientOptions = options;
+      return fakeClient(calls);
+    }
+  });
+
+  const start = await handlers.executeOpenCodeSessionStart();
+
+  assert.equal(clientOptions?.headers?.Authorization, authorization);
+  assert.equal(start.eventAuthorization, authorization);
+});
+
 test("permission reply forwards the decision to the client", async () => {
   const calls = [];
   const handlers = createOpencodeSessionHandlers({
@@ -166,6 +188,77 @@ test("sessions list returns normalized sessions plus server urls", async () => {
   assert.deepEqual(result.sessions, [{ id: "ses_1", title: "A", created: 5, updated: 9 }]);
 });
 
+test("sessions list returns eventAuthorization only when auth exists", async () => {
+  const authorization = "Basic b3BlbmNvZGU6cHc=";
+  const createListClient = () => ({
+    listSessions: async () => [{ id: "ses_1", title: "A", time: { created: 5 } }],
+    eventUrl: () => "http://127.0.0.1:45123/event"
+  });
+  const authedHandlers = createOpencodeSessionHandlers({
+    ensureServer: async () => ({
+      baseUrl: "http://127.0.0.1:45123",
+      directory: "/repo/root",
+      auth: { username: "opencode", password: "pw", header: authorization }
+    }),
+    createClient: () => createListClient()
+  });
+  const unauthenticatedHandlers = createOpencodeSessionHandlers({
+    ensureServer: async () => ({ baseUrl: "http://127.0.0.1:45124", directory: "/repo/root" }),
+    createClient: () => createListClient()
+  });
+
+  const authedList = await authedHandlers.executeOpenCodeSessionsList();
+  const unauthenticatedList = await unauthenticatedHandlers.executeOpenCodeSessionsList();
+
+  assert.equal("eventAuthorization" in authedList, true);
+  assert.equal(authedList.eventAuthorization, authorization);
+  assert.equal("eventAuthorization" in unauthenticatedList, false);
+});
+
+test("stop forgets the singleton entry", async () => {
+  const calls = [];
+  const forgotten = [];
+  let ensured = 0;
+  const serverInfo = { baseUrl: "http://127.0.0.1:45123", directory: "/repo/root" };
+  const handlers = createOpencodeSessionHandlers({
+    ensureServer: async () => {
+      ensured += 1;
+      return serverInfo;
+    },
+    createClient: () => fakeClient(calls),
+    forgetOpencodeServer: (info) => forgotten.push(info)
+  });
+
+  await handlers.executeOpenCodeSessionStart();
+  await handlers.executeOpenCodeSessionStop();
+  await handlers.executeOpenCodeSessionStart();
+
+  assert.deepEqual(forgotten, [serverInfo]);
+  assert.equal(ensured, 2);
+});
+
+test("the password never appears in any response JSON", async () => {
+  const authorization = "Basic b3BlbmNvZGU6cHc=";
+  const handlers = createOpencodeSessionHandlers({
+    ensureServer: async () => ({
+      baseUrl: "http://127.0.0.1:45123",
+      directory: "/repo/root",
+      auth: { username: "opencode", password: "pw", header: authorization }
+    }),
+    createClient: () => ({
+      createSession: async () => ({ id: "s1" }),
+      listSessions: async () => [{ id: "s1", title: "A", time: { created: 5 } }],
+      eventUrl: () => "http://127.0.0.1:45123/event"
+    })
+  });
+
+  const start = await handlers.executeOpenCodeSessionStart();
+  const list = await handlers.executeOpenCodeSessionsList();
+
+  assert.equal(JSON.stringify(start).includes("pw"), false);
+  assert.equal(JSON.stringify(list).includes("pw"), false);
+});
+
 test("session messages requires an id and passes history through", async () => {
   const handlers = createOpencodeSessionHandlers({
     ensureServer: async () => ({ baseUrl: "http://x" }),
@@ -219,4 +312,23 @@ test("web url handler ensures serve, returns a 127.0.0.1 root url, and appends a
   assert.equal(audit[0].event, "webCockpitUrlIssued");
   assert.equal(audit[0].url, "http://127.0.0.1:4231/");
   assert.doesNotThrow(() => new Date(audit[0].at).toISOString());
+});
+
+test("web url handler returns requiresCredential and never leaks the credential", async () => {
+  const audit = [];
+  const executeOpenCodeWebUrl = createOpenCodeWebUrlHandler({
+    executionEnabled: async () => true,
+    ensureServer: async () => ({
+      baseUrl: "http://127.0.0.1:45123",
+      auth: { username: "opencode", password: "s3cret", header: "Basic x" }
+    }),
+    appendAuditEntry: async (entry) => audit.push(entry),
+  });
+
+  const result = await executeOpenCodeWebUrl({ body: { enableOpenCodeExecution: true } });
+
+  assert.deepEqual(result, { url: "http://127.0.0.1:45123/", requiresCredential: true });
+  assert.equal(JSON.stringify(audit).includes("s3cret"), false);
+  assert.equal(JSON.stringify(audit).includes("Basic x"), false);
+  assert.equal(audit[0].url, "http://127.0.0.1:45123/");
 });

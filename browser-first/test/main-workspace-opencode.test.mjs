@@ -512,3 +512,168 @@ test("opencode external cockpit interstitial gates URL issuance and opens with n
     cleanup();
   }
 });
+
+test("cockpit open does not window.open when requiresCredential", async () => {
+  const { container, cleanup, window } = setupDom();
+  const openCalls = [];
+  window.open = (...args) => {
+    openCalls.push(args);
+    return null;
+  };
+  const bridgeRequest = async (route) => {
+    if (route === "/opencode/status") {
+      return {
+        installed: true,
+        executionEnabled: true,
+        command: "/usr/local/bin/opencode",
+        model: "openai/gpt-5.4-mini",
+        detail: "OpenCode runtime was detected.",
+      };
+    }
+    if (route === "/opencode/web/url") {
+      return { url: "http://127.0.0.1:45123/", requiresCredential: true };
+    }
+    throw new Error(`Unexpected route ${route}`);
+  };
+
+  try {
+    renderOpenCodeWorkspace({ container, bridgeRequest });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const cockpitButton = [...container.querySelectorAll("button")]
+      .find((button) => button.textContent === "Open full cockpit (external, ungoverned)");
+    cockpitButton.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const cockpitOpen = [...container.querySelectorAll("button")]
+      .find((button) => button.textContent === "Open in browser tab");
+    cockpitOpen.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const cockpitStatus = container.querySelector(".opencode-cockpit-status");
+    assert.deepEqual(openCalls, []);
+    assert.match(cockpitStatus.textContent, /disabled/);
+    assert.equal(cockpitOpen.disabled, false);
+  } finally {
+    cleanup();
+  }
+});
+
+test("event stream carries Authorization when the bridge returns eventAuthorization (start path)", async () => {
+  const { container, cleanup } = setupDom();
+  const fetches = [];
+  globalThis.fetch = async (url, init) => {
+    fetches.push([url, init]);
+    return { body: { getReader: () => ({ read: async () => ({ done: true }), cancel() {} }) } };
+  };
+  const bridgeRequest = async (route) => {
+    if (route === "/opencode/status") return { installed: true, command: "/usr/local/bin/opencode", model: "openai/gpt-5.4-mini", detail: "Ready" };
+    if (route === "/opencode/session/start") return { sessionId: "ses_live", eventUrl: "http://127.0.0.1:4999/event", eventAuthorization: "Basic abc" };
+    if (route === "/opencode/sessions/list") return { eventUrl: "http://127.0.0.1:4999/event", sessions: [{ id: "ses_live", title: "Live", created: Date.now(), updated: Date.now() }] };
+    if (route === "/opencode/agents/list") return { agents: [] };
+    throw new Error(`Unexpected route ${route}`);
+  };
+
+  try {
+    renderOpenCodeWorkspace({ container, bridgeRequest });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    container.querySelector(".opencode-start-session").click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const eventFetch = fetches.find(([url]) => url === "http://127.0.0.1:4999/event");
+    assert.ok(eventFetch, "expected a fetch to the event stream URL");
+    assert.equal(eventFetch[1].headers.Authorization, "Basic abc");
+  } finally {
+    cleanup();
+  }
+});
+
+test("event stream carries Authorization on resume", async () => {
+  const { container, cleanup } = setupDom();
+  const fetches = [];
+  globalThis.fetch = async (url, init) => {
+    fetches.push([url, init]);
+    return { body: { getReader: () => ({ read: async () => ({ done: true }), cancel() {} }) } };
+  };
+  const bridgeRequest = async (route) => {
+    if (route === "/opencode/status") return { installed: true, command: "/usr/local/bin/opencode", model: "openai/gpt-5.4-mini", detail: "Ready" };
+    if (route === "/opencode/session/start") return { sessionId: "ses_live", eventUrl: "http://127.0.0.1:4999/start-event" };
+    if (route === "/opencode/sessions/list") return { eventUrl: "http://127.0.0.1:4999/list-event", eventAuthorization: "Basic abc", sessions: [{ id: "ses_live", title: "Live", created: Date.now(), updated: Date.now() }] };
+    if (route === "/opencode/session/messages") return { ok: true, messages: [] };
+    if (route === "/opencode/agents/list") return { agents: [] };
+    if (route === "/opencode/session/diff") return { ok: true, diff: [] };
+    throw new Error(`Unexpected route ${route}`);
+  };
+
+  try {
+    renderOpenCodeWorkspace({ container, bridgeRequest });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    container.querySelector(".opencode-start-session").click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    container.querySelector(".ocb-session[data-session-id='ses_live']").click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const resumeFetch = fetches.find(([url]) => url === "http://127.0.0.1:4999/list-event");
+    assert.ok(resumeFetch, "expected a fetch to the resume event stream URL");
+    assert.equal(resumeFetch[1].headers.Authorization, "Basic abc");
+  } finally {
+    cleanup();
+  }
+});
+
+test("no Authorization header when the bridge omits eventAuthorization", async () => {
+  const { container, cleanup } = setupDom();
+  const fetches = [];
+  globalThis.fetch = async (url, init) => {
+    fetches.push([url, init]);
+    return { body: { getReader: () => ({ read: async () => ({ done: true }), cancel() {} }) } };
+  };
+  const bridgeRequest = async (route) => {
+    if (route === "/opencode/status") return { installed: true, command: "/usr/local/bin/opencode", model: "openai/gpt-5.4-mini", detail: "Ready" };
+    if (route === "/opencode/session/start") return { sessionId: "ses_live", eventUrl: "http://127.0.0.1:4999/event" };
+    if (route === "/opencode/sessions/list") return { eventUrl: "http://127.0.0.1:4999/event", sessions: [] };
+    if (route === "/opencode/agents/list") return { agents: [] };
+    throw new Error(`Unexpected route ${route}`);
+  };
+
+  try {
+    renderOpenCodeWorkspace({ container, bridgeRequest });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    container.querySelector(".opencode-start-session").click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const eventFetch = fetches.find(([url]) => url === "http://127.0.0.1:4999/event");
+    assert.ok(eventFetch, "expected a fetch to the event stream URL");
+    assert.ok(eventFetch[1] === undefined || !eventFetch[1]?.headers?.Authorization, "expected no Authorization header");
+  } finally {
+    cleanup();
+  }
+});
+
+test("the header value never appears in rendered status text", async () => {
+  const { container, cleanup } = setupDom();
+  globalThis.fetch = async () => ({ body: { getReader: () => ({ read: async () => ({ done: true }), cancel() {} }) } });
+  const bridgeRequest = async (route) => {
+    if (route === "/opencode/status") return { installed: true, command: "/usr/local/bin/opencode", model: "openai/gpt-5.4-mini", detail: "Ready" };
+    if (route === "/opencode/session/start") return { sessionId: "ses_live", eventUrl: "http://127.0.0.1:4999/event", eventAuthorization: "Basic abc" };
+    if (route === "/opencode/sessions/list") return { eventUrl: "http://127.0.0.1:4999/event", sessions: [] };
+    if (route === "/opencode/agents/list") return { agents: [] };
+    throw new Error(`Unexpected route ${route}`);
+  };
+
+  try {
+    renderOpenCodeWorkspace({ container, bridgeRequest });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    container.querySelector(".opencode-start-session").click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.doesNotMatch(document.body.textContent, /Basic abc/);
+  } finally {
+    cleanup();
+  }
+});

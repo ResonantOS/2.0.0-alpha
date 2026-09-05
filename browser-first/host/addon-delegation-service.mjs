@@ -1253,7 +1253,7 @@ except BaseException as exc:
       spawnImpl: (cmd, args, opts) => spawnProcess(cmd, args, opts),
       command: opencodeCommand(),
       hostname: "127.0.0.1",
-      port: Number(process.env.RESONANTOS_OPENCODE_PORT ?? 4231),
+      port: process.env.RESONANTOS_OPENCODE_PORT ? Number(process.env.RESONANTOS_OPENCODE_PORT) : undefined,
       env: process.env,
     }),
     appendAuditEntry: appendAddonGovernanceAuditEntry,
