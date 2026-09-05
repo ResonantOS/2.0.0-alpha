@@ -40,6 +40,14 @@ const inlineActionsScriptPath = path.join(
   "lib",
   "content-inline-actions.js",
 );
+const inlineActionSurfaceGateScriptPath = path.join(
+  repoRoot,
+  "browser-first",
+  "resonantos-side-panel-extension",
+  "src",
+  "lib",
+  "content-inline-action-surface-gate.js",
+);
 const controlRefsScriptPath = path.join(
   repoRoot,
   "browser-first",
@@ -129,6 +137,7 @@ async function loadContentScript(html, { asChildFrame = false, loadSdk = false, 
   targetWindow.eval(await readFile(fieldSafetyScriptPath, "utf8"));
   targetWindow.eval(await readFile(inlineActionsScriptPath, "utf8"));
   targetWindow.eval(await readFile(controlRefsScriptPath, "utf8"));
+  targetWindow.eval(await readFile(inlineActionSurfaceGateScriptPath, "utf8"));
   targetWindow.eval(await readFile(contentScriptPath, "utf8"));
   targetWindow.eval(await readFile(augmentorShortcutControllerScriptPath, "utf8"));
   assert.equal(typeof listener, "function");

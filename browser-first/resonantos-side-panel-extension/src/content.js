@@ -1216,7 +1216,7 @@ const runInlineAction = async (action) => {
   }
   const locationGate = inlineActionAllowedForLocationGate
     ? inlineActionAllowedForLocationGate(location.href)
-    : { allowed: true };
+    : { allowed: false, message: "Inline actions are unavailable: the surface gate did not load." };
   if (!locationGate.allowed) {
     result.textContent = locationGate.message;
     return;
