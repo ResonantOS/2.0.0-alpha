@@ -18,6 +18,11 @@ on:
     branches:
       - dev
     paths:
+      # Any bridge host or extension source change can break the live panel (#350): the #320
+      # mitigation (#339) changed both and never triggered this lane, while a lockfile-only PR did.
+      - "browser-first/host/**"
+      - "browser-first/resonantos-side-panel-extension/src/**"
+      - "browser-first/resonantos-side-panel-extension/manifest.json"
       - "browser-first/resonantos-side-panel-extension/src/lib/agent-control*"
       - "browser-first/resonantos-side-panel-extension/src/lib/control-*"
       - "browser-first/resonantos-side-panel-extension/src/lib/browser-page-actions.js"
