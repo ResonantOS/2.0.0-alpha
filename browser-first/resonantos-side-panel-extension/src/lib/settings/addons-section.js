@@ -109,9 +109,35 @@ export function renderAddonsSection(container, { bridgeRequest, getBridgeRequest
   const bridge = () => (typeof getBridgeRequest === "function" ? getBridgeRequest() : bridgeRequest);
   const statusNode = document.createElement("p");
   statusNode.className = "settings-status";
+  statusNode.setAttribute("role", "status");
   statusNode.textContent = "Loading add-on registry...";
   const grid = document.createElement("div");
   grid.className = "settings-addon-grid";
+  const refreshExecution = document.createElement("button");
+  refreshExecution.type = "button";
+  refreshExecution.textContent = "Refresh execution state";
+  refreshExecution.hidden = true;
+  let updatingExecution = false;
+
+  function lockExecutionControls(unknown = false) {
+    for (const panel of grid.querySelectorAll(".settings-addon-execution")) {
+      panel.querySelector("button").disabled = true;
+      if (unknown) panel.querySelector("small").textContent = "Current execution state could not be confirmed. Refresh before changing it.";
+    }
+  }
+
+  refreshExecution.addEventListener("click", async () => {
+    if (updatingExecution || refreshExecution.disabled) return;
+    refreshExecution.disabled = true;
+    try {
+      await load();
+      refreshExecution.hidden = true;
+    } catch (error) {
+      setStatus(statusNode, `Execution state could not be confirmed: ${safeErrorMessage(error)}. Try refreshing again.`, "error");
+    } finally {
+      refreshExecution.disabled = false;
+    }
+  });
 
   container.replaceChildren(
     settingsHeader({
@@ -120,6 +146,7 @@ export function renderAddonsSection(container, { bridgeRequest, getBridgeRequest
       body: "Enable replaceable capabilities without lock-in. Start by checking availability and trust posture; open details only when you need grants or runtime controls."
     }),
     statusNode,
+    refreshExecution,
     noteCard({
       title: "Permission rule",
       body: "Add-ons declare requirements. ResonantOS mediates provider, memory, browser, filesystem, and future wallet access through scoped capability grants."
@@ -132,14 +159,35 @@ export function renderAddonsSection(container, { bridgeRequest, getBridgeRequest
     const addons = Array.isArray(result.addons) ? result.addons : [];
     grid.replaceChildren(...addons.map((addon) => addonCard(addon, {
       onToggleExecution: async (selected, enabled) => {
+        if (updatingExecution || refreshExecution.disabled) return;
+        updatingExecution = true;
+        lockExecutionControls();
+        refreshExecution.hidden = true;
         const addon = selected.id === "addon.hermes" ? "hermes" : "opencode";
         setStatus(statusNode, `${enabled ? "Enabling" : "Disabling"} ${selected.name} local execution...`);
-        await bridge()("/addons/execution-settings", {
-          method: "POST",
-          capability: "addon-execution-settings-write",
-          body: { addon, localCliExecution: enabled }
-        });
-        await load();
+        let writeError = null;
+        try {
+          await bridge()("/addons/execution-settings", {
+            method: "POST",
+            capability: "addon-execution-settings-write",
+            body: { addon, localCliExecution: enabled }
+          });
+        } catch (error) {
+          writeError = error;
+        }
+        // A failed response can leave the write outcome uncertain. Read the host state before another change.
+        try {
+          await load();
+          if (writeError) setStatus(statusNode, `Execution change request failed: ${safeErrorMessage(writeError)}. Current state refreshed; review it before retrying.`, "error");
+        } catch (error) {
+          lockExecutionControls(true);
+          refreshExecution.hidden = false;
+          setStatus(statusNode, writeError
+            ? `Execution change request failed: ${safeErrorMessage(writeError)}. Current state could not be confirmed; refresh before retrying.`
+            : `Execution setting saved, but current state could not be confirmed: ${safeErrorMessage(error)}. Refresh to confirm it.`, "warning");
+        } finally {
+          updatingExecution = false;
+        }
       }
     })));
     setStatus(statusNode, addons.length
