@@ -276,7 +276,10 @@ export function renderBridgeTargetSection(container, { bridgeRequest, onBridgeCo
             setStatus(statusNode, parsed.error, "error");
             return;
           }
-          await runProbe(parsed.override.bridgeUrl, parsed.override.bridgeToken);
+          const { bridgeUrl, bridgeToken } = parsed.override;
+          // Reuse the active credential only for that exact target, never a newly entered one.
+          const sameTarget = activeConfig && bridgeUrl.replace(/\/$/, "") === activeConfig.bridgeUrl.replace(/\/$/, "");
+          await runProbe(bridgeUrl, bridgeToken || (sameTarget ? activeConfig.bridgeToken : ""));
         },
       },
       {
