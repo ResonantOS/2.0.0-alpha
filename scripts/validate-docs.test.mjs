@@ -2385,3 +2385,27 @@ test("CLI scans cwd, prints actionable findings, and exits nonzero", () => {
     assert.match(result.stderr, /npm run missing-command/);
   });
 });
+
+test("gitignored and untracked-ignored Markdown is not validated in a git checkout (#344)", () => {
+  withRepository((root) => {
+    const git = (args) => spawnSync("git", ["-C", root, ...args], { encoding: "utf8" });
+    git(["init", "--quiet"]);
+    git(["config", "user.email", "docs-test@example.invalid"]);
+    git(["config", "user.name", "Docs Test"]);
+    writeFixture(root, ".gitignore", ".resonant-rig/\nscratch-*/\n");
+    writeFixture(root, ".resonant-rig/review.md", "[broken](./missing-ignored-a.md)\n");
+    writeFixture(root, "scratch-copy/notes.md", "[broken](./missing-ignored-b.md)\n");
+    writeFixture(root, ".claude/worktrees/x/README.md", "[broken](./missing-ignored-c.md)\n");
+    writeFixture(root, "docs/untracked-new.md", "[broken](./missing-untracked.md)\n");
+    git(["add", "--all"]);
+    git(["commit", "--quiet", "-m", "fixture"]);
+    // docs/untracked-new.md is committed above; add a second, truly untracked doc after the commit
+    writeFixture(root, "docs/really-untracked.md", "[broken](./missing-really-untracked.md)\n");
+
+    const found = messages(validateRepositoryDocs(root).findings).join("\n");
+
+    assert.doesNotMatch(found, /missing-ignored-[abc]\.md/, "gitignored / .claude paths must not be validated");
+    assert.match(found, /missing-untracked\.md/, "tracked docs are validated");
+    assert.match(found, /missing-really-untracked\.md/, "untracked but not ignored docs are validated");
+  });
+});
