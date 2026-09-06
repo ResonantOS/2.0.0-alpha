@@ -308,13 +308,21 @@ export function renderBrowserControlSection(container, { bridgeRequest, getBridg
   };
 
   clearJobs.addEventListener("click", async () => {
+    if (clearJobs.disabled) return;
     clearJobs.disabled = true;
     try {
-      const jobs = await readStored(storage, storageKeys.browserJobs, []);
-      const kept = Array.isArray(jobs) ? jobs.filter((job) => !terminalJobStatuses.has(job?.status)) : [];
-      if (storageKeys.browserJobs) {
-        await storage?.set?.({ [storageKeys.browserJobs]: kept });
+      const key = storageKeys.browserJobs;
+      if (!key || typeof storage?.get !== "function" || typeof storage?.set !== "function") {
+        throw new Error("Browser job storage is unavailable.");
       }
+      // A display fallback is unsafe for a read-modify-write operation.
+      const stored = await storage.get(key);
+      const jobs = stored?.[key];
+      if (!stored || (jobs !== undefined && !Array.isArray(jobs))) {
+        throw new Error("Browser job history could not be read safely.");
+      }
+      const kept = (jobs ?? []).filter((job) => !terminalJobStatuses.has(job?.status));
+      await storage.set({ [key]: kept });
       await load();
     } catch (error) {
       setStatus(statusNode, `Clear failed: ${safeErrorMessage(error)}`, "error");
