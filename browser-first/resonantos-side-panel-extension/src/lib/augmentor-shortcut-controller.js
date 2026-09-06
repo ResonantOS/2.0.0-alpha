@@ -25,7 +25,7 @@
 (() => {
   if (globalThis.ResonantOSAugmentorShortcutController) return;
 
-  const RESTRICTED_SCHEMES = Object.freeze(["chrome:", "about:", "edge:", "devtools:"]);
+  const FALLBACK_RESTRICTED_SCHEMES = Object.freeze(["chrome:", "about:", "edge:", "devtools:"]);
   const EDITABLE_TAGS = new Set(["INPUT", "TEXTAREA", "SELECT"]);
 
   const isEditableTarget = (target) => {
@@ -41,7 +41,9 @@
     if (typeof href !== "string") return false;
     const lowered = href.trim().toLowerCase();
     if (!lowered) return false;
-    return RESTRICTED_SCHEMES.some((prefix) => lowered.startsWith(prefix));
+    const gateSchemes = globalThis.ResonantOSInlineActionSurfaceGate?.INLINE_RESTRICTED_SCHEMES;
+    const restrictedSchemes = Array.isArray(gateSchemes) ? gateSchemes : FALLBACK_RESTRICTED_SCHEMES;
+    return restrictedSchemes.some((prefix) => lowered.startsWith(String(prefix).toLowerCase()));
   };
 
   const hasAuxiliaryModifiers = (event) => Boolean(
@@ -112,7 +114,7 @@
   })();
 
   globalThis.ResonantOSAugmentorShortcutController = Object.freeze({
-    RESTRICTED_SCHEMES,
+    RESTRICTED_SCHEMES: FALLBACK_RESTRICTED_SCHEMES,
     classifyShortcut,
     createRequestToken,
     isSummaryContextStale

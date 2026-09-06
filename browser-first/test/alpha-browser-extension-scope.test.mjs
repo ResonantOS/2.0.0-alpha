@@ -83,12 +83,19 @@ test("2.0.0 alpha release scope is Chrome extension and bridge only", async () =
     /connect-src[^;]*https?:\/\/\*:\*/,
     "connect-src must permit the user's bridge host (remote LAN/Tailscale deployments)",
   );
-  assert.equal(manifest.content_scripts[0].js[0], "src/lib/resonant-context.js");
+  const contentScriptFiles = manifest.content_scripts[0].js;
+  assert.equal(contentScriptFiles[0], "src/lib/resonant-context.js");
   assert.deepEqual(
-    manifest.content_scripts[0].js.slice(0, 3),
+    contentScriptFiles.slice(0, 3),
     ["src/lib/resonant-context.js", "src/lib/context-plugins.js", "src/lib/resonator.js"],
   );
-  assert.ok(manifest.content_scripts[0].js.includes("src/lib/content-field-safety.js"));
+  assert.ok(contentScriptFiles.includes("src/lib/content-field-safety.js"));
+  assert.ok(contentScriptFiles.includes("src/lib/content-inline-action-surface-gate.js"));
+  assert.ok(
+    contentScriptFiles.indexOf("src/lib/content-inline-action-surface-gate.js") <
+      contentScriptFiles.indexOf("src/content.js"),
+    "inline-action surface gate must load before content.js",
+  );
 });
 
 test("2.0.0 alpha release scope excludes local credential artifacts", () => {

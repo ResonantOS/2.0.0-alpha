@@ -1,8 +1,8 @@
 // Inline action surface gate: same restricted-scheme prefixes Agent Control
 // uses (see control-target-classification.js), kept in sync locally so the
 // content script need not import the runner. Order matters — the first match
-// wins. Loaded as a content-script file before content.js so the functions
-// are available on globalThis. Also importable as an ESM module for tests.
+// wins. Loaded as a classic content-script file before content.js so the
+// functions are available on globalThis without ESM syntax.
 
 (() => {
   if (globalThis.ResonantOSInlineActionSurfaceGate) return;
