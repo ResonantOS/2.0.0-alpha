@@ -254,6 +254,12 @@ export function classify(changedPath, state) {
       reason: "design-system reference documentation",
     };
   }
+  if (changedPath.startsWith("docs/security-pipeline/")) {
+    return {
+      bucket: "include",
+      reason: "security-pipeline policy and check documentation",
+    };
+  }
   if (canonicalRootFiles.has(changedPath) || changedPath === "public/icons/README.md") {
     return {
       bucket: "include",
