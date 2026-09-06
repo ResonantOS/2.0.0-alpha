@@ -150,13 +150,13 @@ const defaultProvenanceTier = (
   manifest: AddOnManifest,
   source: AddOnInstallation["source"],
 ): AddOnInstallation["provenanceTier"] =>
-  source === "sideload" ? "sideloaded-unverified" : (manifest.provenance?.tier ?? "curated-signed");
+  source === "sideload" ? "sideloaded-unverified" : (manifest.provenance?.tier ?? "sideloaded-unverified");
 
 const defaultVerificationState = (
   manifest: AddOnManifest,
   source: AddOnInstallation["source"],
 ): AddOnInstallation["verificationState"] =>
-  source === "sideload" ? "unverified" : (manifest.provenance?.verificationState ?? "verified");
+  source === "sideload" ? "unverified" : (manifest.provenance?.verificationState ?? "unverified");
 
 const rankLocality = (
   node: ProviderRuntimeNode,
