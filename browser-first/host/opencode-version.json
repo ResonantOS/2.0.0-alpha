@@ -1,0 +1,4 @@
+{
+  "pinned": "1.18.4",
+  "install": "npm install -g opencode-ai@1.18.4"
+}

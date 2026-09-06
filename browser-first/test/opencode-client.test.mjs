@@ -717,6 +717,70 @@ test("shutdown hooks kill children and install only once", async () => {
   assert.equal(child.killed, true);
 });
 
+test("SIGTERM shutdown kills children and synchronously clears pid records this process wrote", async () => {
+  resetOpencodeServerSingletonForTests();
+  const processImpl = fakeProcess();
+  processImpl.pid = 777;
+  const child = fakeChild();
+  const clears = [];
+  const writes = [];
+  const env = { OPENCODE_SERVER_PASSWORD: "signal-clear-secret" };
+  await ensureTestOpencodeServer({
+    fetchImpl: authedFetch(basicAuthHeader("opencode", env.OPENCODE_SERVER_PASSWORD), []),
+    spawnImpl: () => child,
+    command: "/bin/opencode",
+    cwd: "/repo/root",
+    env,
+    pidRecord: {
+      read: async () => null,
+      write: async (directory, rec) => { writes.push({ directory, rec }); },
+      clear: (directory) => { clears.push(directory); },
+      isAlive: () => false,
+      commandOf: () => "",
+      kill: () => {}
+    },
+    processImpl,
+    sleep: immediateSleep,
+    pollMs: 1,
+    maxWaitMs: 100
+  });
+  assert.equal(writes.length, 1);
+  processImpl.emit("SIGTERM");
+  assert.equal(child.killed, true);
+  assert.deepEqual(clears, ["/repo/root"]);
+  assert.equal(processImpl.exitCode, 143);
+});
+
+test("SIGTERM shutdown does not clear pid records written by another owner", async () => {
+  resetOpencodeServerSingletonForTests();
+  const processImpl = fakeProcess();
+  processImpl.pid = 777;
+  const child = fakeChild();
+  const clears = [];
+  const env = { OPENCODE_SERVER_PASSWORD: "foreign-signal-secret" };
+  await ensureTestOpencodeServer({
+    fetchImpl: authedFetch(basicAuthHeader("opencode", env.OPENCODE_SERVER_PASSWORD), []),
+    spawnImpl: () => child,
+    command: "/bin/opencode",
+    env,
+    pidRecord: {
+      read: async () => ({ owner: 888, pid: 999, port: 45123, startedAt: 0 }),
+      write: async () => {},
+      clear: (directory) => { clears.push(directory); },
+      isAlive: (pid) => pid === 888,
+      commandOf: () => "/x/opencode-ai/bin/opencode serve --port 45123",
+      kill: () => {}
+    },
+    processImpl,
+    sleep: immediateSleep,
+    pollMs: 1,
+    maxWaitMs: 100
+  });
+  processImpl.emit("SIGTERM");
+  assert.equal(child.killed, true);
+  assert.deepEqual(clears, []);
+});
+
 test("pidRecord cleans stale opencode serve processes and records the new child", async () => {
   const writes = [];
   const killed = [];
@@ -754,6 +818,37 @@ test("pidRecord cleans stale opencode serve processes and records the new child"
   assert.equal(writes[0].port, 45123);
   assert.equal(writes[1].pid, 4242);
   assert.equal(writes[1].port, 45123);
+});
+
+test("startup clears a stale pid record whose child pid is already dead", async () => {
+  resetOpencodeServerSingletonForTests();
+  const clears = [];
+  const writes = [];
+  const env = { OPENCODE_SERVER_PASSWORD: "dead-record-secret" };
+  const processImpl = fakeProcess();
+  processImpl.pid = 777;
+  await ensureTestOpencodeServer({
+    fetchImpl: authedFetch(basicAuthHeader("opencode", env.OPENCODE_SERVER_PASSWORD), []),
+    spawnImpl: () => fakeChild(),
+    command: "/bin/opencode",
+    cwd: "/repo/root",
+    env,
+    pidRecord: {
+      read: async () => ({ owner: 888, pid: 999, port: 45123, startedAt: 0 }),
+      write: async (_directory, rec) => { writes.push(rec); },
+      clear: (directory) => { clears.push(directory); },
+      isAlive: () => false,
+      commandOf: () => "",
+      kill: () => {}
+    },
+    processImpl,
+    sleep: immediateSleep,
+    pollMs: 1,
+    maxWaitMs: 100
+  });
+  assert.deepEqual(clears, ["/repo/root"]);
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].owner, 777);
 });
 
 test("base URL helpers strip auth and require explicit positive ports", () => {
@@ -1144,6 +1239,7 @@ test("child exit clears the pid record only when this process owns it", async ()
   // owner matches this process -> cleared
   resetOpencodeServerSingletonForTests();
   let clears = 0;
+  let ownerReads = 0;
   const child = fakeChild();
   await ensureTestOpencodeServer({
     fetchImpl: authedFetch(expectedHeader, []),
@@ -1151,7 +1247,10 @@ test("child exit clears the pid record only when this process owns it", async ()
     command: "/bin/opencode",
     env,
     pidRecord: {
-      read: async () => ({ owner: 777, pid: child.pid }),
+      read: async () => {
+        ownerReads += 1;
+        return ownerReads === 1 ? null : { owner: 777, pid: child.pid };
+      },
       write: async () => {},
       clear: () => { clears += 1; },
       isAlive: () => false,
@@ -1170,6 +1269,7 @@ test("child exit clears the pid record only when this process owns it", async ()
   // owner differs -> left alone
   resetOpencodeServerSingletonForTests();
   clears = 0;
+  let foreignReads = 0;
   const otherChild = fakeChild();
   await ensureTestOpencodeServer({
     fetchImpl: authedFetch(expectedHeader, []),
@@ -1177,7 +1277,10 @@ test("child exit clears the pid record only when this process owns it", async ()
     command: "/bin/opencode",
     env,
     pidRecord: {
-      read: async () => ({ owner: 888, pid: otherChild.pid }),
+      read: async () => {
+        foreignReads += 1;
+        return foreignReads === 1 ? null : { owner: 888, pid: otherChild.pid };
+      },
       write: async () => {},
       clear: () => { clears += 1; },
       isAlive: () => false,

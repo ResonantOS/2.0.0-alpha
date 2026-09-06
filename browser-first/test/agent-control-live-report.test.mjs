@@ -83,6 +83,27 @@ test("certification report emits a scenario matrix without absolute artifact pat
   }
 });
 
+test("certification report accepts a lane-specific certification name", async () => {
+  const artifactDir = await mkdtemp(path.join(os.tmpdir(), "resonantos-live-report-name-test-"));
+  try {
+    const report = createLiveCertificationReport({
+      artifactDir,
+      certification: "resonantos-live-sdk",
+      profile: "ci",
+      runId: "sdk",
+      runAttempt: "1",
+    });
+    report.record("bridge-start", "passed", "capabilities bootstrapped");
+    const output = await report.write({ status: "passed" });
+    const payload = JSON.parse(await readFile(output.jsonPath, "utf8"));
+    const markdown = await readFile(output.markdownPath, "utf8");
+    assert.equal(payload.certification, "resonantos-live-sdk");
+    assert.match(markdown, /ResonantOS Live Sdk Certification/);
+  } finally {
+    await rm(artifactDir, { recursive: true, force: true });
+  }
+});
+
 test("forced Chrome unavailability cannot certify a CI run and still emits evidence", async () => {
   const artifactDir = await mkdtemp(path.join(os.tmpdir(), "resonantos-live-unavailable-test-"));
   try {
