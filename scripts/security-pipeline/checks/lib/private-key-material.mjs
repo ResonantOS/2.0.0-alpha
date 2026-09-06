@@ -14,7 +14,7 @@ const JWK_PRIVATE_KTY = new Set(["OKP", "EC", "RSA"]);
 const PEM_PRIVATE_KEY_PATTERN =
   /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----(?<body>(?:[A-Za-z0-9+/=]|\s|\\[rn])+)/gu;
 const JWK_FALLBACK_PATTERN =
-  /(?:"kty"\s*:\s*"(OKP|EC|RSA)"[\s\S]{0,800}?"d"\s*:\s*"([A-Za-z0-9_\-+/=]{16,})"|"d"\s*:\s*"([A-Za-z0-9_\-+/=]{16,})"[\s\S]{0,800}?"kty"\s*:\s*"(OKP|EC|RSA)")/gu;
+  /(?:"kty"\s*:\s*"(?:[Oo][Kk][Pp]|[Ee][Cc]|[Rr][Ss][Aa])"[\s\S]{0,800}?"d"\s*:\s*"([A-Za-z0-9_\-+/=]{16,})"|"d"\s*:\s*"([A-Za-z0-9_\-+/=]{16,})"[\s\S]{0,800}?"kty"\s*:\s*"(?:[Oo][Kk][Pp]|[Ee][Cc]|[Rr][Ss][Aa])")/gu;
 
 export function scanText({ path: filePath, text }) {
   const findings = [];
@@ -87,7 +87,7 @@ function scanJwkPrivateComponents({ path: filePath, text }) {
 function scanJwkFallback({ path: filePath, text }) {
   const findings = [];
   for (const match of text.matchAll(JWK_FALLBACK_PATTERN)) {
-    const dValue = match[2] ?? match[3];
+    const dValue = match[1] ?? match[2];
     findings.push({
       kind: "jwk-private-component",
       path: filePath,
@@ -111,7 +111,7 @@ function walkJsonForJwk(value, onFinding) {
   }
 
   if (
-    JWK_PRIVATE_KTY.has(value.kty) &&
+    JWK_PRIVATE_KTY.has(String(value.kty ?? "").toUpperCase()) &&
     typeof value.d === "string" &&
     value.d.length >= 16
   ) {

@@ -68,7 +68,7 @@ worker's changes.
 - Keep credentials and user data out of source, fixtures, logs, screenshots, and
   pull-request text.
 - Private key material (PEM blocks, JWKs with a private component,
-  `*.signer.json` / `*.pem` / `*.key` files) is blocked by the gating
+  `*.signer.json` / `*-signer.json` / `*.pem` / `*.key` files) is blocked by the gating
   `committed-private-key-material` check; a deliberately committed test fixture
   must be generated at test time instead, or, if it must be a file, listed in
   `.github/security-pipeline/checks.yml` under the check's `allowlist` with a

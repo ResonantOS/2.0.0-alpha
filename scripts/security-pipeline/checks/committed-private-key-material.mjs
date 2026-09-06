@@ -9,7 +9,9 @@ import {
   scanText,
 } from "./lib/private-key-material.mjs";
 
-const MAX_CONTENT_BYTES = 2 * 1024 * 1024;
+// Content scanning cap; larger tracked files are reported as `oversized` evidence (visible, non-failing)
+// rather than silently skipped. Override per check with `maxContentBytes`.
+const DEFAULT_MAX_CONTENT_BYTES = 16 * 1024 * 1024;
 
 export async function run({ check, repoRoot }) {
   const allowlist = Array.isArray(check.allowlist) ? check.allowlist : [];
@@ -23,6 +25,9 @@ export async function run({ check, repoRoot }) {
     ? check.surfaces
     : ["."];
   const scopedFiles = listCandidateFiles(repoRoot).filter((filePath) => isInSurfaces(filePath, surfaces));
+  const maxContentBytes = Number.isFinite(check.maxContentBytes) && check.maxContentBytes > 0
+    ? check.maxContentBytes
+    : DEFAULT_MAX_CONTENT_BYTES;
   const evidence = [];
 
   for (const filePath of scopedFiles) {
@@ -43,7 +48,14 @@ export async function run({ check, repoRoot }) {
     let text;
     try {
       const fileStat = await stat(absolutePath);
-      if (fileStat.size > MAX_CONTENT_BYTES) {
+      if (fileStat.size > maxContentBytes) {
+        evidence.push({
+          kind: "oversized",
+          path: filePath,
+          line: 1,
+          status: "oversized",
+          reason: `${fileStat.size} bytes exceeds the ${maxContentBytes}-byte content cap; filename rule still applied`,
+        });
         continue;
       }
       text = await readFile(absolutePath, "utf8");
@@ -67,6 +79,7 @@ export async function run({ check, repoRoot }) {
   const failedFindings = evidence.filter((finding) => finding.status === "fail");
   const allowlistedFindings = evidence.filter((finding) => finding.status === "allowlisted");
   const unreadable = evidence.filter((finding) => finding.status === "unreadable");
+  const oversized = evidence.filter((finding) => finding.status === "oversized");
   if (failedFindings.length > 0) {
     return {
       status: "fail",
@@ -77,7 +90,7 @@ export async function run({ check, repoRoot }) {
 
   return {
     status: "pass",
-    summary: `committed-private-key-material: clean, ${scopedFiles.length} file(s) scanned (${allowlistedFindings.length} allowlisted, ${unreadable.length} unreadable)`,
+    summary: `committed-private-key-material: clean, ${scopedFiles.length} file(s) scanned (${allowlistedFindings.length} allowlisted, ${unreadable.length} unreadable, ${oversized.length} oversized)`,
     evidence,
   };
 }

@@ -29,6 +29,7 @@ public/addons/*.local-test-backup-*
 .env.*
 !.env.example
 *.signer.json
+*-signer.json
 *-private*.json
 *.jwk
 *.key

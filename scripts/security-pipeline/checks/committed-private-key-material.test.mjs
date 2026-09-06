@@ -289,3 +289,51 @@ test("an unreadable path is reported without failing or aborting the scan", asyn
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("lowercase kty does not hide a JWK private component (parsed and fallback paths)", async () => {
+  const root = createFixture();
+  try {
+    const { jwk } = generateEd25519Material();
+    const lowered = { ...jwk, kty: jwk.kty.toLowerCase() };
+    writeFixture(root, "keys/lower.json", JSON.stringify(lowered));
+    writeFixture(root, "keys/lower.txt", `key = ${JSON.stringify(lowered)}`);
+
+    const result = await runFixture(root);
+
+    assert.equal(result.status, "fail");
+    assert.deepEqual(
+      result.evidence.map(({ kind, path: evidencePath }) => [kind, evidencePath]).sort(),
+      [
+        ["jwk-private-component", "keys/lower.json"],
+        ["jwk-private-component", "keys/lower.txt"],
+      ],
+    );
+    assert.equal(JSON.stringify(result).includes(jwk.d), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a file above the content cap is reported as oversized instead of silently skipped", async () => {
+  const root = createFixture();
+  try {
+    const { pem } = generateEd25519Material();
+    writeFixture(root, "big/blob.txt", `${pem}${"x".repeat(2048)}`);
+
+    const result = await runFixture(root, { surfaces: ["."], maxContentBytes: 1024 });
+
+    assert.equal(result.status, "pass");
+    assert.deepEqual(
+      result.evidence.map(({ kind, path: evidencePath, status }) => [kind, evidencePath, status]),
+      [["oversized", "big/blob.txt", "oversized"]],
+    );
+    assert.match(result.summary, /1 oversized/u);
+    assert.equal(JSON.stringify(result).includes(pem.split("\n")[1]), false);
+
+    const scanned = await runFixture(root);
+    assert.equal(scanned.status, "fail");
+    assert.equal(scanned.evidence[0].kind, "pem-private-key");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
