@@ -11,8 +11,8 @@
 // is debounced/coalesced via an in-memory pending-write flag. Multiple rapid
 // updates from the same client collapse into a single disk write.
 //
-// Reads do not require a capability token. Writes are capability-gated because
-// they persist host-side user preferences from the extension.
+// Reads and writes are capability-gated because extension preferences live in
+// host-side user state outside the browser profile.
 
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -159,7 +159,12 @@ export function createExtensionPrefsHostService({ userRoot } = {}) {
     executeWriteExtensionPrefs,
     flushPendingWrites,
     extensionPrefsRoutes: [
-      { method: "GET", path: "/settings/extension-prefs", handler: executeReadExtensionPrefs },
+      {
+        method: "GET",
+        path: "/settings/extension-prefs",
+        requiredCapability: "extension-prefs-read",
+        handler: executeReadExtensionPrefs,
+      },
       {
         method: "POST",
         path: "/settings/extension-prefs",

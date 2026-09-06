@@ -80,10 +80,30 @@ export function createBrowserDiagnosticsHostService({
     ...service,
     executeSystemStatus,
     browserDiagnosticsRoutes: [
-      { method: "GET", path: "/status", handler: executeSystemStatus },
-      { method: "GET", path: "/workspace/inspect", handler: service.executeWorkspaceInspection },
-      { method: "GET", path: "/browser/downloads", handler: service.executeBrowserDownloads },
-      { method: "GET", path: "/browser/launch-diagnostics", handler: service.executeBrowserLaunchDiagnostics },
+      {
+        method: "GET",
+        path: "/status",
+        requiredCapability: "bridge-diagnostics-read",
+        handler: executeSystemStatus,
+      },
+      {
+        method: "GET",
+        path: "/workspace/inspect",
+        requiredCapability: "bridge-diagnostics-read",
+        handler: service.executeWorkspaceInspection,
+      },
+      {
+        method: "GET",
+        path: "/browser/downloads",
+        requiredCapability: "bridge-diagnostics-read",
+        handler: service.executeBrowserDownloads,
+      },
+      {
+        method: "GET",
+        path: "/browser/launch-diagnostics",
+        requiredCapability: "bridge-diagnostics-read",
+        handler: service.executeBrowserLaunchDiagnostics,
+      },
       {
         method: "POST",
         path: "/browser/downloads/action",

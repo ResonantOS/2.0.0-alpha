@@ -164,6 +164,93 @@ test("bridge client sends scoped capability headers without localhost binding", 
   assert.equal(saved.saved, true);
 });
 
+test("bridge client waits for pending capability bootstrap before scoped GET", async () => {
+  const bridgeClientModule = await import("../resonantos-side-panel-extension/src/lib/bridge-client.js");
+  assert.equal(typeof bridgeClientModule.__resetCapabilityTokensForTests, "function");
+  bridgeClientModule.__resetCapabilityTokensForTests();
+
+  const bridgeToken = "runtime-general-test-token";
+  const capabilityBootstrapToken = "runtime-bootstrap-test-token";
+  const capabilityToken = "runtime-bridge-diagnostics-read-token";
+  let resolveBootstrapFetch;
+  const bootstrapFetchStarted = new Promise((resolve) => {
+    resolveBootstrapFetch = resolve;
+  });
+  let statusHeaders = null;
+
+  const fetchImpl = async (url, options = {}) => {
+    const pathname = new URL(url).pathname;
+    if (pathname === "/api/capability-tokens") {
+      return await new Promise((resolve) => {
+        bootstrapFetchStarted.then(() => resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            ok: true,
+            capabilityTokens: { "bridge-diagnostics-read": capabilityToken },
+          }),
+        }));
+      });
+    }
+    statusHeaders = options.headers ?? {};
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, service: "resonantos-bridge" }),
+    };
+  };
+
+  const bootstrap = initCapabilityTokens({
+    bridgeUrl: "http://127.0.0.1:47773",
+    bridgeToken,
+    capabilityBootstrapToken,
+    fetchImpl,
+  });
+  const client = createBridgeClient({
+    bridgeUrl: "http://127.0.0.1:47773",
+    bridgeToken,
+    bridgeCapabilityTokens: {},
+    fetchImpl,
+  });
+
+  const request = client("/status", { method: "GET" });
+  resolveBootstrapFetch();
+  await Promise.all([bootstrap, request]);
+
+  assert.equal(
+    statusHeaders?.["X-ResonantOS-Bridge-Capability-Token"],
+    capabilityToken,
+  );
+});
+
+test("bridge client does not wait when no capability bootstrap is in flight", async () => {
+  const bridgeClientModule = await import("../resonantos-side-panel-extension/src/lib/bridge-client.js");
+  assert.equal(typeof bridgeClientModule.__resetCapabilityTokensForTests, "function");
+  bridgeClientModule.__resetCapabilityTokensForTests();
+
+  let requestCount = 0;
+  let statusHeaders = null;
+  const client = createBridgeClient({
+    bridgeUrl: "http://127.0.0.1:47773",
+    bridgeToken: "general-test-token",
+    bridgeCapabilityTokens: {},
+    fetchImpl: async (_url, options = {}) => {
+      requestCount += 1;
+      statusHeaders = options.headers ?? {};
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ ok: true, service: "resonantos-bridge" }),
+      };
+    },
+  });
+
+  await client("/status", { method: "GET" });
+
+  assert.equal(requestCount, 1);
+  assert.equal(statusHeaders?.["X-ResonantOS-Bridge-Capability-Token"], undefined);
+});
+
 test("bridge client reports unreachable bridge fetches with settings guidance", async () => {
   const client = createBridgeClient({
     bridgeUrl: "http://127.0.0.1:47773",

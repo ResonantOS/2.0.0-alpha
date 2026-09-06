@@ -21,5 +21,6 @@ test("browser-first bridge auth passes in-process deterministic smoke test", asy
   assert.equal(result.route, "/status");
   assert.equal(result.unauthorizedStatus, 401);
   assert.equal(result.wrongTokenStatus, 401);
+  assert.equal(result.bridgeTokenOnlyStatus, 403);
   assert.equal(result.authorizedStatus, 200);
 });

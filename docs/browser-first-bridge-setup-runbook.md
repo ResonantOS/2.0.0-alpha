@@ -70,6 +70,10 @@ The extension requests a fixed set of capabilities (`RUNTIME_CAPABILITY_ALLOWLIS
 derived from `BRIDGE_ROUTE_CAPABILITIES` in the extension's `bridge-client.js`).
 The bridge launcher must mint a token for each, or bootstrap 500s. Both are now
 derived from a single canonical source, `browser-first/host/bridge-capability-tokens.mjs`.
+Every bridge route now requires a per-route capability token in addition to the
+bridge token, and `bridge-route-capability-audit` fails when a route is ungated.
+Read-only bridge status, memory, and extension preference routes are protected
+by `bridge-diagnostics-read`, `memory-read`, and `extension-prefs-read`.
 
 ```bash
 # CI-equivalent drift check — must pass before any deploy:

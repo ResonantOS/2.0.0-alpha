@@ -210,7 +210,7 @@ export async function runBrowserFirstSelfTest(context) {
       bridgeCapabilityTokens,
       routes: bridgeRoutes,
     });
-    const authorized = await evaluateBridgeRequestForSelfTest({
+    const bridgeTokenOnly = await evaluateBridgeRequestForSelfTest({
       method: "GET",
       url: "/status",
       headers: { "X-ResonantOS-Bridge-Token": bridgeToken },
@@ -218,8 +218,20 @@ export async function runBrowserFirstSelfTest(context) {
       bridgeCapabilityTokens,
       routes: bridgeRoutes,
     });
+    const authorized = await evaluateBridgeRequestForSelfTest({
+      method: "GET",
+      url: "/status",
+      headers: {
+        "X-ResonantOS-Bridge-Token": bridgeToken,
+        "X-ResonantOS-Bridge-Capability-Token": bridgeCapabilityTokens["bridge-diagnostics-read"],
+      },
+      bridgeToken,
+      bridgeCapabilityTokens,
+      routes: bridgeRoutes,
+    });
     const ok = unauthorized.status === 401 &&
       wrongToken.status === 401 &&
+      bridgeTokenOnly.status === 403 &&
       authorized.status === 200 &&
       authorized.payload.ok === true;
     console.log(JSON.stringify({
@@ -228,6 +240,7 @@ export async function runBrowserFirstSelfTest(context) {
       route: "/status",
       unauthorizedStatus: unauthorized.status,
       wrongTokenStatus: wrongToken.status,
+      bridgeTokenOnlyStatus: bridgeTokenOnly.status,
       authorizedStatus: authorized.status,
     }, null, 2));
     process.exit(ok ? 0 : 1);
@@ -1350,13 +1363,16 @@ export async function runBrowserFirstSelfTest(context) {
       });
       const actualPort = bridgeServerPort(server, Number(args.get("bridge-port") ?? 0));
       const request = async (route, { method = "GET", body, capabilityToken } = {}) => {
+        const effectiveCapabilityToken = method === "GET"
+          ? capabilityTokenForRoute(route, method, capabilityToken)
+          : capabilityTokenForRoute(route, method, capabilityToken ?? "");
         const response = await fetch(`http://127.0.0.1:${actualPort}${route}`, {
           method,
           headers: {
             "Content-Type": "application/json",
             "Origin": resonantExtensionOrigin,
             "X-ResonantOS-Bridge-Token": bridgeToken,
-            ...(capabilityToken ? { "X-ResonantOS-Bridge-Capability-Token": capabilityToken } : {}),
+            ...(effectiveCapabilityToken ? { "X-ResonantOS-Bridge-Capability-Token": effectiveCapabilityToken } : {}),
           },
           ...(body ? { body: JSON.stringify(body) } : {}),
         });
@@ -1460,8 +1476,15 @@ export async function runBrowserFirstSelfTest(context) {
       await chmod(fakeOpenCode, 0o755).catch(() => undefined);
       process.env.HERMES_COMMAND = fakeHermes;
       process.env.OPENCODE_COMMAND = fakeOpenCode;
-      const request = (routePath, { method = "GET", body = {}, capabilityToken = "" } = {}) =>
-        invokeBridgeRouteForSelfTest({ method, routePath, body, capabilityToken });
+      const request = (routePath, { method = "GET", body = {}, capabilityToken } = {}) =>
+        invokeBridgeRouteForSelfTest({
+          method,
+          routePath,
+          body,
+          capabilityToken: method === "GET"
+            ? capabilityTokenForRoute(routePath, method, capabilityToken)
+            : capabilityTokenForRoute(routePath, method, capabilityToken ?? ""),
+        });
       const initial = await request("/addons/execution-settings");
       const denied = await request("/addons/execution-settings", {
         method: "POST",

@@ -8,8 +8,18 @@ export function createMemoryHostService(handlers = {}) {
 
   return {
     memoryBridgeRoutes: [
-      { method: "GET", path: "/memory/status", handler: required("executeMemoryStatus") },
-      { method: "GET", path: "/memory/settings", handler: required("executeMemorySettings") },
+      {
+        method: "GET",
+        path: "/memory/status",
+        requiredCapability: "memory-read",
+        handler: required("executeMemoryStatus"),
+      },
+      {
+        method: "GET",
+        path: "/memory/settings",
+        requiredCapability: "memory-read",
+        handler: required("executeMemorySettings"),
+      },
       {
         method: "POST",
         path: "/memory/settings",
@@ -82,7 +92,12 @@ export function createMemoryHostService(handlers = {}) {
         requiredCapability: "archive-read",
         handler: required("executeMemorySearch"),
       },
-      { method: "GET", path: "/memory/wiki/health", handler: required("executeMemoryWikiHealth") },
+      {
+        method: "GET",
+        path: "/memory/wiki/health",
+        requiredCapability: "memory-read",
+        handler: required("executeMemoryWikiHealth"),
+      },
       {
         method: "POST",
         path: "/memory/wiki/page/read",
