@@ -19,6 +19,7 @@ const PROMPT_FALLBACK_TIMEOUT_MS = 600_000;
 const BRIDGE_REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const inflight = new Map();
 const children = new Set();
+const writtenPidRecordDirectories = new Map();
 let hooksInstalled = false;
 let stalePidCleanupDone = false;
 let stalePidSkipWrite = false;
@@ -113,6 +114,7 @@ export async function opencodeServerEnforcesAuth({ fetchImpl, baseUrl, timeoutMs
 export function resetOpencodeServerSingletonForTests() {
   inflight.clear();
   children.clear();
+  writtenPidRecordDirectories.clear();
   hooksInstalled = false;
   stalePidCleanupDone = false;
   stalePidSkipWrite = false;
@@ -312,6 +314,7 @@ async function startOpencodeServer({
       installShutdownHooks(processImpl);
       if (!skipWrite) {
         await pidRecord.write(directory, { owner: processImpl.pid, pid: child.pid, port: announcedPort, startedAt: Date.now() });
+        trackWrittenPidRecord(pidRecord, directory);
       }
       return { key, baseUrl, spawned: true, process: child, directory, auth: { username, password, header } };
     }
@@ -359,9 +362,26 @@ async function cleanupStalePidOnce(pidRecord, directory, processImpl) {
       stalePidSkipWrite = true;
     } else if (pidRecord.isAlive(stale.pid) && /\bopencode(?:\.exe|\.cmd)?\s+serve\b/i.test(pidRecord.commandOf(stale.pid))) {
       pidRecord.kill(stale.pid);
+    } else if (!pidRecord.isAlive(stale.pid)) {
+      try { pidRecord.clear(directory); } catch { /* noop */ }
     }
   }
   return stalePidSkipWrite;
+}
+
+function trackWrittenPidRecord(pidRecord, directory) {
+  const directories = writtenPidRecordDirectories.get(pidRecord) ?? new Set();
+  directories.add(directory);
+  writtenPidRecordDirectories.set(pidRecord, directories);
+}
+
+function clearWrittenPidRecords() {
+  for (const [pidRecord, directories] of writtenPidRecordDirectories.entries()) {
+    for (const directory of directories) {
+      try { pidRecord.clear(directory); } catch { /* noop */ }
+    }
+  }
+  writtenPidRecordDirectories.clear();
 }
 
 function installShutdownHooks(processImpl) {
@@ -371,6 +391,7 @@ function installShutdownHooks(processImpl) {
     for (const child of children) {
       try { child?.kill?.(); } catch { /* noop */ }
     }
+    clearWrittenPidRecords();
   };
   processImpl.once?.("exit", killAll);
   for (const sig of ["SIGINT", "SIGTERM"]) {

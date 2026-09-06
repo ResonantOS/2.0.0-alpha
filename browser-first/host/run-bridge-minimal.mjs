@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -56,11 +56,31 @@ import {
 } from "./memory-source-history.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
-const resonantExtension = path.join(repoRoot, "browser-first", "resonantos-side-panel-extension");
+const defaultResonantExtension = path.join(repoRoot, "browser-first", "resonantos-side-panel-extension");
+const resonantExtension = resolveResonantExtensionRoot();
 const defaultBridgePort = 47773;
 const resonantExtensionId = "cdpdmmalhmokbfcfgogoepnjplaakgnl";
 const resonantExtensionOrigin = `chrome-extension://${resonantExtensionId}`;
 const args = parseArgs(process.argv.slice(2));
+
+function resolveResonantExtensionRoot() {
+  const configured = String(process.env.RESONANTOS_EXTENSION_ROOT ?? "").trim();
+  if (!configured) return defaultResonantExtension;
+  if (!path.isAbsolute(configured)) {
+    console.error(`RESONANTOS_EXTENSION_ROOT must be an absolute path: ${configured}`);
+    process.exit(1);
+  }
+  try {
+    const resolved = realpathSync.native(configured);
+    if (!statSync(resolved).isDirectory()) {
+      throw new Error("not a directory");
+    }
+    return resolved;
+  } catch {
+    console.error(`RESONANTOS_EXTENSION_ROOT must point to an existing directory: ${configured}`);
+    process.exit(1);
+  }
+}
 
 function userRoot() {
   return path.resolve(process.env.RESONANTOS_BROWSER_FIRST_USER_ROOT || path.join(os.homedir(), "ResonantOS_User"));
@@ -443,8 +463,9 @@ console.log(JSON.stringify({
   recovered: bridgeInfo.recovered,
   bridgeUrl: bridgePublicUrl,
   bridgeConfigPath,
+  extensionRoot: resonantExtension,
 }, null, 2));
-console.log("Load browser-first/resonantos-side-panel-extension in Chrome as an unpacked extension.");
+console.log(`Load ${resonantExtension} in Chrome as an unpacked extension.`);
 
 const shutdown = async () => {
   await flushPendingExtensionPrefs().catch(() => undefined);

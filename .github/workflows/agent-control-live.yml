@@ -33,6 +33,11 @@ on:
       - "browser-first/test/agent-control-live.mjs"
       - "browser-first/test/agent-control-live-report.mjs"
       - "browser-first/test/agent-control-live-report.test.mjs"
+      - "browser-first/test/live-harness.mjs"
+      - "browser-first/test/live-harness.test.mjs"
+      - "browser-first/test/live-sdk-lane.mjs"
+      - "browser-first/test/live-sdk-lane.test.mjs"
+      - "browser-first/host/opencode-version.json"
       - ".github/workflows/agent-control-live.yml"
       - "package.json"
       - "package-lock.json"
@@ -91,4 +96,69 @@ jobs:
 
       - name: Reject uncertified run
         if: always() && steps.certification.outcome != 'success'
+        run: exit 1
+
+  live-sdk:
+    name: Live SDK certification
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install stable Chrome
+        id: chrome
+        uses: browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd
+        with:
+          chrome-version: stable
+          install-dependencies: true
+
+      - name: Install pinned OpenCode
+        # Into $HOME/.local so the binary lands in a root the bridge's pinned-roots discovery trusts
+        # (~/.local/bin + its lib/node_modules sibling). A toolcache install would be invisible to the
+        # bridge and the OpenCode scenarios would be excluded instead of proven.
+        run: npm install -g --prefix "$HOME/.local" opencode-ai@$(node -p "require('./browser-first/host/opencode-version.json').pinned")
+
+      - name: Run live SDK fault self-tests
+        id: live-sdk-self-tests
+        # The lane's --expect-fail self-tests need Chrome and the pinned binary; both exist only in this job.
+        # Stable Chrome comes from setup-chrome (no Playwright Chromium on the runner), so pass its path here too.
+        # continue-on-error so the certification run still executes and uploads evidence; the reject step fails the job.
+        continue-on-error: true
+        env:
+          CI: "true"
+          RESONANTOS_LIVE_CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        run: OPENCODE_COMMAND="$HOME/.local/bin/opencode" xvfb-run -a node --test browser-first/test/live-sdk-lane.test.mjs
+
+      - name: Run live SDK certification
+        id: live-sdk-certification
+        continue-on-error: true
+        env:
+          CI: "true"
+          RESONANTOS_LIVE_CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+          RESONANTOS_LIVE_ARTIFACT_DIR: ${{ runner.temp }}/live-sdk/${{ github.run_id }}-${{ github.run_attempt }}
+        # OPENCODE_COMMAND is set in the shell: the Actions `env` context has no runner HOME, so `${{ env.HOME }}` is empty.
+        run: OPENCODE_COMMAND="$HOME/.local/bin/opencode" xvfb-run -a npm run test:browser-first:live-sdk
+
+      - name: Upload live SDK evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: live-sdk-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/live-sdk/${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Reject uncertified live SDK run
+        if: always() && (steps.live-sdk-certification.outcome != 'success' || steps.live-sdk-self-tests.outcome != 'success')
         run: exit 1

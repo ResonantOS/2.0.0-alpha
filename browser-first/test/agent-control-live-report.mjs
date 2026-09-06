@@ -44,6 +44,7 @@ export function decidePublicSubmitScenario({ mode = "auto", humanHandoff }) {
 
 export function createLiveCertificationReport({
   artifactDir,
+  certification = "resonantos-agent-control-live",
   profile,
   roots = [],
   runId = "local",
@@ -86,7 +87,7 @@ export function createLiveCertificationReport({
     );
     const payload = {
       schemaVersion: 1,
-      certification: "resonantos-agent-control-live",
+      certification,
       status,
       profile,
       run: { id: String(runId), attempt: String(runAttempt) },
@@ -101,12 +102,16 @@ export function createLiveCertificationReport({
     };
     const jsonPath = path.join(artifactDir, "scenario-matrix.json");
     const markdownPath = path.join(artifactDir, "scenario-matrix.md");
-    const markdownRows = scenarios.map((scenario) => {
+    const sortedScenarios = [...scenarios].sort((left, right) => {
+      const rank = { excluded: 0, failed: 1, gated: 2, passed: 3 };
+      return (rank[left.status] ?? 9) - (rank[right.status] ?? 9);
+    });
+    const markdownRows = sortedScenarios.map((scenario) => {
       const detail = scenario.detail.replaceAll("|", "\\|").replaceAll("\n", " ");
       return `| ${scenario.id} | ${scenario.status} | ${detail} |`;
     });
     const markdown = [
-      "# ResonantOS Agent Control Live Certification",
+      `# ${certificationTitle(certification)}`,
       "",
       `- Status: ${status}`,
       `- Profile: ${profile}`,
@@ -139,4 +144,13 @@ export function createLiveCertificationReport({
     scenarios,
     write,
   };
+}
+
+function certificationTitle(certification) {
+  const words = String(certification ?? "")
+    .replace(/^resonantos-/, "ResonantOS ")
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((word) => word === "SDK" ? word : word.charAt(0).toUpperCase() + word.slice(1));
+  return `${words.join(" ")} Certification`;
 }

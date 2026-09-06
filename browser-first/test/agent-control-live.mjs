@@ -11,6 +11,7 @@ import {
   decidePublicSubmitScenario,
   decideUnavailableCertification,
 } from "./agent-control-live-report.mjs";
+import { freeLoopbackPort as sharedFreeLoopbackPort } from "./live-harness.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
 const resonantExtensionId = "cdpdmmalhmokbfcfgogoepnjplaakgnl";
@@ -45,37 +46,25 @@ if (process.env.RESONANTOS_LIVE_FORCE_UNAVAILABLE === "1") {
 }
 
 async function freeLoopbackPort() {
-  const server = http.createServer();
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  }).catch((error) => {
+  try {
+    return await sharedFreeLoopbackPort();
+  } catch (error) {
     if (error?.code === "EPERM" || error?.code === "EACCES") {
-      return decideUnavailableCertification({
+      const unavailable = decideUnavailableCertification({
         ci: isCi,
         reason: "Localhost bind is denied in this environment.",
       });
+      certificationReport.record(
+        "environment-loopback",
+        isCi ? "failed" : "excluded",
+        unavailable.reason,
+      );
+      await certificationReport.write({ status: unavailable.status });
+      console.error(`agent-control-live ${unavailable.status}: ${unavailable.reason}`);
+      process.exit(unavailable.exitCode);
     }
     throw error;
-  });
-  if (!server.listening) {
-    const unavailable = decideUnavailableCertification({
-      ci: isCi,
-      reason: "Localhost bind is denied in this environment.",
-    });
-    certificationReport.record(
-      "environment-loopback",
-      isCi ? "failed" : "excluded",
-      unavailable.reason,
-    );
-    await certificationReport.write({ status: unavailable.status });
-    console.error(`agent-control-live ${unavailable.status}: ${unavailable.reason}`);
-    process.exit(unavailable.exitCode);
   }
-  const address = server.address();
-  const port = typeof address === "object" && address ? address.port : 0;
-  await new Promise((resolve) => server.close(resolve));
-  return port;
 }
 
 const fixturePort = await freeLoopbackPort();

@@ -107,7 +107,31 @@ The iframe is broken. Work top-down:
 - **Residual exposure (documented, not fixed here):** the password is present in the `opencode serve` child environment (readable by other processes of the same user, and inherited by any subprocess OpenCode itself spawns) — env is the only secret channel the binary supports. A bridge killed with `SIGKILL` can leave an authenticated orphan on a random port until the next bridge start reaps it via the PID record. The extension's `/event` fetch relies on MV3 `host_permissions` to send the header cross-origin. These are tracked under #326 and #321.
 - **Recovery:** if the bridge reports "did not announce a listening port", check the opencode binary version (`opencode --version`, expected ≥ 1.18) and confirm `opencode serve --hostname 127.0.0.1 --port <any free port>` prints the listening line.
 
+## Live SDK lane
+
+`npm run test:browser-first:live-sdk` proves the browser-first bridge and SDK-facing add-on routes work together in an isolated live run: capability bootstrap covers the extension allowlist, OpenCode serve uses a credentialed ephemeral loopback port, execution settings gate local CLI execution, public add-on manifests remain structurally valid, and the Settings Overview cards call capability-mapped bridge routes without 403s.
+
+The lane stages a temporary copy of the extension and passes it to both the bridge (`RESONANTOS_EXTENSION_ROOT`) and Chrome, so it is safe to run from the same checkout that serves a deployed bridge; the checkout's `src/bridge-config.generated.js` mtime and hash are checked for drift.
+
+Run the local provider-backed lane with:
+
+```bash
+RESONANTOS_LIVE_SDK_MODEL=<provider/model> npm run test:browser-first:live-sdk
+```
+
+Without `RESONANTOS_LIVE_SDK_MODEL`, CI mode records terminal OpenCode CLI evidence without requiring a real provider credential. With `RESONANTOS_LIVE_SDK_MODEL`, local mode expects the real OpenCode delegation to complete and return a non-empty artifact. Evidence lands in `RESONANTOS_LIVE_ARTIFACT_DIR` when set, otherwise under the system temp directory at `resonantos-live-sdk/<timestamp>`. The OpenCode drift detector reads the pinned version from [`../browser-first/host/opencode-version.json`](../browser-first/host/opencode-version.json).
+
+If an older lane rewrote the deployed checkout config, restart the launchd-managed bridge to regenerate it:
+
+```bash
+launchctl kickstart -k gui/$(id -u)/resonantos.browser-first.bridge
+```
+
+During shutdown, the bridge now clears OpenCode PID records written by the current bridge process before exiting and the live lane waits for the child process to die before evaluating teardown evidence.
+
 ## See also
 
 - `browser-first/test/bridge-first-run-smoke.test.mjs` — CI smoke test for the in-repo bug classes (1 and 4).
 - Issues #199–#204 — the original diagnoses.
+
+Deep manifest validation (the SDK's `validateAddOnManifest`) is not part of the lane yet: the validator is TypeScript and the Node lane has no loader. The lane validates every public manifest structurally; deep validation stays a follow-up.
