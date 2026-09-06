@@ -361,3 +361,13 @@ npm run test:living-archive-memory-service
 npm test -- src/App.test.tsx -t "Living Archive memory bridge"
 cargo test memory_service --manifest-path src-tauri/Cargo.toml
 ```
+
+## Memory service write token
+
+`RESONANTOS_MEMORY_SERVICE_TOKEN` gates **write** operations on the HTTP-JSON
+memory provider (`src/core/memory-provider.ts`) and the reference
+`examples/living-archive-memory-service.mjs`. Set the same value in the bridge
+environment and in the memory service's environment; requests without a matching
+`Authorization: Bearer <token>` are rejected for writes (reads are unaffected).
+Treat it like any other secret: read it from your key store at launch, never
+commit it, never print it.
