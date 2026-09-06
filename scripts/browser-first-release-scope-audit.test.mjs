@@ -360,3 +360,17 @@ test("classify includes the add-on SDK package family and tsconfig in the browse
   // negative control: an unrelated new top-level path still needs review
   assert.notEqual(classify("packages/some-unrelated-tool/index.ts", "added").bucket, "include");
 });
+
+test("security-pipeline documentation is approved release documentation", () => {
+  const classify = requireExport("classify");
+
+  assert.deepEqual(classify("docs/security-pipeline/committed-private-key-material.md", "added"), {
+    bucket: "include",
+    reason: "security-pipeline policy and check documentation",
+  });
+  assert.deepEqual(classify("docs/security-pipeline/sha-pin-policy.md", "modified"), {
+    bucket: "include",
+    reason: "security-pipeline policy and check documentation",
+  });
+  assert.equal(classify("docs/unlisted/notes.md", "added").bucket, "review");
+});

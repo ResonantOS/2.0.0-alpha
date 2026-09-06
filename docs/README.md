@@ -96,6 +96,7 @@ Related contributor references:
 - [Icon system decision](product/ICON-001-resonantos-svg-system.md) and
   [icon asset index](../public/icons/README.md)
 - [GitHub Action SHA-pinning policy](security-pipeline/sha-pin-policy.md)
+- [Committed private key material check](security-pipeline/committed-private-key-material.md)
 - [Architecture templates, runbooks, and add-on skill contracts](architecture/README.md#contributor-contracts)
 
 ## Release The Alpha

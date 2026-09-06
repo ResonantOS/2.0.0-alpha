@@ -28,11 +28,20 @@ public/addons/*.local-test-backup-*
 .env
 .env.*
 !.env.example
+*.signer.json
+*-signer.json
+*-private*.json
+*.jwk
 *.key
 *.pem
 *.p12
+*.pfx
 *.mobileprovision
 *.keystore
+id_rsa
+id_ed25519
+id_ecdsa
+id_dsa
 
 # Logs and caches
 logs/

@@ -67,6 +67,13 @@ worker's changes.
 - Add focused tests for behavior changes.
 - Keep credentials and user data out of source, fixtures, logs, screenshots, and
   pull-request text.
+- Private key material (PEM blocks, JWKs with a private component,
+  `*.signer.json` / `*-signer.json` / `*.pem` / `*.key` files) is blocked by the gating
+  `committed-private-key-material` check; a deliberately committed test fixture
+  must be generated at test time instead, or, if it must be a file, listed in
+  `.github/security-pipeline/checks.yml` under the check's `allowlist` with a
+  `reason`. See
+  [committed private key material](docs/security-pipeline/committed-private-key-material.md).
 - Do not claim runtime support, status, or release scope that is absent from
   code, tests, [current status](docs/STATUS.md), and Project 2.
 
