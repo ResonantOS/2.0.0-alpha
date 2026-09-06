@@ -74,4 +74,48 @@ describe("system slot replacement runtime", () => {
     expect(systemSlotAvailable(next, [chatManifest, memoryManifest], "chat-interface")).toBe(false);
     expect(systemSlotAvailable(next, [chatManifest, memoryManifest], "memory-system")).toBe(true);
   });
+
+  it("does not select an enabled add-on whose slot capability grant is missing, not granted, or the wrong capability (#349)", () => {
+    const chatManifest = manifestForSlot("addon.augmentor-chat", "chat-interface", "chat-interface");
+    const memoryManifest = manifestForSlot("addon.living-archive", "memory-system", "memory-provider");
+    const manifests = [chatManifest, memoryManifest];
+    const base = buildDefaultState(manifests);
+    const enabledWithGrants = (grants: Record<string, CapabilityGrant[]>) => ({
+      ...base,
+      installations: Object.fromEntries(
+        Object.entries(base.installations).map(([id, installation]) => [
+          id,
+          { ...installation, installed: true, enabled: true, grantedCapabilities: grants[id] ?? [] },
+        ]),
+      ),
+    });
+
+    // Enabled, but the slot capability is present-and-denied (chat) or absent entirely (memory).
+    const ungranted = enabledWithGrants({
+      [chatManifest.id]: [grant("chat-interface")],
+      [memoryManifest.id]: [],
+    });
+    expect(activeSystemSlotProvider(ungranted, manifests, "chat-interface")).toBeNull();
+    expect(activeSystemSlotProvider(ungranted, manifests, "memory-system")).toBeNull();
+    expect(systemSlotAvailable(ungranted, manifests, "chat-interface")).toBe(false);
+    expect(systemSlotAvailable(ungranted, manifests, "memory-system")).toBe(false);
+
+    // Enabled with SOME granted capability, just not the one the slot requires.
+    const wrongCapability = enabledWithGrants({
+      [chatManifest.id]: [{ ...grant("notifications"), granted: true }],
+      [memoryManifest.id]: [{ ...grant("chat-interface"), granted: true }],
+    });
+    expect(activeSystemSlotProvider(wrongCapability, manifests, "chat-interface")).toBeNull();
+    expect(activeSystemSlotProvider(wrongCapability, manifests, "memory-system")).toBeNull();
+
+    // The same enabled installations become providers once the backing grant is actually granted.
+    const granted = enabledWithGrants({
+      [chatManifest.id]: [{ ...grant("chat-interface"), granted: true }],
+      [memoryManifest.id]: [{ ...grant("memory-provider"), granted: true }],
+    });
+    expect(activeSystemSlotProvider(granted, manifests, "chat-interface")?.manifest.id).toBe(chatManifest.id);
+    expect(activeSystemSlotProvider(granted, manifests, "memory-system")?.manifest.id).toBe(memoryManifest.id);
+    expect(systemSlotAvailable(granted, manifests, "chat-interface")).toBe(true);
+    expect(systemSlotAvailable(granted, manifests, "memory-system")).toBe(true);
+  });
 });
