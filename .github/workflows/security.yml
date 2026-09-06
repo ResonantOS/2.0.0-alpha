@@ -1,9 +1,8 @@
 # Security observe workflow.
 #
-# Runs the security-pipeline check registry in OBSERVE mode (non-gating): a
-# finding never fails the workflow and no job here is wired as a required
-# status check or branch-protection gate. Additive alongside alpha-build.yml,
-# which this workflow does not touch.
+# Runs the security-pipeline check registry in OBSERVE mode (non-gating) while
+# the committed-private-key-material job gates private key material. Additive
+# alongside alpha-build.yml, which this workflow does not touch.
 #
 # Action refs are pinned to full 40-char commit SHAs per
 # docs/security-pipeline/sha-pin-policy.md (lead by example).
@@ -42,3 +41,24 @@ jobs:
           node-version-file: .nvmrc
       - name: Run security-pipeline registry (observe, non-gating)
         run: node scripts/security-pipeline/run-check.mjs --config .github/security-pipeline/checks.yml
+
+  committed-private-key-material:
+    name: "committed private key material (gating)"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        # pin: full 40-char commit SHA per sha-pin-policy.md.
+        # NOTE: verify this SHA at the commit gate before merge.
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Setup Node.js
+        # pin: full 40-char commit SHA per sha-pin-policy.md.
+        # NOTE: verify this SHA at the commit gate before merge.
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version-file: .nvmrc
+      - name: Test committed private key material check
+        run: node --test scripts/security-pipeline/checks/committed-private-key-material.test.mjs
+      - name: Run committed private key material check
+        run: node scripts/security-pipeline/run-check.mjs --config .github/security-pipeline/checks.yml --check committed-private-key-material

@@ -8,6 +8,10 @@
     "runtime-hardening": {
       "status": "active",
       "description": "Subprocess/runtime hardening: argv secrets, env scoping, pinned load roots, terminal command allowlist."
+    },
+    "secrets-hygiene": {
+      "status": "active",
+      "description": "Committed-content hygiene: private key material, signer files."
     }
   },
   "recordSets": {
@@ -1152,6 +1156,16 @@
         "package-lock.json",
         "npm-shrinkwrap.json"
       ]
+    },
+    {
+      "id": "committed-private-key-material",
+      "family": "secrets-hygiene",
+      "policy": "block",
+      "adapter": "committed-private-key-material",
+      "surfaces": [
+        "."
+      ],
+      "allowlist": []
     },
     {
       "id": "subprocess-no-argv-secret",
