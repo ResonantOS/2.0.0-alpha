@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { unified } from "unified";
@@ -134,9 +134,42 @@ function lineNumber(markdown, offset) {
   return line;
 }
 
+const SKIPPED_DIRECTORY_NAMES = new Set([".git", ".claude", "node_modules", "dist", "coverage"]);
+
+function isSkippedPath(relativePath) {
+  return relativePath.split("/").some((segment) => SKIPPED_DIRECTORY_NAMES.has(segment));
+}
+
+// In a git checkout, enumerate what git would publish or a contributor is about to
+// add: tracked files plus untracked files that are NOT ignored. Gitignored scratch
+// (rig artifacts, worktrees, executor copies) never reaches the validator, so the
+// local gate matches a clean checkout (#344). Falls back to a directory walk when
+// the root is not a git checkout or git is unavailable.
+function listGitVisibleFiles(root) {
+  if (!existsSync(resolve(root, ".git"))) return null;
+  try {
+    const output = execFileSync(
+      "git",
+      ["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+      { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+    );
+    return output
+      .split("\0")
+      .filter(Boolean)
+      .map((path) => path.split(sep).join("/"))
+      .filter((path) => !isSkippedPath(path) && existsSync(resolve(root, path)));
+  } catch {
+    return null;
+  }
+}
+
 function walkFiles(root, current = root, files = []) {
+  if (current === root) {
+    const visible = listGitVisibleFiles(root);
+    if (visible) return visible;
+  }
   for (const entry of readdirSync(current, { withFileTypes: true })) {
-    if ([".git", "node_modules", "dist", "coverage"].includes(entry.name)) continue;
+    if (SKIPPED_DIRECTORY_NAMES.has(entry.name)) continue;
     const path = resolve(current, entry.name);
     if (entry.isDirectory()) walkFiles(root, path, files);
     else if (entry.isFile()) files.push(toRelative(root, path));
