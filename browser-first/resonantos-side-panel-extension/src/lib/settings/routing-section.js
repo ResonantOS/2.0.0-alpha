@@ -41,6 +41,7 @@ function routingCard({ strategy, models, bridgeRequest, getBridgeRequest, status
   const bridge = () => (typeof getBridgeRequest === "function" ? getBridgeRequest() : bridgeRequest);
   const card = document.createElement("article");
   card.className = "settings-routing-card";
+  card.dataset.strategyId = strategy.id;
   card.dataset.state = strategy.routeState;
 
   const heading = document.createElement("div");
@@ -98,6 +99,7 @@ function routingCard({ strategy, models, bridgeRequest, getBridgeRequest, status
   form.append(primary, fallback, cost, hardStop, save);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (save.disabled) return;
     save.disabled = true;
     setStatus(statusNode, `Saving ${strategy.label} routing strategy...`);
     try {
@@ -147,18 +149,27 @@ export function renderRoutingSection(container, { bridgeRequest, getBridgeReques
     })
   );
 
-  const load = async () => {
+  const load = async (savedStrategyId = null) => {
     const result = await bridge()("/providers/routing-strategies", { method: "GET" });
     const models = Array.isArray(result.models) ? result.models : [];
     const strategies = Array.isArray(result.strategies) ? result.strategies : [];
-    grid.replaceChildren(...strategies.map((strategy) => routingCard({
+    const renderCard = (strategy) => routingCard({
       strategy,
       models,
       bridgeRequest,
       getBridgeRequest,
       statusNode,
-      reload: load
-    })));
+      reload: () => load(strategy.id)
+    });
+    if (savedStrategyId === null) {
+      grid.replaceChildren(...strategies.map(renderCard));
+    } else {
+      // Refresh only the saved strategy; other cards may contain unsaved user edits.
+      const saved = strategies.find((strategy) => strategy.id === savedStrategyId);
+      if (!saved) throw new Error("Saved strategy is missing from the refreshed routing response.");
+      const card = [...grid.children].find((node) => node.dataset.strategyId === savedStrategyId);
+      card?.replaceWith(renderCard(saved));
+    }
     const routable = strategies.filter((strategy) => strategy.routeState === "routable").length;
     setStatus(statusNode, strategies.length
       ? `${routable}/${strategies.length} routing strategies currently have at least one available route.`
