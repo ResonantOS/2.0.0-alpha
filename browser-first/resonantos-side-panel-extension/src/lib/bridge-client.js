@@ -22,6 +22,11 @@ const GENERATED_CONFIG_PREFIX = "globalThis.__RESONANTOS_BRIDGE_CONFIG__ = Objec
 const GENERATED_CONFIG_SUFFIX = ");";
 const UNAUTHORIZED_BRIDGE_ERROR = "Unauthorized browser-first bridge request.";
 const BRIDGE_ROUTE_CAPABILITIES = Object.freeze({
+  "GET /status": "bridge-diagnostics-read",
+  "GET /workspace/inspect": "bridge-diagnostics-read",
+  "GET /browser/downloads": "bridge-diagnostics-read",
+  "GET /browser/launch-diagnostics": "bridge-diagnostics-read",
+  "GET /providers/status": "provider-diagnostics-read",
   "POST /providers/health": "provider-diagnostics-read",
   "POST /providers/connectivity-test": "provider-diagnostics-read",
   "GET /providers/diagnostics-history": "provider-diagnostics-read",
@@ -36,6 +41,8 @@ const BRIDGE_ROUTE_CAPABILITIES = Object.freeze({
   "POST /augmentor/control-plan": "agent-control-plan",
   "POST /augmentor/next-action": "agent-control-plan",
   "POST /web/news": "agent-control-plan",
+  "GET /memory/status": "memory-read",
+  "GET /memory/settings": "memory-read",
   "POST /memory/settings": "memory-settings-write",
   "POST /memory/source/browse": "memory-source-browse",
   "POST /memory/source/scan": "memory-source-scan",
@@ -48,6 +55,7 @@ const BRIDGE_ROUTE_CAPABILITIES = Object.freeze({
   "POST /memory/source/file-intake": "memory-source-file-intake",
   "POST /memory/source/sync": "memory-source-file-intake",
   "POST /memory/search": "archive-read",
+  "GET /memory/wiki/health": "memory-read",
   "POST /memory/wiki/page/read": "archive-read",
   "POST /memory/wiki/lint": "memory-source-review",
   "POST /memory/source/versions": "memory-source-review",
@@ -69,7 +77,10 @@ const BRIDGE_ROUTE_CAPABILITIES = Object.freeze({
   "POST /archive/review/promotions/restore": "archive-write",
   "POST /browser/downloads/action": "browser-download-action",
   "POST /diagnostics/report": "diagnostics-report-export",
+  "GET /addons/status": "addon-runtime-read",
+  "GET /addons/execution-settings": "addon-runtime-read",
   "POST /addons/execution-settings": "addon-execution-settings-write",
+  "GET /opencode/status": "addon-runtime-read",
   "POST /hermes/dashboard/status": "addon-runtime-read",
   "POST /hermes/dashboard/start": "addon-runtime-control",
   "POST /hermes/dashboard/stop": "addon-runtime-control",
@@ -103,6 +114,7 @@ const BRIDGE_ROUTE_CAPABILITIES = Object.freeze({
   "POST /addons/delegate": "addon-record-write",
   "POST /addons/delegate/list": "addon-record-read",
   "POST /goals": "addon-record-write",
+  "GET /settings/extension-prefs": "extension-prefs-read",
   "POST /settings/extension-prefs": "extension-prefs-write",
 });
 export const RUNTIME_CAPABILITY_ALLOWLIST = Object.freeze([...new Set(Object.values(BRIDGE_ROUTE_CAPABILITIES))]);
@@ -277,9 +289,9 @@ export function createBridgeClient(config = globalThis.__RESONANTOS_BRIDGE_CONFI
       headers["X-ResonantOS-Bridge-Token"] = bridgeToken;
     }
     const capability = options.capability || capabilityForBridgeRoute(route, method);
-    const effectiveCapabilityTokens = { ..._capabilityTokens, ...bridgeCapabilityTokens };
-    if (capability && effectiveCapabilityTokens[capability]) {
-      headers["X-ResonantOS-Bridge-Capability-Token"] = effectiveCapabilityTokens[capability];
+    const capabilityToken = await capabilityTokenForRequest(capability, bridgeCapabilityTokens);
+    if (capabilityToken) {
+      headers["X-ResonantOS-Bridge-Capability-Token"] = capabilityToken;
     }
     let response;
     try {
@@ -319,9 +331,9 @@ export function createRawBridgeFetch(config = globalThis.__RESONANTOS_BRIDGE_CON
       headers["X-ResonantOS-Bridge-Token"] = bridgeToken;
     }
     const capability = options.capability || capabilityForBridgeRoute(path, method);
-    const effectiveCapabilityTokens = { ..._capabilityTokens, ...bridgeCapabilityTokens };
-    if (capability && effectiveCapabilityTokens[capability]) {
-      headers["X-ResonantOS-Bridge-Capability-Token"] = effectiveCapabilityTokens[capability];
+    const capabilityToken = await capabilityTokenForRequest(capability, bridgeCapabilityTokens);
+    if (capabilityToken) {
+      headers["X-ResonantOS-Bridge-Capability-Token"] = capabilityToken;
     }
     try {
       return await fetchImpl(`${bridgeUrl}${path}`, {
@@ -407,6 +419,15 @@ function buildLoopbackCandidates(config) {
   return out;
 }
 
+// True when a bridge answered 403 because the route is capability-scoped (the bridge token was
+// accepted; only the per-route capability token is missing). Distinct from the IP-allowlist 403 and
+// from 401 (bridge token rejected). Exported for the settings Bridge Target probe.
+export function isCapabilityScopedBridgeReply(status, body) {
+  return status === 403
+    && typeof body?.error === "string"
+    && /requires [a-z0-9-]+ capability/i.test(body.error);
+}
+
 export async function detectLoopbackBridge(config, { fetchImpl: fetchOverride } = {}) {
   if (!config) return config;
   const fetchFn = fetchOverride ?? (typeof fetch !== "undefined" ? fetch : null);
@@ -430,10 +451,16 @@ export async function detectLoopbackBridge(config, { fetchImpl: fetchOverride } 
         signal: ac.signal,
       });
       clearTimeout(timer);
-      if (!res.ok) continue;
       let body = null;
       try { body = await res.json(); } catch { continue; }
-      if (body?.ok === true && (body?.service === "resonantos-bridge" || body?.bridge)) {
+      // A 200 {ok:true} identifies the bridge. Since #346 every route, including /status, is
+      // capability-scoped, and this probe runs BEFORE capability bootstrap, so a 403 whose body
+      // names a required capability is ALSO proof of a ResonantOS bridge that accepted our bridge
+      // token (a wrong token is 401; a foreign server has no such error shape).
+      const identified = res.ok
+        ? body?.ok === true && (body?.service === "resonantos-bridge" || body?.bridge)
+        : isCapabilityScopedBridgeReply(res.status, body);
+      if (identified) {
         return {
           ...config,
           bridgeUrl: candidate,
@@ -456,6 +483,24 @@ export async function detectLoopbackBridge(config, { fetchImpl: fetchOverride } 
 // into the build. The runtime-fetched tokens are an additional layer for
 // tokens that should NOT appear in the generated config file.
 const _capabilityTokens = {};
+let _capabilityTokensInFlight = null;
+
+async function capabilityTokenForRequest(capability, configCapabilityTokens = {}) {
+  if (!capability) return "";
+  let effectiveCapabilityTokens = { ..._capabilityTokens, ...configCapabilityTokens };
+  if (!effectiveCapabilityTokens[capability] && _capabilityTokensInFlight) {
+    await _capabilityTokensInFlight.catch(() => undefined);
+    effectiveCapabilityTokens = { ..._capabilityTokens, ...configCapabilityTokens };
+  }
+  return effectiveCapabilityTokens[capability] ?? "";
+}
+
+export function __resetCapabilityTokensForTests() {
+  for (const capability of Object.keys(_capabilityTokens)) {
+    delete _capabilityTokens[capability];
+  }
+  _capabilityTokensInFlight = null;
+}
 
 /**
  * Fetches capability tokens from the bridge server's authenticated endpoint
@@ -474,7 +519,7 @@ export async function initCapabilityTokens(config) {
   const capabilityBootstrapToken = cfg.capabilityBootstrapToken ?? "";
   const fetchImpl = cfg.fetchImpl ?? fetch;
   if (!bridgeToken || !capabilityBootstrapToken) return;
-  try {
+  const tokenBootstrap = (async () => {
     const response = await fetchImpl(`${bridgeUrl}/api/capability-tokens`, {
       method: "POST",
       headers: {
@@ -490,9 +535,17 @@ export async function initCapabilityTokens(config) {
         Object.assign(_capabilityTokens, payload.capabilityTokens);
       }
     }
-  } catch {
+  })().catch(() => {
     // Bridge may not be reachable yet (e.g. host not started). Capability
     // requests will fall back to config-supplied tokens until the bridge
     // is up.
+  });
+  _capabilityTokensInFlight = tokenBootstrap;
+  try {
+    await tokenBootstrap;
+  } finally {
+    if (_capabilityTokensInFlight === tokenBootstrap) {
+      _capabilityTokensInFlight = null;
+    }
   }
 }

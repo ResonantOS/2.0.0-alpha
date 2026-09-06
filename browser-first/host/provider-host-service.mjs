@@ -41,7 +41,12 @@ export function createProviderHostService({ redactDiagnosticText, extractJsonObj
   return {
     ...service,
     providerBridgeRoutes: [
-      { method: "GET", path: "/providers/status", handler: service.executeProviderStatus },
+      {
+        method: "GET",
+        path: "/providers/status",
+        requiredCapability: "provider-diagnostics-read",
+        handler: service.executeProviderStatus,
+      },
       {
         method: "POST",
         path: "/providers/health",

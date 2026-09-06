@@ -6,7 +6,7 @@ import test from "node:test";
 
 import { createExtensionPrefsHostService } from "../host/extension-prefs-host-service.mjs";
 
-test("extension prefs write route is capability gated", async () => {
+test("extension prefs routes are capability gated", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "resonantos-extension-prefs-"));
   try {
     const { extensionPrefsRoutes, flushPendingWrites } = createExtensionPrefsHostService({
@@ -16,7 +16,7 @@ test("extension prefs write route is capability gated", async () => {
 
     assert.equal(typeof routes.get("GET /settings/extension-prefs")?.handler, "function");
     assert.equal(typeof routes.get("POST /settings/extension-prefs")?.handler, "function");
-    assert.equal(routes.get("GET /settings/extension-prefs")?.requiredCapability, undefined);
+    assert.equal(routes.get("GET /settings/extension-prefs")?.requiredCapability, "extension-prefs-read");
     assert.equal(routes.get("POST /settings/extension-prefs")?.requiredCapability, "extension-prefs-write");
 
     await flushPendingWrites();

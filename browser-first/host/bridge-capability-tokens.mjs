@@ -26,6 +26,7 @@ export const BRIDGE_CAPABILITY_TOKEN_SPECS = Object.freeze([
   { capability: "provider-diagnostics-read", arg: "provider-diagnostics-token", env: "RESONANTOS_BROWSER_FIRST_PROVIDER_DIAGNOSTICS_TOKEN" },
   { capability: "provider-model-invoke", arg: "provider-model-invoke-token", env: "RESONANTOS_BROWSER_FIRST_PROVIDER_MODEL_INVOKE_TOKEN" },
   { capability: "agent-control-plan", arg: "agent-control-plan-token", env: "RESONANTOS_BROWSER_FIRST_AGENT_CONTROL_PLAN_TOKEN" },
+  { capability: "memory-read", arg: "memory-read-token", env: "RESONANTOS_BROWSER_FIRST_MEMORY_READ_TOKEN" },
   { capability: "memory-settings-write", arg: "memory-settings-token", env: "RESONANTOS_BROWSER_FIRST_MEMORY_SETTINGS_TOKEN" },
   { capability: "memory-source-browse", arg: "memory-source-browse-token", env: "RESONANTOS_BROWSER_FIRST_MEMORY_SOURCE_BROWSE_TOKEN" },
   { capability: "memory-source-scan", arg: "memory-source-scan-token", env: "RESONANTOS_BROWSER_FIRST_MEMORY_SOURCE_SCAN_TOKEN" },
@@ -37,12 +38,14 @@ export const BRIDGE_CAPABILITY_TOKEN_SPECS = Object.freeze([
   { capability: "archive-read", arg: "archive-read-token", env: "RESONANTOS_BROWSER_FIRST_ARCHIVE_READ_TOKEN" },
   { capability: "archive-write", arg: "archive-write-token", env: "RESONANTOS_BROWSER_FIRST_ARCHIVE_WRITE_TOKEN" },
   { capability: "diagnostics-report-export", arg: "diagnostics-report-token", env: "RESONANTOS_BROWSER_FIRST_DIAGNOSTICS_REPORT_TOKEN" },
+  { capability: "bridge-diagnostics-read", arg: "bridge-diagnostics-read-token", env: "RESONANTOS_BROWSER_FIRST_BRIDGE_DIAGNOSTICS_READ_TOKEN" },
   { capability: "browser-download-action", arg: "browser-download-action-token", env: "RESONANTOS_BROWSER_FIRST_BROWSER_DOWNLOAD_ACTION_TOKEN" },
   { capability: "addon-execution-settings-write", arg: "addon-execution-settings-token", env: "RESONANTOS_BROWSER_FIRST_ADDON_EXECUTION_SETTINGS_TOKEN" },
   { capability: "addon-runtime-read", arg: "addon-runtime-read-token", env: "RESONANTOS_BROWSER_FIRST_ADDON_RUNTIME_READ_TOKEN" },
   { capability: "addon-runtime-control", arg: "addon-runtime-control-token", env: "RESONANTOS_BROWSER_FIRST_ADDON_RUNTIME_CONTROL_TOKEN" },
   { capability: "addon-record-read", arg: "addon-record-read-token", env: "RESONANTOS_BROWSER_FIRST_ADDON_RECORD_READ_TOKEN" },
   { capability: "addon-record-write", arg: "addon-record-write-token", env: "RESONANTOS_BROWSER_FIRST_ADDON_RECORD_WRITE_TOKEN" },
+  { capability: "extension-prefs-read", arg: "extension-prefs-read-token", env: "RESONANTOS_BROWSER_FIRST_EXTENSION_PREFS_READ_TOKEN" },
   { capability: "extension-prefs-write", arg: "extension-prefs-write-token", env: "RESONANTOS_BROWSER_FIRST_EXTENSION_PREFS_WRITE_TOKEN" },
 ]);
 

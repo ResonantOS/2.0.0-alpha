@@ -8,15 +8,30 @@ export function createAddonDelegationHostService(handlers = {}) {
 
   return {
     addonDelegationRoutes: [
-      { method: "GET", path: "/addons/status", handler: required("executeAddonsStatus") },
-      { method: "GET", path: "/addons/execution-settings", handler: required("executeAddonExecutionSettingsGet") },
+      {
+        method: "GET",
+        path: "/addons/status",
+        requiredCapability: "addon-runtime-read",
+        handler: required("executeAddonsStatus"),
+      },
+      {
+        method: "GET",
+        path: "/addons/execution-settings",
+        requiredCapability: "addon-runtime-read",
+        handler: required("executeAddonExecutionSettingsGet"),
+      },
       {
         method: "POST",
         path: "/addons/execution-settings",
         requiredCapability: "addon-execution-settings-write",
         handler: required("executeAddonExecutionSettingsUpdate"),
       },
-      { method: "GET", path: "/opencode/status", handler: required("executeOpenCodeStatus") },
+      {
+        method: "GET",
+        path: "/opencode/status",
+        requiredCapability: "addon-runtime-read",
+        handler: required("executeOpenCodeStatus"),
+      },
       {
         method: "POST",
         path: "/hermes/dashboard/status",
