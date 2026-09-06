@@ -1,6 +1,9 @@
 import { metricCard, noteCard, safeErrorMessage, setStatus, settingsHeader } from "./settings-common.js";
 
+const DIAGNOSTICS_TIMEOUT_MS = 10_000;
+
 function serviceStatus(result) {
+  if (result.status === "pending") return { value: "Checking", detail: "waiting for status endpoint", tone: "" };
   if (result.status === "rejected") {
     return { value: "Error", detail: safeErrorMessage(result.reason), tone: "warning" };
   }
@@ -8,6 +11,7 @@ function serviceStatus(result) {
 }
 
 function browserLaunchStatus(result) {
+  if (result.status === "pending") return { value: "Checking", detail: "waiting for browser diagnostics", tone: "" };
   if (result.status === "rejected") {
     return { value: "Error", detail: safeErrorMessage(result.reason), tone: "warning" };
   }
@@ -53,6 +57,7 @@ export function renderDiagnosticsSection(container, { bridgeRequest, getBridgeRe
   const bridge = () => (typeof getBridgeRequest === "function" ? getBridgeRequest() : bridgeRequest);
   const statusNode = document.createElement("p");
   statusNode.className = "settings-status";
+  statusNode.setAttribute("role", "status");
   statusNode.textContent = "Checking diagnostics endpoints...";
   const grid = document.createElement("div");
   grid.className = "settings-health-grid settings-diagnostics-health";
@@ -60,8 +65,13 @@ export function renderDiagnosticsSection(container, { bridgeRequest, getBridgeRe
     metricCard({ label: "Bridge", value: "Checking", detail: "loading system status" }),
     metricCard({ label: "Providers", value: "Checking", detail: "loading provider status" }),
     metricCard({ label: "Add-ons", value: "Checking", detail: "loading add-on status" }),
-    metricCard({ label: "Memory", value: "Checking", detail: "loading memory status" })
+    metricCard({ label: "Memory", value: "Checking", detail: "loading memory status" }),
+    metricCard({ label: "Chromium", value: "Checking", detail: "loading browser diagnostics" })
   );
+  const retry = document.createElement("button");
+  retry.type = "button";
+  retry.textContent = "Retry unavailable checks";
+  retry.hidden = true;
 
   const details = document.createElement("ol");
   details.className = "settings-diagnostics-list";
@@ -96,6 +106,7 @@ export function renderDiagnosticsSection(container, { bridgeRequest, getBridgeRe
       body: "Check whether ResonantOS is healthy. Detailed endpoint data and redacted report export are available when needed."
     }),
     statusNode,
+    retry,
     grid,
     endpointDetails,
     exportDetails
@@ -118,16 +129,28 @@ export function renderDiagnosticsSection(container, { bridgeRequest, getBridgeRe
     }
   });
 
-  const load = async () => {
-    const [statusResult, providerResult, addonResult, memoryResult] = await Promise.allSettled([
-      bridge()("/status", { method: "GET" }),
-      bridge()("/providers/status", { method: "GET" }),
-      bridge()("/addons/status", { method: "GET" }),
-      bridge()("/memory/status", { method: "GET" })
-    ]);
-    const [browserLaunchResult] = await Promise.allSettled([
-      bridge()("/browser/launch-diagnostics", { method: "GET" })
-    ]);
+  const routes = ["/status", "/providers/status", "/addons/status", "/memory/status", "/browser/launch-diagnostics"];
+  const results = routes.map(() => ({ status: "pending" }));
+
+  async function probe(route) {
+    const controller = new AbortController();
+    let timer;
+    // Bound each endpoint separately, including transports that ignore AbortSignal.
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        reject(new Error("Status request timed out after 10 seconds."));
+        controller.abort();
+      }, DIAGNOSTICS_TIMEOUT_MS);
+    });
+    try {
+      return await Promise.race([bridge()(route, { method: "GET", signal: controller.signal }), timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  function renderResults() {
+    const [statusResult, providerResult, addonResult, memoryResult, browserLaunchResult] = results;
     const statusValue = serviceStatus(statusResult);
     const providerValue = serviceStatus(providerResult);
     const addonValue = serviceStatus(addonResult);
@@ -149,28 +172,28 @@ export function renderDiagnosticsSection(container, { bridgeRequest, getBridgeRe
     details.replaceChildren(
       diagnosticsRow({
         label: "Bridge",
-        value: system?.bridge ?? "Unavailable",
-        detail: statusResult.status === "fulfilled" ? "Core bridge responded." : safeErrorMessage(statusResult.reason)
+        value: statusResult.status === "pending" ? "Checking" : system?.bridge ?? "Unavailable",
+        detail: statusResult.status === "pending" ? "Waiting for bridge status." : statusResult.status === "fulfilled" ? "Core bridge responded." : safeErrorMessage(statusResult.reason)
       }),
       diagnosticsRow({
         label: "Providers",
-        value: `${providers.filter((provider) => provider.configured).length}/${providers.length}`,
+        value: providerResult.status === "pending" ? "Checking" : `${providers.filter((provider) => provider.configured).length}/${providers.length}`,
         detail: "configured provider profiles"
       }),
       diagnosticsRow({
         label: "Add-ons",
-        value: `${addons.filter((addon) => addon.available || addon.enabled).length}/${addons.length}`,
+        value: addonResult.status === "pending" ? "Checking" : `${addons.filter((addon) => addon.available || addon.enabled).length}/${addons.length}`,
         detail: "available add-ons"
       }),
       diagnosticsRow({
         label: "Memory",
-        value: `${memory?.wiki?.pages ?? 0} pages`,
-        detail: `${memory?.intake?.artifacts ?? 0} intake artifacts`
+        value: memoryResult.status === "pending" ? "Checking" : `${memory?.wiki?.pages ?? 0} pages`,
+        detail: memoryResult.status === "pending" ? "Waiting for memory status." : `${memory?.intake?.artifacts ?? 0} intake artifacts`
       }),
       diagnosticsRow({
         label: "Chromium host",
-        value: browserLaunch?.status ?? "Unavailable",
-        detail: browserLaunchResult.status === "fulfilled"
+        value: browserLaunchResult.status === "pending" ? "Checking" : browserLaunch?.status ?? "Unavailable",
+        detail: browserLaunchResult.status === "pending" ? "Waiting for browser diagnostics." : browserLaunchResult.status === "fulfilled"
           ? [
               `launch=${browserLaunch.launchMode ?? "unknown"}`,
               `menu=${browserLaunch.appkitMenu ?? "unknown"}`,
@@ -181,16 +204,29 @@ export function renderDiagnosticsSection(container, { bridgeRequest, getBridgeRe
           : safeErrorMessage(browserLaunchResult.reason)
       })
     );
-    const failed = [statusResult, providerResult, addonResult, memoryResult, browserLaunchResult]
-      .filter((result) => result.status === "rejected").length;
-    setStatus(statusNode, failed
+    const failed = results.filter((result) => result.status === "rejected").length;
+    const pending = results.filter((result) => result.status === "pending").length;
+    retry.hidden = failed === 0;
+    setStatus(statusNode, pending
+      ? `Checking ${pending} diagnostics endpoint${pending === 1 ? "" : "s"}; ${failed} unavailable.`
+      : failed
       ? `Diagnostics loaded with ${failed} unavailable endpoint${failed === 1 ? "" : "s"}.`
       : "Diagnostics loaded from host-mediated status endpoints.",
-      failed ? "warning" : "success"
+      failed ? "warning" : pending ? "" : "success"
     );
-  };
+  }
 
-  void load().catch((error) => {
-    setStatus(statusNode, `Diagnostics unavailable: ${safeErrorMessage(error)}`, "error");
+  function startCheck(index) {
+    results[index] = { status: "pending" };
+    void probe(routes[index]).then(
+      (value) => { results[index] = { status: "fulfilled", value }; renderResults(); },
+      (reason) => { results[index] = { status: "rejected", reason }; renderResults(); }
+    );
+  }
+
+  retry.addEventListener("click", () => {
+    results.forEach((result, index) => { if (result.status === "rejected") startCheck(index); });
+    renderResults();
   });
+  routes.forEach((_, index) => startCheck(index));
 }
