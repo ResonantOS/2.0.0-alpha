@@ -142,17 +142,21 @@ async function withBridgeRoutes(callback) {
       redactPathForDiagnostics: (value) => String(value ?? ""),
       redactDiagnosticText: (value) => String(value ?? ""),
     });
-    const routes = [
-      ...diagnostics.browserDiagnosticsRoutes,
-      ...provider.providerBridgeRoutes,
-      ...agent.agentControlRoutes,
-      ...memory.memoryBridgeRoutes,
-      ...addon.addonDelegationRoutes,
-      ...opencodeSession.opencodeSessionRoutes,
-      ...prefs.extensionPrefsRoutes,
-    ];
+    // Keyed by the exact identifier run-bridge-minimal.mjs spreads into `bridgeRoutes`, so the
+    // composition guard below can prove each composed array is actually CONSTRUCTED here — not
+    // merely named in a list.
+    const routeArrays = {
+      browserDiagnosticsRoutes: diagnostics.browserDiagnosticsRoutes,
+      providerBridgeRoutes: provider.providerBridgeRoutes,
+      agentControlRoutes: agent.agentControlRoutes,
+      memoryBridgeRoutes: memory.memoryBridgeRoutes,
+      addonDelegationRoutes: addon.addonDelegationRoutes,
+      opencodeSessionRoutes: opencodeSession.opencodeSessionRoutes,
+      extensionPrefsRoutes: prefs.extensionPrefsRoutes,
+    };
+    const routes = Object.values(routeArrays).flat();
 
-    await callback(routes);
+    await callback(routes, routeArrays);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -210,19 +214,14 @@ test("audit covers every route array composed by run-bridge-minimal", async () =
   );
   const bridgeRoutesInitializer = /const\s+bridgeRoutes\s*=\s*\[([\s\S]*?)\];/.exec(source)?.[1] ?? "";
   const composedRouteArrays = [...bridgeRoutesInitializer.matchAll(/\.\.\.(\w+)/g)].map((match) => match[1]);
-  const auditedRouteArrays = [
-    "browserDiagnosticsRoutes",
-    "providerBridgeRoutes",
-    "agentControlRoutes",
-    "memoryBridgeRoutes",
-    "addonDelegationRoutes",
-    "opencodeSessionRoutes",
-    "extensionPrefsRoutes",
-  ];
+  assert.ok(composedRouteArrays.length >= 7, "expected run-bridge-minimal to compose at least seven route arrays");
 
-  assert.deepEqual(
-    composedRouteArrays.filter((name) => !auditedRouteArrays.includes(name)),
-    [],
-    "run-bridge-minimal composes route arrays that bridge-route-capability-audit does not construct",
-  );
+  await withBridgeRoutes(async (_routes, routeArrays) => {
+    for (const name of composedRouteArrays) {
+      assert.ok(
+        Array.isArray(routeArrays[name]) && routeArrays[name].length > 0,
+        `${name} is composed by run-bridge-minimal but this audit does not construct it (add the service to withBridgeRoutes)`,
+      );
+    }
+  });
 });

@@ -15,7 +15,7 @@
 
 import { bridgeAuthMessage } from "../runtime-error-messages.js";
 import { metricCard, noteCard, safeErrorMessage, setStatus, settingsHeader } from "./settings-common.js";
-import { BRIDGE_STORAGE_OVERRIDE_KEY, detectLoopbackBridge, resolveBridgeConfig } from "../bridge-client.js";
+import { BRIDGE_STORAGE_OVERRIDE_KEY, detectLoopbackBridge, isCapabilityScopedBridgeReply, resolveBridgeConfig } from "../bridge-client.js";
 
 const STATUS_KEYS = [BRIDGE_STORAGE_OVERRIDE_KEY];
 
@@ -70,7 +70,14 @@ async function probeBridge(url, token) {
   } catch {
     body = {};
   }
-  return { ok: response.ok && body?.ok === true, status: response.status, body };
+  return {
+    ok: response.ok && body?.ok === true,
+    status: response.status,
+    body,
+    // Since #346 /status is capability-scoped: a 403 naming a capability means the bridge accepted
+    // the bridge token (the panel attaches the capability token automatically after bootstrap).
+    capabilityScoped: isCapabilityScopedBridgeReply(response.status, body),
+  };
 }
 
 function buildField({ id, label, value, type = "text", placeholder = "", monospace = true, textarea = false, autocomplete = "off" }) {
@@ -390,6 +397,11 @@ export function renderBridgeTargetSection(container, { bridgeRequest, onBridgeCo
         healthCardEl.querySelector("p").textContent = "unauthorized - token mismatch";
         healthCardEl.dataset.tone = "error";
         setStatus(statusNode, `Bridge ${url} replied 401. ${bridgeAuthMessage()}`, "error");
+      } else if (result.status === 403 && result.capabilityScoped) {
+        healthCardEl.querySelector("strong").textContent = "Reachable";
+        healthCardEl.querySelector("p").textContent = "token accepted · /status is capability-scoped";
+        healthCardEl.dataset.tone = "success";
+        setStatus(statusNode, `Bridge ${url} accepted the bridge token. /status requires a capability token, which the panel attaches automatically after bootstrap.`, "success");
       } else if (result.status === 403) {
         healthCardEl.querySelector("strong").textContent = "403";
         healthCardEl.querySelector("p").textContent = "forbidden — IP not allowlisted";

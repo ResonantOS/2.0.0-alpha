@@ -419,6 +419,15 @@ function buildLoopbackCandidates(config) {
   return out;
 }
 
+// True when a bridge answered 403 because the route is capability-scoped (the bridge token was
+// accepted; only the per-route capability token is missing). Distinct from the IP-allowlist 403 and
+// from 401 (bridge token rejected). Exported for the settings Bridge Target probe.
+export function isCapabilityScopedBridgeReply(status, body) {
+  return status === 403
+    && typeof body?.error === "string"
+    && /requires [a-z0-9-]+ capability/i.test(body.error);
+}
+
 export async function detectLoopbackBridge(config, { fetchImpl: fetchOverride } = {}) {
   if (!config) return config;
   const fetchFn = fetchOverride ?? (typeof fetch !== "undefined" ? fetch : null);
@@ -442,10 +451,16 @@ export async function detectLoopbackBridge(config, { fetchImpl: fetchOverride } 
         signal: ac.signal,
       });
       clearTimeout(timer);
-      if (!res.ok) continue;
       let body = null;
       try { body = await res.json(); } catch { continue; }
-      if (body?.ok === true && (body?.service === "resonantos-bridge" || body?.bridge)) {
+      // A 200 {ok:true} identifies the bridge. Since #346 every route, including /status, is
+      // capability-scoped, and this probe runs BEFORE capability bootstrap, so a 403 whose body
+      // names a required capability is ALSO proof of a ResonantOS bridge that accepted our bridge
+      // token (a wrong token is 401; a foreign server has no such error shape).
+      const identified = res.ok
+        ? body?.ok === true && (body?.service === "resonantos-bridge" || body?.bridge)
+        : isCapabilityScopedBridgeReply(res.status, body);
+      if (identified) {
         return {
           ...config,
           bridgeUrl: candidate,
