@@ -18,6 +18,7 @@ import {
   pickFreeLoopbackPort,
   opencodeServeBaseUrl,
   opencodeServerHealthy,
+  peekOpencodeServer,
   resetOpencodeServerSingletonForTests
 } from "../host/opencode-client.mjs";
 
@@ -1044,4 +1045,198 @@ test("concurrent first API doc callers share one in-flight fetch before using pr
     "http://127.0.0.1:4096/session/s1/prompt_async",
     "http://127.0.0.1:4096/session/s1/prompt_async"
   ]);
+});
+
+test("the reaper matches the opencode.exe serve wrapper on the full command line", async () => {
+  resetOpencodeServerSingletonForTests();
+  const killed = [];
+  const env = { OPENCODE_SERVER_PASSWORD: "exe-wrapper-secret" };
+  await ensureTestOpencodeServer({
+    fetchImpl: authedFetch(basicAuthHeader("opencode", env.OPENCODE_SERVER_PASSWORD), []),
+    spawnImpl: () => fakeChild(),
+    command: "/bin/opencode",
+    env,
+    pidRecord: {
+      read: async () => ({ pid: 999 }),
+      write: async () => {},
+      clear: () => {},
+      isAlive: () => true,
+      commandOf: () => "/x/opencode-ai/bin/opencode.exe serve --hostname 127.0.0.1 --port 57979",
+      kill: (pid) => { killed.push(pid); }
+    },
+    processImpl: fakeProcess(),
+    sleep: immediateSleep,
+    pollMs: 1,
+    maxWaitMs: 100
+  });
+  assert.deepEqual(killed, [999]);
+});
+
+test("a pid record owned by a live other process is never killed or overwritten, and our server still starts", async () => {
+  resetOpencodeServerSingletonForTests();
+  const killed = [];
+  const writes = [];
+  const env = { OPENCODE_SERVER_PASSWORD: "foreign-owner-secret" };
+  const processImpl = fakeProcess();
+  processImpl.pid = 777;
+  const result = await ensureTestOpencodeServer({
+    fetchImpl: authedFetch(basicAuthHeader("opencode", env.OPENCODE_SERVER_PASSWORD), []),
+    spawnImpl: () => fakeChild(),
+    command: "/bin/opencode",
+    env,
+    pidRecord: {
+      read: async () => ({ owner: 888, pid: 999, port: 45123, startedAt: 0 }),
+      write: async (_directory, rec) => { writes.push(rec); },
+      clear: () => {},
+      isAlive: () => true,
+      commandOf: () => "/x/opencode-ai/bin/opencode serve --port 0",
+      kill: (pid) => { killed.push(pid); }
+    },
+    processImpl,
+    sleep: immediateSleep,
+    pollMs: 1,
+    maxWaitMs: 100
+  });
+  assert.equal(result.spawned, true);
+  assert.equal(result.baseUrl, "http://127.0.0.1:45123");
+  assert.deepEqual(killed, []);
+  assert.deepEqual(writes, []);
+});
+
+test("a pid record owned by a dead process with a matching serve command is killed and overwritten", async () => {
+  resetOpencodeServerSingletonForTests();
+  const killed = [];
+  const writes = [];
+  const env = { OPENCODE_SERVER_PASSWORD: "dead-owner-secret" };
+  const processImpl = fakeProcess();
+  processImpl.pid = 777;
+  const result = await ensureTestOpencodeServer({
+    fetchImpl: authedFetch(basicAuthHeader("opencode", env.OPENCODE_SERVER_PASSWORD), []),
+    spawnImpl: () => fakeChild(),
+    command: "/bin/opencode",
+    env,
+    pidRecord: {
+      read: async () => ({ owner: 888, pid: 999, port: 45123, startedAt: 0 }),
+      write: async (_directory, rec) => { writes.push(rec); },
+      clear: () => {},
+      isAlive: (pid) => pid === 999,
+      commandOf: () => "/x/opencode-ai/bin/opencode.exe serve --hostname 127.0.0.1 --port 57979",
+      kill: (pid) => { killed.push(pid); }
+    },
+    processImpl,
+    sleep: immediateSleep,
+    pollMs: 1,
+    maxWaitMs: 100
+  });
+  assert.equal(result.spawned, true);
+  assert.deepEqual(killed, [999]);
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].owner, 777);
+  assert.equal(writes[0].pid, 4242);
+});
+
+test("child exit clears the pid record only when this process owns it", async () => {
+  const env = { OPENCODE_SERVER_PASSWORD: "owner-exit-secret" };
+  const expectedHeader = basicAuthHeader("opencode", env.OPENCODE_SERVER_PASSWORD);
+  const processImpl = fakeProcess();
+  processImpl.pid = 777;
+
+  // owner matches this process -> cleared
+  resetOpencodeServerSingletonForTests();
+  let clears = 0;
+  const child = fakeChild();
+  await ensureTestOpencodeServer({
+    fetchImpl: authedFetch(expectedHeader, []),
+    spawnImpl: () => child,
+    command: "/bin/opencode",
+    env,
+    pidRecord: {
+      read: async () => ({ owner: 777, pid: child.pid }),
+      write: async () => {},
+      clear: () => { clears += 1; },
+      isAlive: () => false,
+      commandOf: () => "",
+      kill: () => {}
+    },
+    processImpl,
+    sleep: immediateSleep,
+    pollMs: 1,
+    maxWaitMs: 100
+  });
+  child.emit("exit", 0);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(clears, 1);
+
+  // owner differs -> left alone
+  resetOpencodeServerSingletonForTests();
+  clears = 0;
+  const otherChild = fakeChild();
+  await ensureTestOpencodeServer({
+    fetchImpl: authedFetch(expectedHeader, []),
+    spawnImpl: () => otherChild,
+    command: "/bin/opencode",
+    env,
+    pidRecord: {
+      read: async () => ({ owner: 888, pid: otherChild.pid }),
+      write: async () => {},
+      clear: () => { clears += 1; },
+      isAlive: () => false,
+      commandOf: () => "",
+      kill: () => {}
+    },
+    processImpl,
+    sleep: immediateSleep,
+    pollMs: 1,
+    maxWaitMs: 100
+  });
+  otherChild.emit("exit", 0);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(clears, 0);
+});
+
+test("a registered singleton missing auth is treated as unhealthy and respawns", async () => {
+  resetOpencodeServerSingletonForTests();
+  let spawns = 0;
+  const env = { OPENCODE_SERVER_PASSWORD: "missing-auth-secret" };
+  const expectedHeader = basicAuthHeader("opencode", env.OPENCODE_SERVER_PASSWORD);
+  const ensure = () => ensureTestOpencodeServer({
+    fetchImpl: authedFetch(expectedHeader, []),
+    spawnImpl: () => { spawns += 1; return fakeChild(45123 + spawns); },
+    command: "/bin/opencode",
+    env,
+    pidRecord: noPid,
+    processImpl: fakeProcess(),
+    sleep: immediateSleep,
+    pollMs: 1,
+    maxWaitMs: 100
+  });
+  const first = await ensure();
+  assert.equal(spawns, 1);
+  first.auth = undefined; // simulate a singleton entry with no auth metadata
+  const second = await ensure();
+  assert.equal(spawns, 2);
+  assert.equal(second.spawned, true);
+});
+
+test("peekOpencodeServer returns the registered singleton without spawning, or null", async () => {
+  resetOpencodeServerSingletonForTests();
+  const env = { OPENCODE_SERVER_PASSWORD: "peek-secret" };
+  const expectedHeader = basicAuthHeader("opencode", env.OPENCODE_SERVER_PASSWORD);
+  assert.equal(peekOpencodeServer({ command: "/bin/opencode", hostname: "127.0.0.1", cwd: "/repo/root", env }), null);
+  const result = await ensureTestOpencodeServer({
+    fetchImpl: authedFetch(expectedHeader, []),
+    spawnImpl: () => fakeChild(),
+    command: "/bin/opencode",
+    hostname: "127.0.0.1",
+    cwd: "/repo/root",
+    env,
+    pidRecord: noPid,
+    processImpl: fakeProcess(),
+    sleep: immediateSleep,
+    pollMs: 1,
+    maxWaitMs: 100
+  });
+  const peeked = peekOpencodeServer({ command: "/bin/opencode", hostname: "127.0.0.1", cwd: "/repo/root", env });
+  assert.equal(peeked?.baseUrl, result.baseUrl);
+  assert.equal(peeked?.spawned, true);
 });

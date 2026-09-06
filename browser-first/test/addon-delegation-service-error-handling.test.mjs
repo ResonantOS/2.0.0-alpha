@@ -40,6 +40,7 @@ function createService(root, overrides = {}) {
     opencodeCommand: overrides.opencodeCommand ?? (() => null),
     opencodeRuntimeDiagnostics: overrides.opencodeRuntimeDiagnostics ?? (() => ({ installed: false, command: null })),
     ensureOpenCodeServer: overrides.ensureOpenCodeServer,
+    peekOpenCodeServer: overrides.peekOpenCodeServer,
     redactPathForDiagnostics: (value) => String(value ?? "").replace(root, "<root>"),
     readProviderSecrets: overrides.readProviderSecrets ?? (async () => ({})),
     repoRoot: root,
@@ -197,6 +198,8 @@ test("OpenCode web cockpit URL issuance is execution-gated, loopback-only, and i
         ensured += 1;
         return { baseUrl: "http://127.0.0.1:4231/session?directory=%2Frepo" };
       },
+      // a server is already registered -> the handler may issue the URL (#343 peek)
+      peekOpenCodeServer: () => ({ baseUrl: "http://127.0.0.1:4231" }),
     });
     const auditPath = path.join(root, "BrowserFirst", "Settings", "addon-governance-audit.jsonl");
 
@@ -675,5 +678,25 @@ test("OpenCode provider matrix scopes explicit provider environment keys", async
         assert.ok(!envKeys.includes("RESONANTOS_PROVIDER_SECRETS_JSON"));
       }
     });
+  });
+});
+
+test("OpenCode web cockpit URL issuance does not spawn a server just to refuse (#343)", async () => {
+  await withTempService(async (_service, root) => {
+    let ensured = 0;
+    const service = createService(root, {
+      opencodeCommand: () => "/usr/local/bin/opencode",
+      opencodeRuntimeDiagnostics: () => ({ installed: true, command: "/usr/local/bin/opencode", commandRedacted: "<opencode>" }),
+      ensureOpenCodeServer: async () => { ensured += 1; return { baseUrl: "http://127.0.0.1:4231" }; },
+      peekOpenCodeServer: () => null, // nothing registered
+    });
+    const result = await service.executeOpenCodeWebUrl({ enableOpenCodeExecution: true });
+    assert.equal(ensured, 0);
+    assert.deepEqual(result, { url: "", requiresCredential: true });
+    const auditPath = path.join(root, "BrowserFirst", "Settings", "addon-governance-audit.jsonl");
+    const entries = (await readFile(auditPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].event, "webCockpitUrlIssued");
+    assert.equal(entries[0].url, "");
   });
 });

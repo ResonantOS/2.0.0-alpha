@@ -6,7 +6,7 @@
 // /event bus; that streaming glue is bridge-server-specific and is registered
 // alongside these request/response routes.
 
-import { forgetOpencodeServer as defaultForgetOpencodeServer, opencodeServeBaseUrl } from "./opencode-client.mjs";
+import { forgetOpencodeServer as defaultForgetOpencodeServer, opencodeServeBaseUrl, peekOpencodeServer } from "./opencode-client.mjs";
 
 export function createOpenCodeWebUrlError(message) {
   const error = new Error(message);
@@ -16,7 +16,7 @@ export function createOpenCodeWebUrlError(message) {
   return error;
 }
 
-export function createOpenCodeWebUrlHandler({ executionEnabled, ensureServer, appendAuditEntry } = {}) {
+export function createOpenCodeWebUrlHandler({ executionEnabled, ensureServer, appendAuditEntry, peekServer, command, hostname, cwd, env } = {}) {
   if (typeof executionEnabled !== "function") {
     throw new Error("OpenCode web URL handler missing executionEnabled.");
   }
@@ -26,10 +26,26 @@ export function createOpenCodeWebUrlHandler({ executionEnabled, ensureServer, ap
   if (typeof appendAuditEntry !== "function") {
     throw new Error("OpenCode web URL handler missing appendAuditEntry.");
   }
+  // Peek (without spawning) whether a server is already registered. An explicit
+  // peekServer wins; otherwise, when enough context is available, peek the registered
+  // singleton directly. When no peek is possible (e.g. tests that stub ensureServer),
+  // fall back to the original ensure-then-serve behavior.
+  const peek = typeof peekServer === "function"
+    ? peekServer
+    : (command ? () => peekOpencodeServer({ command, hostname, cwd, env }) : null);
   return async function executeOpenCodeWebUrl(req) {
     const payload = req?.body ?? req ?? {};
     if (!(await executionEnabled(payload))) {
       throw createOpenCodeWebUrlError("OpenCode web cockpit URL issuance requires explicit OpenCode execution enablement.");
+    }
+    if (peek && !(await peek())) {
+      await appendAuditEntry({
+        at: new Date().toISOString(),
+        addonId: "opencode",
+        event: "webCockpitUrlIssued",
+        url: "",
+      });
+      return { url: "", requiresCredential: true };
     }
     const serverInfo = await ensureServer();
     const url = opencodeServeBaseUrl(serverInfo);

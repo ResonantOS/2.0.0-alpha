@@ -332,3 +332,34 @@ test("web url handler returns requiresCredential and never leaks the credential"
   assert.equal(JSON.stringify(audit).includes("Basic x"), false);
   assert.equal(audit[0].url, "http://127.0.0.1:45123/");
 });
+
+test("web url handler peeks for a registered server and refuses without spawning when none is registered", async () => {
+  // No server registered -> refuse without calling ensureServer.
+  let ensured = 0;
+  const refuseAudit = [];
+  const refuseHandler = createOpenCodeWebUrlHandler({
+    executionEnabled: async () => true,
+    ensureServer: async () => { ensured += 1; return { baseUrl: "http://127.0.0.1:4231" }; },
+    appendAuditEntry: async (entry) => refuseAudit.push(entry),
+    peekServer: async () => null
+  });
+  const refused = await refuseHandler({ body: { enableOpenCodeExecution: true } });
+  assert.deepEqual(refused, { url: "", requiresCredential: true });
+  assert.equal(ensured, 0);
+  assert.equal(refuseAudit.length, 1);
+  assert.equal(refuseAudit[0].event, "webCockpitUrlIssued");
+  assert.equal(refuseAudit[0].url, "");
+
+  // A registered server -> existing behavior (ensure + serve URL, no credential leak).
+  const registeredAudit = [];
+  const registeredHandler = createOpenCodeWebUrlHandler({
+    executionEnabled: async () => true,
+    ensureServer: async () => ({ baseUrl: "http://127.0.0.1:45123/session", auth: { username: "opencode", password: "s3cret", header: "Basic x" } }),
+    appendAuditEntry: async (entry) => registeredAudit.push(entry),
+    peekServer: async () => ({ baseUrl: "http://127.0.0.1:45123" })
+  });
+  const issued = await registeredHandler({ body: { enableOpenCodeExecution: true } });
+  assert.deepEqual(issued, { url: "http://127.0.0.1:45123/", requiresCredential: true });
+  assert.equal(registeredAudit[0].url, "http://127.0.0.1:45123/");
+  assert.equal(JSON.stringify(registeredAudit).includes("s3cret"), false);
+});
