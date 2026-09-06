@@ -1,4 +1,4 @@
-import { noteCard, setStatus, settingsHeader } from "./settings-common.js";
+import { noteCard, safeErrorMessage, setStatus, settingsHeader } from "./settings-common.js";
 
 const defaults = {
   density: "comfortable",
@@ -43,6 +43,7 @@ export function renderAppearanceSection(container, { storage, storageKeys = {} }
   const key = storageKeys.appearance;
   const statusNode = document.createElement("p");
   statusNode.className = "settings-status";
+  statusNode.setAttribute("role", "status");
   statusNode.textContent = "Loading appearance settings...";
   const form = document.createElement("form");
   form.className = "settings-appearance-form";
@@ -77,7 +78,8 @@ export function renderAppearanceSection(container, { storage, storageKeys = {} }
     labelledControl("Density", "Choose compact desktop spacing or larger touch-friendly controls.", density),
     labelledControl("Text size", "Adjust chat, navigation, and settings text without changing workflows.", fontScale),
     labelledControl("Motion", "Reduce motion when animation should be calmer or less distracting.", motion),
-    save
+    save,
+    statusNode
   );
 
   container.replaceChildren(
@@ -86,7 +88,6 @@ export function renderAppearanceSection(container, { storage, storageKeys = {} }
       title: "Interface Preferences",
       body: "Tune the workspace for desktop focus or touch-friendly use. These settings change presentation only, not agent behavior."
     }),
-    statusNode,
     noteCard({
       title: "Recommended default",
       body: "Use Comfortable + Standard + Full motion for the normal desktop experience. Switch to Touch friendly when using a touchscreen."
@@ -104,17 +105,23 @@ export function renderAppearanceSection(container, { storage, storageKeys = {} }
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (save.disabled) return;
     save.disabled = true;
-    const preferences = applyAppearance({
+    const preferences = {
       density: density.value,
       fontScale: fontScale.value,
       motion: motion.value
-    });
+    };
+    setStatus(statusNode, "Saving appearance settings...");
     try {
-      if (storage && key) {
-        await storage.set({ [key]: preferences });
+      if (!storage?.set || !key) {
+        throw new Error("Local settings storage is unavailable.");
       }
+      await storage.set({ [key]: preferences });
+      applyAppearance(preferences);
       setStatus(statusNode, "Appearance settings saved.", "success");
+    } catch (error) {
+      setStatus(statusNode, `Appearance settings could not be saved. Your previous appearance is unchanged. Try saving again. ${safeErrorMessage(error)}`, "error");
     } finally {
       save.disabled = false;
     }
