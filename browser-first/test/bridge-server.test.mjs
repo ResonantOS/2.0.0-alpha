@@ -9,13 +9,25 @@ import {
   isUnauthorizedBridgeError,
   resolveBridgeConfig,
 } from "../resonantos-side-panel-extension/src/lib/bridge-client.js";
-import { evaluateBridgeRequestForSelfTest, startBridgeServer } from "../host/bridge-server.mjs";
+import { constantTimeEqual, evaluateBridgeRequestForSelfTest, startBridgeServer } from "../host/bridge-server.mjs";
+
+test("constant-time token comparison preserves exact-match and length checks", () => {
+  assert.equal(constantTimeEqual("capability-token", "capability-token"), true);
+  assert.equal(constantTimeEqual("capability-token", "capability-tokfn"), false);
+  assert.equal(constantTimeEqual("capability-token", "capability-token-extra"), false);
+  assert.equal(constantTimeEqual("", undefined), false);
+});
 
 test("bridge capability behavior is deterministic without localhost binding", async () => {
   const bridgeToken = "general-test-token";
   const capabilityToken = "credential-write-test-token";
   const routes = [
-    { method: "GET", path: "/public", handler: async () => ({ public: true }) },
+    {
+      method: "GET",
+      path: "/public",
+      requiredCapability: "bridge-diagnostics-read",
+      handler: async () => ({ public: true }),
+    },
     {
       method: "POST",
       path: "/providers/credentials",
@@ -27,9 +39,15 @@ test("bridge capability behavior is deterministic without localhost binding", as
   const publicResult = await evaluateBridgeRequestForSelfTest({
     method: "GET",
     url: "/public",
-    headers: { "X-ResonantOS-Bridge-Token": bridgeToken },
+    headers: {
+      "X-ResonantOS-Bridge-Token": bridgeToken,
+      "X-ResonantOS-Bridge-Capability-Token": capabilityToken,
+    },
     bridgeToken,
-    bridgeCapabilityTokens: { "provider-credential-write": capabilityToken },
+    bridgeCapabilityTokens: {
+      "bridge-diagnostics-read": capabilityToken,
+      "provider-credential-write": capabilityToken,
+    },
     routes,
   });
   assert.equal(publicResult.status, 200);
@@ -84,6 +102,73 @@ test("bridge capability behavior is deterministic without localhost binding", as
   });
   assert.equal(saved.status, 200);
   assert.equal(saved.payload.saved, true);
+});
+
+test("bridge refuses undeclared routes by default while preserving declared capability and bootstrap routes", async () => {
+  const bridgeToken = "default-deny-test-token";
+  const capabilityBootstrapToken = "default-deny-bootstrap-token";
+  const capabilityToken = "default-deny-capability-token";
+
+  const undeclared = await evaluateBridgeRequestForSelfTest({
+    method: "GET",
+    url: "/default-deny",
+    headers: { "X-ResonantOS-Bridge-Token": bridgeToken },
+    bridgeToken,
+    bridgeCapabilityTokens: { "bridge-diagnostics-read": capabilityToken },
+    capabilityBootstrapToken,
+    routes: [
+      { method: "GET", path: "/default-deny", handler: async () => ({ reached: true }) },
+    ],
+  });
+  assert.equal(undeclared.status, 403);
+  assert.deepEqual(undeclared.payload, {
+    ok: false,
+    error: "Bridge route declares no capability; refused by default.",
+  });
+
+  const declared = await evaluateBridgeRequestForSelfTest({
+    method: "GET",
+    url: "/default-deny",
+    headers: {
+      "X-ResonantOS-Bridge-Token": bridgeToken,
+      "X-ResonantOS-Bridge-Capability-Token": capabilityToken,
+    },
+    bridgeToken,
+    bridgeCapabilityTokens: { "bridge-diagnostics-read": capabilityToken },
+    capabilityBootstrapToken,
+    routes: [
+      {
+        method: "GET",
+        path: "/default-deny",
+        requiredCapability: "bridge-diagnostics-read",
+        handler: async () => ({ reached: true }),
+      },
+    ],
+  });
+  assert.equal(declared.status, 200);
+  assert.equal(declared.payload.reached, true);
+
+  const bootstrapOnly = await evaluateBridgeRequestForSelfTest({
+    method: "POST",
+    url: "/bootstrap-only",
+    headers: {
+      "X-ResonantOS-Bridge-Token": bridgeToken,
+      "X-ResonantOS-Capability-Bootstrap-Token": capabilityBootstrapToken,
+    },
+    bridgeToken,
+    bridgeCapabilityTokens: { "bridge-diagnostics-read": capabilityToken },
+    capabilityBootstrapToken,
+    routes: [
+      {
+        method: "POST",
+        path: "/bootstrap-only",
+        requiredCapabilityBootstrap: true,
+        handler: async () => ({ bootstrapped: true }),
+      },
+    ],
+  });
+  assert.equal(bootstrapOnly.status, 200);
+  assert.equal(bootstrapOnly.payload.bootstrapped, true);
 });
 
 test("bridge client sends scoped capability headers without localhost binding", async () => {
@@ -475,17 +560,24 @@ test("bridge capability-token bootstrap is scoped and separate from the bridge t
 test("bridge privileged routes require a route-scoped capability token", async (t) => {
   const bridgeToken = "general-test-token";
   const capabilityToken = "credential-write-test-token";
+  const diagnosticsToken = "diagnostics-read-test-token";
   let server;
   try {
     server = await startBridgeServer({
       port: 0,
       bridgeToken,
       bridgeCapabilityTokens: {
+        "bridge-diagnostics-read": diagnosticsToken,
         "provider-credential-write": capabilityToken,
       },
       extensionOrigin: "chrome-extension://test",
       routes: [
-        { method: "GET", path: "/public", handler: async () => ({ public: true }) },
+        {
+          method: "GET",
+          path: "/status",
+          requiredCapability: "bridge-diagnostics-read",
+          handler: async () => ({ service: "resonantos-bridge" }),
+        },
         {
           method: "POST",
           path: "/providers/credentials",
@@ -507,6 +599,7 @@ test("bridge privileged routes require a route-scoped capability token", async (
     bridgeUrl,
     bridgeToken,
     bridgeCapabilityTokens: {
+      "bridge-diagnostics-read": diagnosticsToken,
       "provider-credential-write": capabilityToken,
     },
   });
@@ -517,7 +610,7 @@ test("bridge privileged routes require a route-scoped capability token", async (
   });
 
   try {
-    assert.equal((await client("/public", { method: "GET" })).public, true);
+    assert.equal((await client("/status", { method: "GET" })).service, "resonantos-bridge");
 
     await assert.rejects(
       () => clientWithoutCapability("/providers/credentials", {
