@@ -202,7 +202,15 @@ const addonDelegationService = createAddonDelegationService({
 });
 
 const { executeAddonsStatus } = addonDelegationService;
-const { addonDelegationRoutes } = createAddonDelegationHostService(addonDelegationService);
+const { addonDelegationRoutes } = createAddonDelegationHostService(addonDelegationService, {
+  // Dispatcher (ADR-040 §4) dependencies. The grants store and audit ledger
+  // are constructed below in the Phase 3.5 setup; resolve them lazily so the
+  // route registry can be built before those objects exist.
+  get grantsStore() { return minimalLauncherCallerGrants; },
+  get auditLedger() { return { record: (record) => bridgeAudit.sink(record) }; },
+  fetchImpl: globalThis.fetch,
+  repoRoot,
+});
 
 // Live OpenCode session: the bridge starts (reuses) `opencode serve` on an
 // ephemeral loopback port with a bridge-minted credential and proxies

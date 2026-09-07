@@ -17,7 +17,7 @@
 
 import { dispatchExternalAgentRuntime } from "./external-agent-runtime-dispatcher.mjs";
 
-export function createAddonDelegationHostService(handlers = {}) {
+export function createAddonDelegationHostService(handlers = {}, deps = {}) {
   function required(name) {
     if (typeof handlers[name] !== "function") {
       throw new Error(`Add-on delegation host service missing handler: ${name}`);
@@ -186,35 +186,36 @@ export function createAddonDelegationHostService(handlers = {}) {
         method: "POST",
         path: "/external-agent-runtime/delegate",
         requiredCapability: "agent-delegation",
-        handler: async ({ body, callerId, perCallerGrants, auditLedger, fetchImpl }) => {
-          const addonId = body?.addonId;
-          const toolName = body?.tool;
-          const payload = body?.payload ?? {};
+        handler: async (payload, request) => {
+          const addonId = payload?.addonId;
+          const toolName = payload?.tool;
+          const toolPayload = payload?.payload ?? {};
           if (typeof addonId !== "string" || typeof toolName !== "string") {
-            return { status: 400, body: { error: { message: "addonId and tool are required" } } };
+            return { dispatched: false, reason: "malformed-request", detail: "addonId and tool are required" };
+          }
+          // Verified caller identity is attached to the request context by
+          // bridge-server.mjs (derived from the caller-bound token), never
+          // from the raw X-ResonantOS-Bridge-Caller-Id header. A static-token
+          // request carries no verified caller (fallback __extension__) and
+          // must fail closed here rather than relying on an incidental grant
+          // miss.
+          if (!request?.callerId || request.callerId === "__extension__") {
+            return { dispatched: false, reason: "caller-unverified", detail: "verified caller identity required for delegation" };
           }
           const result = await dispatchExternalAgentRuntime({
             addonId,
             toolName,
-            payload,
-            callerId,
-            perCallerGrants,
-            auditLedger,
-            fetchImpl,
+            payload: toolPayload,
+            callerId: request.callerId,
+            perCallerGrants: deps.grantsStore,
+            auditLedger: deps.auditLedger,
+            fetchImpl: deps.fetchImpl,
+            repoRoot: deps.repoRoot,
           });
           if (result.outcome === "deny") {
-            const status = result.reason === "addon-not-found"
-              || result.reason === "manifest-misconfigured"
-              ? 404
-              : result.reason === "unknown-tool"
-                ? 404
-                : 403;
-            return {
-              status,
-              body: { error: { code: result.reason, message: result.detail } },
-            };
+            return { dispatched: false, reason: result.reason, detail: result.detail };
           }
-          return { status: 200, body: { response: result.response } };
+          return { dispatched: true, response: result.response };
         },
       },
     ],

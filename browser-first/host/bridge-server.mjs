@@ -1193,6 +1193,11 @@ export async function evaluateBridgeRequestForSelfTest({
         ? headerCaller
         : "__extension__";
     }
+    // Verified caller identity (derived from the caller-bound token, not the
+    // raw X-ResonantOS-Bridge-Caller-Id header) is attached to the request
+    // context so route handlers can attribute requests without trusting
+    // client-supplied headers.
+    request.callerId = callerId;
     const payload = method === "POST" ? body : {};
     const result = await route.handler(payload, request);
     emitAuthorized(callerId, route.requiredCapability ?? null, route.path);

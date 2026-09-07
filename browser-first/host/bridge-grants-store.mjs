@@ -102,6 +102,14 @@ export function createBridgeGrantsStore({
     return bucket.capabilities.get(capability) ?? null;
   }
 
+  // Read-only caller-bucket access for the addon-delegation dispatcher
+  // (ADR-040 §4). Returns { capabilities, mintedAt, expiresAt } or null. The
+  // dispatcher's checkToolGrants only tests capability presence; it never
+  // reads token contents, so this does not leak minted tokens.
+  function get(callerId) {
+    return callers.get(callerId) ?? null;
+  }
+
   // The bridge's primary verifier: verify a caller-supplied token against
   // the tokenKey, restricted to (callerId, capability). The store's own
   // state is consulted first — a revoked grant is verified as null even if
@@ -173,6 +181,7 @@ export function createBridgeGrantsStore({
   return {
     mintGrant,
     lookupToken,
+    get,
     verifyCallerGrant,
     revoke,
     snapshot,
