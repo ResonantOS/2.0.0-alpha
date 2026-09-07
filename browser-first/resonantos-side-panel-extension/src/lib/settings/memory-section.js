@@ -249,11 +249,14 @@ export function renderMemorySection(container, { bridgeRequest, getBridgeRequest
   const bridge = () => (typeof getBridgeRequest === "function" ? getBridgeRequest() : bridgeRequest);
   const statusNode = document.createElement("p");
   statusNode.className = "settings-status";
+  statusNode.id = "settings-memory-status";
   statusNode.setAttribute("role", "status");
   statusNode.textContent = "Loading memory settings...";
   const retryRefresh = document.createElement("button");
   retryRefresh.type = "button";
   retryRefresh.textContent = "Retry refresh";
+  retryRefresh.setAttribute("aria-label", "Refresh Memory settings");
+  retryRefresh.setAttribute("aria-describedby", statusNode.id);
   retryRefresh.hidden = true;
   const metrics = document.createElement("div");
   metrics.className = "settings-health-grid";
@@ -635,12 +638,12 @@ export function renderMemorySection(container, { bridgeRequest, getBridgeRequest
   });
 
   // Persistence has already succeeded here; retry only the read, never the source write.
-  const refreshSavedSettings = async () => {
+  const refreshSavedSettings = async ({ retry = false } = {}) => {
     retryRefresh.disabled = true;
     try {
       await load();
       retryRefresh.hidden = true;
-      setStatus(statusNode, "Memory settings saved.", "success");
+      setStatus(statusNode, retry ? "Memory settings refreshed." : "Memory settings saved.", "success");
     } catch (error) {
       retryRefresh.hidden = false;
       setStatus(statusNode, `Memory settings saved, but the view could not refresh: ${safeErrorMessage(error)}. Retry refresh to update the source list.`, "warning");
@@ -652,7 +655,7 @@ export function renderMemorySection(container, { bridgeRequest, getBridgeRequest
     if (save.disabled || retryRefresh.disabled) return;
     save.disabled = true;
     try {
-      await refreshSavedSettings();
+      await refreshSavedSettings({ retry: true });
     } finally {
       save.disabled = false;
     }
