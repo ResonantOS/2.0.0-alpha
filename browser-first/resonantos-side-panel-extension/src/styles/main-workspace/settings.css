@@ -504,6 +504,15 @@
   min-width: 0;
 }
 
+/* ROSI standard controls are 40px; compact and touch keep their own density. */
+body:not([data-density="compact"]):not([data-density="touch"])
+  :is(.settings-workspace, .settings-provider-modal)
+  :is(button:not(.settings-nav-item):not(.icon-button),
+      input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="hidden"]),
+      select) {
+  min-height: 40px;
+}
+
 .settings-appearance-control {
   display: grid;
   gap: 5px;
