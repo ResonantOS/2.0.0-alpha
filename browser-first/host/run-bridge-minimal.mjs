@@ -37,6 +37,7 @@ import { buildBridgeCapabilityTokens } from "./bridge-capability-tokens.mjs";
 import { createBridgeGrantsStore } from "./bridge-grants-store.mjs";
 import { createBridgeAuditLedger } from "./bridge-audit-ledger.mjs";
 import { createBridgeTokenKey } from "./bridge-token-key.mjs";
+import { createAddonDelegationHostService } from "./addon-delegation-host-service.mjs";
 import { createAddonDelegationService } from "./addon-delegation-service.mjs";
 import { createOpencodeHttpClient, ensureOpencodeServer } from "./opencode-client.mjs";
 import { createOpencodeSessionHandlers, createOpencodeSessionHostService } from "./opencode-session-host-service.mjs";
