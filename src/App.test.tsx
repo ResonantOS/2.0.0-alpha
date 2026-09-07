@@ -4417,7 +4417,33 @@ describe("App boot flow", () => {
     expect(requestProviderSetupProbeMock).toHaveBeenCalledWith(
       expect.objectContaining({
         providerType: "local",
-        runtimeNodeEndpoint: "http://127.0.0.1:11434",
+        runtimeNodeEndpoint: "http://127.0.0.1:11434/v1",
+      }),
+    );
+  });
+
+  it("adds local OpenAI-compatible software from settings without requiring an API key", async () => {
+    render(<App />);
+
+    expect((await screen.findAllByText("Launch your AI tools from one workbench.")).length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getAllByRole("button", { name: /Settings/i })[0]);
+    const settingsNav = await screen.findByRole("navigation", { name: "Settings sections" });
+    fireEvent.click(within(settingsNav).getByRole("button", { name: /Providers/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /Add AI Provider/i }));
+    fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "vllm" } });
+
+    expect(screen.getByLabelText("API base URL")).toHaveProperty("value", "http://127.0.0.1:8000/v1");
+    expect(screen.queryByLabelText("API key")).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("Name in ResonantOS"), { target: { value: "vLLM Local Runtime" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add Provider" }));
+
+    expect(await screen.findByText("vLLM Local Runtime")).toBeTruthy();
+    expect(requestProviderSetupProbeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerType: "local",
+        runtimeNodeEndpoint: "http://127.0.0.1:8000/v1",
       }),
     );
   });

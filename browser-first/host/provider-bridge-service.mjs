@@ -228,9 +228,16 @@ export function createProviderBridgeService({
     if (url.protocol !== "https:" && !allowLocal) {
       throw new Error("Provider endpoint must use HTTPS unless it is a known local-runtime provider.");
     }
-    const sendsCredential = String(profile.authType ?? "api-key").toLowerCase() !== "none";
+    const sendsCredential = !["none", "local-runtime"].includes(String(profile.authType ?? "api-key").toLowerCase());
     if (sendsCredential && isLocal && !allowLocal) {
       throw new Error("Credential-bearing provider endpoints cannot target local, private, or metadata-network hosts.");
+    }
+    // Local runtimes expose OpenAI-compatible chat completions under /v1. Older
+    // saved accounts and some presets omit the version path, which makes the
+    // eventual /chat/completions request 404. Normalize once here so existing
+    // accounts self-correct without requiring users to delete and re-add them.
+    if (String(profile.providerType ?? "").toLowerCase() === "local" && !url.pathname.endsWith("/v1") && !url.pathname.includes("/v1/")) {
+      url.pathname = `${url.pathname.replace(/\/+$/, "")}/v1`;
     }
     return url.toString().replace(/\/+$/, "");
   }
@@ -258,6 +265,26 @@ export function createProviderBridgeService({
         ],
       };
     }
+    // Known local-software templates are keyless local runtimes regardless of
+    // the providerType a legacy caller sends; templateId is authoritative.
+    const localPresets = {
+      ollama: { apiBaseUrl: "http://127.0.0.1:11434/v1", models: ["batiai/gemma4-e2b:q4"] },
+      "lm-studio": { apiBaseUrl: "http://127.0.0.1:1234/v1", models: ["local-model"] },
+      "dgx-spark": { apiBaseUrl: "http://dgx-spark.local:11434/v1", models: ["local-model"] },
+      localai: { apiBaseUrl: "http://127.0.0.1:8080/v1", models: ["local-model"] },
+      "llama-cpp": { apiBaseUrl: "http://127.0.0.1:8080/v1", models: ["local-model"] },
+      vllm: { apiBaseUrl: "http://127.0.0.1:8000/v1", models: ["local-model"] },
+      "text-generation-webui": { apiBaseUrl: "http://127.0.0.1:5000/v1", models: ["local-model"] },
+    };
+    if (localPresets[templateId] || type === "local") {
+      const preset = localPresets[templateId] ?? localPresets.ollama;
+      return {
+        providerType: "local",
+        authType: "local-runtime",
+        apiBaseUrl: preset.apiBaseUrl,
+        models: preset.models.map((model) => ({ model, label: model, runtime: "local", costTier: "local-free", qualityTier: "local runtime" })),
+      };
+    }
     const openAiCompatiblePresets = {
       xai: { apiBaseUrl: "https://api.x.ai/v1", models: ["grok-4", "grok-3"] },
       deepseek: { apiBaseUrl: "https://api.deepseek.com/v1", models: ["deepseek-chat", "deepseek-reasoner"] },
@@ -276,10 +303,6 @@ export function createProviderBridgeService({
       "cloudflare-ai-gateway": { apiBaseUrl: "", models: ["gateway-model-id"] },
       litellm: { apiBaseUrl: "http://127.0.0.1:4000/v1", models: ["configured-model-alias"] },
       bifrost: { apiBaseUrl: "", models: ["bifrost-model-alias"] },
-      localai: { apiBaseUrl: "http://127.0.0.1:8080/v1", models: ["local-model"] },
-      "llama-cpp": { apiBaseUrl: "http://127.0.0.1:8080/v1", models: ["local-model"] },
-      vllm: { apiBaseUrl: "http://127.0.0.1:8000/v1", models: ["local-model"] },
-      "text-generation-webui": { apiBaseUrl: "http://127.0.0.1:5000/v1", models: ["local-model"] },
       "asus-gx10": { apiBaseUrl: "http://192.168.1.77:30004/v1", models: ["Qwen3.6-35B-A3B-Q4_K_M.gguf"] },
       "openai-compatible": { apiBaseUrl: "", models: ["model-id"] },
     };
@@ -315,20 +338,6 @@ export function createProviderBridgeService({
         ],
       };
     }
-    const localPresets = {
-      ollama: { apiBaseUrl: "http://127.0.0.1:11434", models: ["batiai/gemma4-e2b:q4"] },
-      "lm-studio": { apiBaseUrl: "http://127.0.0.1:1234/v1", models: ["local-model"] },
-      "dgx-spark": { apiBaseUrl: "http://dgx-spark.local:11434", models: ["local-model"] },
-    };
-    if (localPresets[templateId] || type === "local") {
-      const preset = localPresets[templateId] ?? localPresets.ollama;
-      return {
-        providerType: "local",
-        authType: "local-runtime",
-        apiBaseUrl: preset.apiBaseUrl,
-        models: preset.models.map((model) => ({ model, label: model, runtime: "local", costTier: "local-free", qualityTier: "local runtime" })),
-      };
-    }
     const customPresets = {
       cohere: { apiBaseUrl: "https://api.cohere.com", models: ["command-r-plus", "command-r"] },
       ai21: { apiBaseUrl: "https://api.ai21.com/studio/v1", models: ["jamba-large", "jamba-mini"] },
@@ -358,10 +367,11 @@ export function createProviderBridgeService({
     const model = String(rawModel ?? "").trim().slice(0, 120);
     if (!model) return null;
     const preset = presetModels.find((candidate) => candidate.model === model) ?? modelCatalog.find((candidate) => candidate.model === model) ?? {};
+    const presetRuntime = preset.runtime ?? presetModels[0]?.runtime;
     return {
       model,
       label: String((typeof entry === "string" ? preset.label : entry?.label) ?? preset.label ?? model).trim().slice(0, 120) || model,
-      runtime: String((typeof entry === "string" ? preset.runtime : entry?.runtime) ?? preset.runtime ?? "cloud").trim().slice(0, 40) || "cloud",
+      runtime: String((typeof entry === "string" ? presetRuntime : entry?.runtime) ?? presetRuntime ?? "cloud").trim().slice(0, 40) || "cloud",
       costTier: String((typeof entry === "string" ? preset.costTier : entry?.costTier) ?? preset.costTier ?? "custom").trim().slice(0, 60) || "custom",
       qualityTier: String((typeof entry === "string" ? preset.qualityTier : entry?.qualityTier) ?? preset.qualityTier ?? "custom").trim().slice(0, 100) || "custom",
       wireModel: String((typeof entry === "string" ? preset.wireModel : entry?.wireModel) ?? preset.wireModel ?? model).trim().slice(0, 120) || model,
@@ -394,7 +404,10 @@ export function createProviderBridgeService({
     if (!models.length) {
       throw new Error("At least one model must be declared for a provider account.");
     }
-    const authType = String(raw?.authType ?? preset.authType).trim().slice(0, 40) || "api-key";
+    const authType = String(
+      preset.providerType === "local" ? "local-runtime" :
+      raw?.authType ?? preset.authType
+    ).trim().slice(0, 40) || "api-key";
     const rawEndpoint = String(raw?.apiBaseUrl ?? "").trim();
     const allowsCustomEndpoint = ["custom", "local", "openai-compatible"].includes(preset.providerType);
     if (rawEndpoint && !allowsCustomEndpoint && rawEndpoint !== preset.apiBaseUrl) {
@@ -483,11 +496,12 @@ export function createProviderBridgeService({
     return new Set(configured.length ? configured : declaredModels).has(model);
   }
 
-  function providerModelRuntimeState(entry, { secrets = {}, preferences = {}, localRuntimeUrl = "", catalog = modelCatalog } = {}) {
+  function providerModelRuntimeState(entry, { secrets = {}, preferences = {}, localRuntimeUrl = "", catalog = modelCatalog, profiles = providerProfiles } = {}) {
     const allowed = isModelAllowedForProviderModel(entry.providerId, entry.model, preferences, catalog);
-    const configured = entry.providerId === "desktop-local"
-      ? Boolean(localRuntimeUrl)
-      : Boolean(secrets[entry.providerId]);
+    const profile = profiles.find((candidate) => candidate.id === entry.providerId) ?? {};
+    const authType = String(profile.authType ?? "api-key").toLowerCase();
+    const requiresCredential = !["none", "local-runtime"].includes(authType);
+    const configured = requiresCredential ? Boolean(secrets[entry.providerId]) : true;
     return {
       ...entry,
       allowed,
@@ -593,7 +607,7 @@ export function createProviderBridgeService({
             routeState: strategy.routeState,
             hardStop: strategy.hardStop,
           })),
-        configured: Boolean(secrets[profile.id]),
+        configured: !["none", "local-runtime"].includes(String(profile.authType ?? "api-key").toLowerCase()) ? Boolean(secrets[profile.id]) : true,
         credentialPreview: secrets[profile.id] ? "session" : "missing",
       })),
     };
@@ -605,31 +619,43 @@ export function createProviderBridgeService({
     if (!profile) {
       throw new Error("Unknown provider profile.");
     }
-    const [secrets, preferences, strategies, catalog] = await Promise.all([
+    const [secrets, preferences, strategies, catalog, profiles] = await Promise.all([
       readProviderSecrets(),
       readProviderModelPreferences().catch(() => ({})),
       resolvedRoutingStrategies(),
       allModelCatalog(),
+      allProviderProfiles(),
     ]);
     const models = catalog.filter((entry) => entry.providerId === providerId);
-    const configured = Boolean(secrets[providerId]);
+    const authType = String(profile.authType ?? "api-key").toLowerCase();
+    const isDesktopLocal = providerId === "desktop-local";
+    const requiresCredential = !isDesktopLocal && !["none", "local-runtime"].includes(authType);
+    const configured = isDesktopLocal
+      ? Boolean(process.env.RESONANTOS_LOCAL_RUNTIME_URL)
+      : requiresCredential
+        ? Boolean(secrets[providerId])
+        : true;
     const routeConsumers = strategies.filter((strategy) =>
       [strategy.primary, ...(strategy.fallbackChain ?? [])]
         .some((entry) => entry?.providerId === providerId)
     );
     const blockedConsumers = routeConsumers.filter((strategy) => strategy.routeState !== "routable");
-    const availableModels = models.filter((entry) => providerModelRuntimeState(entry, {
+    const runtimeOptions = {
       secrets,
       preferences,
       catalog,
       localRuntimeUrl: process.env.RESONANTOS_LOCAL_RUNTIME_URL,
-    })?.configured);
+      profiles,
+    };
+    const availableModels = models.filter((entry) => providerModelRuntimeState(entry, runtimeOptions)?.configured);
     const allowedModels = models.filter((entry) => isModelAllowedForProviderModel(providerId, entry.model, preferences, catalog));
     const state = configured && availableModels.length
       ? (blockedConsumers.length ? "degraded" : "ready")
       : configured && !allowedModels.length
         ? "disabled"
-      : "missing-credential";
+      : requiresCredential
+        ? "missing-credential"
+        : "unreachable";
     return {
       providerId,
       label: profile.label,
@@ -641,12 +667,7 @@ export function createProviderBridgeService({
         label: entry.label,
         runtime: entry.runtime,
         allowed: isModelAllowedForProviderModel(providerId, entry.model, preferences, catalog),
-        configured: Boolean(providerModelRuntimeState(entry, {
-          secrets,
-          preferences,
-          catalog,
-          localRuntimeUrl: process.env.RESONANTOS_LOCAL_RUNTIME_URL,
-        })?.configured),
+        configured: Boolean(providerModelRuntimeState(entry, runtimeOptions)?.configured),
       })),
       routeConsumers: routeConsumers.map((strategy) => ({
         id: strategy.id,
@@ -671,8 +692,9 @@ export function createProviderBridgeService({
       throw new Error("Unknown provider profile.");
     }
     const secrets = await readProviderSecrets();
-    const credential = secrets[providerId];
-    if (!credential) {
+    const requiresCredential = !["none", "local-runtime"].includes(String(profile.authType ?? "api-key").toLowerCase());
+    const credential = secrets[providerId] ?? "";
+    if (requiresCredential && !credential) {
       const result = {
         providerId,
         label: profile.label,
@@ -690,7 +712,7 @@ export function createProviderBridgeService({
       providerId,
       url: `${String(profile.apiBaseUrl).replace(/\/$/, "")}/models`,
       label: profile.label,
-      sendsCredential: profile.authType !== "none",
+      sendsCredential: requiresCredential,
     } : null);
     if (!target) {
       throw new Error("No connectivity diagnostic target exists for this provider.");
@@ -860,11 +882,13 @@ export function createProviderBridgeService({
       }
       rememberProviderSecret(normalized.id, credential);
     }
+    const savedSecrets = await readProviderSecrets();
+    const needsCredential = !["none", "local-runtime"].includes(String(normalized.authType ?? "api-key").toLowerCase());
     return {
       provider: normalized,
       savedAt: new Date().toISOString(),
       persistence: "session-only",
-      configured: Boolean(credential || (await readProviderSecrets())[normalized.id]),
+      configured: needsCredential ? Boolean(credential || savedSecrets[normalized.id]) : true,
     };
   }
 
@@ -996,7 +1020,8 @@ export function createProviderBridgeService({
       allProviderProfiles(),
     ]);
     const route = providerRouteForArchiveVerifier(secrets, requestedModel, { catalog, profiles });
-    if (!route) {
+    const routeSendsCredential = !["none", "local-runtime"].includes(String(route?.authType ?? "api-key").toLowerCase());
+    if (!route || (routeSendsCredential && !secrets[route.providerId])) {
       return {
         semanticStatus: "unavailable",
         semanticSummary: "No configured provider was available for semantic archive verification.",
@@ -1023,11 +1048,13 @@ export function createProviderBridgeService({
     });
     try {
       const response = await fetchProviderResponse(
-        providerRequestUrl(route, "/chat/completions"),
+        providerRequestUrl(route, "/chat/completions", { sendsCredential: routeSendsCredential }),
         {
           method: "POST",
-          headers: {
+          headers: routeSendsCredential ? {
             "Authorization": `Bearer ${secrets[route.providerId]}`,
+            "Content-Type": "application/json",
+          } : {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
@@ -1158,8 +1185,9 @@ export function createProviderBridgeService({
     });
     const failures = [];
     for (const { model: attemptModel, route } of uniqueAttempts) {
-      const apiKey = route.providerId === "desktop-local" ? "local-runtime" : secrets[route.providerId];
-      if (!apiKey) {
+      const sendsCredential = !["none", "local-runtime"].includes(String(route.authType ?? "api-key").toLowerCase());
+      const apiKey = sendsCredential ? secrets[route.providerId] : "local-runtime";
+      if (sendsCredential && !apiKey) {
         if (routeDecision.source !== "strategy") {
           // A manually selected, catalog-valid model whose provider has no
           // credential: name it and point to recovery, instead of the generic
@@ -1172,11 +1200,13 @@ export function createProviderBridgeService({
       let response;
       try {
         response = await fetchProviderResponse(
-          providerRequestUrl(route, "/chat/completions", { sendsCredential: route.providerId !== "desktop-local" }),
+          providerRequestUrl(route, "/chat/completions", { sendsCredential }),
           {
             method: "POST",
-            headers: {
+            headers: sendsCredential ? {
               "Authorization": `Bearer ${apiKey}`,
+              "Content-Type": "application/json",
+            } : {
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
@@ -1261,8 +1291,9 @@ export function createProviderBridgeService({
       allProviderProfiles(),
     ]);
     const route = providerRouteForModel(payload.model, { catalog, profiles });
-    const apiKey = secrets[route.providerId];
-    if (!apiKey) {
+    const sendsCredential = !["none", "local-runtime"].includes(String(route.authType ?? "api-key").toLowerCase());
+    const apiKey = sendsCredential ? secrets[route.providerId] : "local-runtime";
+    if (sendsCredential && !apiKey) {
       return {
         reply: fallbackInlineAssistant({ action, selection, prompt }),
         providerId: "local-fallback",
@@ -1285,11 +1316,13 @@ export function createProviderBridgeService({
     let response;
     try {
       response = await fetchProviderResponse(
-        providerRequestUrl(route, "/chat/completions"),
+        providerRequestUrl(route, "/chat/completions", { sendsCredential }),
         {
           method: "POST",
-          headers: {
+          headers: sendsCredential ? {
             "Authorization": `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+          } : {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({

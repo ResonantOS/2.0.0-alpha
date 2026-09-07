@@ -1,10 +1,12 @@
 import { metricCard, noteCard, safeErrorMessage, setStatus, settingsHeader } from "./settings-common.js";
 import {
+  allowsCustomProviderEndpoint,
   formatLabel,
   modelLabel,
   modelValue,
   parseModelsText,
   providerModelsText,
+  providerRequiresCredential,
   providerSort,
   providerTypeLabel,
   providerTypePresets
@@ -19,7 +21,7 @@ function labeledField({ label, input }) {
   return wrapper;
 }
 
-function providerAccountPayload(form, provider = {}) {
+export function providerAccountPayload(form, provider = {}) {
   const FormDataCtor = form.ownerDocument?.defaultView?.FormData ?? FormData;
   const data = new FormDataCtor(form);
   const templateId = String(data.get("templateId") ?? provider.templateId ?? provider.providerType ?? "minimax").trim();
@@ -30,7 +32,7 @@ function providerAccountPayload(form, provider = {}) {
     templateId,
     label: String(data.get("label") ?? "").trim(),
     providerType: preset.providerType,
-    authType: "api-key",
+    authType: preset.providerType === "local" ? "local-runtime" : "api-key",
     apiBaseUrl: String(data.get("apiBaseUrl") ?? "").trim(),
     role: String(data.get("role") ?? "").trim(),
     models: parseModelsText(data.get("models")),
@@ -38,7 +40,7 @@ function providerAccountPayload(form, provider = {}) {
   };
 }
 
-function providerAccountForm(provider = {}) {
+export function providerAccountForm(provider = {}) {
   const form = document.createElement("form");
   form.className = "settings-provider-account-form";
 
@@ -88,11 +90,36 @@ function providerAccountForm(provider = {}) {
   credential.autocomplete = "off";
   credential.placeholder = provider.id ? "Leave blank to keep current credential" : "Paste account API key";
 
+  function updateCredentialRequirement(templateId) {
+    const required = providerRequiresCredential(templateId);
+    credential.required = required;
+    credential.placeholder = provider.id
+      ? "Leave blank to keep current credential"
+      : required
+        ? "Paste account API key"
+        : "No API key needed for local runtime";
+  }
+
+  updateCredentialRequirement(template.value);
+
+  function lockUrlForTemplate(templateId, { preserveSavedValue = false } = {}) {
+    const preset = providerTypePresets[templateId] ?? providerTypePresets.minimax;
+    const editable = allowsCustomProviderEndpoint(templateId);
+    apiBaseUrl.disabled = !editable;
+    apiBaseUrl.title = editable ? "" : "This provider requires its built-in endpoint URL.";
+    if (!preserveSavedValue || !editable) {
+      apiBaseUrl.value = preset.apiBaseUrl;
+    }
+  }
+
+  lockUrlForTemplate(template.value, { preserveSavedValue: true });
+
   template.addEventListener("change", () => {
     const preset = providerTypePresets[template.value] ?? providerTypePresets.minimax;
     name.placeholder = `${preset.label} account`;
-    apiBaseUrl.value = preset.apiBaseUrl;
     models.value = preset.models.join("\n");
+    lockUrlForTemplate(template.value);
+    updateCredentialRequirement(template.value);
   });
 
   const grid = document.createElement("div");
@@ -128,13 +155,17 @@ export function openProviderAccountModal({ bridgeRequest, getBridgeRequest, stat
   close.textContent = "Close";
   heading.append(title, close);
   const form = providerAccountForm();
+  const errorNode = document.createElement("p");
+  errorNode.className = "settings-provider-modal-error";
+  errorNode.setAttribute("role", "alert");
+  errorNode.hidden = true;
   const actions = document.createElement("div");
   actions.className = "settings-provider-modal-actions";
   const save = document.createElement("button");
   save.type = "submit";
   save.textContent = "Save account";
   actions.append(save);
-  form.append(actions);
+  form.append(errorNode, actions);
   // Status lives INSIDE the modal so save progress and — critically — save
   // failures are shown to the user while the dialog is still open. Writing them
   // to the settings page behind the modal (the old behavior) hid the error and
@@ -153,6 +184,8 @@ export function openProviderAccountModal({ bridgeRequest, getBridgeRequest, stat
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     save.disabled = true;
+    setStatus(errorNode, "", "");
+    errorNode.hidden = true;
     setStatus(modalStatus, "Saving provider account…");
     try {
       await bridge()("/providers/accounts", {
@@ -167,7 +200,10 @@ export function openProviderAccountModal({ bridgeRequest, getBridgeRequest, stat
     } catch (error) {
       // Failure: keep the dialog open and show the reason in the dialog so the
       // user can correct the input and retry — do not write it behind the modal.
-      setStatus(modalStatus, `Save failed: ${safeErrorMessage(error)}`, "error");
+      const message = safeErrorMessage(error);
+      setStatus(modalStatus, `Save failed: ${message}`, "error");
+      setStatus(errorNode, `Provider account save failed: ${message}`, "error");
+      errorNode.hidden = false;
     } finally {
       save.disabled = false;
     }
@@ -364,11 +400,14 @@ function providerCard({ provider, bridgeRequest, getBridgeRequest, statusNode, r
 
   const auth = document.createElement("p");
   auth.className = "settings-model-list";
-  const credentialState = provider.credentialPreview === "session"
-    ? "session-only in host memory"
-    : provider.credentialPreview === "stored"
-      ? "configured in host credential store"
-      : "missing";
+  const keyless = ["none", "local-runtime"].includes(String(provider.authType ?? "api-key").toLowerCase());
+  const credentialState = keyless
+    ? "not required"
+    : provider.credentialPreview === "session"
+      ? "session-only in host memory"
+      : provider.credentialPreview === "stored"
+        ? "configured in host credential store"
+        : "missing";
   auth.textContent = `Auth: ${formatLabel(provider.authType)} · Credential: ${credentialState}`;
 
   const form = document.createElement("form");
@@ -382,7 +421,9 @@ function providerCard({ provider, bridgeRequest, getBridgeRequest, statusNode, r
   const save = document.createElement("button");
   save.type = "submit";
   save.textContent = provider.configured ? "Update" : "Save";
-  form.append(input, save);
+  if (!keyless) {
+    form.append(input, save);
+  }
   if (provider.source === "user") {
     const remove = document.createElement("button");
     remove.type = "button";

@@ -185,7 +185,7 @@ export const providerTypePresets = {
     label: "Ollama",
     providerType: "local",
     category: "Local software",
-    apiBaseUrl: "http://127.0.0.1:11434",
+    apiBaseUrl: "http://127.0.0.1:11434/v1",
     models: ["batiai/gemma4-e2b:q4"],
   },
   "lm-studio": {
@@ -197,28 +197,28 @@ export const providerTypePresets = {
   },
   "localai": {
     label: "LocalAI",
-    providerType: "openai-compatible",
+    providerType: "local",
     category: "Local software",
     apiBaseUrl: "http://127.0.0.1:8080/v1",
     models: ["local-model"],
   },
   "llama-cpp": {
     label: "llama.cpp server",
-    providerType: "openai-compatible",
+    providerType: "local",
     category: "Local software",
     apiBaseUrl: "http://127.0.0.1:8080/v1",
     models: ["local-model"],
   },
   vllm: {
     label: "vLLM",
-    providerType: "openai-compatible",
+    providerType: "local",
     category: "Local software",
     apiBaseUrl: "http://127.0.0.1:8000/v1",
     models: ["local-model"],
   },
   "text-generation-webui": {
     label: "Text Generation WebUI",
-    providerType: "openai-compatible",
+    providerType: "local",
     category: "Local software",
     apiBaseUrl: "http://127.0.0.1:5000/v1",
     models: ["local-model"],
@@ -227,7 +227,7 @@ export const providerTypePresets = {
     label: "NVIDIA DGX Spark",
     providerType: "local",
     category: "User-owned machines",
-    apiBaseUrl: "http://dgx-spark.local:11434",
+    apiBaseUrl: "http://dgx-spark.local:11434/v1",
     models: ["local-model"],
   },
   "asus-gx10": {
@@ -249,6 +249,16 @@ export const providerTypePresets = {
 export function providerTypeLabel(provider) {
   const type = provider.templateId ?? provider.providerType ?? provider.type ?? "minimax";
   return providerTypePresets[type]?.label ?? formatLabel(type);
+}
+
+export function allowsCustomProviderEndpoint(templateId) {
+  const preset = providerTypePresets[String(templateId ?? "minimax")];
+  return ["custom", "local", "openai-compatible"].includes(preset?.providerType);
+}
+
+export function providerRequiresCredential(templateId) {
+  const preset = providerTypePresets[String(templateId ?? "minimax")];
+  return preset?.providerType !== "local";
 }
 
 export function providerModelsText(provider) {

@@ -522,6 +522,104 @@ test("settings provider profiles can add and edit separate accounts for the same
   }
 });
 
+test("editing a local account keeps its custom endpoint instead of resetting to the preset", async () => {
+  const { container, cleanup } = setupDom();
+  const calls = [];
+  const providers = [
+    {
+      id: "ollama-home",
+      label: "Ollama Home",
+      providerType: "local",
+      templateId: "ollama",
+      authType: "local-runtime",
+      apiBaseUrl: "http://192.168.1.20:11434/v1",
+      role: "Home server runtime",
+      source: "user",
+      models: [{
+        model: "deepseek-v4-flash:cloud",
+        label: "deepseek-v4-flash:cloud",
+        costTier: "local-free",
+        qualityTier: "local runtime",
+        allowed: true
+      }],
+      routeConsumers: [],
+      configured: true,
+      credentialPreview: "stored"
+    }
+  ];
+  const bridgeRequest = async (route, options = {}) => {
+    calls.push([route, options]);
+    if (route === "/providers/status") {
+      return {
+        providers,
+        vault: { configured: true, location: "ResonantOS local provider vault" }
+      };
+    }
+    if (route === "/providers/diagnostics-history") return { entries: [] };
+    if (route === "/providers/accounts") {
+      const index = providers.findIndex((provider) => provider.id === options.body.id);
+      providers[index] = { ...providers[index], apiBaseUrl: options.body.apiBaseUrl };
+      return { provider: providers[index], configured: true };
+    }
+    throw new Error(`Unexpected route ${route}`);
+  };
+
+  try {
+    renderSettingsWorkspace({ container, bridgeRequest, initialSection: "providers" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const card = [...container.querySelectorAll(".settings-provider-card")]
+      .find((node) => /Ollama Home/.test(node.textContent));
+    card.querySelector("[data-action='edit-provider']").click();
+    const urlField = card.querySelector("input[name='apiBaseUrl']");
+    assert.equal(urlField.value, "http://192.168.1.20:11434/v1", "edit form should show the saved endpoint, not the preset");
+    card.querySelector(".settings-provider-account-form").dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.ok(calls.some(([route, options]) =>
+      route === "/providers/accounts" &&
+      options.body.mode === "update" &&
+      options.body.id === "ollama-home" &&
+      options.body.apiBaseUrl === "http://192.168.1.20:11434/v1"
+    ), "save should persist the custom endpoint");
+  } finally {
+    cleanup();
+  }
+});
+
+test("local software templates are keyless with editable endpoints in the add modal", async () => {
+  const { container, cleanup } = setupDom();
+  const bridgeRequest = async (route) => {
+    if (route === "/providers/status") {
+      return { providers: [], vault: { configured: false, location: "ResonantOS local provider vault" } };
+    }
+    if (route === "/providers/diagnostics-history") return { entries: [] };
+    throw new Error(`Unexpected route ${route}`);
+  };
+
+  try {
+    renderSettingsWorkspace({ container, bridgeRequest, initialSection: "providers" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    container.querySelector(".settings-provider-toolbar button").click();
+    const select = document.querySelector("select[name='templateId']");
+    for (const [templateId, expectedUrl] of [
+      ["localai", "http://127.0.0.1:8080/v1"],
+      ["llama-cpp", "http://127.0.0.1:8080/v1"],
+      ["vllm", "http://127.0.0.1:8000/v1"],
+      ["text-generation-webui", "http://127.0.0.1:5000/v1"]
+    ]) {
+      select.value = templateId;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+      const urlField = document.querySelector("input[name='apiBaseUrl']");
+      const credential = document.querySelector("input[name='credential']");
+      assert.equal(urlField.value, expectedUrl, `${templateId} should prefill its local endpoint`);
+      assert.equal(urlField.disabled, false, `${templateId} endpoint should stay editable`);
+      assert.equal(credential.required, false, `${templateId} should not require an API key`);
+    }
+  } finally {
+    document.querySelector(".settings-provider-modal")?.remove();
+    cleanup();
+  }
+});
+
 test("settings provider add modal exposes comprehensive cloud, gateway, local, and custom templates", async () => {
   const { container, cleanup } = setupDom();
   const bridgeRequest = async (route) => {
@@ -552,7 +650,7 @@ test("settings provider add modal exposes comprehensive cloud, gateway, local, a
 
     select.value = "ollama";
     select.dispatchEvent(new Event("change", { bubbles: true }));
-    assert.equal(document.querySelector("input[name='apiBaseUrl']").value, "http://127.0.0.1:11434");
+    assert.equal(document.querySelector("input[name='apiBaseUrl']").value, "http://127.0.0.1:11434/v1");
     assert.match(document.querySelector("textarea[name='models']").value, /batiai\/gemma4-e2b:q4/);
   } finally {
     document.querySelector(".settings-provider-modal")?.remove();
@@ -2736,6 +2834,48 @@ test("settings browser control section degrades when browser stores are unavaila
     assert.match(container.textContent, /No readable http\/https tab is currently active/);
     assert.match(container.textContent, /No stored grants/);
     assert.match(container.textContent, /No browser jobs/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a keyless local account card does not ask for a credential", async () => {
+  const { container, cleanup } = setupDom();
+  const providers = [
+    {
+      id: "vllm-lab",
+      label: "vLLM Lab",
+      providerType: "local",
+      templateId: "vllm",
+      authType: "local-runtime",
+      apiBaseUrl: "http://127.0.0.1:8000/v1",
+      role: "Lab runtime",
+      source: "user",
+      models: [{ model: "local-model", label: "local-model", costTier: "local-free", qualityTier: "local runtime", allowed: true }],
+      routeConsumers: [],
+      configured: true,
+      credentialPreview: "missing"
+    }
+  ];
+  const bridgeRequest = async (route) => {
+    if (route === "/providers/status") {
+      return { providers, vault: { configured: true, location: "ResonantOS local provider vault" } };
+    }
+    if (route === "/providers/diagnostics-history") return { entries: [] };
+    throw new Error(`Unexpected route ${route}`);
+  };
+
+  try {
+    renderSettingsWorkspace({ container, bridgeRequest, initialSection: "providers" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const card = [...container.querySelectorAll(".settings-provider-card")]
+      .find((node) => /vLLM Lab/.test(node.textContent));
+    assert.ok(card, "the keyless account renders a card");
+    assert.match(card.textContent, /Ready/, "a keyless runtime counts as configured");
+    assert.match(card.textContent, /Credential: not required/);
+    assert.doesNotMatch(card.textContent, /Credential: missing/);
+    assert.equal(card.querySelector(".settings-provider-form input[name='credential']"), null, "keyless accounts must not offer a key field");
+    assert.ok(card.querySelector(".settings-provider-remove"), "user accounts keep their Remove control");
   } finally {
     cleanup();
   }

@@ -33,4 +33,18 @@ describe("provider templates", () => {
     expect(templateById.get("anthropic")?.initialStatus).toBe("missing");
     expect(templateById.get("anthropic")?.initialRuntimeHealthState).toBe("unavailable");
   });
+
+  it("classifies local OpenAI-compatible software as keyless local runtimes", () => {
+    const templateById = new Map(providerTemplates.map((template) => [template.id, template]));
+
+    for (const templateId of ["localai", "llama-cpp", "vllm", "text-generation-webui"]) {
+      const template = templateById.get(templateId);
+
+      expect(template?.category).toBe("local-runtime");
+      expect(template?.providerType).toBe("local");
+      expect(template?.authMethod).toBe("local-runtime");
+      expect(template?.requiresSecret).toBe(false);
+      expect(template?.requiresBaseUrl).toBe(true);
+    }
+  });
 });
