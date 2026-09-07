@@ -238,7 +238,7 @@ when the sideloaded add-on provides a system slot.
 2. Should uninstall stop or cancel currently running local add-on work first?
    Recommended default: yes, attempt a best-effort stop before the state
    mutation and block uninstall if the runtime cannot reach a safe stopped
-   state. **Answered 2026-09-07 (release owner): yes — implemented in task 2.**
+   state. **Answered 2026-09-07 (release owner): yes — implemented in task 2.** Scope of the stop hook in task 3: the desktop shell has no delegation-cancel primitive, and task workspaces are listable but carry no run status; the in-flight registry covers Logician script and hook runs, browser engine install, and Hermes install. The Hermes dashboard, OpenCode service start/stop, OpenCode task execution from the Delegation workspace, task-workspace creation from chat, and browser sessions are not stopped by uninstall in task 3; the host-side running-delegation check lands with task 4.
 3. Which surface owns active system-slot provider selection?
    Recommended default: add an explicit typed field under shared runtime state
    before enforcing kernel-adjacent uninstall blocking. **Answered 2026-09-07 (release owner): yes — implemented in task 2.**
@@ -272,8 +272,8 @@ when the sideloaded add-on provides a system slot.
 
 3. UI control and confirmation (M)
    - Files: `src/modules/addons/AddOnsWorkspace.tsx`,
-     `src/modules/addons/AddOnsWorkspace.test.tsx`, `src/App.tsx`.
-   - TDD first: add `shows Uninstall for installed add-ons`, `confirmation copy states config is deleted and user data retained`, `does not show Uninstall for blocked active bundled defaults`, and `calls uninstall handler only after confirmation`.
+     `src/modules/addons/AddOnsWorkspace.test.tsx`, `src/App.tsx`. **Implemented in task 3 (2026-09-07).**
+   - TDD first: add `shows Uninstall for installed add-ons`, `confirmation copy states config is deleted and user data retained`, `shows a disabled Uninstall with the slot reason for blocked active bundled defaults`, and `calls uninstall handler only after confirmation`.
    - Implementation: add an Uninstall secondary action in the detail panel,
      show the warning copy from this design, and wire the handler through
      `App.tsx`.

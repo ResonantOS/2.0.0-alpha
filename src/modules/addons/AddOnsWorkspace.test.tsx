@@ -1,10 +1,18 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
-import type { AddOnManifest, CapabilityGrant, LogicianExecutionArtifact } from "../../core/contracts";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { ComponentProps } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  AddOnInstallation,
+  AddOnManifest,
+  CapabilityGrant,
+  InstallationStatus,
+  LogicianExecutionArtifact,
+} from "../../core/contracts";
 import { buildDefaultState } from "../../core/defaults";
 import { AddOnsWorkspace } from "./AddOnsWorkspace";
+import type { UninstallAddonResult } from "./controller";
 
 vi.mock("../../core/runtime", () => ({
   requestBrowserEngineStatus: vi.fn(async () => ({
@@ -61,6 +69,89 @@ const createHermesManifest = (): AddOnManifest => ({
     shellVersion: "^0.1.0",
     platforms: ["macOS"],
   },
+});
+
+const createMinimalManifest = (id: string, name: string): AddOnManifest => ({
+  id,
+  name,
+  version: "0.1.0",
+  author: "test",
+  category: "tool",
+  description: `${name} manifest`,
+  runtimeType: "ui-module",
+  surfaces: [],
+  requestedCapabilities: [],
+  providerRequirements: {
+    sharedProfiles: [],
+    supportsPrivateCredentials: false,
+  },
+  archiveIntegration: {
+    readScopes: [],
+    intakeWriteScopes: [],
+    canRequestIngest: false,
+    canWriteKnowledgePages: false,
+  },
+  health: {
+    strategy: "none",
+  },
+  installHooks: {},
+  compatibility: {
+    shellVersion: "^0.1.0",
+    platforms: ["macOS"],
+  },
+});
+
+type AddOnsWorkspaceRenderProps = ComponentProps<typeof AddOnsWorkspace>;
+
+const renderWorkspaceProps = (overrides: Partial<AddOnsWorkspaceRenderProps> = {}): AddOnsWorkspaceRenderProps => {
+  const fallbackManifest = createMinimalManifest("addon.test", "Test Addon");
+  const manifests = overrides.filteredManifests ?? [overrides.selectedManifest ?? fallbackManifest];
+  const state = buildDefaultState(manifests);
+  const selectedManifest = overrides.selectedManifest ?? manifests[0] ?? null;
+  const selectedInstallation =
+    overrides.selectedInstallation ?? (selectedManifest ? state.installations[selectedManifest.id] : null);
+  return {
+    search: "",
+    sideloadPath: "",
+    filteredManifests: manifests,
+    installations: state.installations,
+    selectedManifest,
+    selectedInstallation,
+    uninstallBlock: null,
+    onSearchChange: vi.fn(),
+    onSideloadPathChange: vi.fn(),
+    onSideload: vi.fn(),
+    onSelectManifest: vi.fn(),
+    onToggleAddonInstall: vi.fn(),
+    onToggleGrant: vi.fn(),
+    onGrantCapabilities: vi.fn(),
+    onUpdateAddonConfig: vi.fn(),
+    onUninstallAddon: vi.fn(async (): Promise<UninstallAddonResult> => ({ outcome: "blocked", blockReason: "not-installed" })),
+    onRunLogicianScript: vi.fn(),
+    onRunLogicianHook: vi.fn(),
+    onAskAugmentor: vi.fn(async () => undefined),
+    onOpenArchiveReview: vi.fn(),
+    onOpenSurface: vi.fn(),
+    ...overrides,
+  };
+};
+
+const renderWorkspace = (overrides: Partial<AddOnsWorkspaceRenderProps> = {}) =>
+  render(<AddOnsWorkspace {...renderWorkspaceProps(overrides)} />);
+
+const setInstallationStatus = (installation: AddOnInstallation, status: InstallationStatus): AddOnInstallation => {
+  installation.status = status;
+  installation.installed = status !== "available" && status !== "uninstalled";
+  installation.enabled = status === "enabled";
+  return installation;
+};
+
+const confirmationCopy =
+  "Uninstall clears this add-on's grants, private provider links, and settings. It keeps source files, Living Archive intake/review records, delegation packets, drafts, and result artifacts. Review those records separately before deleting them.";
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
 });
 
 describe("AddOnsWorkspace Hermes grants", () => {
@@ -121,6 +212,7 @@ describe("AddOnsWorkspace Hermes grants", () => {
         installations={state.installations}
         selectedManifest={null}
         selectedInstallation={null}
+        uninstallBlock={null}
         onSearchChange={vi.fn()}
         onSideloadPathChange={vi.fn()}
         onSideload={vi.fn()}
@@ -129,6 +221,7 @@ describe("AddOnsWorkspace Hermes grants", () => {
         onToggleGrant={vi.fn()}
         onGrantCapabilities={vi.fn()}
         onUpdateAddonConfig={vi.fn()}
+        onUninstallAddon={vi.fn()}
         onRunLogicianScript={vi.fn()}
         onRunLogicianHook={vi.fn()}
         onAskAugmentor={vi.fn(async () => undefined)}
@@ -155,6 +248,7 @@ describe("AddOnsWorkspace Hermes grants", () => {
         installations={state.installations}
         selectedManifest={null}
         selectedInstallation={null}
+        uninstallBlock={null}
         onSearchChange={vi.fn()}
         onSideloadPathChange={vi.fn()}
         onSideload={vi.fn()}
@@ -163,6 +257,7 @@ describe("AddOnsWorkspace Hermes grants", () => {
         onToggleGrant={vi.fn()}
         onGrantCapabilities={onGrantCapabilities}
         onUpdateAddonConfig={vi.fn()}
+        onUninstallAddon={vi.fn()}
         onRunLogicianScript={vi.fn()}
         onRunLogicianHook={vi.fn()}
         onAskAugmentor={vi.fn(async () => undefined)}
@@ -248,6 +343,7 @@ describe("AddOnsWorkspace Hermes grants", () => {
         installations={state.installations}
         selectedManifest={hermesManifest}
         selectedInstallation={state.installations[hermesManifest.id]}
+        uninstallBlock={null}
         onSearchChange={vi.fn()}
         onSideloadPathChange={vi.fn()}
         onSideload={vi.fn()}
@@ -256,6 +352,7 @@ describe("AddOnsWorkspace Hermes grants", () => {
         onToggleGrant={vi.fn()}
         onGrantCapabilities={vi.fn()}
         onUpdateAddonConfig={vi.fn()}
+        onUninstallAddon={vi.fn()}
         onRunLogicianScript={vi.fn(async (): Promise<LogicianExecutionArtifact> => ({
           id: "test-artifact",
           addonId: hermesManifest.id,
@@ -376,6 +473,7 @@ describe("AddOnsWorkspace Hermes grants", () => {
         installations={state.installations}
         selectedManifest={hermesManifest}
         selectedInstallation={state.installations[hermesManifest.id]}
+        uninstallBlock={null}
         onSearchChange={vi.fn()}
         onSideloadPathChange={vi.fn()}
         onSideload={vi.fn()}
@@ -384,6 +482,7 @@ describe("AddOnsWorkspace Hermes grants", () => {
         onToggleGrant={vi.fn()}
         onGrantCapabilities={vi.fn()}
         onUpdateAddonConfig={vi.fn()}
+        onUninstallAddon={vi.fn()}
         onRunLogicianScript={vi.fn()}
         onRunLogicianHook={vi.fn()}
         onAskAugmentor={vi.fn(async () => undefined)}
@@ -396,5 +495,293 @@ describe("AddOnsWorkspace Hermes grants", () => {
     expect(screen.getByText(/Hermes profile requires review/i)).toBeTruthy();
     expect(screen.getByText(/host-reported: 1/i)).toBeTruthy();
     expect(screen.getByText(/command-degraded/i)).toBeTruthy();
+  });
+});
+
+describe("AddOnsWorkspace uninstall lifecycle", () => {
+  it.each(["installed", "enabled", "disabled", "degraded", "update-available", "incompatible"] as const)(
+    "shows Uninstall for installed add-ons in %s status",
+    (status) => {
+      const manifest = createMinimalManifest(`addon.${status}`, `${status} Addon`);
+      const state = buildDefaultState([manifest]);
+      setInstallationStatus(state.installations[manifest.id], status);
+
+      renderWorkspace({
+        filteredManifests: [manifest],
+        installations: state.installations,
+        selectedManifest: manifest,
+        selectedInstallation: state.installations[manifest.id],
+      });
+
+      const button = screen.getByRole("button", { name: `Uninstall ${manifest.name}` }) as HTMLButtonElement;
+      expect(button.disabled).toBe(false);
+    },
+  );
+
+  it("hides Uninstall for available and uninstalled add-ons", () => {
+    for (const status of ["available", "uninstalled"] as const) {
+      const manifest = createMinimalManifest(`addon.${status}`, `${status} Addon`);
+      const state = buildDefaultState([manifest]);
+      setInstallationStatus(state.installations[manifest.id], status);
+      const view = renderWorkspace({
+        filteredManifests: [manifest],
+        installations: state.installations,
+        selectedManifest: manifest,
+        selectedInstallation: state.installations[manifest.id],
+      });
+
+      expect(screen.queryByRole("button", { name: `Uninstall ${manifest.name}` })).toBeNull();
+      view.unmount();
+    }
+  });
+
+  it("disables Uninstall for a blocked active bundled default and shows the slot reason", () => {
+    const manifest = createMinimalManifest("addon.default", "Default Agent");
+    const state = buildDefaultState([manifest]);
+    setInstallationStatus(state.installations[manifest.id], "enabled");
+
+    renderWorkspace({
+      filteredManifests: [manifest],
+      installations: state.installations,
+      selectedManifest: manifest,
+      selectedInstallation: state.installations[manifest.id],
+      uninstallBlock: { blockReason: "active-system-slot-provider", blockDetail: "primary-agent, chat-interface" },
+    });
+
+    const button = screen.getByRole("button", { name: "Uninstall Default Agent" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    const reason = screen.getByText(
+      "Default Agent currently provides the primary-agent, chat-interface slot(s). Select another provider for those slots before uninstalling.",
+    );
+    expect(reason).toBeTruthy();
+    // The disabled button must point screen readers at its reason.
+    expect(reason.id).toBeTruthy();
+    expect(button.getAttribute("aria-describedby")).toBe(reason.id);
+  });
+
+  it("confirmation copy states config is deleted and user data retained", () => {
+    const manifest = createMinimalManifest("addon.confirm", "Confirm Addon");
+    const state = buildDefaultState([manifest]);
+    setInstallationStatus(state.installations[manifest.id], "enabled");
+    const onUninstallAddon = vi.fn();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    renderWorkspace({
+      filteredManifests: [manifest],
+      installations: state.installations,
+      selectedManifest: manifest,
+      selectedInstallation: state.installations[manifest.id],
+      onUninstallAddon,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Uninstall Confirm Addon" }));
+
+    expect(confirm).toHaveBeenCalledWith(confirmationCopy);
+    expect(onUninstallAddon).not.toHaveBeenCalled();
+    confirm.mockRestore();
+  });
+
+  it("calls the uninstall handler after confirmation and shows the counts-only result", async () => {
+    const manifest = createMinimalManifest("addon.clean", "Clean Addon");
+    const state = buildDefaultState([manifest]);
+    setInstallationStatus(state.installations[manifest.id], "enabled");
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const onUninstallAddon = vi.fn(async (): Promise<UninstallAddonResult> => ({
+      outcome: "uninstalled",
+      audit: {
+        at: "2026-09-07T12:00:00.000Z",
+        event: "addonUninstalled",
+        addonId: manifest.id,
+        source: "bundled",
+        previousStatus: "enabled",
+        previousInstalled: true,
+        previousEnabled: true,
+        clearedCapabilities: ["network", "shell"],
+        clearedPrivateProviderProfileIds: 3,
+        configDeleted: true,
+        userDataRetained: true,
+        alsoDeleteUserDataOffered: false,
+        actor: "human",
+      },
+    }));
+
+    renderWorkspace({
+      filteredManifests: [manifest],
+      installations: state.installations,
+      selectedManifest: manifest,
+      selectedInstallation: state.installations[manifest.id],
+      onUninstallAddon,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Uninstall Clean Addon" }));
+
+    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("2 grant(s) cleared"));
+    expect(screen.getByRole("status").textContent).toContain("settings deleted");
+    expect(screen.getByRole("status").textContent).toContain("user data retained");
+    expect(screen.queryByText(/private-profile|secret-config-value/i)).toBeNull();
+    confirm.mockRestore();
+  });
+
+  it('shows "settings were not set" when configDeleted is false', async () => {
+    const manifest = createMinimalManifest("addon.no-config", "No Config Addon");
+    const state = buildDefaultState([manifest]);
+    setInstallationStatus(state.installations[manifest.id], "enabled");
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    renderWorkspace({
+      filteredManifests: [manifest],
+      installations: state.installations,
+      selectedManifest: manifest,
+      selectedInstallation: state.installations[manifest.id],
+      onUninstallAddon: vi.fn(async (): Promise<UninstallAddonResult> => ({
+        outcome: "uninstalled",
+        audit: {
+          at: "2026-09-07T12:00:00.000Z",
+          event: "addonUninstalled",
+          addonId: manifest.id,
+          source: "bundled",
+          previousStatus: "enabled",
+          previousInstalled: true,
+          previousEnabled: true,
+          clearedCapabilities: [],
+          clearedPrivateProviderProfileIds: 0,
+          configDeleted: false,
+          userDataRetained: true,
+          alsoDeleteUserDataOffered: false,
+          actor: "human",
+        },
+      })),
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Uninstall No Config Addon" }));
+
+    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("settings were not set"));
+    confirm.mockRestore();
+  });
+
+  it("shows the block reason when the handler reports running work", async () => {
+    const manifest = createMinimalManifest("addon.running", "Running Addon");
+    const state = buildDefaultState([manifest]);
+    setInstallationStatus(state.installations[manifest.id], "enabled");
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    renderWorkspace({
+      filteredManifests: [manifest],
+      installations: state.installations,
+      selectedManifest: manifest,
+      selectedInstallation: state.installations[manifest.id],
+      onUninstallAddon: vi.fn(async (): Promise<UninstallAddonResult> => ({
+        outcome: "blocked",
+        blockReason: "running-work-not-stopped",
+        blockDetail: "Work is still running.",
+      })),
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Uninstall Running Addon" }));
+
+    await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Work is still running."));
+    confirm.mockRestore();
+  });
+
+  it("keeps the pending state on the add-on that was uninstalled when the selection changes", async () => {
+    const first = createMinimalManifest("addon.first", "First Addon");
+    const second = createMinimalManifest("addon.second", "Second Addon");
+    const state = buildDefaultState([first, second]);
+    setInstallationStatus(state.installations[first.id], "enabled");
+    setInstallationStatus(state.installations[second.id], "enabled");
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    let resolveUninstall: (result: UninstallAddonResult) => void = () => undefined;
+    const uninstallPromise = new Promise<UninstallAddonResult>((resolve) => {
+      resolveUninstall = resolve;
+    });
+    const onUninstallAddon = vi.fn(() => uninstallPromise);
+    const props = {
+      filteredManifests: [first, second],
+      installations: state.installations,
+      onUninstallAddon,
+    };
+    const view = renderWorkspace({
+      ...props,
+      selectedManifest: first,
+      selectedInstallation: state.installations[first.id],
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Uninstall First Addon" }));
+    expect((screen.getByRole("button", { name: "Uninstalling…" }) as HTMLButtonElement).disabled).toBe(true);
+
+    view.rerender(
+      <AddOnsWorkspace
+        {...(renderWorkspaceProps({
+          ...props,
+          selectedManifest: second,
+          selectedInstallation: state.installations[second.id],
+        }))}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Uninstalling…" })).toBeNull();
+    expect((screen.getByRole("button", { name: "Uninstall Second Addon" }) as HTMLButtonElement).disabled).toBe(false);
+
+    await act(async () => {
+      resolveUninstall({ outcome: "blocked", blockReason: "running-work-not-stopped", blockDetail: "still running" });
+      await uninstallPromise;
+    });
+    confirm.mockRestore();
+  });
+
+  it("discards an uninstall result that arrives for a different add-on than the selection", async () => {
+    const first = createMinimalManifest("addon.first", "First Addon");
+    const second = createMinimalManifest("addon.second", "Second Addon");
+    const state = buildDefaultState([first, second]);
+    setInstallationStatus(state.installations[first.id], "enabled");
+    setInstallationStatus(state.installations[second.id], "enabled");
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    let resolveUninstall: (result: UninstallAddonResult) => void = () => undefined;
+    const uninstallPromise = new Promise<UninstallAddonResult>((resolve) => {
+      resolveUninstall = resolve;
+    });
+    const props = {
+      filteredManifests: [first, second],
+      installations: state.installations,
+      onUninstallAddon: vi.fn(() => uninstallPromise),
+    };
+    const view = renderWorkspace({
+      ...props,
+      selectedManifest: first,
+      selectedInstallation: state.installations[first.id],
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Uninstall First Addon" }));
+    view.rerender(
+      <AddOnsWorkspace
+        {...(renderWorkspaceProps({
+          ...props,
+          selectedManifest: second,
+          selectedInstallation: state.installations[second.id],
+        }))}
+      />,
+    );
+
+    await act(async () => {
+      resolveUninstall({
+        outcome: "blocked",
+        blockReason: "running-work-not-stopped",
+        blockDetail: "First add-on is still running.",
+      });
+      await uninstallPromise;
+    });
+
+    expect(screen.queryByRole("status")).toBeNull();
+    view.rerender(
+      <AddOnsWorkspace
+        {...(renderWorkspaceProps({
+          ...props,
+          selectedManifest: first,
+          selectedInstallation: state.installations[first.id],
+        }))}
+      />,
+    );
+    expect(screen.queryByRole("status")).toBeNull();
+    confirm.mockRestore();
   });
 });

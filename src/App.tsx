@@ -59,14 +59,17 @@ import {
   subscribeRuntimeStateUpdates,
 } from "./core/runtime";
 import {
+  describeUninstallBlock,
   executeSideloadManifest,
   grantAddonCapabilities,
   runAddonLogicianHook,
   runAddonLogicianScript,
   toggleAddonCapabilityGrant,
   toggleAddonInstallation,
+  uninstallAddon,
   updateAddonConfig,
 } from "./modules/addons/controller";
+import { addonWorkRegistry, withAddonWork } from "./modules/addons/running-work";
 import {
   executeArchiveIngestProbe,
   executeArchiveSearch,
@@ -2422,6 +2425,7 @@ export function App() {
                 installations={state.installations}
                 selectedManifest={selectedManifest}
                 selectedInstallation={selectedInstallation}
+                uninstallBlock={selectedManifest ? describeUninstallBlock(state, selectedManifest) : null}
                 onSearchChange={(value) => {
                   startTransition(() => setSearch(value));
                 }}
@@ -2436,11 +2440,28 @@ export function App() {
                   grantAddonCapabilities(manifestId, capabilities, requestedCapabilities, updateRuntimeState)
                 }
                 onUpdateAddonConfig={(manifestId, config) => updateAddonConfig(manifestId, config, updateRuntimeState)}
-                onRunLogicianScript={(manifest, installation, script) =>
-                  runAddonLogicianScript(manifest, installation, script, updateRuntimeState)
+                onUninstallAddon={(manifest) =>
+                  uninstallAddon(manifest, {
+                    getState: () => {
+                      const readyState = currentReadyStateRef.current;
+                      if (!readyState) {
+                        throw new Error("Runtime state is not ready.");
+                      }
+                      return readyState;
+                    },
+                    updateRuntimeState,
+                    stopRunningWork: addonWorkRegistry.stopRunningWork,
+                  })
                 }
-                onRunLogicianHook={(manifest, installation, hook) =>
-                  runAddonLogicianHook(manifest, installation, hook, updateRuntimeState)
+                onRunLogicianScript={async (manifest, installation, script) =>
+                  withAddonWork(addonWorkRegistry, manifest.id, () =>
+                    runAddonLogicianScript(manifest, installation, script, updateRuntimeState),
+                  )
+                }
+                onRunLogicianHook={async (manifest, installation, hook) =>
+                  withAddonWork(addonWorkRegistry, manifest.id, () =>
+                    runAddonLogicianHook(manifest, installation, hook, updateRuntimeState),
+                  )
                 }
                 onAskAugmentor={async (message) => {
                   await sendStrategistMessage(message);

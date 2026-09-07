@@ -1,6 +1,6 @@
 // Intent citation: docs/architecture/ADR-002-modular-codebase.md
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   AddOnInstallation,
   AddOnHookDefinition,
@@ -21,6 +21,8 @@ import { createAddOnRegistryEntry } from "../../sdk/addons";
 import { HermesAddonPanel } from "./HermesAddonPanel";
 import { ObsidianAddonPanel } from "./ObsidianAddonPanel";
 import { TelegramAddonPanel } from "./TelegramAddonPanel";
+import { addonWorkRegistry, withAddonWork } from "./running-work";
+import type { UninstallAddonBlockReason, UninstallAddonResult } from "./controller";
 
 type AddOnsWorkspaceProps = {
   search: string;
@@ -41,6 +43,8 @@ type AddOnsWorkspaceProps = {
     requestedCapabilities: CapabilityGrant[],
   ) => void;
   onUpdateAddonConfig: (manifestId: string, config: Record<string, unknown>) => void;
+  uninstallBlock: { blockReason: UninstallAddonBlockReason; blockDetail?: string } | null;
+  onUninstallAddon: (manifest: AddOnManifest) => Promise<UninstallAddonResult>;
   onRunLogicianScript: (
     manifest: AddOnManifest,
     installation: AddOnInstallation,
@@ -116,6 +120,39 @@ const addonPrimaryActionLabel = (manifest: AddOnManifest, installation: AddOnIns
     return "Install";
   }
   return installation.enabled ? "Disable" : "Enable";
+};
+
+const UNINSTALL_CONFIRMATION_COPY =
+  "Uninstall clears this add-on's grants, private provider links, and settings. It keeps source files, Living Archive intake/review records, delegation packets, drafts, and result artifacts. Review those records separately before deleting them.";
+
+const uninstallBlockMessage = (
+  manifestName: string,
+  reason: UninstallAddonBlockReason | undefined,
+  detail?: string,
+): string => {
+  if (reason === "active-system-slot-provider") {
+    return `${manifestName} currently provides the ${detail ?? "selected"} slot(s). Select another provider for those slots before uninstalling.`;
+  }
+  if (reason === "already-uninstalled") {
+    return `${manifestName} is already uninstalled.`;
+  }
+  if (reason === "not-installed") {
+    return `${manifestName} is not installed.`;
+  }
+  if (reason === "running-work-not-stopped") {
+    return detail ?? "Work for this add-on is still running in the desktop shell. Wait for it to finish, then uninstall.";
+  }
+  return "This add-on cannot be uninstalled right now.";
+};
+
+const uninstallResultMessage = (manifestName: string, result: UninstallAddonResult): string => {
+  if (result.outcome === "uninstalled") {
+    const audit = result.audit;
+    const clearedGrantCount = audit?.clearedCapabilities.length ?? 0;
+    const settingsText = audit?.configDeleted ? "settings deleted" : "settings were not set";
+    return `Uninstalled. ${clearedGrantCount} grant(s) cleared; ${settingsText}; user data retained.`;
+  }
+  return uninstallBlockMessage(manifestName, result.blockReason, result.blockDetail);
 };
 
 export function AddOnsWorkspace(props: AddOnsWorkspaceProps) {
@@ -231,6 +268,8 @@ export function AddOnsWorkspace(props: AddOnsWorkspaceProps) {
           onToggleGrant={props.onToggleGrant}
           onGrantCapabilities={props.onGrantCapabilities}
           onUpdateAddonConfig={props.onUpdateAddonConfig}
+          uninstallBlock={props.uninstallBlock}
+          onUninstallAddon={props.onUninstallAddon}
           onRunLogicianScript={props.onRunLogicianScript}
           onRunLogicianHook={props.onRunLogicianHook}
           onAskAugmentor={props.onAskAugmentor}
@@ -250,6 +289,8 @@ type AddOnDetailPanelProps = Pick<
   | "onRunLogicianScript"
   | "onToggleGrant"
   | "onUpdateAddonConfig"
+  | "onUninstallAddon"
+  | "uninstallBlock"
 > & {
   selectedManifest: AddOnManifest;
   selectedInstallation: AddOnInstallation;
@@ -259,6 +300,10 @@ type AddOnDetailPanelProps = Pick<
 function AddOnDetailPanel(props: AddOnDetailPanelProps) {
   const [logicianBusyId, setLogicianBusyId] = useState<string | null>(null);
   const [logicianNotice, setLogicianNotice] = useState("");
+  const [uninstallPending, setUninstallPending] = useState<{ addonId: string } | null>(null);
+  const [uninstallResult, setUninstallResult] = useState<{ addonId: string; result: UninstallAddonResult } | null>(null);
+  const selectedAddonIdRef = useRef(props.selectedManifest.id);
+  selectedAddonIdRef.current = props.selectedManifest.id;
   const runScript = async (script: AddOnScriptDefinition) => {
     setLogicianBusyId(script.id);
     setLogicianNotice("");
@@ -281,6 +326,26 @@ function AddOnDetailPanel(props: AddOnDetailPanelProps) {
       setLogicianNotice(error instanceof Error ? error.message : "Logician hook failed.");
     } finally {
       setLogicianBusyId(null);
+    }
+  };
+  const currentUninstallPending = uninstallPending?.addonId === props.selectedManifest.id;
+  const uninstallBlockId = `uninstall-block-${props.selectedManifest.id}`;
+  const currentUninstallResult =
+    uninstallResult?.addonId === props.selectedManifest.id ? uninstallResult.result : null;
+  const runUninstall = async () => {
+    const addonId = props.selectedManifest.id;
+    if (!window.confirm(UNINSTALL_CONFIRMATION_COPY)) {
+      return;
+    }
+    setUninstallPending({ addonId });
+    setUninstallResult(null);
+    try {
+      const result = await props.onUninstallAddon(props.selectedManifest);
+      if (selectedAddonIdRef.current === addonId) {
+        setUninstallResult({ addonId, result });
+      }
+    } finally {
+      setUninstallPending((current) => (current?.addonId === addonId ? null : current));
     }
   };
 
@@ -350,6 +415,40 @@ function AddOnDetailPanel(props: AddOnDetailPanelProps) {
               </button>
             ))}
           </div>
+        </div>
+        <div className="detail-card">
+          <span className="eyebrow">Lifecycle</span>
+          {props.selectedInstallation.status === "uninstalled" ? (
+            <p className="muted-copy">Uninstalled. Reinstalling starts a fresh grant flow.</p>
+          ) : props.selectedInstallation.installed ? (
+            <>
+              <button
+                type="button"
+                className="button-secondary touch-action"
+                disabled={currentUninstallPending || props.uninstallBlock !== null}
+                aria-describedby={props.uninstallBlock ? uninstallBlockId : undefined}
+                onClick={() => void runUninstall()}
+              >
+                {currentUninstallPending ? "Uninstalling…" : `Uninstall ${props.selectedManifest.name}`}
+              </button>
+              {props.uninstallBlock ? (
+                <p className="muted-copy" id={uninstallBlockId}>
+                  {uninstallBlockMessage(
+                    props.selectedManifest.name,
+                    props.uninstallBlock.blockReason,
+                    props.uninstallBlock.blockDetail,
+                  )}
+                </p>
+              ) : null}
+            </>
+          ) : (
+            <p className="muted-copy">Not installed.</p>
+          )}
+          {currentUninstallResult ? (
+            <p className="muted-copy" role="status">
+              {uninstallResultMessage(props.selectedManifest.name, currentUninstallResult)}
+            </p>
+          ) : null}
         </div>
         <div className="detail-card">
           <span className="eyebrow">Archive contract</span>
@@ -683,7 +782,7 @@ function BrowserAddonSetupPanel({
     setEngineError("");
     setEngineLog("");
     try {
-      const result = await requestBrowserInstallEngine();
+      const result = await withAddonWork(addonWorkRegistry, "addon.browser", () => requestBrowserInstallEngine());
       setEngineLog(result.log);
       setEngineStatus({
         installed: result.installed,
