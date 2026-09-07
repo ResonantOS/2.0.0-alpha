@@ -550,11 +550,13 @@ describe("AddOnsWorkspace uninstall lifecycle", () => {
 
     const button = screen.getByRole("button", { name: "Uninstall Default Agent" }) as HTMLButtonElement;
     expect(button.disabled).toBe(true);
-    expect(
-      screen.getByText(
-        "Default Agent currently provides the primary-agent, chat-interface slot(s). Select another provider for those slots before uninstalling.",
-      ),
-    ).toBeTruthy();
+    const reason = screen.getByText(
+      "Default Agent currently provides the primary-agent, chat-interface slot(s). Select another provider for those slots before uninstalling.",
+    );
+    expect(reason).toBeTruthy();
+    // The disabled button must point screen readers at its reason.
+    expect(reason.id).toBeTruthy();
+    expect(button.getAttribute("aria-describedby")).toBe(reason.id);
   });
 
   it("confirmation copy states config is deleted and user data retained", () => {
@@ -595,7 +597,7 @@ describe("AddOnsWorkspace uninstall lifecycle", () => {
         previousInstalled: true,
         previousEnabled: true,
         clearedCapabilities: ["network", "shell"],
-        clearedPrivateProviderProfileIds: 2,
+        clearedPrivateProviderProfileIds: 3,
         configDeleted: true,
         userDataRetained: true,
         alsoDeleteUserDataOffered: false,

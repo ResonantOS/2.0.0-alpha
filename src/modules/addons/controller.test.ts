@@ -314,6 +314,22 @@ describe("uninstallAddon", () => {
       blockReason: "active-system-slot-provider",
       blockDetail: "primary-agent",
     });
+
+    // Two selected slots are both named in the detail, comma-separated.
+    const twoSlotManifest = {
+      ...createSystemSlotManifest("addon.two-slots"),
+      systemSlots: [
+        { id: "primary-agent" as const, role: "default-provider" as const, replaceable: true, recommended: true },
+        { id: "chat-interface" as const, role: "default-provider" as const, replaceable: true, recommended: true },
+      ],
+    };
+    const twoSlotState = buildDefaultState([twoSlotManifest]);
+    twoSlotState.installations[twoSlotManifest.id] = createMinimalInstallation(twoSlotManifest.id, true, true, "enabled");
+    twoSlotState.activeSystemSlotProviderIds = { "primary-agent": twoSlotManifest.id, "chat-interface": twoSlotManifest.id };
+    expect(describeUninstallBlock(twoSlotState, twoSlotManifest)).toEqual({
+      blockReason: "active-system-slot-provider",
+      blockDetail: "primary-agent, chat-interface",
+    });
   });
 
   it("describeUninstallBlock never blocks sideloaded providers", () => {

@@ -329,6 +329,7 @@ function AddOnDetailPanel(props: AddOnDetailPanelProps) {
     }
   };
   const currentUninstallPending = uninstallPending?.addonId === props.selectedManifest.id;
+  const uninstallBlockId = `uninstall-block-${props.selectedManifest.id}`;
   const currentUninstallResult =
     uninstallResult?.addonId === props.selectedManifest.id ? uninstallResult.result : null;
   const runUninstall = async () => {
@@ -425,12 +426,13 @@ function AddOnDetailPanel(props: AddOnDetailPanelProps) {
                 type="button"
                 className="button-secondary touch-action"
                 disabled={currentUninstallPending || props.uninstallBlock !== null}
+                aria-describedby={props.uninstallBlock ? uninstallBlockId : undefined}
                 onClick={() => void runUninstall()}
               >
                 {currentUninstallPending ? "Uninstalling…" : `Uninstall ${props.selectedManifest.name}`}
               </button>
               {props.uninstallBlock ? (
-                <p className="muted-copy">
+                <p className="muted-copy" id={uninstallBlockId}>
                   {uninstallBlockMessage(
                     props.selectedManifest.name,
                     props.uninstallBlock.blockReason,
