@@ -183,7 +183,7 @@ export function renderAddonsSection(container, { bridgeRequest, getBridgeRequest
           lockExecutionControls(true);
           refreshExecution.hidden = false;
           setStatus(statusNode, writeError
-            ? `Execution change request failed: ${safeErrorMessage(writeError)}. Current state could not be confirmed; refresh before retrying.`
+            ? `Execution change request failed: ${safeErrorMessage(writeError)}. Current state could not be confirmed: ${safeErrorMessage(error)}. Refresh before retrying.`
             : `Execution setting saved, but current state could not be confirmed: ${safeErrorMessage(error)}. Refresh to confirm it.`, "warning");
         } finally {
           updatingExecution = false;

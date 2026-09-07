@@ -100,6 +100,8 @@ test("failed write and failed refresh leave execution state unconfirmed until a 
   });
   ui.toggle().click(); await tick();
   assert.match(ui.status.textContent, /failed/i);
+  assert.match(ui.status.textContent, /write unavailable/);
+  assert.match(ui.status.textContent, /read unavailable/);
   assert.equal(ui.toggle().disabled, true);
   ui.retry().click(); await tick();
   assert.equal(ui.retry().hidden, false);
