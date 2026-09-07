@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import {
+  constantTimeEqual,
   createBridgeToken,
   getBridgeHost,
   getBridgePublicUrl,
@@ -396,7 +397,7 @@ async function invokeBridgeRouteForSelfTest({ method = "POST", routePath, body =
   if (!route) {
     return { status: 404, payload: { ok: false, error: "Unknown browser-first bridge route." } };
   }
-  if (route.requiredCapability && capabilityToken !== bridgeCapabilityTokens[route.requiredCapability]) {
+  if (route.requiredCapability && !constantTimeEqual(capabilityToken, bridgeCapabilityTokens[route.requiredCapability])) {
     return { status: 403, payload: { ok: false, error: `Bridge route requires ${route.requiredCapability} capability.` } };
   }
   try {

@@ -72,6 +72,9 @@ The bridge launcher must mint a token for each, or bootstrap 500s. Both are now
 derived from a single canonical source, `browser-first/host/bridge-capability-tokens.mjs`.
 Every bridge route now requires a per-route capability token in addition to the
 bridge token, and `bridge-route-capability-audit` fails when a route is ungated.
+Routes that declare neither `requiredCapability` nor `requiredCapabilityBootstrap`
+are refused by default as defense in depth; the audit test remains the readable
+gate for route capability coverage.
 Read-only bridge status, memory, and extension preference routes are protected
 by `bridge-diagnostics-read`, `memory-read`, and `extension-prefs-read`.
 

@@ -79,7 +79,8 @@ export function createBridgeToken() {
   return randomBytes(32).toString("base64url");
 }
 
-function constantTimeEqual(left, right) {
+export function constantTimeEqual(left, right) {
+  if (!left || !right) return false;
   const leftBuffer = Buffer.from(String(left ?? ""));
   const rightBuffer = Buffer.from(String(right ?? ""));
   return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
@@ -1003,7 +1004,7 @@ export async function writeBridgeConfig({
 
 function isAuthorizedCapabilityRequest(request, bridgeCapabilityTokens, requiredCapability) {
   if (!requiredCapability) {
-    return true;
+    return false;
   }
   const expectedToken = bridgeCapabilityTokens?.[requiredCapability];
   return Boolean(expectedToken) && constantTimeEqual(request.headers[bridgeCapabilityHeader], expectedToken);
@@ -1067,7 +1068,13 @@ export async function evaluateBridgeRequestForSelfTest({
     if (route.requiredCapabilityBootstrap && !isAuthorizedCapabilityBootstrapRequest(request, capabilityBootstrapToken)) {
       return { status: 403, payload: { ok: false, error: "Bridge route requires capability bootstrap authorization." } };
     }
-    if (!isAuthorizedCapabilityRequest(request, bridgeCapabilityTokens, route.requiredCapability)) {
+    if (!route.requiredCapability && !route.requiredCapabilityBootstrap) {
+      return {
+        status: 403,
+        payload: { ok: false, error: "Bridge route declares no capability; refused by default." },
+      };
+    }
+    if (route.requiredCapability && !isAuthorizedCapabilityRequest(request, bridgeCapabilityTokens, route.requiredCapability)) {
       return { status: 403, payload: { ok: false, error: `Bridge route requires ${route.requiredCapability} capability.` } };
     }
     const payload = method === "POST" ? body : {};
@@ -1407,25 +1414,54 @@ export async function startBridgeServerWithFallback({
 }
 
 export async function runBridgeAuthSelfTest({ port, bridgeToken, extensionOrigin }) {
+  const selfTestCapability = "bridge-self-test";
+  const selfTestCapabilityToken = createBridgeToken();
   const server = await startBridgeServer({
     port,
     bridgeToken,
+    bridgeCapabilityTokens: { [selfTestCapability]: selfTestCapabilityToken },
     extensionOrigin,
-    routes: [{ method: "GET", path: "/status", handler: async () => ({ bridge: "self-test" }) }],
+    routes: [{
+      method: "GET",
+      path: "/status",
+      requiredCapability: selfTestCapability,
+      handler: async () => ({ bridge: "self-test" }),
+    }],
   });
   const actualPort = bridgeServerPort(server, port);
   const unauthorized = await fetch(`http://127.0.0.1:${actualPort}/status`);
   const wrongToken = await fetch(`http://127.0.0.1:${actualPort}/status`, {
     headers: { [bridgeTokenHeaderName]: "wrong-token" },
   });
-  const authorized = await fetch(`http://127.0.0.1:${actualPort}/status`, {
+  const missingCapability = await fetch(`http://127.0.0.1:${actualPort}/status`, {
     headers: { [bridgeTokenHeaderName]: bridgeToken },
   });
+  const authorized = await fetch(`http://127.0.0.1:${actualPort}/status`, {
+    headers: {
+      [bridgeTokenHeaderName]: bridgeToken,
+      [bridgeCapabilityHeaderName]: selfTestCapabilityToken,
+    },
+  });
   server.close();
-  return {
-    ok: unauthorized.status === 401 && wrongToken.status === 401 && authorized.ok,
+  return summarizeBridgeAuthSelfTest({
     unauthorizedStatus: unauthorized.status,
     wrongTokenStatus: wrongToken.status,
+    missingCapabilityStatus: missingCapability.status,
     authorizedStatus: authorized.status,
+  });
+}
+
+// Pure so the pass/fail rule is unit-testable without a socket: the self-test is only ok when
+// token auth held (401/401), default-deny held (bridge token alone -> 403), and the fully
+// authorized probe succeeded. bridgeTokenOnlyStatus mirrors the in-process self-test's field name.
+export function summarizeBridgeAuthSelfTest({ unauthorizedStatus, wrongTokenStatus, missingCapabilityStatus, authorizedStatus }) {
+  const authorizedOk = authorizedStatus >= 200 && authorizedStatus < 300;
+  return {
+    ok: unauthorizedStatus === 401 && wrongTokenStatus === 401 && missingCapabilityStatus === 403 && authorizedOk,
+    unauthorizedStatus,
+    wrongTokenStatus,
+    missingCapabilityStatus,
+    bridgeTokenOnlyStatus: missingCapabilityStatus,
+    authorizedStatus,
   };
 }

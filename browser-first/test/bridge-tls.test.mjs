@@ -115,11 +115,20 @@ test("ensureBridgeTls: idempotent on second call (no regen)", async () => {
 test("startBridgeServersWithTls: HTTP and HTTPS serve the same routes", async () => {
   const tls = await ensureBridgeTls({ dir: tmp });
   const TOKEN = "tls-test-token-1";
-  const routes = [{ method: "GET", path: "/ping", handler: async () => ({ pong: true }) }];
+  const CAPABILITY_TOKEN = "tls-test-capability-token-1";
+  const routes = [{
+    method: "GET",
+    path: "/ping",
+    requiredCapability: "bridge-diagnostics-read",
+    handler: async () => ({ pong: true }),
+  }];
   const result = await startBridgeServersWithTls({
     httpPort: 0, httpsPort: 0,
     tls: { key: tls.key, cert: tls.cert },
-    bridgeToken: TOKEN, routes, host: "127.0.0.1",
+    bridgeToken: TOKEN,
+    bridgeCapabilityTokens: { "bridge-diagnostics-read": CAPABILITY_TOKEN },
+    routes,
+    host: "127.0.0.1",
   });
   try {
     assert.ok(result.httpServer);
@@ -127,13 +136,19 @@ test("startBridgeServersWithTls: HTTP and HTTPS serve the same routes", async ()
     assert.notEqual(result.httpPort, result.httpsPort);
     // HTTP
     const httpResp = await fetch(`http://127.0.0.1:${result.httpPort}/ping`, {
-      headers: { "X-ResonantOS-Bridge-Token": TOKEN },
+      headers: {
+        "X-ResonantOS-Bridge-Token": TOKEN,
+        "X-ResonantOS-Bridge-Capability-Token": CAPABILITY_TOKEN,
+      },
     });
     assert.equal(httpResp.status, 200);
     // HTTPS
     const httpsResp = await httpsGet(`https://127.0.0.1:${result.httpsPort}/ping`, {
       ca: tls.ca,
-      headers: { "X-ResonantOS-Bridge-Token": TOKEN },
+      headers: {
+        "X-ResonantOS-Bridge-Token": TOKEN,
+        "X-ResonantOS-Bridge-Capability-Token": CAPABILITY_TOKEN,
+      },
     });
     assert.equal(httpsResp.status, 200);
     const body = JSON.parse(httpsResp.body);
@@ -148,11 +163,18 @@ test("startBridgeServersWithTls: HTTP and HTTPS serve the same routes", async ()
 test("startBridgeServersWithTls: HTTPS enforces token auth (401 without header)", async () => {
   const tls = await ensureBridgeTls({ dir: tmp });
   const TOKEN = "tls-test-token-2";
+  const CAPABILITY_TOKEN = "tls-test-capability-token-2";
   const result = await startBridgeServersWithTls({
     httpPort: 0, httpsPort: 0,
     tls: { key: tls.key, cert: tls.cert },
     bridgeToken: TOKEN,
-    routes: [{ method: "GET", path: "/ping", handler: async () => ({ pong: true }) }],
+    bridgeCapabilityTokens: { "bridge-diagnostics-read": CAPABILITY_TOKEN },
+    routes: [{
+      method: "GET",
+      path: "/ping",
+      requiredCapability: "bridge-diagnostics-read",
+      handler: async () => ({ pong: true }),
+    }],
     host: "127.0.0.1",
   });
   try {
