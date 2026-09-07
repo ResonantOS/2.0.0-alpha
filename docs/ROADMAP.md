@@ -30,6 +30,19 @@ state, milestone, and project fields decide scheduling.
 
 ## Beta.2
 
+Exit criteria are tracked in
+[#402: beta.2 exit criteria](https://github.com/ResonantOS/2.0.0-alpha/issues/402).
+Gating: the committed feature track and the security line below; every other
+beta.2 item stays deferred with a recorded disposition.
+
+- [#402: beta.2 exit criteria](https://github.com/ResonantOS/2.0.0-alpha/issues/402)
+- [#227: Research trail save and archive review handoff](https://github.com/ResonantOS/2.0.0-alpha/issues/227)
+- [#232: Spreadsheet and document artifact contract](https://github.com/ResonantOS/2.0.0-alpha/issues/232)
+- [#252: Explicit `@tab` referencing](https://github.com/ResonantOS/2.0.0-alpha/issues/252)
+- [#321: Governed OpenCode boundary (bridge-authenticated proxy)](https://github.com/ResonantOS/2.0.0-alpha/issues/321)
+- [#326: Add-on delegation OS-level isolation](https://github.com/ResonantOS/2.0.0-alpha/issues/326)
+- [#373: Default-deny routes without a required capability](https://github.com/ResonantOS/2.0.0-alpha/issues/373)
+- [#180: Add-on uninstall and capability cleanup](https://github.com/ResonantOS/2.0.0-alpha/issues/180)
 - [#216: Personal connectors, voice, and delegated automation](https://github.com/ResonantOS/2.0.0-alpha/issues/216)
 - [#234: Draft-only Gmail and Calendar handoff audit UX](https://github.com/ResonantOS/2.0.0-alpha/issues/234)
 - [#235: Permission-light transcript-to-composer voice flow](https://github.com/ResonantOS/2.0.0-alpha/issues/235)
