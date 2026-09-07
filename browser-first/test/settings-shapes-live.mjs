@@ -70,12 +70,13 @@ try {
     await radius(".settings-nav-item", 16);
     await radius(".settings-setup-card", 22);
     await radius(".settings-health-card", 20);
-    await radius(".settings-setup-card button", 999);
+    await radius(".settings-setup-card button", 12);
+    await radius(".settings-setup-card span", 999);
     await radius("#outside", 3);
     await page.screenshot({ path: path.join(artifacts, `overview-${width}.png`), fullPage: true });
     await render("appearance");
     await radius(".settings-appearance-control select", 12);
-    await radius(".settings-panel button", 999);
+    await radius(".settings-panel button", 12);
     await page.getByRole("combobox").first().focus();
     await page.keyboard.press("Tab");
     assert.equal(await page.evaluate(() => getComputedStyle(document.activeElement).outlineStyle), "solid");
@@ -86,7 +87,7 @@ try {
     await radius(".settings-provider-modal-panel", 22);
     await radius(".settings-provider-field input", 12);
     await radius(".settings-provider-field textarea", 16);
-    await radius(".settings-provider-modal-actions button", 999);
+    await radius(".settings-provider-modal-actions button", 12);
     await page.screenshot({ path: path.join(artifacts, `provider-modal-${width}.png`), fullPage: true });
     await page.locator(".settings-provider-modal").getByRole("button", { name: "Close", exact: true }).click();
     await page.locator(".settings-provider-modal").waitFor({ state: "detached" });
@@ -97,7 +98,11 @@ try {
   await assert.rejects(() => radius(".settings-health-card", 20), { name: "AssertionError" });
   await override.evaluate(node => node.remove());
   await radius(".settings-health-card", 20);
-  console.log(JSON.stringify({ passed: true, chrome: browser.version(), viewports: [1280, 768, 390], injectedOverrideDetected: true }));
+  const pillOverride = await page.addStyleTag({ content: ".settings-setup-card button { border-radius: 999px !important; }" });
+  await assert.rejects(() => radius(".settings-setup-card button", 12), { name: "AssertionError" });
+  await pillOverride.evaluate(node => node.remove());
+  await radius(".settings-setup-card button", 12);
+  console.log(JSON.stringify({ passed: true, chrome: browser.version(), viewports: [1280, 768, 390], injectedOverrideDetected: true, injectedPillDetected: true }));
 } finally {
   await browser?.close();
   await new Promise(resolve => server.close(resolve));

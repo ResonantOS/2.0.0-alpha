@@ -1,6 +1,7 @@
 /* Settings shape contract: docs/design/SETTINGS-COMPONENT-SHAPES.md. */
 :root {
   --settings-radius-input: 12px;
+  --settings-radius-action: var(--settings-radius-input);
   --settings-radius-compact: 16px;
   --settings-radius-card: 20px;
   --settings-radius-panel: 22px;
@@ -9,7 +10,7 @@
 }
 
 :where(.settings-workspace, .settings-provider-modal) button {
-  border-radius: var(--settings-radius-pill);
+  border-radius: var(--settings-radius-action);
 }
 
 .settings-workspace {
@@ -172,7 +173,7 @@
 .settings-setup-card button {
   justify-self: start;
   border: 1px solid rgba(36, 209, 143, 0.22);
-  border-radius: var(--settings-radius-pill);
+  border-radius: var(--settings-radius-action);
   background: rgba(36, 209, 143, 0.1);
   color: rgba(247, 255, 249, 0.92);
   font-size: 0.75rem;
@@ -482,7 +483,7 @@
 
 .settings-path-picker button {
   border: 1px solid rgba(36, 209, 143, 0.2);
-  border-radius: var(--settings-radius-pill);
+  border-radius: var(--settings-radius-action);
   background: rgba(36, 209, 143, 0.08);
   color: rgba(247, 255, 249, 0.9);
   font-weight: 950;
@@ -500,7 +501,7 @@
 
 .settings-routing-form button {
   border: 0;
-  border-radius: var(--settings-radius-pill);
+  border-radius: var(--settings-radius-action);
   background: var(--accent);
   color: #06110d;
   font-weight: 950;
@@ -562,7 +563,7 @@ body:not([data-density="compact"]):not([data-density="touch"])
 .settings-appearance-form button {
   justify-self: start;
   border: 0;
-  border-radius: var(--settings-radius-pill);
+  border-radius: var(--settings-radius-action);
   background: var(--accent);
   color: #06110d;
   font-weight: 950;
@@ -716,7 +717,7 @@ body:not([data-density="compact"]):not([data-density="touch"])
   align-items: center;
   gap: 6px;
   border: 1px solid rgba(36, 209, 143, 0.16);
-  border-radius: var(--settings-radius-pill);
+  border-radius: var(--settings-radius-action);
   background: rgba(36, 209, 143, 0.06);
   color: rgba(214, 229, 219, 0.82);
   font-size: 0.72rem;
@@ -744,7 +745,7 @@ body:not([data-density="compact"]):not([data-density="touch"])
 .settings-provider-model-policy button,
 .settings-provider-more summary {
   border: 1px solid rgba(36, 209, 143, 0.24);
-  border-radius: var(--settings-radius-pill);
+  border-radius: var(--settings-radius-action);
   background: rgba(36, 209, 143, 0.1);
   color: rgba(247, 255, 249, 0.9);
   font-size: 0.72rem;
@@ -1080,7 +1081,7 @@ body:not([data-density="compact"]):not([data-density="touch"])
 .settings-provider-modal-heading button,
 .settings-provider-modal-actions button {
   border: 1px solid rgba(36, 209, 143, 0.22);
-  border-radius: var(--settings-radius-pill);
+  border-radius: var(--settings-radius-action);
   background: rgba(36, 209, 143, 0.08);
   color: rgba(247, 255, 249, 0.9);
   font-size: 0.74rem;
@@ -1318,7 +1319,7 @@ body:not([data-density="compact"]):not([data-density="touch"])
 
 .settings-control-row button {
   border: 1px solid rgba(36, 209, 143, 0.2);
-  border-radius: var(--settings-radius-pill);
+  border-radius: var(--settings-radius-action);
   background: rgba(36, 209, 143, 0.08);
   color: rgba(247, 255, 249, 0.9);
   font-size: 0.72rem;
@@ -1344,7 +1345,7 @@ body:not([data-density="compact"]):not([data-density="touch"])
 
 .settings-overview-action-buttons button {
   border: 1px solid rgba(36, 209, 143, 0.22);
-  border-radius: var(--settings-radius-pill);
+  border-radius: var(--settings-radius-action);
   background: rgba(36, 209, 143, 0.08);
   color: rgba(247, 255, 249, 0.9);
   font-size: 0.74rem;
@@ -1354,7 +1355,7 @@ body:not([data-density="compact"]):not([data-density="touch"])
 
 .settings-inline-actions button {
   border: 0;
-  border-radius: var(--settings-radius-pill);
+  border-radius: var(--settings-radius-action);
   background: rgba(36, 209, 143, 0.1);
   color: rgba(223, 237, 228, 0.88);
   font-size: 0.72rem;
@@ -1370,7 +1371,7 @@ body:not([data-density="compact"]):not([data-density="touch"])
 .settings-primary-action {
   justify-self: start;
   border: 0;
-  border-radius: var(--settings-radius-pill);
+  border-radius: var(--settings-radius-action);
   background: var(--accent);
   color: #06110d;
   font-weight: 950;
@@ -1420,7 +1421,7 @@ body:not([data-density="compact"]):not([data-density="touch"])
 
 .settings-provider-form button {
   border: 0;
-  border-radius: var(--settings-radius-pill);
+  border-radius: var(--settings-radius-action);
   background: var(--accent);
   color: #06110d;
   font-weight: 950;
@@ -1466,7 +1467,7 @@ body:not([data-density="compact"]):not([data-density="touch"])
 
 .settings-work-tools button {
   border: 1px solid rgba(36, 209, 143, 0.24);
-  border-radius: var(--settings-radius-pill);
+  border-radius: var(--settings-radius-action);
   background: rgba(36, 209, 143, 0.12);
   color: rgba(247, 255, 249, 0.94);
   font-size: 0.72rem;
@@ -1494,7 +1495,7 @@ body:not([data-density="compact"]):not([data-density="touch"])
 
 .settings-work-artifact-actions button {
   border: 1px solid rgba(36, 209, 143, 0.24);
-  border-radius: var(--settings-radius-pill);
+  border-radius: var(--settings-radius-action);
   background: rgba(36, 209, 143, 0.1);
   color: rgba(247, 255, 249, 0.9);
   font-size: 0.72rem;
@@ -1612,7 +1613,7 @@ body:not([data-density="compact"]):not([data-density="touch"])
 .settings-work-row button,
 .settings-archive-row button {
   border: 1px solid rgba(36, 209, 143, 0.2);
-  border-radius: var(--settings-radius-pill);
+  border-radius: var(--settings-radius-action);
   background: rgba(36, 209, 143, 0.08);
   color: rgba(247, 255, 249, 0.9);
   font-size: 0.72rem;
