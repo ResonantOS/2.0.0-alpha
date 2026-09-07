@@ -76,6 +76,8 @@ const addonHandlers = [
   "executeAddonDraftProviderHandoff",
   "executeDelegationRecord",
   "executeDelegationList",
+  "executeAddonUninstallAudit",
+  "executeAddonRunningWork",
   "executeGoalRecord",
 ];
 

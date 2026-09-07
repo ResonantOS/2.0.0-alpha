@@ -188,6 +188,11 @@ The controller-level mutation should return enough structured detail for the
 bridge/UI caller to append this audit entry without putting secrets or raw user
 content into the log.
 
+The bridge exposes `POST /addons/uninstall-audit` with `addon-record-write` to
+persist the shell's audit record and `POST /addons/running-work` with
+`addon-record-read` to report persisted running delegation packets before
+uninstall.
+
 ## Kernel-adjacent add-ons (ADR-026)
 
 ADR-026 says the minimal kernel owns add-on registry, installer, lifecycle,
@@ -239,6 +244,12 @@ when the sideloaded add-on provides a system slot.
    Recommended default: yes, attempt a best-effort stop before the state
    mutation and block uninstall if the runtime cannot reach a safe stopped
    state. **Answered 2026-09-07 (release owner): yes — implemented in task 2.** Scope of the stop hook in task 3: the desktop shell has no delegation-cancel primitive, and task workspaces are listable but carry no run status; the in-flight registry covers Logician script and hook runs, browser engine install, and Hermes install. The Hermes dashboard, OpenCode service start/stop, OpenCode task execution from the Delegation workspace, task-workspace creation from chat, and browser sessions are not stopped by uninstall in task 3; the host-side running-delegation check lands with task 4.
+   The bridge's running-delegation signal is the persisted packet status, not
+   process liveness: a crash after a packet is marked running and before it is
+   finalised leaves it running, the route keeps reporting it, and uninstall
+   stays blocked until a human cancels it through the existing Hermes or
+   OpenCode cancel routes. Packets are never auto-expired. Engineer delegations
+   have no catalog add-on and never block an uninstall.
 3. Which surface owns active system-slot provider selection?
    Recommended default: add an explicit typed field under shared runtime state
    before enforcing kernel-adjacent uninstall blocking. **Answered 2026-09-07 (release owner): yes — implemented in task 2.**
@@ -286,7 +297,10 @@ when the sideloaded add-on provides a system slot.
    - TDD first: add `add-on uninstall appends governance audit entry without secrets` and `uninstall audit route requires addon-record-write`.
    - Implementation: add a narrow audit-write route or reuse an existing
      add-on record-write path to append `addonUninstalled` entries to
-     `addon-governance-audit.jsonl`.
+     `addon-governance-audit.jsonl`. **Implemented in task 4 (2026-09-07):
+     bridge routes only. Persisting the shell's record and consulting the
+     running-delegation check from the desktop shell depend on #374 (the
+     web-mode shell sends no capability tokens).**
 
 5. Optional user-data deletion flow (M)
    - Files: `src/modules/addons/AddOnsWorkspace.tsx`,
