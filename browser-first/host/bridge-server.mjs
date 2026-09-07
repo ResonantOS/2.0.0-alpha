@@ -6,9 +6,9 @@ import net from "node:net";
 import path from "node:path";
 
 const bridgeTokenHeader = "x-resonantos-bridge-token";
-const bridgeTokenHeaderName = "X-ResonantOS-Bridge-Token";
+export const bridgeTokenHeaderName = "X-ResonantOS-Bridge-Token";
 const bridgeCapabilityHeader = "x-resonantos-bridge-capability-token";
-const bridgeCapabilityHeaderName = "X-ResonantOS-Bridge-Capability-Token";
+export const bridgeCapabilityHeaderName = "X-ResonantOS-Bridge-Capability-Token";
 const bridgeCapabilityBootstrapHeader = "x-resonantos-capability-bootstrap-token";
 const bridgeCapabilityBootstrapHeaderName = "X-ResonantOS-Capability-Bootstrap-Token";
 
