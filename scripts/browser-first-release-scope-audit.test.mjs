@@ -374,3 +374,14 @@ test("security-pipeline documentation is approved release documentation", () => 
   });
   assert.equal(classify("docs/unlisted/notes.md", "added").bucket, "review");
 });
+
+test("Resonant Extension Framework specification docs are approved release documentation", () => {
+  const classify = requireExport("classify");
+
+  assert.deepEqual(classify("docs/addons/resonant-extension-framework/ADDON_PACKAGE_AND_MANIFEST_SPEC_V0.1.md", "added"), {
+    bucket: "include",
+    reason: "Resonant Extension Framework specification documentation",
+  });
+  assert.equal(classify("docs/addons/other-framework/notes.md", "added").bucket, "review");
+  assert.equal(classify("docs/REVIEW_PACKET_2026-08-25.md", "added").bucket, "review", "process artifacts at the docs root still need manual review");
+});

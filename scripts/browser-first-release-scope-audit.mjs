@@ -260,6 +260,12 @@ export function classify(changedPath, state) {
       reason: "security-pipeline policy and check documentation",
     };
   }
+  if (changedPath.startsWith("docs/addons/resonant-extension-framework/")) {
+    return {
+      bucket: "include",
+      reason: "Resonant Extension Framework specification documentation",
+    };
+  }
   if (canonicalRootFiles.has(changedPath) || changedPath === "public/icons/README.md") {
     return {
       bucket: "include",
