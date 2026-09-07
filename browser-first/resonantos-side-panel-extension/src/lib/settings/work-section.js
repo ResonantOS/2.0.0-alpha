@@ -341,6 +341,40 @@ export function renderWorkSection(container, { bridgeRequest, getBridgeRequest, 
   const status = document.createElement("p");
   status.className = "settings-status";
 
+  const tools = document.createElement("form");
+  tools.className = "settings-work-tools";
+  const search = document.createElement("input");
+  search.type = "search";
+  search.placeholder = "Search chats and projects";
+  search.setAttribute("aria-label", "Search chats and projects");
+  search.addEventListener("input", () => {
+    query = search.value.trim();
+    renderBody();
+  });
+  const projectNameInput = document.createElement("input");
+  projectNameInput.name = "projectName";
+  projectNameInput.placeholder = "New project name";
+  projectNameInput.setAttribute("aria-label", "New project name");
+  const createProject = document.createElement("button");
+  createProject.type = "submit";
+  createProject.textContent = "Create project";
+  tools.append(search, projectNameInput, createProject);
+  tools.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const name = projectNameInput.value.trim();
+    if (name.length < 2) {
+      setStatus(status, "Project name needs at least 2 characters.", "warning");
+      return;
+    }
+    await chatSessionStore.createProject?.(name);
+    projectNameInput.value = "";
+    setStatus(status, `Created project: ${name}`, "success");
+    renderBody();
+  });
+  let renderedMetrics;
+  let renderedActiveList;
+  let renderedArchive;
+
   const renderBody = () => {
     const sessions = chatSessionStore.getSessions?.() ?? [];
     const projects = chatSessionStore.getProjects?.() ?? [];
@@ -356,38 +390,6 @@ export function renderWorkSection(container, { bridgeRequest, getBridgeRequest, 
       metricCard({ label: "Projects", value: String(activeProjects.length), detail: "active work containers" }),
       metricCard({ label: "Archived", value: String(archivedChats.length + archivedProjects.length), detail: "restorable work objects" })
     );
-
-    const tools = document.createElement("form");
-    tools.className = "settings-work-tools";
-    const search = document.createElement("input");
-    search.type = "search";
-    search.placeholder = "Search chats and projects";
-    search.value = query;
-    search.setAttribute("aria-label", "Search chats and projects");
-    search.addEventListener("input", () => {
-      query = search.value.trim();
-      renderBody();
-      search.focus();
-    });
-    const projectNameInput = document.createElement("input");
-    projectNameInput.name = "projectName";
-    projectNameInput.placeholder = "New project name";
-    projectNameInput.setAttribute("aria-label", "New project name");
-    const createProject = document.createElement("button");
-    createProject.type = "submit";
-    createProject.textContent = "Create project";
-    tools.append(search, projectNameInput, createProject);
-    tools.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const name = projectNameInput.value.trim();
-      if (name.length < 2) {
-        setStatus(status, "Project name needs at least 2 characters.", "warning");
-        return;
-      }
-      await chatSessionStore.createProject?.(name);
-      setStatus(status, `Created project: ${name}`, "success");
-      renderBody();
-    });
 
     const activeList = document.createElement("ol");
     activeList.className = "settings-work-list";
@@ -484,18 +486,28 @@ export function renderWorkSection(container, { bridgeRequest, getBridgeRequest, 
     }
     archive.append(archiveTitle, archiveBody, archiveList);
 
-    panel.replaceChildren(
-      metrics,
-      tools,
-      status,
-      noteCard({
-        title: "Active work",
-        body: "Move chats between projects, open active chats, archive completed work, or delete work after confirmation."
-      }),
-      activeList,
-      archive,
-      artifactManagementPanel({ bridgeRequest, getBridgeRequest })
-    );
+    if (renderedMetrics) {
+      // Keep the form and artifact state mounted while only work results change.
+      renderedMetrics.replaceWith(metrics);
+      renderedActiveList.replaceWith(activeList);
+      renderedArchive.replaceWith(archive);
+    } else {
+      panel.append(
+        metrics,
+        tools,
+        status,
+        noteCard({
+          title: "Active work",
+          body: "Move chats between projects, open active chats, archive completed work, or delete work after confirmation."
+        }),
+        activeList,
+        archive,
+        artifactManagementPanel({ bridgeRequest, getBridgeRequest })
+      );
+    }
+    renderedMetrics = metrics;
+    renderedActiveList = activeList;
+    renderedArchive = archive;
   };
 
   container.replaceChildren(
