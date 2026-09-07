@@ -1519,11 +1519,24 @@ export const rebaseStateOnManifests = (
 ): ResonantShellState => {
   const installations = { ...state.installations };
   for (const manifest of manifests) {
-    installations[manifest.id] = createInstallationSnapshot(
+    const snapshot = createInstallationSnapshot(
       manifest,
       installations[manifest.id],
       sideloadedIds.includes(manifest.id) ? "sideload" : "bundled",
     );
+    if (snapshot.status === "uninstalled") {
+      const uninstalledSnapshot = {
+        ...snapshot,
+        installed: false,
+        enabled: false,
+        grantedCapabilities: [],
+        privateProviderProfileIds: [],
+      };
+      delete uninstalledSnapshot.config;
+      installations[manifest.id] = uninstalledSnapshot;
+      continue;
+    }
+    installations[manifest.id] = snapshot;
   }
 
   for (const installation of Object.values(installations)) {

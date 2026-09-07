@@ -76,7 +76,15 @@ export type WorkloadClass =
   | "archive-ingest"
   | "recovery"
   | "background";
-export type InstallationStatus = "available" | "installed" | "enabled" | "disabled" | "degraded" | "update-available" | "incompatible";
+export type InstallationStatus =
+  | "available"
+  | "installed"
+  | "enabled"
+  | "disabled"
+  | "degraded"
+  | "update-available"
+  | "incompatible"
+  | "uninstalled";
 export type CoreServiceStatus = "ready" | "attention" | "planned";
 export type ArchiveActorType = "core-agent" | "addon" | "service";
 export type ArchiveAction = "archive-read" | "archive-intake-write" | "archive-knowledge-write" | "archive-ingest-request";

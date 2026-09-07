@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
-import type { AddOnManifest } from "./contracts";
+import type { AddOnInstallation, AddOnManifest, InstallationStatus } from "./contracts";
 import { buildDefaultState } from "./defaults";
-import { applyProviderDiagnostics, canPerformArchiveAction, resolveProviderPath, resolveProviderRoute, strategistDisplayName } from "./policies";
+import {
+  applyProviderDiagnostics,
+  canPerformArchiveAction,
+  createInstallationSnapshot,
+  resolveProviderPath,
+  resolveProviderRoute,
+  strategistDisplayName,
+} from "./policies";
 import { rebaseStateOnManifests } from "./runtime";
 
 const testManifest = (id: string): AddOnManifest => ({
@@ -169,6 +176,34 @@ describe("manifest rebase", () => {
         installation.grantedCapabilities.filter((grant) => grant.granted),
       ),
     ).toEqual([]);
+  });
+
+  it("createInstallationSnapshot rebuilds fresh grants after reinstall", () => {
+    const manifest = {
+      ...testManifest("addon.obsidian"),
+      requestedCapabilities: [{ capability: "filesystem", granted: false, scope: "shared", revocationBehavior: "hard-stop" }],
+    } satisfies AddOnManifest;
+    const base = buildDefaultState([manifest]);
+    const staleUninstalled = {
+      ...base.installations["addon.obsidian"],
+      status: "uninstalled" as InstallationStatus,
+      installed: false,
+      enabled: false,
+      grantedCapabilities: [{ capability: "filesystem", granted: true, scope: "shared", revocationBehavior: "hard-stop" }],
+      privateProviderProfileIds: ["profile-stale"],
+      config: { vaultPath: "/tmp/stale-vault" },
+    } satisfies AddOnInstallation;
+
+    const snapshot = createInstallationSnapshot(manifest, staleUninstalled, "bundled");
+
+    expect(snapshot.status).toBe("uninstalled");
+    expect(snapshot.installed).toBe(false);
+    expect(snapshot.enabled).toBe(false);
+    expect(snapshot.grantedCapabilities).toEqual([
+      { capability: "filesystem", granted: false, scope: "shared", revocationBehavior: "hard-stop" },
+    ]);
+    expect(snapshot.privateProviderProfileIds).toEqual([]);
+    expect("config" in snapshot).toBe(false);
   });
 });
 

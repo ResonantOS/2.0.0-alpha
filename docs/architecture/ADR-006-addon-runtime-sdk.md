@@ -106,6 +106,7 @@ Add-ons must have explicit lifecycle states:
 - `degraded`
 - `update-available`
 - `incompatible`
+- `uninstalled`
 
 ## Interfaces Constrained By This ADR
 

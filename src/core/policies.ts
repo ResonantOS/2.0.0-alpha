@@ -319,21 +319,30 @@ export const createInstallationSnapshot = (
   source: AddOnInstallation["source"],
 ): AddOnInstallation => {
   if (current) {
+    const isUninstalled = current.status === "uninstalled";
+    const currentSnapshot = { ...current };
+    if (isUninstalled) {
+      delete currentSnapshot.config;
+    }
     const existingGrants = new Map(current.grantedCapabilities.map((grant) => [grant.capability, grant]));
     const grantedCapabilities = manifest.requestedCapabilities.map((grant) => ({
       ...grant,
-      granted: existingGrants.get(grant.capability)?.granted ?? false,
+      granted: isUninstalled ? false : (existingGrants.get(grant.capability)?.granted ?? false),
     }));
     return {
-      ...current,
+      ...currentSnapshot,
       source,
       provenanceTier: source === "sideload" ? "sideloaded-unverified" : (manifest.provenance?.tier ?? current.provenanceTier),
       verificationState: source === "sideload" ? "unverified" : (manifest.provenance?.verificationState ?? current.verificationState),
       grantedCapabilities,
       recommendedGrantPresetIds: (manifest.grantPresets ?? []).map((preset) => preset.id),
-      grantRecommendationSource: manifest.grantPresets?.length ? "preset-bundle" : current.grantRecommendationSource,
-      privateProviderProfileIds: current.privateProviderProfileIds ?? [],
-      config: current.config ?? {},
+      grantRecommendationSource: manifest.grantPresets?.length
+        ? "preset-bundle"
+        : isUninstalled
+          ? "manifest-request"
+          : current.grantRecommendationSource,
+      privateProviderProfileIds: isUninstalled ? [] : (current.privateProviderProfileIds ?? []),
+      ...(isUninstalled ? {} : { config: current.config ?? {} }),
       notes: current.notes ?? [],
     };
   }
