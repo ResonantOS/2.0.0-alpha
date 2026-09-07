@@ -36,7 +36,8 @@ let browser;
 try {
   await mkdir(artifacts, { recursive: true });
   browser = await chromium.launch({
-    headless: false,
+    // CI has no interactive desktop; use Chrome's native headless compositor.
+    headless: /^(?:1|true)$/i.test(process.env.CI ?? ""),
     ...(process.env.RESONANTOS_LIVE_CHROME_PATH
       ? { executablePath: process.env.RESONANTOS_LIVE_CHROME_PATH }
       : { channel: "chrome" }),

@@ -77,9 +77,10 @@ jobs:
 
       - name: Check rendered Settings component shapes
         env:
+          CI: "true"
           RESONANTOS_LIVE_CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
           RESONANTOS_SETTINGS_ARTIFACT_DIR: ${{ runner.temp }}/agent-control-live/${{ github.run_id }}-${{ github.run_attempt }}/settings-shapes
-        run: xvfb-run -a npm run test:browser-first:settings-shapes
+        run: npm run test:browser-first:settings-shapes
 
       - name: Run live Agent Control certification
         id: certification

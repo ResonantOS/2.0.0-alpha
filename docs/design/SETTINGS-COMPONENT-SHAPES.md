@@ -31,7 +31,8 @@ keyboard focus distinct from hover using the existing accent token.
 
 Run `npm run test:browser-first:settings-shapes` with stable Chrome installed
 (or set `RESONANTOS_LIVE_CHROME_PATH`). The live-browser CI lane runs this check
-and retains screenshots with its evidence. It renders actual extension modules
+and retains screenshots with its evidence. CI uses headless Chrome; local runs
+use a visible window unless `CI=true` is set. It renders actual extension modules
 and styles with synthetic, network-isolated data at 390/768/1280px; it does not
 replace extension/bridge certification. It also injects the old important
 override to verify that the regression detector rejects it.
