@@ -29,6 +29,13 @@ The later `responsive.css` compact-skin rules must not override these Settings
 shapes. Existing color, border and density rules remain in effect. Keep visible
 keyboard focus distinct from hover using the existing accent token.
 
+Run `npm run test:browser-first:settings-shapes` with stable Chrome installed
+(or set `RESONANTOS_LIVE_CHROME_PATH`). The live-browser CI lane runs this check
+and retains screenshots with its evidence. It renders actual extension modules
+and styles with synthetic, network-isolated data at 390/768/1280px; it does not
+replace extension/bridge certification. It also injects the old important
+override to verify that the regression detector rejects it.
+
 When changing these rules, check actual computed styles in Chrome: Start Here,
 Profile, Providers (including its modal), Routing, Appearance and Bridge Target.
 Compare the same viewport and state before and after; inspect textareas, nested
