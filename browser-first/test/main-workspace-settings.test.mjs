@@ -2258,6 +2258,8 @@ test("settings workspace renders add-on status and capability boundaries", async
     container.querySelector('[data-section="diagnostics"]').click();
     assert.match(container.textContent, /Diagnostics/);
     assert.match(container.textContent, /Checking diagnostics endpoints/);
+    await waitForCondition(() => /Diagnostics loaded from host-mediated status endpoints/.test(container.textContent));
+    assert.match(container.textContent, /Diagnostics loaded from host-mediated status endpoints/);
   } finally {
     cleanup();
   }
