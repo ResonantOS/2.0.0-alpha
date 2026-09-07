@@ -112,6 +112,18 @@ An open issue is not proof that every deterministic check currently fails. It
 is unresolved release evidence until the issue is closed or explicitly
 dispositioned in Project 2.
 
+The **beta.2** gate is **open**. Its exit criteria — the committed feature track
+([#227](https://github.com/ResonantOS/2.0.0-alpha/issues/227),
+[#232](https://github.com/ResonantOS/2.0.0-alpha/issues/232),
+[#252](https://github.com/ResonantOS/2.0.0-alpha/issues/252)), the security line
+([#321](https://github.com/ResonantOS/2.0.0-alpha/issues/321),
+[#326](https://github.com/ResonantOS/2.0.0-alpha/issues/326),
+[#373](https://github.com/ResonantOS/2.0.0-alpha/issues/373),
+[#180](https://github.com/ResonantOS/2.0.0-alpha/issues/180)), the
+[#216](https://github.com/ResonantOS/2.0.0-alpha/issues/216) acceptance
+criteria, and the release evidence — are tracked in
+[#402](https://github.com/ResonantOS/2.0.0-alpha/issues/402).
+
 ## Out of Scope
 
 - Tauri and Electron shells are historical or future work, not Alpha runtime.
