@@ -22,7 +22,7 @@
         "sources": [
           {
             "path": "browser-first/host/addon-delegation-service.mjs",
-            "anchor": "spawnProcess(runtime.pythonPath, [adapterPath, promptPath, outputPath], {"
+            "anchor": "const child = spawnProcess(wrapped.command, wrapped.args, {"
           },
           {
             "path": "browser-first/host/hermes-runtime.mjs",
@@ -71,6 +71,7 @@
           "RESONANTOS_HERMES_BASE_URL",
           "RESONANTOS_HERMES_API_KEY",
           "RESONANTOS_HERMES_API_MODE",
+          "PYTHONDONTWRITEBYTECODE",
           "RESONANTOS_HERMES_AGENT_ROOT",
           "RESONANTOS_HERMES_MAX_TURNS"
         ],
@@ -102,6 +103,7 @@
           "RESONANTOS_HERMES_BASE_URL",
           "RESONANTOS_HERMES_API_KEY",
           "RESONANTOS_HERMES_API_MODE",
+          "PYTHONDONTWRITEBYTECODE",
           "RESONANTOS_HERMES_AGENT_ROOT",
           "RESONANTOS_HERMES_MAX_TURNS"
         ],

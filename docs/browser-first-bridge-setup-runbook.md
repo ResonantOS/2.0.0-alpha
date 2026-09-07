@@ -110,6 +110,36 @@ The iframe is broken. Work top-down:
 - **Residual exposure (documented, not fixed here):** the password is present in the `opencode serve` child environment (readable by other processes of the same user, and inherited by any subprocess OpenCode itself spawns) — env is the only secret channel the binary supports. A bridge killed with `SIGKILL` can leave an authenticated orphan on a random port until the next bridge start reaps it via the PID record. The extension's `/event` fetch relies on MV3 `host_permissions` to send the header cross-origin. These are tracked under #326 and #321.
 - **Recovery:** if the bridge reports "did not announce a listening port", check the opencode binary version (`opencode --version`, expected ≥ 1.18) and confirm `opencode serve --hostname 127.0.0.1 --port <any free port>` prints the listening line.
 
+## Delegation confinement
+
+OpenCode and Hermes CLI delegations are isolated at the host process boundary
+before the bridge spawns the local runtime. On macOS, the bridge wraps each
+delegation in `/usr/bin/sandbox-exec` with a per-run profile that denies writes
+outside explicit runtime, prompt, temporary, and workspace roots, and denies
+reads of well-known secret stores plus the generated bridge config. If
+`sandbox-exec` is unavailable on macOS, delegation fails closed unless the
+operator sets `RESONANTOS_DELEGATION_ISOLATION=contract-only`; that override is
+recorded in the add-on governance audit.
+
+On Linux and Windows, delegation currently runs in `contract-only` mode: the
+bridge records the requested isolation mode and a bounded change manifest, but
+there is no OS confinement primitive. Each run appends a governance audit entry
+with the add-on id, task id, isolation mode, denial count when available, change
+counts, and outcome; audit entries do not include prompt text, file paths, or
+credential values.
+
+Residuals:
+
+- The CLI's own config may hold provider keys and stays readable.
+- Network access is unrestricted.
+- `OPENCODE_SERVER_USERNAME` and `OPENCODE_SERVER_PASSWORD` reach the unconfined OpenCode server over loopback.
+- `mach-lookup` is open, so `open`, `osascript`, `launchctl`, and `ssh localhost` can have work done outside the sandbox.
+- Hard links inside the workspace can alias outside inodes.
+- Unix sockets such as `/var/run/docker.sock` are readable.
+- The change manifest sees only the snapshotted roots.
+- The Hermes dashboard server and OpenCode server are not confined.
+- Cross-platform isolation is a separate ADR.
+
 ## Live SDK lane
 
 `npm run test:browser-first:live-sdk` proves the browser-first bridge and SDK-facing add-on routes work together in an isolated live run: capability bootstrap covers the extension allowlist, OpenCode serve uses a credentialed ephemeral loopback port, execution settings gate local CLI execution, public add-on manifests remain structurally valid, and the Settings Overview cards call capability-mapped bridge routes without 403s.

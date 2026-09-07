@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { chmod, mkdtemp, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import * as fsPromises from "node:fs/promises";
+import { access, chmod, mkdtemp, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -18,6 +19,10 @@ function safeFileSlug(value) {
     .replace(/[^a-z0-9._-]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 80) || "item";
+}
+
+function providerSecretsPath() {
+  return path.join(os.homedir(), "ResonantOS_User", "Secrets", "provider-secrets.json");
 }
 
 function createService(root, overrides = {}) {
@@ -45,12 +50,72 @@ function createService(root, overrides = {}) {
     readProviderSecrets: overrides.readProviderSecrets ?? (async () => ({})),
     repoRoot: root,
     safeFileSlug,
+    fs: overrides.fs,
+    isolation: overrides.isolation,
     platform: overrides.platform,
     spawnProcess: overrides.spawnProcess,
     socketOpen: async () => false,
     uniqueRuntimeId: (prefix) => `${prefix}-test-${++id}`,
     userRoot: () => root,
   });
+}
+
+function successfulOpenCodeOutput(summary = "OpenCode isolation test completed.") {
+  return [
+    "## Final Summary",
+    summary,
+    "",
+    "## Changed Files",
+    "- seeded.txt",
+    "",
+    "## Commands Run",
+    "- fake opencode run",
+    "",
+    "## Tests",
+    "- fake child process completed.",
+    "",
+    "## Residual Risks",
+    "- fake runtime only.",
+    "",
+    "## Verification",
+    "- profile was inspected during fake spawn.",
+  ].join("\n");
+}
+
+function successfulHermesResponse(summary = "Hermes isolation test completed.") {
+  return [
+    "Final Summary",
+    summary,
+    "",
+    "Actions Taken",
+    "- Ran through the injected Hermes child process.",
+    "",
+    "Approval Needs",
+    "- None.",
+    "",
+    "Residual Risks",
+    "- fake runtime only.",
+    "",
+    "Verification",
+    "- profile was inspected during fake spawn.",
+  ].join("\n");
+}
+
+function fakeChild() {
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.kill = () => undefined;
+  return child;
+}
+
+async function readAuditEntries(root) {
+  const auditPath = path.join(root, "BrowserFirst", "Settings", "addon-governance-audit.jsonl");
+  return (await readFile(auditPath, "utf8"))
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
 }
 
 async function withTempService(fn) {
@@ -266,6 +331,7 @@ test("Hermes delegation ignores an attacker-controlled profileHome Python before
 
       let spawnCount = 0;
       const service = createService(root, {
+        platform: "linux",
         hermesCommand: () => trustedRuntime.command,
         hermesHome: (profileHome) => profileHome
           ? path.resolve(profileHome)
@@ -318,6 +384,7 @@ test("Hermes MiniMax execution uses OpenAI-compatible custom runtime endpoint", 
 
       let captured = null;
       const service = createService(root, {
+        platform: "linux",
         hermesCommand: () => hermesCommand,
         hermesPythonRuntime: () => ({
           installed: true,
@@ -394,6 +461,7 @@ test("Hermes delegation fails closed when runtime returns unresolved tool-call m
       await writeFile(path.join(root, "HermesHome", "hermes-agent", "run_agent.py"), "");
 
       const service = createService(root, {
+        platform: "linux",
         hermesCommand: () => hermesCommand,
         hermesPythonRuntime: () => ({
           installed: true,
@@ -641,6 +709,7 @@ test("OpenCode provider matrix scopes explicit provider environment keys", async
     await withTempService(async (_service, root) => {
       const calls = [];
       const service = createService(root, {
+        platform: "linux",
         opencodeRuntimeDiagnostics: () => ({
           installed: true,
           command: "/usr/local/bin/opencode",
@@ -698,5 +767,382 @@ test("OpenCode web cockpit URL issuance does not spawn a server just to refuse (
     assert.equal(entries.length, 1);
     assert.equal(entries[0].event, "webCockpitUrlIssued");
     assert.equal(entries[0].url, "");
+  });
+});
+
+test("OpenCode delegation wraps the CLI with sandbox-exec and records isolation metadata", async () => {
+  await withTempService(async (_service, root) => {
+    await withEnv({
+      HOME: root,
+      OPENAI_API_KEY: "synthetic-openai-key",
+      RESONANTOS_OPENCODE_EXECUTION: "enabled",
+      RESONANTOS_DELEGATION_ISOLATION: undefined,
+    }, async () => {
+      const workspacePath = path.join(root, "workspace");
+      const seededPath = path.join(workspacePath, "seeded.txt");
+      const bridgeConfigPath = path.join(root, "browser-first", "resonantos-side-panel-extension", "src", "bridge-config.generated.js");
+      await mkdir(workspacePath, { recursive: true });
+      await mkdir(path.dirname(bridgeConfigPath), { recursive: true });
+      await mkdir(path.join(root, "Secrets"), { recursive: true });
+      await mkdir(path.dirname(providerSecretsPath()), { recursive: true });
+      await writeFile(seededPath, "before");
+      await writeFile(bridgeConfigPath, "export const bridgeToken = 'test-token';\n");
+
+      let captured = null;
+      let capturedProfilePath = "";
+      const service = createService(root, {
+        platform: "darwin",
+        isolation: {
+          isExecutable: async () => true,
+          readSandboxDenials: async () => ({ count: 0, sample: [] }),
+        },
+        opencodeRuntimeDiagnostics: () => ({
+          installed: true,
+          command: "/usr/local/bin/opencode",
+          commandRedacted: "/usr/local/bin/opencode",
+        }),
+        spawnProcess: (command, args, options) => {
+          captured = { command, args, options };
+          const child = fakeChild();
+          setImmediate(async () => {
+            try {
+              capturedProfilePath = args[1];
+              const profile = await readFile(capturedProfilePath, "utf8");
+              const profileMode = (await stat(capturedProfilePath)).mode & 0o777;
+              assert.equal(profileMode, 0o600);
+              assert.ok(profile.indexOf("(deny file-write*)") < profile.indexOf("(allow file-write*"));
+              assert.match(profile, new RegExp(`\\(subpath "${(await realpath(workspacePath)).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"\\)`));
+              assert.doesNotMatch(profile, /\(subpath "\/dev"\)/);
+              assert.match(profile, new RegExp(`\\(subpath "${(await realpath(path.dirname(providerSecretsPath()))).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"\\)`));
+              assert.match(profile, new RegExp(`\\(literal "${(await realpath(bridgeConfigPath)).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"\\)`));
+              await writeFile(seededPath, "after");
+              child.stdout.emit("data", successfulOpenCodeOutput());
+              child.emit("close", 0, null);
+            } catch (error) {
+              child.emit("error", error);
+            }
+          });
+          return child;
+        },
+      });
+      const created = await service.executeDelegationRecord({
+        target: "opencode",
+        mission: "Exercise OpenCode sandbox wrapping.",
+      });
+
+      const started = await service.executeOpenCodeDelegationStart({ path: created.path, workspacePath });
+
+      assert.equal(captured.command, "/usr/bin/sandbox-exec");
+      assert.deepEqual(captured.args.slice(0, 3), ["-f", capturedProfilePath, "/usr/local/bin/opencode"]);
+      assert.equal(captured.options.shell, false);
+      await assert.rejects(() => access(capturedProfilePath), /ENOENT/);
+      assert.equal(started.status, "completed");
+      assert.equal(started.isolation.mode, "sandbox-exec");
+      assert.equal(started.changeAudit.modified, 1);
+      const entries = await readAuditEntries(root);
+      const audit = entries.find((entry) => entry.event === "delegationExecuted");
+      assert.equal(audit.addonId, "opencode");
+      assert.equal(audit.outcome, "completed");
+      assert.equal(audit.isolation.mode, "sandbox-exec");
+      assert.equal(audit.changeAudit.modified, 1);
+      const auditText = JSON.stringify(audit);
+      assert.equal(auditText.includes(workspacePath), false);
+      assert.equal(auditText.includes("synthetic-openai-key"), false);
+    });
+  });
+});
+
+test("OpenCode delegation uses contract-only mode without wrapping on linux", async () => {
+  await withTempService(async (_service, root) => {
+    await withEnv({
+      HOME: root,
+      OPENAI_API_KEY: "synthetic-openai-key",
+      RESONANTOS_OPENCODE_EXECUTION: "enabled",
+      RESONANTOS_DELEGATION_ISOLATION: undefined,
+    }, async () => {
+      let captured = null;
+      const service = createService(root, {
+        platform: "linux",
+        opencodeRuntimeDiagnostics: () => ({
+          installed: true,
+          command: "/usr/local/bin/opencode",
+          commandRedacted: "/usr/local/bin/opencode",
+        }),
+        spawnProcess: (command, args, options) => {
+          captured = { command, args, options };
+          const child = fakeChild();
+          queueMicrotask(() => {
+            child.stdout.emit("data", successfulOpenCodeOutput("OpenCode contract-only test completed."));
+            child.emit("close", 0, null);
+          });
+          return child;
+        },
+      });
+      const created = await service.executeDelegationRecord({
+        target: "opencode",
+        mission: "Exercise OpenCode linux isolation metadata.",
+      });
+
+      const started = await service.executeOpenCodeDelegationStart({ path: created.path });
+
+      assert.equal(captured.command, "/usr/local/bin/opencode");
+      assert.equal(started.isolation.mode, "contract-only");
+      assert.equal(started.isolation.reason, "no-os-primitive:linux");
+    });
+  });
+});
+
+test("OpenCode delegation honors darwin contract-only operator override without wrapping", async () => {
+  await withTempService(async (_service, root) => {
+    await withEnv({
+      HOME: root,
+      OPENAI_API_KEY: "synthetic-openai-key",
+      RESONANTOS_OPENCODE_EXECUTION: "enabled",
+      RESONANTOS_DELEGATION_ISOLATION: "contract-only",
+    }, async () => {
+      let captured = null;
+      const service = createService(root, {
+        platform: "darwin",
+        isolation: {
+          isExecutable: async () => true,
+          readSandboxDenials: async () => ({ count: 0, sample: [] }),
+        },
+        opencodeRuntimeDiagnostics: () => ({
+          installed: true,
+          command: "/usr/local/bin/opencode",
+          commandRedacted: "/usr/local/bin/opencode",
+        }),
+        spawnProcess: (command, args, options) => {
+          captured = { command, args, options };
+          const child = fakeChild();
+          queueMicrotask(() => {
+            child.stdout.emit("data", successfulOpenCodeOutput("OpenCode operator override test completed."));
+            child.emit("close", 0, null);
+          });
+          return child;
+        },
+      });
+      const created = await service.executeDelegationRecord({
+        target: "opencode",
+        mission: "Exercise OpenCode operator override.",
+      });
+
+      const started = await service.executeOpenCodeDelegationStart({ path: created.path });
+
+      assert.equal(captured.command, "/usr/local/bin/opencode");
+      assert.equal(started.isolation.mode, "contract-only");
+      assert.equal(started.isolation.reason, "operator-override");
+    });
+  });
+});
+
+test("OpenCode delegation fails closed on darwin when sandbox-exec is unavailable and audits failure", async () => {
+  await withTempService(async (_service, root) => {
+    await withEnv({
+      HOME: root,
+      OPENAI_API_KEY: "synthetic-openai-key",
+      RESONANTOS_OPENCODE_EXECUTION: "enabled",
+      RESONANTOS_DELEGATION_ISOLATION: undefined,
+    }, async () => {
+      let spawnCount = 0;
+      const service = createService(root, {
+        platform: "darwin",
+        isolation: {
+          sandboxExecPath: "/missing/sandbox-exec",
+          isExecutable: async () => false,
+          readSandboxDenials: async () => ({ count: 0, sample: [] }),
+        },
+        opencodeRuntimeDiagnostics: () => ({
+          installed: true,
+          command: "/usr/local/bin/opencode",
+          commandRedacted: "/usr/local/bin/opencode",
+        }),
+        spawnProcess: () => {
+          spawnCount += 1;
+          throw new Error("must not spawn unconfined");
+        },
+      });
+      const created = await service.executeDelegationRecord({
+        target: "opencode",
+        mission: "Exercise missing sandbox-exec fail closed behavior.",
+      });
+
+      const started = await service.executeOpenCodeDelegationStart({ path: created.path });
+
+      assert.equal(spawnCount, 0);
+      assert.equal(started.status, "failed");
+      assert.equal(started.failureReason, "Delegation isolation unavailable: /missing/sandbox-exec is not executable. Set RESONANTOS_DELEGATION_ISOLATION=contract-only to run delegations unconfined (this is recorded in the governance audit).");
+      const audit = (await readAuditEntries(root)).find((entry) => entry.event === "delegationExecuted");
+      assert.equal(audit.outcome, "failed");
+      assert.deepEqual(audit.isolation, {
+        mode: "sandbox-exec",
+        reason: started.failureReason,
+        denials: null,
+      });
+    });
+  });
+});
+
+test("OpenCode delegation fails closed without spawning when sandbox profile write fails", async () => {
+  await withTempService(async (_service, root) => {
+    await withEnv({
+      HOME: root,
+      OPENAI_API_KEY: "synthetic-openai-key",
+      RESONANTOS_OPENCODE_EXECUTION: "enabled",
+      RESONANTOS_DELEGATION_ISOLATION: undefined,
+    }, async () => {
+      let spawnCount = 0;
+      const service = createService(root, {
+        platform: "darwin",
+        fs: {
+          ...fsPromises,
+          writeFile: async (filePath, ...args) => {
+            if (String(filePath).endsWith(".sb")) throw new Error("profile write denied");
+            return fsPromises.writeFile(filePath, ...args);
+          },
+        },
+        isolation: {
+          isExecutable: async () => true,
+          readSandboxDenials: async () => ({ count: 0, sample: [] }),
+        },
+        opencodeRuntimeDiagnostics: () => ({
+          installed: true,
+          command: "/usr/local/bin/opencode",
+          commandRedacted: "/usr/local/bin/opencode",
+        }),
+        spawnProcess: () => {
+          spawnCount += 1;
+          throw new Error("must not spawn unconfined");
+        },
+      });
+      const created = await service.executeDelegationRecord({
+        target: "opencode",
+        mission: "Exercise profile write fail closed behavior.",
+      });
+
+      const started = await service.executeOpenCodeDelegationStart({ path: created.path });
+
+      assert.equal(spawnCount, 0);
+      assert.equal(started.status, "failed");
+      assert.equal(started.failureReason, "Delegation isolation could not be applied: profile write denied");
+      const audit = (await readAuditEntries(root)).find((entry) => entry.event === "delegationExecuted");
+      assert.equal(audit.outcome, "failed");
+      assert.equal(audit.isolation.mode, "sandbox-exec");
+    });
+  });
+});
+
+test("OpenCode .cmd rejection still applies to the inner command under darwin isolation", async () => {
+  await withTempService(async (_service, root) => {
+    await withEnv({
+      HOME: root,
+      OPENAI_API_KEY: "synthetic-openai-key",
+      RESONANTOS_OPENCODE_EXECUTION: "enabled",
+      RESONANTOS_DELEGATION_ISOLATION: undefined,
+    }, async () => {
+      let spawnCount = 0;
+      const service = createService(root, {
+        platform: "darwin",
+        isolation: {
+          isExecutable: async () => true,
+          readSandboxDenials: async () => ({ count: 0, sample: [] }),
+        },
+        opencodeRuntimeDiagnostics: () => ({
+          installed: true,
+          command: path.join(root, "opencode.cmd"),
+          commandRedacted: "<opencode.cmd>",
+        }),
+        spawnProcess: () => {
+          spawnCount += 1;
+          throw new Error("command shim must not spawn");
+        },
+      });
+      const created = await service.executeDelegationRecord({
+        target: "opencode",
+        mission: "Exercise inner command shim rejection under sandbox wrapping.",
+      });
+
+      const started = await service.executeOpenCodeDelegationStart({ path: created.path });
+
+      assert.equal(spawnCount, 0);
+      assert.equal(started.status, "failed");
+      assert.match(started.failureReason, /OpenCode command shims \(\.cmd\/\.bat\) are not supported/);
+    });
+  });
+});
+
+test("Hermes adapter is wrapped with sandbox-exec and PYTHONDONTWRITEBYTECODE", async () => {
+  await withTempService(async (_service, root) => {
+    await withEnv({
+      HOME: root,
+      MINIMAX_API_KEY: undefined,
+      OPENAI_API_KEY: undefined,
+      RESONANTOS_HERMES_EXECUTION: "enabled",
+      RESONANTOS_DELEGATION_ISOLATION: undefined,
+    }, async () => {
+      const hermesBin = path.join(root, "HermesHome", "hermes-agent", "venv", "bin");
+      const hermesCommand = path.join(hermesBin, "hermes");
+      const pythonPath = path.join(hermesBin, "python");
+      const profileHome = path.join(root, "HermesHome");
+      await mkdir(hermesBin, { recursive: true });
+      await mkdir(path.join(root, "Secrets"), { recursive: true });
+      await writeFile(hermesCommand, "");
+      await writeFile(pythonPath, "");
+      await writeFile(path.join(root, "HermesHome", "hermes-agent", "run_agent.py"), "");
+      let captured = null;
+      let profileText = "";
+      const service = createService(root, {
+        platform: "darwin",
+        hermesCommand: () => hermesCommand,
+        hermesPythonRuntime: () => ({
+          installed: true,
+          agentRoot: path.join(root, "HermesHome", "hermes-agent"),
+          pythonPath,
+        }),
+        isolation: {
+          isExecutable: async () => true,
+          readSandboxDenials: async () => ({ count: 0, sample: [] }),
+        },
+        readProviderSecrets: async () => ({ "shared-minimax": "session-minimax-credential" }),
+        spawnProcess: (command, args, options) => {
+          captured = { command, args, options };
+          const child = fakeChild();
+          setImmediate(async () => {
+            try {
+              profileText = await readFile(args[1], "utf8");
+              await writeFile(args[5], JSON.stringify({
+                ok: true,
+                completed: true,
+                apiCalls: 1,
+                finalResponse: successfulHermesResponse(),
+              }));
+              child.emit("close", 0, null);
+            } catch (error) {
+              child.emit("error", error);
+            }
+          });
+          return child;
+        },
+      });
+      const created = await service.executeDelegationRecord({
+        target: "hermes",
+        mission: "Exercise Hermes sandbox wrapping.",
+      });
+
+      const started = await service.executeHermesDelegationStart({ path: created.path, profileHome });
+
+      assert.equal(captured.command, "/usr/bin/sandbox-exec");
+      assert.deepEqual(captured.args.slice(0, 3), ["-f", captured.args[1], pythonPath]);
+      assert.equal(captured.options.env.PYTHONDONTWRITEBYTECODE, "1");
+      assert.match(profileText, new RegExp(`\\(subpath "${(await realpath(profileHome)).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"\\)`));
+      assert.match(profileText, /\(subpath ".+BrowserFirst\/Runtime\/hermes-prompts\/prompt-/);
+      assert.equal(started.status, "completed");
+      assert.equal(started.isolation.mode, "sandbox-exec");
+      const audit = (await readAuditEntries(root)).find((entry) => entry.event === "delegationExecuted");
+      assert.equal(audit.addonId, "hermes");
+      assert.equal(audit.outcome, "completed");
+      assert.equal(JSON.stringify(audit).includes("session-minimax-credential"), false);
+      assert.equal(JSON.stringify(audit).includes(profileHome), false);
+    });
   });
 });

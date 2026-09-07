@@ -1,5 +1,7 @@
 import { existsSync } from "node:fs";
+import * as fsPromises from "node:fs/promises";
 import { appendFile, chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { spawn } from "node:child_process";
@@ -9,6 +11,7 @@ import {
   parseDraftPacketMarkdown,
 } from "./addon-draft-connectors.mjs";
 import { dashboardProxyUrl } from "./bridge-server.mjs";
+import { createDelegationIsolationAdapter } from "./delegation-isolation.mjs";
 import { ensureOpencodeServer, peekOpencodeServer } from "./opencode-client.mjs";
 import { createOpenCodeWebUrlHandler } from "./opencode-session-host-service.mjs";
 
@@ -182,11 +185,26 @@ export function createAddonDelegationService(dependencies) {
     readProviderSecrets = async () => ({}),
     repoRoot,
     safeFileSlug,
+    fs: isolationFs = fsPromises,
+    isolation: isolationDependency,
     spawnProcess = spawn,
     socketOpen,
     uniqueRuntimeId,
     userRoot,
   } = dependencies;
+  const isolation = isolationDependency?.resolve
+    ? isolationDependency
+    : createDelegationIsolationAdapter({
+      browserFirstRoot,
+      env: process.env,
+      fs: isolationFs,
+      platform,
+      repoRoot,
+      spawnProcess,
+      uniqueRuntimeId,
+      userRoot,
+      ...(isolationDependency ?? {}),
+    });
 
   function currentOpenCodeRuntime() {
     if (typeof opencodeRuntimeDiagnostics === "function") {
@@ -645,6 +663,209 @@ export function createAddonDelegationService(dependencies) {
     }
   }
 
+  function errorMessage(error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+
+  function withDelegationRunAudit(error, audit) {
+    const wrapped = error instanceof Error ? error : new Error(String(error));
+    wrapped.delegationRunAudit = audit;
+    return wrapped;
+  }
+
+  function emptyChangeAudit() {
+    return {
+      added: 0,
+      modified: 0,
+      removed: 0,
+      truncated: false,
+      sample: { added: [], modified: [], removed: [] },
+    };
+  }
+
+  function auditChangeCounts(changeAudit) {
+    return changeAudit
+      ? {
+        added: changeAudit.added,
+        modified: changeAudit.modified,
+        removed: changeAudit.removed,
+        truncated: Boolean(changeAudit.truncated),
+      }
+      : {
+        added: 0,
+        modified: 0,
+        removed: 0,
+        truncated: false,
+      };
+  }
+
+  function auditDenialCount(publicIsolation) {
+    return publicIsolation?.denials ? publicIsolation.denials.count : null;
+  }
+
+  function publicIsolationFromPrepared(prepared, denials = null, denialCaptureError = "") {
+    return {
+      mode: prepared.mode,
+      reason: prepared.reason,
+      writableRootCount: prepared.writableRootCount,
+      readDenyRootCount: prepared.readDenyRootCount,
+      denials,
+      ...(denialCaptureError ? { denialCaptureError } : {}),
+    };
+  }
+
+  function failedIsolation(mode, reason) {
+    return {
+      mode,
+      reason,
+      writableRootCount: 0,
+      readDenyRootCount: 0,
+      denials: null,
+    };
+  }
+
+  async function appendDelegationExecutionAudit(addonId, taskId, outcome, runAudit) {
+    if (!runAudit?.isolation) return;
+    const publicIsolation = runAudit.isolation;
+    await appendAddonGovernanceAuditEntry({
+      at: new Date().toISOString(),
+      event: "delegationExecuted",
+      addonId,
+      taskId,
+      isolation: {
+        mode: publicIsolation.mode,
+        reason: publicIsolation.reason,
+        denials: auditDenialCount(publicIsolation),
+      },
+      changeAudit: auditChangeCounts(runAudit.changeAudit),
+      outcome,
+    });
+  }
+
+  function isolationResultLines(result) {
+    const isolationInfo = result?.isolation;
+    const changeAudit = result?.changeAudit;
+    if (!isolationInfo || !changeAudit) return [];
+    const isolationLine = isolationInfo.mode === "sandbox-exec"
+      ? `Isolation: sandbox-exec (writes confined to ${isolationInfo.writableRootCount} roots; ${isolationInfo.readDenyRootCount} secret stores unreadable)`
+      : `Isolation: contract-only (${isolationInfo.reason}) — no OS confinement on this platform`;
+    return [
+      isolationLine,
+      `Workspace changes: +${changeAudit.added} ~${changeAudit.modified} -${changeAudit.removed}`,
+      "",
+    ];
+  }
+
+  async function prepareDelegationIsolation(addonId, context) {
+    let resolved;
+    try {
+      resolved = await isolation.resolve();
+    } catch (error) {
+      const message = errorMessage(error);
+      throw withDelegationRunAudit(error, {
+        isolation: failedIsolation("sandbox-exec", message),
+        changeAudit: emptyChangeAudit(),
+        changeAuditError: "",
+      });
+    }
+    if (resolved.mode !== "sandbox-exec") {
+      return {
+        mode: resolved.mode,
+        reason: resolved.reason,
+        sandboxExecPath: isolation.sandboxExecPath ?? "/usr/bin/sandbox-exec",
+        profilePath: "",
+        writableRootCount: 0,
+        readDenyRootCount: 0,
+      };
+    }
+    let profilePath = "";
+    try {
+      const writableRoots = [];
+      for (const candidate of isolation.writableRootsFor(addonId, context)) {
+        writableRoots.push(await isolation.ensureRealpath(candidate));
+      }
+      const readDeny = isolation.readDenyRootsFor({
+        env: context.env,
+        repoRoot,
+        userRoot,
+      });
+      const readDenyRoots = await isolation.realpathExisting(readDeny.roots);
+      const readDenyFiles = await isolation.realpathExisting(readDeny.files);
+      const profileText = isolation.buildSandboxProfile({
+        writableRoots,
+        readDenyRoots,
+        readDenyFiles,
+      });
+      profilePath = await isolation.writeProfile(profileText);
+      return {
+        mode: resolved.mode,
+        reason: resolved.reason,
+        sandboxExecPath: isolation.sandboxExecPath ?? "/usr/bin/sandbox-exec",
+        profilePath,
+        writableRootCount: writableRoots.length,
+        readDenyRootCount: readDenyRoots.length + readDenyFiles.length,
+      };
+    } catch (error) {
+      if (profilePath) await isolation.removeProfile(profilePath);
+      const message = `Delegation isolation could not be applied: ${errorMessage(error)}`;
+      throw withDelegationRunAudit(new Error(message), {
+        isolation: failedIsolation(resolved.mode, resolved.reason),
+        changeAudit: emptyChangeAudit(),
+        changeAuditError: "",
+      });
+    }
+  }
+
+  async function snapshotChangeRoots(roots) {
+    const snapshots = [];
+    const errors = [];
+    for (const root of roots) {
+      try {
+        snapshots.push({ root, snapshot: await isolation.snapshotTree(root) });
+      } catch (error) {
+        errors.push(errorMessage(error));
+      }
+    }
+    return { snapshots, error: errors.join("; ") };
+  }
+
+  function aggregateChangeAudit(before, after) {
+    if (before.error || after.error) {
+      return {
+        changeAudit: null,
+        changeAuditError: [before.error, after.error].filter(Boolean).join("; "),
+      };
+    }
+    let added = 0;
+    let modified = 0;
+    let removed = 0;
+    let truncated = false;
+    const sample = { added: [], modified: [], removed: [] };
+    for (const beforeEntry of before.snapshots) {
+      const afterEntry = after.snapshots.find((candidate) => candidate.root === beforeEntry.root);
+      if (!afterEntry) continue;
+      const diff = isolation.diffTrees(beforeEntry.snapshot, afterEntry.snapshot);
+      added += diff.added;
+      modified += diff.modified;
+      removed += diff.removed;
+      truncated = truncated || diff.truncated;
+      for (const bucket of ["added", "modified", "removed"]) {
+        sample[bucket].push(...diff.sample[bucket].slice(0, 100 - sample[bucket].length));
+      }
+    }
+    return { changeAudit: { added, modified, removed, truncated, sample }, changeAuditError: "" };
+  }
+
+  async function captureSandboxDenials(prepared, startedAt, processNames) {
+    if (prepared.mode !== "sandbox-exec") return { denials: null, denialCaptureError: "" };
+    try {
+      const denials = await isolation.readSandboxDenials({ startedAt, processNames });
+      return { denials: denials ?? null, denialCaptureError: "" };
+    } catch (error) {
+      return { denials: null, denialCaptureError: errorMessage(error) };
+    }
+  }
+
   function deterministicHermesResult(packet) {
     const mission = sectionFromMarkdown(packet, "Mission");
     const hasContext = Boolean(sectionFromMarkdown(packet, "Context Packet"));
@@ -903,7 +1124,13 @@ except BaseException as exc:
     const timeout = Math.min(900_000, Math.max(30_000, Number(options.timeout ?? 300_000)));
     const adapterPath = options.adapterPath;
     return new Promise((resolve, reject) => {
-      const child = spawnProcess(runtime.pythonPath, [adapterPath, promptPath, outputPath], {
+      const innerArgs = [adapterPath, promptPath, outputPath];
+      const wrapped = isolation.wrapCommandForIsolation({
+        ...(options.isolation ?? { mode: "contract-only" }),
+        command: runtime.pythonPath,
+        args: innerArgs,
+      });
+      const child = spawnProcess(wrapped.command, wrapped.args, {
         cwd: options.cwd,
         env: options.env,
         shell: false,
@@ -965,43 +1192,93 @@ except BaseException as exc:
     const promptPath = path.join(tempDir, "resonantos-hermes-task.md");
     const adapterPath = path.join(tempDir, "resonantos_hermes_adapter.py");
     const outputPath = path.join(tempDir, "result.json");
+    let preparedIsolation = null;
     try {
       await writeFile(promptPath, prompt, { mode: 0o600 });
       await writeFile(adapterPath, hermesPythonAdapterScript(), { mode: 0o600 });
       await chmod(promptPath, 0o600).catch(() => undefined);
       await chmod(adapterPath, 0o600).catch(() => undefined);
-      await execHermesPythonAdapter(runtime, promptPath, outputPath, {
-        adapterPath,
-        cwd: repoRoot,
-        env: {
-          ...scopedHermesEnv({ provider, model, profileHome, secrets }),
-          ...(runtimeProvider.provider ? { HERMES_INFERENCE_PROVIDER: runtimeProvider.provider } : {}),
-          ...(runtimeProvider.baseUrl ? {
-            OPENAI_BASE_URL: runtimeProvider.baseUrl,
-            RESONANTOS_HERMES_BASE_URL: runtimeProvider.baseUrl,
-          } : {}),
-          ...(runtimeProvider.apiKey ? {
-            OPENAI_API_KEY: runtimeProvider.apiKey,
-            RESONANTOS_HERMES_API_KEY: runtimeProvider.apiKey,
-          } : {}),
-          ...(runtimeProvider.apiMode ? { RESONANTOS_HERMES_API_MODE: runtimeProvider.apiMode } : {}),
-          RESONANTOS_HERMES_AGENT_ROOT: runtime.agentRoot,
-          RESONANTOS_HERMES_MAX_TURNS: String(Math.min(90, Math.max(1, Number(payload.maxTurns ?? 20)))),
-        },
-        timeout: Math.min(900_000, Math.max(30_000, Number(payload.timeoutMs ?? 300_000))),
+      const env = {
+        ...scopedHermesEnv({ provider, model, profileHome, secrets }),
+        ...(runtimeProvider.provider ? { HERMES_INFERENCE_PROVIDER: runtimeProvider.provider } : {}),
+        ...(runtimeProvider.baseUrl ? {
+          OPENAI_BASE_URL: runtimeProvider.baseUrl,
+          RESONANTOS_HERMES_BASE_URL: runtimeProvider.baseUrl,
+        } : {}),
+        ...(runtimeProvider.apiKey ? {
+          OPENAI_API_KEY: runtimeProvider.apiKey,
+          RESONANTOS_HERMES_API_KEY: runtimeProvider.apiKey,
+        } : {}),
+        ...(runtimeProvider.apiMode ? { RESONANTOS_HERMES_API_MODE: runtimeProvider.apiMode } : {}),
+        PYTHONDONTWRITEBYTECODE: "1",
+        RESONANTOS_HERMES_AGENT_ROOT: runtime.agentRoot,
+        RESONANTOS_HERMES_MAX_TURNS: String(Math.min(90, Math.max(1, Number(payload.maxTurns ?? 20)))),
+      };
+      preparedIsolation = await prepareDelegationIsolation("hermes", {
+        env,
+        profileHome,
+        tempDir,
+        tmpdir: os.tmpdir(),
       });
+      const beforeSnapshots = await snapshotChangeRoots([profileHome, tempDir]);
+      const startedAt = new Date();
+      let executionError = null;
+      try {
+        await execHermesPythonAdapter(runtime, promptPath, outputPath, {
+          adapterPath,
+          cwd: repoRoot,
+          env,
+          isolation: preparedIsolation,
+          timeout: Math.min(900_000, Math.max(30_000, Number(payload.timeoutMs ?? 300_000))),
+        });
+      } catch (error) {
+        executionError = error;
+      }
+      const afterSnapshots = await snapshotChangeRoots([profileHome, tempDir]);
+      const { changeAudit, changeAuditError } = aggregateChangeAudit(beforeSnapshots, afterSnapshots);
+      const denialCapture = await captureSandboxDenials(preparedIsolation, startedAt, [
+        path.basename(runtime.pythonPath),
+        "sh",
+        "bash",
+        "python",
+        "python3",
+      ]);
+      const publicIsolation = publicIsolationFromPrepared(
+        preparedIsolation,
+        denialCapture.denials,
+        denialCapture.denialCaptureError,
+      );
+      const runAudit = { isolation: publicIsolation, changeAudit, changeAuditError };
+      if (executionError) {
+        throw withDelegationRunAudit(executionError, runAudit);
+      }
       const rawResult = await readFile(outputPath, "utf8");
       const parsed = JSON.parse(rawResult);
       if (!parsed.ok) {
-        throw new Error(redactCliText(parsed.error || "Hermes local runtime failed."));
+        throw withDelegationRunAudit(
+          new Error(redactCliText(parsed.error || "Hermes local runtime failed.")),
+          runAudit,
+        );
       }
-      return {
-        ...parseHermesCliResult(parsed.finalResponse, repoRoot),
-        adapter: "hermes-cli",
-        model,
-        provider,
-      };
+      try {
+        return {
+          ...parseHermesCliResult(parsed.finalResponse, repoRoot),
+          adapter: "hermes-cli",
+          changeAudit,
+          ...(changeAuditError ? { changeAuditError } : {}),
+          isolation: publicIsolation,
+          model,
+          provider,
+        };
+      } catch (error) {
+        throw withDelegationRunAudit(error, runAudit);
+      }
+    } catch (error) {
+      throw error;
     } finally {
+      if (preparedIsolation?.profilePath) {
+        await isolation.removeProfile(preparedIsolation.profilePath);
+      }
       await rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
     }
   }
@@ -1022,6 +1299,7 @@ except BaseException as exc:
       result.provider ? `- provider: ${result.provider}` : "",
       result.model ? `- model: ${result.model}` : "",
       "- boundary: Reviewable artifact only. External sends and trusted memory writes remain blocked.",
+      ...isolationResultLines(result),
       "",
       "## Final Summary",
       result.finalSummary,
@@ -1108,6 +1386,12 @@ except BaseException as exc:
     } catch (error) {
       const failedAt = new Date().toISOString();
       const failureReason = error instanceof Error ? error.message : String(error);
+      await appendDelegationExecutionAudit(
+        "hermes",
+        fieldFromMarkdown(packet, "id") || path.basename(taskPath, ".md"),
+        "failed",
+        error?.delegationRunAudit,
+      );
       if (adapter !== "deterministic" && isHermesProviderCredentialError(failureReason)) {
         const credentialState = hermesProviderCredentialState(payload, await readProviderSecrets());
         const blockedReason = hermesProviderCredentialBlockedReason(credentialState);
@@ -1130,11 +1414,20 @@ except BaseException as exc:
       return {
         ...delegationSummaryFromMarkdown(taskPath, updated, await stat(taskPath)),
         failureReason,
+        ...(error?.delegationRunAudit?.isolation ? { isolation: error.delegationRunAudit.isolation } : {}),
+        ...(error?.delegationRunAudit?.changeAudit ? { changeAudit: error.delegationRunAudit.changeAudit } : {}),
+        ...(error?.delegationRunAudit?.changeAuditError ? { changeAuditError: error.delegationRunAudit.changeAuditError } : {}),
         status: "failed",
       };
     }
     try {
       const artifactPath = await writeHermesResultArtifact(taskPath, packet, result);
+      await appendDelegationExecutionAudit(
+        "hermes",
+        fieldFromMarkdown(packet, "id") || path.basename(taskPath, ".md"),
+        "completed",
+        result,
+      );
       let updated = await writeDelegationStatus(taskPath, "completed", {
         completedAt: new Date().toISOString(),
         resultArtifactPath: path.relative(userRoot(), artifactPath),
@@ -1148,9 +1441,20 @@ except BaseException as exc:
           path: path.relative(userRoot(), artifactPath),
           ...result,
         },
+        ...(result.isolation ? { isolation: result.isolation } : {}),
+        ...(result.changeAudit ? { changeAudit: result.changeAudit } : {}),
+        ...(result.changeAuditError ? { changeAuditError: result.changeAuditError } : {}),
         status: "completed",
       };
     } catch (error) {
+      if (result?.isolation) {
+        await appendDelegationExecutionAudit(
+          "hermes",
+          fieldFromMarkdown(packet, "id") || path.basename(taskPath, ".md"),
+          "failed",
+          result,
+        );
+      }
       return failDelegationAfterRunning(taskPath, error);
     }
   }
@@ -1410,7 +1714,12 @@ except BaseException as exc:
         reject(new Error("OpenCode on Windows requires a pinned direct .exe executable."));
         return;
       }
-      const child = spawnProcess(command, args, {
+      const wrapped = isolation.wrapCommandForIsolation({
+        ...(options.isolation ?? { mode: "contract-only" }),
+        command,
+        args,
+      });
+      const child = spawnProcess(wrapped.command, wrapped.args, {
         cwd: options.cwd,
         env: options.env,
         shell: false,
@@ -1461,9 +1770,19 @@ except BaseException as exc:
     await mkdir(tempRoot, { recursive: true });
     const tempDir = await mkdtemp(path.join(tempRoot, "prompt-"));
     const promptPath = path.join(tempDir, "resonantos-opencode-task.md");
+    let preparedIsolation = null;
     try {
       await writeFile(promptPath, prompt, { mode: 0o600 });
       await chmod(promptPath, 0o600).catch(() => undefined);
+      const env = scopedOpenCodeEnv(model, secrets);
+      const resolvedWorkspacePath = await isolationFs.realpath(workspacePath);
+      preparedIsolation = await prepareDelegationIsolation("opencode", {
+        env,
+        promptTempDir: tempDir,
+        tmpdir: os.tmpdir(),
+        workspacePath: resolvedWorkspacePath,
+      });
+      const beforeSnapshots = await snapshotChangeRoots([resolvedWorkspacePath]);
       const args = [
         "run",
         "Read the attached ResonantOS OpenCode task packet and return the requested artifact.",
@@ -1476,16 +1795,52 @@ except BaseException as exc:
         "--format",
         "json",
       ];
-      const output = await execOpenCodeCli(command, args, {
-        cwd: workspacePath,
-        env: scopedOpenCodeEnv(model, secrets),
-        timeout: Math.min(900_000, Math.max(30_000, Number(payload.timeoutMs ?? 300_000))),
-      });
-      return {
-        ...parseOpenCodeCliResult(output, workspacePath),
-        model,
-      };
+      const startedAt = new Date();
+      let output = "";
+      let executionError = null;
+      try {
+        output = await execOpenCodeCli(command, args, {
+          cwd: workspacePath,
+          env,
+          isolation: preparedIsolation,
+          timeout: Math.min(900_000, Math.max(30_000, Number(payload.timeoutMs ?? 300_000))),
+        });
+      } catch (error) {
+        executionError = error;
+      }
+      const afterSnapshots = await snapshotChangeRoots([resolvedWorkspacePath]);
+      const { changeAudit, changeAuditError } = aggregateChangeAudit(beforeSnapshots, afterSnapshots);
+      const denialCapture = await captureSandboxDenials(preparedIsolation, startedAt, [
+        path.basename(command),
+        "sh",
+        "bash",
+        "bun",
+        "node",
+      ]);
+      const publicIsolation = publicIsolationFromPrepared(
+        preparedIsolation,
+        denialCapture.denials,
+        denialCapture.denialCaptureError,
+      );
+      const runAudit = { isolation: publicIsolation, changeAudit, changeAuditError };
+      if (executionError) {
+        throw withDelegationRunAudit(executionError, runAudit);
+      }
+      try {
+        return {
+          ...parseOpenCodeCliResult(output, workspacePath),
+          changeAudit,
+          ...(changeAuditError ? { changeAuditError } : {}),
+          isolation: publicIsolation,
+          model,
+        };
+      } catch (error) {
+        throw withDelegationRunAudit(error, runAudit);
+      }
     } finally {
+      if (preparedIsolation?.profilePath) {
+        await isolation.removeProfile(preparedIsolation.profilePath);
+      }
       await rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
     }
   }
@@ -1506,6 +1861,7 @@ except BaseException as exc:
       `- workspacePath: ${result.workspacePath || "."}`,
       result.model ? `- model: ${result.model}` : "",
       "- boundary: Reviewable coding artifact only. Shell, filesystem, provider secrets, trusted memory writes, and external sends remain governed by ResonantOS.",
+      ...isolationResultLines(result),
       "",
       "## Final Summary",
       result.finalSummary,
@@ -1609,6 +1965,12 @@ except BaseException as exc:
         ? deterministicOpenCodeResult(packet, payload)
         : await runOpenCodeCliDelegation(command, packet, payload);
     } catch (error) {
+      await appendDelegationExecutionAudit(
+        "opencode",
+        fieldFromMarkdown(packet, "id") || path.basename(taskPath, ".md"),
+        "failed",
+        error?.delegationRunAudit,
+      );
       const updated = await writeDelegationStatus(taskPath, "failed", {
         failedAt: new Date().toISOString(),
         failureReason: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500),
@@ -1616,11 +1978,20 @@ except BaseException as exc:
       return {
         ...delegationSummaryFromMarkdown(taskPath, updated, await stat(taskPath)),
         failureReason: error instanceof Error ? error.message : String(error),
+        ...(error?.delegationRunAudit?.isolation ? { isolation: error.delegationRunAudit.isolation } : {}),
+        ...(error?.delegationRunAudit?.changeAudit ? { changeAudit: error.delegationRunAudit.changeAudit } : {}),
+        ...(error?.delegationRunAudit?.changeAuditError ? { changeAuditError: error.delegationRunAudit.changeAuditError } : {}),
         status: "failed",
       };
     }
     try {
       const artifactPath = await writeOpenCodeResultArtifact(taskPath, packet, result);
+      await appendDelegationExecutionAudit(
+        "opencode",
+        fieldFromMarkdown(packet, "id") || path.basename(taskPath, ".md"),
+        "completed",
+        result,
+      );
       let updated = await writeDelegationStatus(taskPath, "completed", {
         completedAt: new Date().toISOString(),
         resultArtifactPath: path.relative(userRoot(), artifactPath),
@@ -1634,9 +2005,20 @@ except BaseException as exc:
           path: path.relative(userRoot(), artifactPath),
           ...result,
         },
+        ...(result.isolation ? { isolation: result.isolation } : {}),
+        ...(result.changeAudit ? { changeAudit: result.changeAudit } : {}),
+        ...(result.changeAuditError ? { changeAuditError: result.changeAuditError } : {}),
         status: "completed",
       };
     } catch (error) {
+      if (result?.isolation) {
+        await appendDelegationExecutionAudit(
+          "opencode",
+          fieldFromMarkdown(packet, "id") || path.basename(taskPath, ".md"),
+          "failed",
+          result,
+        );
+      }
       return failDelegationAfterRunning(taskPath, error);
     }
   }
