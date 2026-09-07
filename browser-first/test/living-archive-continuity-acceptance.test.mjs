@@ -279,8 +279,11 @@ test("issue #228: Living Archive context continuity survives restart with proven
 
     assert.equal(review.sourceArtifactPath, intake.path);
     assert.equal(review.status, "pending");
-    assert.ok(artifactStats.mtimeMs >= beforeIntake);
-    assert.ok(artifactStats.mtimeMs <= afterIntake + 1_000);
+    // Filesystem mtimes are coarser than Date.now() on some kernels (Linux CI runners round to the
+    // clock tick), so the artifact can legitimately carry an mtime a few ms before `beforeIntake`.
+    // Bound both sides with the same one-second tolerance instead of trusting sub-tick ordering.
+    assert.ok(artifactStats.mtimeMs >= beforeIntake - 1_000, `artifact mtime ${artifactStats.mtimeMs} predates intake start ${beforeIntake} by more than 1s`);
+    assert.ok(artifactStats.mtimeMs <= afterIntake + 1_000, `artifact mtime ${artifactStats.mtimeMs} is more than 1s after intake end ${afterIntake}`);
     assert.match(artifact.content, /# Living Archive Context Continuity Artifact/);
     assert.match(artifact.content, new RegExp(`runStartedAt: ${runStartedAt.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
     assert.match(artifact.content, /restartBoundary: fresh-chat-session-store-instance/);
