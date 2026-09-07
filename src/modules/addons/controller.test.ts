@@ -33,6 +33,7 @@ import {
   runAddonLogicianScript,
   toggleAddonCapabilityGrant,
   toggleAddonInstallation,
+  uninstallAddon,
   updateAddonConfig,
 } from "./controller";
 
@@ -109,6 +110,30 @@ const createMinimalInstallation = (addonId: string, installed: boolean, enabled:
   recommendedGrantPresetIds: [],
   privateProviderProfileIds: [],
   notes: [],
+});
+
+const createSystemSlotManifest = (
+  id: string,
+  role: NonNullable<AddOnManifest["systemSlots"]>[number]["role"] = "default-provider",
+  recommended = true,
+): AddOnManifest => ({
+  ...createMinimalManifest(id, id),
+  requestedCapabilities: [capability("agent-delegation"), capability("chat-interface")],
+  systemSlots: [
+    { id: "primary-agent", role, replaceable: true, recommended },
+    { id: "chat-interface", role: "default-provider", replaceable: true, recommended: true },
+  ],
+});
+
+const uninstallDeps = (
+  getState: () => ResonantShellState,
+  updateRuntimeState: (updater: (current: ResonantShellState) => ResonantShellState) => void,
+  stopRunningWork?: (input: { addonId: string }) => Promise<{ stopped: boolean; detail?: string }>,
+) => ({
+  getState,
+  updateRuntimeState,
+  stopRunningWork,
+  now: () => new Date("2026-09-07T12:00:00.000Z"),
 });
 
 describe("toggleAddonInstallation", () => {
@@ -261,6 +286,389 @@ describe("toggleAddonCapabilityGrant", () => {
     });
 
     expect(state.installations["addon.nonexistent"]).toBeUndefined();
+  });
+});
+
+describe("uninstallAddon", () => {
+  it("clears grants provider profiles and config", async () => {
+    const manifest = createMinimalManifest("addon.test", "Test Addon");
+    let state = buildDefaultState([manifest]);
+    state.installations[manifest.id] = {
+      ...createMinimalInstallation(manifest.id, true, true, "enabled"),
+      grantedCapabilities: [
+        { ...capability("network"), granted: true },
+        { ...capability("archive-read"), granted: false },
+      ],
+      privateProviderProfileIds: ["profile-a", "profile-b"],
+      config: { secret: "do-not-log" },
+    };
+
+    const result = await uninstallAddon(
+      manifest,
+      uninstallDeps(
+        () => state,
+        (updater) => {
+          state = updater(state);
+        },
+      ),
+    );
+
+    expect(result.outcome).toBe("uninstalled");
+    expect(state.installations[manifest.id].grantedCapabilities).toEqual([]);
+    expect(state.installations[manifest.id].privateProviderProfileIds).toEqual([]);
+    expect("config" in state.installations[manifest.id]).toBe(false);
+    expect(result.audit?.clearedCapabilities).toEqual(["network"]);
+    expect(result.audit?.clearedPrivateProviderProfileIds).toBe(2);
+    expect(result.audit?.configDeleted).toBe(true);
+  });
+
+  it("disables enabled add-ons and records an uninstall note", async () => {
+    const manifest = createMinimalManifest("addon.test", "Test Addon");
+    let state = buildDefaultState([manifest]);
+    state.installations[manifest.id] = createMinimalInstallation(manifest.id, true, true, "enabled");
+
+    await uninstallAddon(
+      manifest,
+      uninstallDeps(
+        () => state,
+        (updater) => {
+          state = updater(state);
+        },
+      ),
+    );
+
+    expect(state.installations[manifest.id]).toMatchObject({
+      installed: false,
+      enabled: false,
+      status: "uninstalled",
+      notes: ["Uninstalled; capability grants and add-on config were cleared. User data was retained."],
+    });
+  });
+
+  it("disables the Hermes channel in the same mutation", async () => {
+    const manifest = createHermesManifest();
+    let state = buildDefaultState([manifest]);
+    state.channels.find((channel) => channel.id === "desktop-hermes")!.enabled = true;
+    state.installations[manifest.id] = createMinimalInstallation(manifest.id, true, true, "enabled");
+
+    await uninstallAddon(
+      manifest,
+      uninstallDeps(
+        () => state,
+        (updater) => {
+          state = updater(state);
+        },
+      ),
+    );
+
+    expect(state.channels.find((channel) => channel.id === "desktop-hermes")?.enabled).toBe(false);
+  });
+
+  it("is a no-op for available add-ons and missing records", async () => {
+    const manifest = createMinimalManifest("addon.test", "Test Addon");
+    let availableState = buildDefaultState([manifest]);
+    const missingState = buildDefaultState([]);
+    const availableBefore = structuredClone(availableState);
+    const missingBefore = structuredClone(missingState);
+
+    const available = await uninstallAddon(
+      manifest,
+      uninstallDeps(
+        () => availableState,
+        (updater) => {
+          availableState = updater(availableState);
+        },
+      ),
+    );
+    const missing = await uninstallAddon(
+      manifest,
+      uninstallDeps(
+        () => missingState,
+        () => {
+          throw new Error("missing records should not mutate");
+        },
+      ),
+    );
+
+    expect(available).toEqual({ outcome: "blocked", blockReason: "not-installed" });
+    expect(missing).toEqual({ outcome: "blocked", blockReason: "not-installed" });
+    expect(availableState).toEqual(availableBefore);
+    expect(missingState).toEqual(missingBefore);
+  });
+
+  it("is idempotent for already-uninstalled add-ons", async () => {
+    const manifest = createMinimalManifest("addon.test", "Test Addon");
+    let state = buildDefaultState([manifest]);
+    state.installations[manifest.id] = createMinimalInstallation(manifest.id, false, false, "uninstalled");
+    const before = structuredClone(state);
+
+    const result = await uninstallAddon(
+      manifest,
+      uninstallDeps(
+        () => state,
+        (updater) => {
+          state = updater(state);
+        },
+      ),
+    );
+
+    expect(result).toEqual({ outcome: "blocked", blockReason: "already-uninstalled" });
+    expect(result.audit).toBeUndefined();
+    expect(state).toEqual(before);
+  });
+
+  it("is allowed from disabled, degraded, update-available and incompatible", async () => {
+    for (const status of ["disabled", "degraded", "update-available", "incompatible"] as const) {
+      const manifest = createMinimalManifest(`addon.${status}`, status);
+      let state = buildDefaultState([manifest]);
+      state.installations[manifest.id] = createMinimalInstallation(manifest.id, true, false, status);
+
+      const result = await uninstallAddon(
+        manifest,
+        uninstallDeps(
+          () => state,
+          (updater) => {
+            state = updater(state);
+          },
+        ),
+      );
+
+      expect(result.outcome).toBe("uninstalled");
+      expect(result.audit?.previousStatus).toBe(status);
+      expect(state.installations[manifest.id].status).toBe("uninstalled");
+    }
+  });
+
+  it("blocks a bundled default that is the selected provider for one of its slots", async () => {
+    const manifest = createSystemSlotManifest("addon.default");
+    let state = buildDefaultState([manifest]);
+    state.activeSystemSlotProviderIds = { "primary-agent": manifest.id };
+    state.installations[manifest.id] = createMinimalInstallation(manifest.id, true, true, "enabled");
+    const before = structuredClone(state);
+
+    const result = await uninstallAddon(
+      manifest,
+      uninstallDeps(
+        () => state,
+        (updater) => {
+          state = updater(state);
+        },
+      ),
+    );
+
+    expect(result).toEqual({
+      outcome: "blocked",
+      blockReason: "active-system-slot-provider",
+      blockDetail: "primary-agent",
+    });
+    expect(state).toEqual(before);
+  });
+
+  it("ignores non-recommended and non-default-provider slots", async () => {
+    const notRecommended = createSystemSlotManifest("addon.not-recommended", "default-provider", false);
+    const alternative = createSystemSlotManifest("addon.alternative", "alternative-provider", true);
+
+    for (const manifest of [notRecommended, alternative]) {
+      let state = buildDefaultState([manifest]);
+      state.activeSystemSlotProviderIds = { "primary-agent": manifest.id };
+      state.installations[manifest.id] = createMinimalInstallation(manifest.id, true, true, "enabled");
+
+      const result = await uninstallAddon(
+        manifest,
+        uninstallDeps(
+          () => state,
+          (updater) => {
+            state = updater(state);
+          },
+        ),
+      );
+
+      expect(result.outcome).toBe("uninstalled");
+    }
+  });
+
+  it("allows sideloaded system-slot providers", async () => {
+    const manifest = createSystemSlotManifest("addon.sideloaded");
+    let state = buildDefaultState([manifest]);
+    state.activeSystemSlotProviderIds = { "primary-agent": manifest.id };
+    state.installations[manifest.id] = {
+      ...createMinimalInstallation(manifest.id, true, true, "enabled"),
+      source: "sideload",
+    };
+
+    const result = await uninstallAddon(
+      manifest,
+      uninstallDeps(
+        () => state,
+        (updater) => {
+          state = updater(state);
+        },
+      ),
+    );
+
+    expect(result.outcome).toBe("uninstalled");
+  });
+
+  it("allows a bundled default once another provider is selected for all its slots", async () => {
+    const manifest = createSystemSlotManifest("addon.default");
+    let state = buildDefaultState([manifest]);
+    state.activeSystemSlotProviderIds = {
+      "primary-agent": "addon.replacement",
+      "chat-interface": "addon.replacement",
+    };
+    state.installations[manifest.id] = createMinimalInstallation(manifest.id, true, true, "enabled");
+
+    const result = await uninstallAddon(
+      manifest,
+      uninstallDeps(
+        () => state,
+        (updater) => {
+          state = updater(state);
+        },
+      ),
+    );
+
+    expect(result.outcome).toBe("uninstalled");
+  });
+
+  it("blocks when running work cannot be stopped", async () => {
+    const manifest = createMinimalManifest("addon.test", "Test Addon");
+    for (const stopRunningWork of [
+      vi.fn(async () => ({ stopped: false, detail: "still running" })),
+      vi.fn(async () => {
+        throw new Error("runtime unavailable");
+      }),
+    ]) {
+      let state = buildDefaultState([manifest]);
+      state.installations[manifest.id] = createMinimalInstallation(manifest.id, true, true, "enabled");
+      const before = structuredClone(state);
+
+      const result = await uninstallAddon(
+        manifest,
+        uninstallDeps(
+          () => state,
+          (updater) => {
+            state = updater(state);
+          },
+          stopRunningWork,
+        ),
+      );
+
+      expect(result.outcome).toBe("blocked");
+      expect(result.blockReason).toBe("running-work-not-stopped");
+      expect(result.audit).toBeUndefined();
+      expect(state).toEqual(before);
+    }
+  });
+
+  it("proceeds when no stop hook is provided", async () => {
+    const manifest = createMinimalManifest("addon.test", "Test Addon");
+    let state = buildDefaultState([manifest]);
+    state.installations[manifest.id] = createMinimalInstallation(manifest.id, true, true, "enabled");
+
+    const result = await uninstallAddon(
+      manifest,
+      uninstallDeps(
+        () => state,
+        (updater) => {
+          state = updater(state);
+        },
+      ),
+    );
+
+    expect(result.outcome).toBe("uninstalled");
+  });
+
+  it("awaits the stop hook before mutating", async () => {
+    const manifest = createMinimalManifest("addon.test", "Test Addon");
+    let state = buildDefaultState([manifest]);
+    state.installations[manifest.id] = createMinimalInstallation(manifest.id, true, true, "enabled");
+    const observedStatuses: InstallationStatus[] = [];
+
+    const result = await uninstallAddon(
+      manifest,
+      uninstallDeps(
+        () => state,
+        (updater) => {
+          state = updater(state);
+        },
+        async () => {
+          observedStatuses.push(state.installations[manifest.id].status);
+          return { stopped: true };
+        },
+      ),
+    );
+
+    expect(result.outcome).toBe("uninstalled");
+    expect(observedStatuses).toEqual(["enabled"]);
+  });
+
+  it("does not call the stop hook when already blocked", async () => {
+    const manifest = createMinimalManifest("addon.test", "Test Addon");
+    const state = buildDefaultState([manifest]);
+    const stopRunningWork = vi.fn(async () => ({ stopped: true }));
+
+    const result = await uninstallAddon(
+      manifest,
+      uninstallDeps(
+        () => state,
+        () => {
+          throw new Error("blocked uninstall should not mutate");
+        },
+        stopRunningWork,
+      ),
+    );
+
+    expect(result.blockReason).toBe("not-installed");
+    expect(stopRunningWork).not.toHaveBeenCalled();
+  });
+
+  it("decides inside the updater", async () => {
+    const manifest = createMinimalManifest("addon.test", "Test Addon");
+    const getStateSnapshot = buildDefaultState([manifest]);
+    getStateSnapshot.installations[manifest.id] = createMinimalInstallation(manifest.id, true, true, "enabled");
+    let draft = buildDefaultState([manifest]);
+    draft.installations[manifest.id] = createMinimalInstallation(manifest.id, false, false, "uninstalled");
+    const before = structuredClone(draft);
+
+    const result = await uninstallAddon(manifest, {
+      ...uninstallDeps(
+        () => getStateSnapshot,
+        (updater) => {
+          draft = updater(draft);
+        },
+      ),
+    });
+
+    expect(result).toEqual({ outcome: "blocked", blockReason: "already-uninstalled" });
+    expect(draft).toEqual(before);
+  });
+
+  it("returns a counts-only audit record", async () => {
+    const manifest = createMinimalManifest("addon.test", "Test Addon");
+    let state = buildDefaultState([manifest]);
+    state.installations[manifest.id] = {
+      ...createMinimalInstallation(manifest.id, true, true, "enabled"),
+      grantedCapabilities: [{ ...capability("network"), granted: true }],
+      privateProviderProfileIds: ["private-profile-123"],
+      config: { apiKey: "secret-config-value" },
+    };
+
+    const result = await uninstallAddon(
+      manifest,
+      uninstallDeps(
+        () => state,
+        (updater) => {
+          state = updater(state);
+        },
+      ),
+    );
+    const auditJson = JSON.stringify(result.audit);
+
+    expect(result.audit?.clearedCapabilities).toEqual(["network"]);
+    expect(result.audit?.clearedPrivateProviderProfileIds).toBe(1);
+    expect(auditJson).not.toContain("private-profile-123");
+    expect(auditJson).not.toContain("secret-config-value");
   });
 });
 

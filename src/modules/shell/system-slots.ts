@@ -39,21 +39,47 @@ export const capabilityForSlot = (slotId: SystemSlotId): CapabilityGrant["capabi
   }
 };
 
+export const selectedSystemSlotProviderId = (state: ResonantShellState, slotId: SystemSlotId): string | undefined =>
+  state.activeSystemSlotProviderIds?.[slotId];
+
+const eligibleSystemSlotProvider = (
+  state: ResonantShellState,
+  manifest: AddOnManifest,
+  slotId: SystemSlotId,
+): SystemSlotProvider | null => {
+  if (!manifest.systemSlots?.some((slot) => slot.id === slotId)) {
+    return null;
+  }
+  const installation = state.installations[manifest.id];
+  if (!installation?.enabled) {
+    return null;
+  }
+  const requiredCapability = capabilityForSlot(slotId);
+  if (!installation.grantedCapabilities.some((grant) => grant.capability === requiredCapability && grant.granted)) {
+    return null;
+  }
+  return { manifest, installation };
+};
+
 export const activeSystemSlotProvider = (
   state: ResonantShellState,
   manifests: AddOnManifest[],
   slotId: SystemSlotId,
 ): SystemSlotProvider | null => {
+  const selectedManifestId = selectedSystemSlotProviderId(state, slotId);
+  const selectedManifest = selectedManifestId ? manifests.find((manifest) => manifest.id === selectedManifestId) : undefined;
+  if (selectedManifest) {
+    const selectedProvider = eligibleSystemSlotProvider(state, selectedManifest, slotId);
+    if (selectedProvider) {
+      return selectedProvider;
+    }
+  }
+
   for (const manifest of manifestsForSystemSlot(manifests, slotId)) {
-    const installation = state.installations[manifest.id];
-    if (!installation?.enabled) {
-      continue;
+    const provider = eligibleSystemSlotProvider(state, manifest, slotId);
+    if (provider) {
+      return provider;
     }
-    const requiredCapability = capabilityForSlot(slotId);
-    if (!installation.grantedCapabilities.some((grant) => grant.capability === requiredCapability && grant.granted)) {
-      continue;
-    }
-    return { manifest, installation };
   }
 
   return null;

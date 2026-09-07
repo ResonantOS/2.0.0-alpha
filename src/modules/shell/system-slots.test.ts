@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { AddOnManifest, CapabilityGrant, SystemSlotId } from "../../core/contracts";
 import { buildDefaultState } from "../../core/defaults";
 import { applyFirstRunRecommendedAddOns } from "./controller";
-import { activeSystemSlotProvider, systemSlotAvailable } from "./system-slots";
+import { activeSystemSlotProvider, selectedSystemSlotProviderId, systemSlotAvailable } from "./system-slots";
 
 const grant = (capability: CapabilityGrant["capability"]): CapabilityGrant => ({
   capability,
@@ -117,5 +117,113 @@ describe("system slot replacement runtime", () => {
     expect(activeSystemSlotProvider(granted, manifests, "memory-system")?.manifest.id).toBe(memoryManifest.id);
     expect(systemSlotAvailable(granted, manifests, "chat-interface")).toBe(true);
     expect(systemSlotAvailable(granted, manifests, "memory-system")).toBe(true);
+  });
+
+  it("activeSystemSlotProvider prefers the selected provider when it is enabled and granted", () => {
+    const first = manifestForSlot("addon.first", "memory-system", "memory-provider");
+    const selected = manifestForSlot("addon.selected", "memory-system", "memory-provider");
+    const state = {
+      ...buildDefaultState([first, selected]),
+      activeSystemSlotProviderIds: { "memory-system": selected.id },
+      installations: {
+        [first.id]: {
+          ...buildDefaultState([first]).installations[first.id],
+          installed: true,
+          enabled: true,
+          grantedCapabilities: [{ ...grant("memory-provider"), granted: true }],
+        },
+        [selected.id]: {
+          ...buildDefaultState([selected]).installations[selected.id],
+          installed: true,
+          enabled: true,
+          grantedCapabilities: [{ ...grant("memory-provider"), granted: true }],
+        },
+      },
+    };
+
+    expect(selectedSystemSlotProviderId(state, "memory-system")).toBe(selected.id);
+    expect(activeSystemSlotProvider(state, [first, selected], "memory-system")?.manifest.id).toBe(selected.id);
+  });
+
+  it("falls back to the first eligible provider when the selection is disabled or ungranted", () => {
+    const first = manifestForSlot("addon.first", "chat-interface", "chat-interface");
+    const disabled = manifestForSlot("addon.disabled", "chat-interface", "chat-interface");
+    const ungranted = manifestForSlot("addon.ungranted", "chat-interface", "chat-interface");
+    const base = buildDefaultState([first, disabled, ungranted]);
+    const eligibleInstallation = {
+      ...base.installations[first.id],
+      installed: true,
+      enabled: true,
+      grantedCapabilities: [{ ...grant("chat-interface"), granted: true }],
+    };
+
+    expect(
+      activeSystemSlotProvider(
+        {
+          ...base,
+          activeSystemSlotProviderIds: { "chat-interface": disabled.id },
+          installations: {
+            ...base.installations,
+            [first.id]: eligibleInstallation,
+            [disabled.id]: {
+              ...base.installations[disabled.id],
+              installed: true,
+              enabled: false,
+              grantedCapabilities: [{ ...grant("chat-interface"), granted: true }],
+            },
+          },
+        },
+        [first, disabled, ungranted],
+        "chat-interface",
+      )?.manifest.id,
+    ).toBe(first.id);
+
+    expect(
+      activeSystemSlotProvider(
+        {
+          ...base,
+          activeSystemSlotProviderIds: { "chat-interface": ungranted.id },
+          installations: {
+            ...base.installations,
+            [first.id]: eligibleInstallation,
+            [ungranted.id]: {
+              ...base.installations[ungranted.id],
+              installed: true,
+              enabled: true,
+              grantedCapabilities: [{ ...grant("chat-interface"), granted: false }],
+            },
+          },
+        },
+        [first, disabled, ungranted],
+        "chat-interface",
+      )?.manifest.id,
+    ).toBe(first.id);
+  });
+
+  it("ignores a selection naming a manifest that does not declare the slot", () => {
+    const first = manifestForSlot("addon.first", "memory-system", "memory-provider");
+    const selected = manifestForSlot("addon.selected-chat", "chat-interface", "chat-interface");
+    const base = buildDefaultState([first, selected]);
+    const state = {
+      ...base,
+      activeSystemSlotProviderIds: { "memory-system": selected.id },
+      installations: {
+        ...base.installations,
+        [first.id]: {
+          ...base.installations[first.id],
+          installed: true,
+          enabled: true,
+          grantedCapabilities: [{ ...grant("memory-provider"), granted: true }],
+        },
+        [selected.id]: {
+          ...base.installations[selected.id],
+          installed: true,
+          enabled: true,
+          grantedCapabilities: [{ ...grant("chat-interface"), granted: true }],
+        },
+      },
+    };
+
+    expect(activeSystemSlotProvider(state, [first, selected], "memory-system")?.manifest.id).toBe(first.id);
   });
 });

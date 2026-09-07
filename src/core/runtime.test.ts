@@ -468,4 +468,65 @@ describe("runtime state migration", () => {
     expect(installation.privateProviderProfileIds).toEqual([]);
     expect("config" in installation).toBe(false);
   });
+
+  it("normalizeState keeps persisted slot selection and fills missing slots from defaults", () => {
+    const defaultMemoryProvider = {
+      ...testManifest("addon.default-memory"),
+      systemSlots: [
+        { id: "memory-system", role: "default-provider", replaceable: true, recommended: true },
+      ],
+    } satisfies AddOnManifest;
+    const persistedChatProvider = {
+      ...testManifest("addon.persisted-chat"),
+      systemSlots: [
+        { id: "chat-interface", role: "default-provider", replaceable: true, recommended: true },
+      ],
+    } satisfies AddOnManifest;
+    const base = buildDefaultState([defaultMemoryProvider, persistedChatProvider]);
+    const persisted = {
+      ...base,
+      activeSystemSlotProviderIds: { "chat-interface": "addon.custom-chat" },
+    } satisfies ResonantShellState;
+
+    const normalized = normalizeState(persisted, base);
+
+    expect(normalized.activeSystemSlotProviderIds).toEqual({
+      "memory-system": "addon.default-memory",
+      "chat-interface": "addon.custom-chat",
+    });
+  });
+
+  it("rebaseStateOnManifests preserves slot selection and tolerates a legacy object without the field", () => {
+    const defaultChatProvider = {
+      ...testManifest("addon.default-chat"),
+      systemSlots: [
+        { id: "chat-interface", role: "default-provider", replaceable: true, recommended: true },
+      ],
+    } satisfies AddOnManifest;
+    const persistedMemoryProvider = {
+      ...testManifest("addon.persisted-memory"),
+      systemSlots: [
+        { id: "memory-system", role: "default-provider", replaceable: true, recommended: true },
+      ],
+    } satisfies AddOnManifest;
+    const base = buildDefaultState([defaultChatProvider, persistedMemoryProvider]);
+    const legacy = { ...base };
+    delete (legacy as Partial<ResonantShellState>).activeSystemSlotProviderIds;
+
+    const rebasedLegacy = rebaseStateOnManifests(legacy as ResonantShellState, [defaultChatProvider], []);
+    const rebasedPersisted = rebaseStateOnManifests(
+      {
+        ...base,
+        activeSystemSlotProviderIds: { "memory-system": "addon.missing-from-catalog" },
+      },
+      [defaultChatProvider, persistedMemoryProvider],
+      [],
+    );
+
+    expect(rebasedLegacy.activeSystemSlotProviderIds).toEqual({ "chat-interface": "addon.default-chat" });
+    expect(rebasedPersisted.activeSystemSlotProviderIds).toEqual({
+      "chat-interface": "addon.default-chat",
+      "memory-system": "addon.missing-from-catalog",
+    });
+  });
 });
