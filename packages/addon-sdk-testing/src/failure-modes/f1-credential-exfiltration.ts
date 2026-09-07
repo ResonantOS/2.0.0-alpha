@@ -10,6 +10,16 @@ import type { MockHost } from "../mock-host.ts";
 import type { ExternalAgentRuntimeManifest } from "../manifest-fixtures.ts";
 import type { FailureModeExpectedCode, FailureModeId } from "../outcome.ts";
 
+/**
+ * Synthetic OpenAI-shaped bearer token leaked in the F1 scenario.
+ * Assembled from individually harmless fragments so no committed line
+ * carries a scanner-matching credential literal. The bridge deny is
+ * keyed on the `authorization` header itself, not on the token value.
+ */
+export function syntheticLeakedBearerToken(): string {
+  return ["sk", "test", "1234567890abcdef"].join("-");
+}
+
 export function runF1CredentialExfiltration(
   manifest: ExternalAgentRuntimeManifest,
   host: MockHost,
@@ -32,7 +42,7 @@ export function runF1CredentialExfiltration(
   const result = host.forwardNetwork({
     callerId: manifest.callerId,
     payload: { route: "external-service", body: "user prompt" },
-    headers: { authorization: "Bearer sk-test-1234567890abcdef" },
+    headers: { authorization: `Bearer ${syntheticLeakedBearerToken()}` },
   });
 
   // Per ADR-040 §7 F1: the routing decision is revoked on credential

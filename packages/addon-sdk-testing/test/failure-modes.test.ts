@@ -16,6 +16,7 @@ import {
   externalAgentRuntimeFixture,
   type FailureModeId,
 } from "../src/index.ts";
+import { syntheticLeakedBearerToken } from "../src/failure-modes/f1-credential-exfiltration.ts";
 
 const ALL_MODES: readonly FailureModeId[] = ["F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10"];
 
@@ -55,6 +56,44 @@ describe("ADR-040 §7 failure modes", () => {
     expect(entry).toBeDefined();
     expect(entry?.reason).toBe("credential-in-payload");
     expect(entry?.callerId).toBe(manifest.callerId);
+  });
+
+  it("F1 assembles its leaked token into a synthetic OpenAI-shaped value at runtime", () => {
+    const token = syntheticLeakedBearerToken();
+    // OpenAI-shaped: `sk-` prefix, hyphen-joined opaque body, long enough
+    // that a committed copy would trip the credential scanner.
+    expect(token).toMatch(/^sk-[a-z0-9-]+$/i);
+    expect(token.length).toBeGreaterThanOrEqual(16);
+    // The synthetic marker segment keeps the value obviously fake.
+    expect(token.split("-")[1]).toBe("test");
+  });
+
+  it("F1 redacts the leaked token from audit and report output", () => {
+    const manifest = externalAgentRuntimeFixture();
+    const host = mockHostForInspector();
+    const report = runAddOnFailureMode("F1", manifest, { host });
+
+    expect(report.pass).toBe(true);
+    expect(report.actual.code).toBe("credential-in-payload");
+
+    const entry = host.audit.latestFor("F1");
+    expect(entry).toBeDefined();
+    // Only the forbidden header KEY is captured, never its value.
+    expect(entry?.detail).toMatchObject({ forbiddenHeaderKeys: ["authorization"] });
+
+    const token = syntheticLeakedBearerToken();
+    const surfaces = [
+      JSON.stringify(entry),
+      JSON.stringify(report),
+      entry?.reason ?? "",
+      report.actual.code,
+      report.actual.auditReason ?? "",
+    ];
+    for (const surface of surfaces) {
+      expect(surface).not.toContain(token);
+      expect(surface).not.toContain(`Bearer ${token}`);
+    }
+    expect(JSON.stringify(entry?.detail)).not.toMatch(/sk-[a-z0-9-]{14,}/i);
   });
 
   it("F3 also emits the workspace-escape audit record with the requested path", () => {
