@@ -43,7 +43,7 @@ function row({ title, meta, actionLabel = "", onAction = null, actions = [] }) {
       const action = document.createElement("button");
       action.type = "button";
       action.textContent = itemAction.label;
-      action.addEventListener("click", () => void itemAction.onAction());
+      action.addEventListener("click", () => void itemAction.onAction(action));
       actionGroup.append(action);
     });
     item.append(actionGroup);
@@ -205,6 +205,32 @@ export function renderBrowserControlSection(container, { bridgeRequest, getBridg
     jobsDisclosure
   );
 
+  let grantPending = false;
+  const grantAction = (label, mutate) => {
+    let updated = false;
+    return async (button) => {
+      if (button.disabled || grantPending) return;
+      grantPending = true;
+      button.disabled = true;
+      setStatus(statusNode, updated ? "Refreshing permissions..." : `${label} in progress...`);
+      try {
+        if (!updated) {
+          await mutate();
+          updated = true;
+        }
+        await load();
+      } catch (error) {
+        setStatus(statusNode, updated
+          ? `Permission updated, but settings refresh failed: ${safeErrorMessage(error)}. Use Refresh to check current grants.`
+          : `${label} could not be confirmed: ${safeErrorMessage(error)}. Refresh Settings to check current grants before retrying.`, "error");
+      } finally {
+        grantPending = false;
+        button.textContent = updated ? "Refresh" : label;
+        button.disabled = false;
+      }
+    };
+  };
+
   const load = async () => {
     const tab = await activeTab(chromeApi);
     const siteKey = readableTab(tab) && sitePermissionStore
@@ -214,8 +240,8 @@ export function renderBrowserControlSection(container, { bridgeRequest, getBridg
       ? await sitePermissionStore.permissionForUrl(tab.url)
       : "unavailable";
     const [sitePermissions, taskConsents, jobs, activeJobId, downloads] = await Promise.all([
-      sitePermissionStore?.sitePermissions?.().catch(() => ({})) ?? {},
-      taskConsentStore?.taskConsents?.().catch(() => ({})) ?? {},
+      sitePermissionStore?.sitePermissions?.() ?? {},
+      taskConsentStore?.taskConsents?.() ?? {},
       readStored(storage, storageKeys.browserJobs, []),
       readStored(storage, storageKeys.activeBrowserJob, ""),
       bridgeRequest?.("/browser/downloads", { method: "GET" }).catch(() => ({ entries: [], total: 0, root: "" })) ?? { entries: [], total: 0, root: "" }
@@ -242,10 +268,12 @@ export function renderBrowserControlSection(container, { bridgeRequest, getBridg
         title: key,
         meta: `site permission · ${permissionLabel(value)}`,
         actionLabel: "Reset",
-        onAction: async () => {
-          await sitePermissionStore?.resetSitePermission?.(key, { reason: "Reset from Settings Browser Control", source: "settings" });
-          await load();
-        }
+        onAction: grantAction("Reset", async () => {
+          if (typeof sitePermissionStore?.resetSitePermission !== "function") {
+            throw new Error("Site permission reset is unavailable.");
+          }
+          await sitePermissionStore.resetSitePermission(key, { reason: "Reset from Settings Browser Control", source: "settings" });
+        })
       }));
     }
     for (const consent of consentEntries) {
@@ -253,15 +281,17 @@ export function renderBrowserControlSection(container, { bridgeRequest, getBridg
         title: `${consent.siteKey} · ${consent.taskClass}`,
         meta: `task consent · ${consent.mode} · expires ${new Date(consent.expiresAt).toLocaleDateString()}`,
         actionLabel: "Revoke",
-        onAction: async () => {
-          await taskConsentStore?.revokeTaskConsent?.({
+        onAction: grantAction("Revoke", async () => {
+          if (typeof taskConsentStore?.revokeTaskConsent !== "function") {
+            throw new Error("Task consent revocation is unavailable.");
+          }
+          await taskConsentStore.revokeTaskConsent({
             siteKey: consent.siteKey,
             taskClass: consent.taskClass,
             reason: "Revoked from Settings Browser Control",
             source: "settings"
           });
-          await load();
-        }
+        })
       }));
     }
     if (!permissionEntries.length && !consentEntries.length) {
