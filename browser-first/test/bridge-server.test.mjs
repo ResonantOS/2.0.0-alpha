@@ -9,7 +9,7 @@ import {
   isUnauthorizedBridgeError,
   resolveBridgeConfig,
 } from "../resonantos-side-panel-extension/src/lib/bridge-client.js";
-import { constantTimeEqual, evaluateBridgeRequestForSelfTest, startBridgeServer } from "../host/bridge-server.mjs";
+import { constantTimeEqual, evaluateBridgeRequestForSelfTest, startBridgeServer, summarizeBridgeAuthSelfTest } from "../host/bridge-server.mjs";
 
 test("constant-time token comparison preserves exact-match and length checks", () => {
   assert.equal(constantTimeEqual("capability-token", "capability-token"), true);
@@ -717,4 +717,14 @@ test("runBridgeAuthSelfTest proves token auth and default-deny on a real socket"
   assert.equal(result.missingCapabilityStatus, 403, "a valid bridge token without the capability header must be refused");
   assert.equal(result.authorizedStatus, 200);
   assert.equal(result.ok, true);
+});
+
+test("bridge auth self-test summary only reports ok when default-deny held", () => {
+  const healthy = summarizeBridgeAuthSelfTest({ unauthorizedStatus: 401, wrongTokenStatus: 401, missingCapabilityStatus: 403, authorizedStatus: 200 });
+  assert.equal(healthy.ok, true);
+  assert.equal(healthy.bridgeTokenOnlyStatus, 403, "the in-process self-test's field name is mirrored for operators");
+  const denyRegressed = summarizeBridgeAuthSelfTest({ unauthorizedStatus: 401, wrongTokenStatus: 401, missingCapabilityStatus: 200, authorizedStatus: 200 });
+  assert.equal(denyRegressed.ok, false, "a bridge-token-only 200 means an undeclared or unguarded route was served; the self-test must fail");
+  const tokenRegressed = summarizeBridgeAuthSelfTest({ unauthorizedStatus: 200, wrongTokenStatus: 401, missingCapabilityStatus: 403, authorizedStatus: 200 });
+  assert.equal(tokenRegressed.ok, false);
 });

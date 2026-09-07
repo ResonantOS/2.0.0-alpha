@@ -1443,12 +1443,25 @@ export async function runBridgeAuthSelfTest({ port, bridgeToken, extensionOrigin
     },
   });
   server.close();
-  return {
-    ok: unauthorized.status === 401 && wrongToken.status === 401 && missingCapability.status === 403 && authorized.ok,
+  return summarizeBridgeAuthSelfTest({
     unauthorizedStatus: unauthorized.status,
     wrongTokenStatus: wrongToken.status,
     missingCapabilityStatus: missingCapability.status,
-    bridgeTokenOnlyStatus: missingCapability.status,
     authorizedStatus: authorized.status,
+  });
+}
+
+// Pure so the pass/fail rule is unit-testable without a socket: the self-test is only ok when
+// token auth held (401/401), default-deny held (bridge token alone -> 403), and the fully
+// authorized probe succeeded. bridgeTokenOnlyStatus mirrors the in-process self-test's field name.
+export function summarizeBridgeAuthSelfTest({ unauthorizedStatus, wrongTokenStatus, missingCapabilityStatus, authorizedStatus }) {
+  const authorizedOk = authorizedStatus >= 200 && authorizedStatus < 300;
+  return {
+    ok: unauthorizedStatus === 401 && wrongTokenStatus === 401 && missingCapabilityStatus === 403 && authorizedOk,
+    unauthorizedStatus,
+    wrongTokenStatus,
+    missingCapabilityStatus,
+    bridgeTokenOnlyStatus: missingCapabilityStatus,
+    authorizedStatus,
   };
 }
