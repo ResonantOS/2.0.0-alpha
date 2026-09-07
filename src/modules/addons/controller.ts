@@ -165,6 +165,17 @@ const decideUninstall = (state: ResonantShellState, manifest: AddOnManifest): Un
   return { ok: true, installation };
 };
 
+export const describeUninstallBlock = (
+  state: ResonantShellState,
+  manifest: AddOnManifest,
+): { blockReason: UninstallAddonBlockReason; blockDetail?: string } | null => {
+  const decision = decideUninstall(state, manifest);
+  if (decision.ok) {
+    return null;
+  }
+  return { blockReason: decision.blockReason, blockDetail: decision.blockDetail };
+};
+
 const runningWorkBlockDetail = (error: unknown): string =>
   error instanceof Error ? error.message : typeof error === "string" ? error : "Running add-on work could not be stopped.";
 

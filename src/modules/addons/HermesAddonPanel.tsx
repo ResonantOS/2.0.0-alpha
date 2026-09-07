@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { AddOnInstallation, CapabilityGrant, HermesInstallStatus } from "../../core/contracts";
 import { requestHermesInstall, requestHermesStatus } from "../../core/runtime";
+import { addonWorkRegistry, withAddonWork } from "./running-work";
 
 type HermesAddonPanelProps = {
   installation: AddOnInstallation;
@@ -76,10 +77,12 @@ export function HermesAddonPanel({
     setInstallNotice("");
     setInstallLog("");
     try {
-      const result = await requestHermesInstall({
-        profileHome: profileHome.trim() || undefined,
-        branch: "main",
-      });
+      const result = await withAddonWork(addonWorkRegistry, "addon.hermes", () =>
+        requestHermesInstall({
+          profileHome: profileHome.trim() || undefined,
+          branch: "main",
+        }),
+      );
       setStatus(result.status);
       setInstallLog(result.log);
       setInstallNotice(

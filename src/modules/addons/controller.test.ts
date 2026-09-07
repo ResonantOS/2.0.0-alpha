@@ -27,6 +27,7 @@ const logicianMocks = vi.hoisted(() => ({
 
 vi.mock("../../core/logician", () => logicianMocks);
 import {
+  describeUninstallBlock,
   executeSideloadManifest,
   grantAddonCapabilities,
   runAddonLogicianHook,
@@ -290,6 +291,43 @@ describe("toggleAddonCapabilityGrant", () => {
 });
 
 describe("uninstallAddon", () => {
+  it("describeUninstallBlock mirrors decideUninstall for allowed, not-installed, uninstalled and active-slot cases", () => {
+    const allowedManifest = createMinimalManifest("addon.allowed", "Allowed");
+    const missingManifest = createMinimalManifest("addon.missing", "Missing");
+    const uninstalledManifest = createMinimalManifest("addon.removed", "Removed");
+    const activeSlotManifest = createSystemSlotManifest("addon.default");
+    const state = buildDefaultState([allowedManifest, missingManifest, uninstalledManifest, activeSlotManifest]);
+    state.installations[allowedManifest.id] = createMinimalInstallation(allowedManifest.id, true, true, "enabled");
+    state.installations[uninstalledManifest.id] = createMinimalInstallation(
+      uninstalledManifest.id,
+      false,
+      false,
+      "uninstalled",
+    );
+    state.installations[activeSlotManifest.id] = createMinimalInstallation(activeSlotManifest.id, true, true, "enabled");
+    state.activeSystemSlotProviderIds = { "primary-agent": activeSlotManifest.id };
+
+    expect(describeUninstallBlock(state, allowedManifest)).toBeNull();
+    expect(describeUninstallBlock(state, missingManifest)).toEqual({ blockReason: "not-installed" });
+    expect(describeUninstallBlock(state, uninstalledManifest)).toEqual({ blockReason: "already-uninstalled" });
+    expect(describeUninstallBlock(state, activeSlotManifest)).toEqual({
+      blockReason: "active-system-slot-provider",
+      blockDetail: "primary-agent",
+    });
+  });
+
+  it("describeUninstallBlock never blocks sideloaded providers", () => {
+    const manifest = createSystemSlotManifest("addon.sideloaded");
+    const state = buildDefaultState([manifest]);
+    state.activeSystemSlotProviderIds = { "primary-agent": manifest.id };
+    state.installations[manifest.id] = {
+      ...createMinimalInstallation(manifest.id, true, true, "enabled"),
+      source: "sideload",
+    };
+
+    expect(describeUninstallBlock(state, manifest)).toBeNull();
+  });
+
   it("clears grants provider profiles and config", async () => {
     const manifest = createMinimalManifest("addon.test", "Test Addon");
     let state = buildDefaultState([manifest]);
