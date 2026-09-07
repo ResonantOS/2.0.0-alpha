@@ -73,6 +73,7 @@ review, promotion, or trusted-memory writes.
 
 Read [ADR-006: Add-On Runtime SDK](architecture/ADR-006-addon-runtime-sdk.md),
 [ADR-023: Add-On Repository And Registry](architecture/ADR-023-addon-repository-registry-model.md),
+[Add-On Lifecycle Uninstall Design](addons/addon-lifecycle-uninstall-design.md),
 and [Module Ownership](architecture/MODULE-OWNERSHIP.md). For the separate
 controlled Chromium package, use its
 [component README](../addons/resonant-browser-host/README.md).
