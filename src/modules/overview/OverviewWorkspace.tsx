@@ -96,7 +96,7 @@ export function OverviewWorkspace({
                   <small>{runtimeLabel(app.runtimeSurface)}</small>
                   <span>{app.description}</span>
                 </span>
-                <span className={`app-status app-status-${statusTone(app.status)}`}>{app.status}</span>
+                <span className={`app-status app-status-${statusTone(app.status)}`}>{statusLabel(app.status)}</span>
               </button>
             ))}
           </div>
@@ -182,7 +182,7 @@ function ActiveAppSurface({
           <h3>{app.name}</h3>
           <p>{app.description}</p>
         </div>
-        <span className={`app-status app-status-${statusTone(app.status)}`}>{app.status}</span>
+        <span className={`app-status app-status-${statusTone(app.status)}`}>{statusLabel(app.status)}</span>
       </div>
 
       <div className={`workspace-preview ${isTerminal ? "terminal" : isEmbedded ? "embedded" : "system"}`}>
@@ -272,7 +272,7 @@ function buildLauncherApps(state: ResonantShellState, manifests: AddOnManifest[]
     const installation = state.installations[manifest.id];
     const installedStatus = installation?.enabled
       ? "enabled"
-      : installation?.installed
+      : installation
         ? installation.status
         : "available";
 
@@ -401,6 +401,22 @@ function statusTone(status: LauncherApp["status"]) {
     return "warning";
   }
   return "idle";
+}
+
+function statusLabel(status: LauncherApp["status"]) {
+  const labels: Record<LauncherApp["status"], string> = {
+    available: "Available",
+    installed: "Installed",
+    enabled: "Enabled",
+    disabled: "Disabled",
+    degraded: "Degraded",
+    "update-available": "Update available",
+    incompatible: "Incompatible",
+    uninstalled: "Uninstalled",
+    core: "Core",
+    planned: "Planned",
+  };
+  return labels[status];
 }
 
 function appIcon(app: LauncherApp) {

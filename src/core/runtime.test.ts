@@ -1,10 +1,27 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AddOnManifest, ResonantShellState } from "./contracts";
+import type { AddOnManifest, InstallationStatus, ResonantShellState } from "./contracts";
 import { buildDefaultState } from "./defaults";
 import { applyProviderCredentialStatuses, normalizeState, rebaseStateOnManifests, requestProviderSmokeTest } from "./runtime";
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+const testManifest = (id: string): AddOnManifest => ({
+  id,
+  name: id,
+  version: "0.1.0",
+  author: "test",
+  category: "integration",
+  description: "test",
+  runtimeType: "local-service",
+  surfaces: [],
+  requestedCapabilities: [],
+  providerRequirements: { sharedProfiles: [], supportsPrivateCredentials: false },
+  archiveIntegration: { readScopes: [], intakeWriteScopes: [], canRequestIngest: false, canWriteKnowledgePages: false },
+  health: { strategy: "none" },
+  installHooks: {},
+  compatibility: { shellVersion: "^0.1.0", platforms: ["macOS"] },
 });
 
 describe("runtime state migration", () => {
@@ -417,5 +434,38 @@ describe("runtime state migration", () => {
       "ui-embedding",
     ]);
     expect(rebased.installations["addon.browser"].recommendedGrantPresetIds).toContain("browser-visible-session");
+  });
+
+  it("rebaseStateOnManifests preserves uninstalled state without restoring grants", () => {
+    const manifest = {
+      ...testManifest("addon.obsidian"),
+      requestedCapabilities: [{ capability: "filesystem", granted: false, scope: "shared", revocationBehavior: "hard-stop" }],
+    } satisfies AddOnManifest;
+    const base = buildDefaultState([manifest]);
+    const stale = {
+      ...base,
+      installations: {
+        ...base.installations,
+        "addon.obsidian": {
+          ...base.installations["addon.obsidian"],
+          installed: false,
+          enabled: false,
+          status: "uninstalled" as InstallationStatus,
+          grantedCapabilities: [{ capability: "filesystem", granted: true, scope: "shared", revocationBehavior: "hard-stop" }],
+          privateProviderProfileIds: ["profile-stale"],
+          config: { vaultPath: "/tmp/stale-vault" },
+        },
+      },
+    } satisfies ResonantShellState;
+
+    const rebased = rebaseStateOnManifests(stale, [manifest], []);
+    const installation = rebased.installations["addon.obsidian"];
+
+    expect(installation.status).toBe("uninstalled");
+    expect(installation.installed).toBe(false);
+    expect(installation.enabled).toBe(false);
+    expect(installation.grantedCapabilities).toEqual([]);
+    expect(installation.privateProviderProfileIds).toEqual([]);
+    expect("config" in installation).toBe(false);
   });
 });

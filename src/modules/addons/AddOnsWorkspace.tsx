@@ -9,6 +9,7 @@ import type {
   AddOnScriptDefinition,
   BrowserEngineStatus,
   CapabilityGrant,
+  InstallationStatus,
   LogicianExecutionArtifact,
   VerifyAgentReport,
   ShellSectionId,
@@ -90,6 +91,20 @@ const hasScaffoldContract = (manifest: AddOnManifest): boolean =>
 const shellNavigationSectionFor = (manifest: AddOnManifest): ShellSectionId | null =>
   manifest.surfaces.find((surface) => surface.shellNavigation)?.shellNavigation?.sectionId ?? null;
 
+const installationStatusLabel = (status: InstallationStatus): string => {
+  const labels: Record<InstallationStatus, string> = {
+    available: "Available",
+    installed: "Installed",
+    enabled: "Enabled",
+    disabled: "Disabled",
+    degraded: "Degraded",
+    "update-available": "Update available",
+    incompatible: "Incompatible",
+    uninstalled: "Uninstalled",
+  };
+  return labels[status];
+};
+
 const addonPrimaryActionLabel = (manifest: AddOnManifest, installation: AddOnInstallation | null): string => {
   if (manifest.id === "addon.browser" && !isBrowserVisibleReady(installation)) {
     return "Install and grant browser access";
@@ -153,7 +168,7 @@ export function AddOnsWorkspace(props: AddOnsWorkspaceProps) {
                     </p>
                   </div>
                   <span className={`tone tone-${effectiveInstallation?.enabled ? "active" : "neutral"}`}>
-                    {registryEntry.installState}
+                    {installationStatusLabel(registryEntry.installState)}
                   </span>
                 </div>
                 <p>{manifest.description}</p>
@@ -289,7 +304,7 @@ function AddOnDetailPanel(props: AddOnDetailPanelProps) {
           </p>
         </div>
         <div className="addon-registry-strip">
-          <span>{props.registryEntry.installState}</span>
+          <span>{installationStatusLabel(props.registryEntry.installState)}</span>
           <span>{props.registryEntry.verificationState}</span>
           <span>{props.registryEntry.manifestRef.label}</span>
         </div>
