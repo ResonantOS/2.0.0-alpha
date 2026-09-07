@@ -10,7 +10,7 @@ export const bridgeTokenHeaderName = "X-ResonantOS-Bridge-Token";
 const bridgeCapabilityHeader = "x-resonantos-bridge-capability-token";
 export const bridgeCapabilityHeaderName = "X-ResonantOS-Bridge-Capability-Token";
 const bridgeCapabilityBootstrapHeader = "x-resonantos-capability-bootstrap-token";
-export const bridgeCapabilityBootstrapHeaderName = "X-ResonantOS-Capability-Bootstrap-Token";
+const bridgeCapabilityBootstrapHeaderName = "X-ResonantOS-Capability-Bootstrap-Token";
 
 // ResonantOS bridge network configuration
 // (read by startBridgeServer / writeBridgeConfig)
