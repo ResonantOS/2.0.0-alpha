@@ -4,6 +4,10 @@ Community-contributed design reference for ResonantOS. Nothing here is
 imported by the runtime; these are the visual contracts and source material
 for anyone building panels, add-ons, or app-shell UI.
 
+- [Browser-first Settings component shapes](SETTINGS-COMPONENT-SHAPES.md) —
+  scoped runtime radius contract; preserves the existing palette and explains
+  which ROSI generation informs Settings components.
+
 ## ROSI — Resonant OS Interface design system
 
 For implemented Settings density behavior, see

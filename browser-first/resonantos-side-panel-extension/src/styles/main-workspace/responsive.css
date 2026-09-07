@@ -81,29 +81,7 @@
   .memory-review-draft,
   .memory-review-preview,
   .memory-source-candidate,
-  .opencode-card,
-  .settings-workspace,
-  .settings-subnav,
-  .settings-provider-card,
-  .settings-addon-card,
-  .settings-routing-card,
-  .settings-note,
-  .settings-health-card,
-  .settings-provider-panel,
-  .settings-provider-modal-panel,
-  .settings-provider-field input,
-  .settings-provider-field select,
-  .settings-provider-field textarea,
-  .settings-route-badge,
-  .settings-provider-summary span,
-  .settings-provider-model-options label,
-  .settings-provider-recovery-row,
-  .settings-provider-history-row,
-  .settings-diagnostics-row,
-  .settings-control-row,
-  .settings-work-row,
-  .settings-archive-row,
-  .settings-work-empty
+  .opencode-card
 ) {
   border-radius: 3px !important;
 }
@@ -133,9 +111,24 @@ button:not(.icon-button):not(.send-button):not(.rail-icon-button),
   .opencode-card button
 ) {
   border: 0 !important;
-  border-radius: 3px !important;
   box-shadow: none !important;
   padding: 5px 8px;
+}
+
+/* Settings owns its component shapes; keep the compact skin elsewhere. */
+button:not(.icon-button):not(.send-button):not(.rail-icon-button):not(.settings-workspace *):not(.settings-provider-modal *),
+:where(
+  .module-form button,
+  .module-action-row button,
+  .addon-card-actions button,
+  .artifacts-hero button,
+  .memory-card button,
+  .memory-review-actions button,
+  .memory-source-candidates button,
+  .artifact-actions button,
+  .opencode-card button
+) {
+  border-radius: 3px !important;
 }
 
 :where(
