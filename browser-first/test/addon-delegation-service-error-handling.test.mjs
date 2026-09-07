@@ -322,6 +322,12 @@ test("uninstall audit rejects malformed records and appends nothing", async () =
       ["path date", validUninstallAuditRecord({ at: "/Users/x" }), ["/Users/x"]],
       ["non-canonical date", validUninstallAuditRecord({ at: "2026-09-07T00:00:00Z" }), ["2026-09-07T00:00:00Z"]],
       ["array payload", [validUninstallAuditRecord()], ["addon.hermes"]],
+      ["bad source", validUninstallAuditRecord({ source: "marketplace" }), ["marketplace"]],
+      ["bad previous status", validUninstallAuditRecord({ previousStatus: "installing" }), ["installing"]],
+      ["non-boolean previousInstalled", validUninstallAuditRecord({ previousInstalled: "yes" }), ["yes"]],
+      ["non-boolean configDeleted", validUninstallAuditRecord({ configDeleted: 1 }), []],
+      ["negative profile count", validUninstallAuditRecord({ clearedPrivateProviderProfileIds: -1 }), ["-1"]],
+      ["oversized profile count", validUninstallAuditRecord({ clearedPrivateProviderProfileIds: 10_001 }), ["10001"]],
     ];
 
     for (const [name, payload, forbiddenValues] of cases) {
@@ -357,9 +363,14 @@ test("running-work reports running delegations per add-on", async () => {
       target: "hermes",
       mission: "Keep one Hermes delegation completed.",
     });
+    const failed = await service.executeDelegationRecord({
+      target: "hermes",
+      mission: "Keep one Hermes delegation failed.",
+    });
     await rewriteDelegationStatus(root, running, "running");
     await rewriteDelegationStatus(root, queued, "queued");
     await rewriteDelegationStatus(root, completed, "completed");
+    await rewriteDelegationStatus(root, failed, "failed");
 
     const hermes = await service.executeAddonRunningWork({ addonId: "addon.hermes" });
     const opencode = await service.executeAddonRunningWork({ addonId: "addon.opencode" });
@@ -436,6 +447,18 @@ test("running-work rejects unknown keys", async () => {
     await assert.rejects(
       () => service.executeAddonRunningWork({ addonId: "addon.hermes", target: "hermes" }),
       /^Error: Running-work query rejected: unexpected-keys$/,
+    );
+    await assert.rejects(
+      () => service.executeAddonRunningWork(["addon.hermes"]),
+      /^Error: Running-work query rejected: not-an-object$/,
+    );
+    await assert.rejects(
+      () => service.executeAddonRunningWork({ addonId: "../hermes" }),
+      (error) => {
+        assert.match(error.message, /^Running-work query rejected: addonId$/);
+        assert.equal(error.message.includes("../"), false);
+        return true;
+      },
     );
   });
 });
