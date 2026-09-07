@@ -154,6 +154,18 @@ export function createAddonDelegationHostService(handlers = {}) {
       },
       {
         method: "POST",
+        path: "/addons/uninstall-audit",
+        requiredCapability: "addon-record-write",
+        handler: required("executeAddonUninstallAudit"),
+      },
+      {
+        method: "POST",
+        path: "/addons/running-work",
+        requiredCapability: "addon-record-read",
+        handler: required("executeAddonRunningWork"),
+      },
+      {
+        method: "POST",
         path: "/goals",
         requiredCapability: "addon-record-write",
         handler: required("executeGoalRecord"),

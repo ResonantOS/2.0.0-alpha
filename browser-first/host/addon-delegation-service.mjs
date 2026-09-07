@@ -498,6 +498,101 @@ export function createAddonDelegationService(dependencies) {
     return match ? match[1].trim() : "";
   }
 
+  function isPlainObject(value) {
+    return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  }
+
+  const addonIdPattern = /^[a-z0-9][a-z0-9._-]{0,119}$/i;
+  const addonCapabilityPattern = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
+  const uninstallAuditKeys = Object.freeze([
+    "actor",
+    "addonId",
+    "alsoDeleteUserDataOffered",
+    "at",
+    "clearedCapabilities",
+    "clearedPrivateProviderProfileIds",
+    "configDeleted",
+    "event",
+    "previousEnabled",
+    "previousInstalled",
+    "previousStatus",
+    "source",
+    "userDataRetained",
+  ]);
+  const installationStatuses = new Set([
+    "available",
+    "installed",
+    "enabled",
+    "disabled",
+    "degraded",
+    "update-available",
+    "incompatible",
+    "uninstalled",
+  ]);
+
+  function rejectUninstallAudit(reason) {
+    throw new Error(`Uninstall audit record rejected: ${reason}`);
+  }
+
+  function rejectRunningWork(reason) {
+    throw new Error(`Running-work query rejected: ${reason}`);
+  }
+
+  function hasExactKeys(payload, allowedKeys) {
+    const keys = Object.keys(payload);
+    const allowed = new Set(allowedKeys);
+    if (keys.some((key) => !allowed.has(key))) return "unexpected-keys";
+    if (allowedKeys.some((key) => !Object.hasOwn(payload, key))) return "missing-keys";
+    return "";
+  }
+
+  function validateCanonicalIsoTimestamp(value) {
+    if (typeof value !== "string") return false;
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return false;
+    return parsed.toISOString() === value;
+  }
+
+  function validateUninstallAuditRecord(payload) {
+    if (!isPlainObject(payload)) rejectUninstallAudit("not-an-object");
+    const keyError = hasExactKeys(payload, uninstallAuditKeys);
+    if (keyError) rejectUninstallAudit(keyError);
+    if (payload.event !== "addonUninstalled") rejectUninstallAudit("event");
+    if (typeof payload.addonId !== "string" || !addonIdPattern.test(payload.addonId)) {
+      rejectUninstallAudit("addonId");
+    }
+    if (!["bundled", "sideload"].includes(payload.source)) rejectUninstallAudit("source");
+    if (!installationStatuses.has(payload.previousStatus)) rejectUninstallAudit("previousStatus");
+    if (
+      typeof payload.previousInstalled !== "boolean" ||
+      typeof payload.previousEnabled !== "boolean" ||
+      typeof payload.configDeleted !== "boolean" ||
+      typeof payload.alsoDeleteUserDataOffered !== "boolean"
+    ) {
+      rejectUninstallAudit("booleans");
+    }
+    if (payload.userDataRetained !== true) rejectUninstallAudit("userDataRetained");
+    if (payload.actor !== "human") rejectUninstallAudit("actor");
+    if (
+      !Array.isArray(payload.clearedCapabilities) ||
+      payload.clearedCapabilities.length > 64 ||
+      payload.clearedCapabilities.some((capability) => (
+        typeof capability !== "string" || !addonCapabilityPattern.test(capability)
+      ))
+    ) {
+      rejectUninstallAudit("clearedCapabilities");
+    }
+    if (
+      !Number.isInteger(payload.clearedPrivateProviderProfileIds) ||
+      payload.clearedPrivateProviderProfileIds < 0 ||
+      payload.clearedPrivateProviderProfileIds > 10_000
+    ) {
+      rejectUninstallAudit("clearedPrivateProviderProfileIds");
+    }
+    if (!validateCanonicalIsoTimestamp(payload.at)) rejectUninstallAudit("at");
+    return Object.fromEntries(uninstallAuditKeys.map((key) => [key, payload[key]]));
+  }
+
   function sectionFromMarkdown(content, heading) {
     const normalizedContent = String(content ?? "").replace(/\r\n?/g, "\n");
     const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -596,6 +691,68 @@ export function createAddonDelegationService(dependencies) {
     }
     delegations.sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)));
     return { root: path.relative(userRoot(), delegationRoot()), delegations: delegations.slice(0, limit) };
+  }
+
+  async function executeAddonUninstallAudit(payload) {
+    const record = validateUninstallAuditRecord(payload);
+    const recordedAt = new Date().toISOString();
+    await appendAddonGovernanceAuditEntry({
+      ...record,
+      recordedAt,
+      recordedVia: "bridge",
+    });
+    return { recorded: true, addonId: record.addonId, recordedAt };
+  }
+
+  async function executeAddonRunningWork(payload) {
+    if (!isPlainObject(payload)) rejectRunningWork("not-an-object");
+    const keyError = hasExactKeys(payload, ["addonId"]);
+    if (keyError) rejectRunningWork(keyError);
+    if (typeof payload.addonId !== "string" || !addonIdPattern.test(payload.addonId)) {
+      rejectRunningWork("addonId");
+    }
+
+    const targetMap = new Map([
+      ["addon.hermes", ["hermes"]],
+      ["addon.opencode", ["opencode"]],
+    ]);
+    const targets = targetMap.get(payload.addonId) ?? [];
+    const running = [];
+    let queuedCount = 0;
+
+    for (const target of targets) {
+      const root = path.join(delegationRoot(), target);
+      const files = await listFilesRecursive(root, (filePath) => filePath.endsWith(".md"), 300);
+      for (const filePath of files) {
+        const [details, content] = await Promise.all([
+          stat(filePath).catch(() => null),
+          readFile(filePath, "utf8").catch(() => ""),
+        ]);
+        const status = (fieldFromMarkdown(content, "status") || "queued").toLowerCase();
+        if (status === "queued") {
+          queuedCount += 1;
+        }
+        if (status === "running") {
+          running.push({
+            id: fieldFromMarkdown(content, "id") || path.basename(filePath, ".md"),
+            target,
+            updatedAt: details?.mtime?.toISOString?.() ?? "",
+          });
+        }
+      }
+    }
+
+    const stopped = running.length === 0;
+    return {
+      addonId: payload.addonId,
+      targets,
+      running,
+      queuedCount,
+      stopped,
+      detail: stopped
+        ? "No running delegations for this add-on on the bridge."
+        : `${running.length} running delegation(s) for this add-on; cancel them or wait for them to finish before uninstalling.`,
+    };
   }
 
   async function executeHermesStatus(payload = {}) {
@@ -2395,6 +2552,8 @@ except BaseException as exc:
     executeAddonsStatus,
     executeAddonExecutionSettingsGet,
     executeAddonExecutionSettingsUpdate,
+    executeAddonUninstallAudit,
+    executeAddonRunningWork,
     executeHermesDashboardStatus,
     executeHermesDashboardStart,
     executeHermesDashboardStop,

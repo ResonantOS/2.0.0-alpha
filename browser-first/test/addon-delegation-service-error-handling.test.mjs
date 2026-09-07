@@ -7,6 +7,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { createAddonDelegationService } from "../host/addon-delegation-service.mjs";
+import { listFilesRecursive } from "../host/browser-first-host-utils.mjs";
 import {
   hermesPythonRuntimeDiagnostics,
   hermesRuntimeDiagnostics,
@@ -40,7 +41,7 @@ function createService(root, overrides = {}) {
     hermesCommand: overrides.hermesCommand ?? (() => null),
     hermesHome: overrides.hermesHome ?? (() => path.join(root, "HermesHome")),
     hermesPythonRuntime: overrides.hermesPythonRuntime ?? (() => null),
-    listFilesRecursive: async () => [],
+    listFilesRecursive: overrides.listFilesRecursive ?? (async () => []),
     memoryRoot: () => path.join(root, "Memory"),
     opencodeCommand: overrides.opencodeCommand ?? (() => null),
     opencodeRuntimeDiagnostics: overrides.opencodeRuntimeDiagnostics ?? (() => ({ installed: false, command: null })),
@@ -116,6 +117,32 @@ async function readAuditEntries(root) {
     .split("\n")
     .filter(Boolean)
     .map((line) => JSON.parse(line));
+}
+
+function validUninstallAuditRecord(overrides = {}) {
+  return {
+    actor: "human",
+    addonId: "addon.hermes",
+    alsoDeleteUserDataOffered: false,
+    at: "2026-09-07T00:00:00.000Z",
+    clearedCapabilities: ["agent-delegation", "archive-read"],
+    clearedPrivateProviderProfileIds: 2,
+    configDeleted: true,
+    event: "addonUninstalled",
+    previousEnabled: true,
+    previousInstalled: true,
+    previousStatus: "enabled",
+    source: "bundled",
+    userDataRetained: true,
+    ...overrides,
+  };
+}
+
+async function rewriteDelegationStatus(root, delegation, statusValue) {
+  const filePath = path.join(root, delegation.path);
+  const content = await readFile(filePath, "utf8");
+  await writeFile(filePath, content.replace(/^- status:\s*.+$/mi, `- status: ${statusValue}`));
+  return filePath;
 }
 
 async function withTempService(fn) {
@@ -232,6 +259,184 @@ test("add-on execution setting updates append an operator audit trail only for r
     ]);
     assert.deepEqual(entries.map((entry) => entry.addonId), ["opencode", "opencode", "opencode"]);
     assert.ok(entries.every((entry) => entry.field === "localCliExecution"));
+  });
+});
+
+test("add-on uninstall appends governance audit entry without secrets", async () => {
+  await withTempService(async (service, root) => {
+    const record = validUninstallAuditRecord();
+
+    const result = await service.executeAddonUninstallAudit(record);
+
+    assert.equal(result.recorded, true);
+    assert.equal(result.addonId, "addon.hermes");
+    assert.doesNotThrow(() => new Date(result.recordedAt).toISOString());
+    const [entry] = await readAuditEntries(root);
+    assert.deepEqual(Object.keys(entry).sort(), [
+      "actor",
+      "addonId",
+      "alsoDeleteUserDataOffered",
+      "at",
+      "clearedCapabilities",
+      "clearedPrivateProviderProfileIds",
+      "configDeleted",
+      "event",
+      "previousEnabled",
+      "previousInstalled",
+      "previousStatus",
+      "recordedAt",
+      "recordedVia",
+      "source",
+      "userDataRetained",
+    ].sort());
+    assert.deepEqual(entry, {
+      ...record,
+      recordedAt: result.recordedAt,
+      recordedVia: "bridge",
+    });
+    const serialized = JSON.stringify(entry);
+    assert.doesNotMatch(serialized, /\/[A-Za-z0-9._-]+/);
+    assert.doesNotMatch(serialized, /sk-[a-z0-9_-]+/i);
+    assert.doesNotMatch(serialized, /api[_-]?key|token|secret/i);
+  });
+});
+
+test("uninstall audit rejects malformed records and appends nothing", async () => {
+  await withTempService(async (service, root) => {
+    const cases = [
+      ["extra key", { ...validUninstallAuditRecord(), configValues: { secret: "sk-extra" } }, ["configValues", "sk-extra"]],
+      ["missing actor", (() => {
+        const record = validUninstallAuditRecord();
+        delete record.actor;
+        return record;
+      })(), ["actor"]],
+      ["path addon id", validUninstallAuditRecord({ addonId: "../x" }), ["../x"]],
+      ["path capability", validUninstallAuditRecord({ clearedCapabilities: ["/tmp/x"] }), ["/tmp/x"]],
+      ["too many capabilities", validUninstallAuditRecord({ clearedCapabilities: Array.from({ length: 65 }, (_, index) => `cap-${index}`) }), ["cap-64"]],
+      ["profile ids array", validUninstallAuditRecord({ clearedPrivateProviderProfileIds: ["id-1"] }), ["id-1"]],
+      ["profile ids float", validUninstallAuditRecord({ clearedPrivateProviderProfileIds: 1.5 }), ["1.5"]],
+      ["user data deleted", validUninstallAuditRecord({ userDataRetained: false }), ["false"]],
+      ["agent actor", validUninstallAuditRecord({ actor: "agent" }), ["agent"]],
+      ["wrong event", validUninstallAuditRecord({ event: "delegationExecuted" }), ["delegationExecuted"]],
+      ["garbage date", validUninstallAuditRecord({ at: "yesterday" }), ["yesterday"]],
+      ["path date", validUninstallAuditRecord({ at: "/Users/x" }), ["/Users/x"]],
+      ["non-canonical date", validUninstallAuditRecord({ at: "2026-09-07T00:00:00Z" }), ["2026-09-07T00:00:00Z"]],
+      ["array payload", [validUninstallAuditRecord()], ["addon.hermes"]],
+    ];
+
+    for (const [name, payload, forbiddenValues] of cases) {
+      await assert.rejects(
+        () => service.executeAddonUninstallAudit(payload),
+        (error) => {
+          assert.match(error.message, /^Uninstall audit record rejected: /, name);
+          for (const value of forbiddenValues) {
+            assert.equal(error.message.includes(value), false, `${name} leaked ${value}`);
+          }
+          return true;
+        },
+      );
+    }
+
+    const auditPath = path.join(root, "BrowserFirst", "Settings", "addon-governance-audit.jsonl");
+    await assert.rejects(() => access(auditPath), /ENOENT/);
+  });
+});
+
+test("running-work reports running delegations per add-on", async () => {
+  await withTempService(async (_service, root) => {
+    const service = createService(root, { listFilesRecursive });
+    const running = await service.executeDelegationRecord({
+      target: "hermes",
+      mission: "Keep one Hermes delegation marked as running.",
+    });
+    const queued = await service.executeDelegationRecord({
+      target: "hermes",
+      mission: "Keep one Hermes delegation queued.",
+    });
+    const completed = await service.executeDelegationRecord({
+      target: "hermes",
+      mission: "Keep one Hermes delegation completed.",
+    });
+    await rewriteDelegationStatus(root, running, "running");
+    await rewriteDelegationStatus(root, queued, "queued");
+    await rewriteDelegationStatus(root, completed, "completed");
+
+    const hermes = await service.executeAddonRunningWork({ addonId: "addon.hermes" });
+    const opencode = await service.executeAddonRunningWork({ addonId: "addon.opencode" });
+    const obsidian = await service.executeAddonRunningWork({ addonId: "addon.obsidian" });
+
+    assert.equal(hermes.addonId, "addon.hermes");
+    assert.deepEqual(hermes.targets, ["hermes"]);
+    assert.equal(hermes.running.length, 1);
+    assert.equal(hermes.running[0].id, running.id);
+    assert.equal(hermes.running[0].target, "hermes");
+    assert.doesNotThrow(() => new Date(hermes.running[0].updatedAt).toISOString());
+    assert.equal(JSON.stringify(hermes.running).includes(root), false);
+    assert.equal(JSON.stringify(hermes.running).includes("/BrowserFirst/Delegations"), false);
+    assert.equal(hermes.queuedCount, 1);
+    assert.equal(hermes.stopped, false);
+    assert.equal(hermes.detail, "1 running delegation(s) for this add-on; cancel them or wait for them to finish before uninstalling.");
+    assert.deepEqual(opencode.running, []);
+    assert.equal(opencode.stopped, true);
+    assert.deepEqual(obsidian.targets, []);
+    assert.deepEqual(obsidian.running, []);
+    assert.equal(obsidian.stopped, true);
+  });
+});
+
+test("running-work sees an old running packet behind newer ones", async () => {
+  await withTempService(async (_service, root) => {
+    const service = createService(root, { listFilesRecursive });
+    const oldRunning = await service.executeDelegationRecord({
+      target: "hermes",
+      mission: "Keep the old Hermes packet running behind newer packets.",
+    });
+    await rewriteDelegationStatus(root, oldRunning, "running");
+
+    for (let index = 0; index < 45; index += 1) {
+      const completed = await service.executeDelegationRecord({
+        target: "hermes",
+        mission: `Create newer completed Hermes packet ${index}.`,
+      });
+      await rewriteDelegationStatus(root, completed, "completed");
+    }
+
+    const result = await service.executeAddonRunningWork({ addonId: "addon.hermes" });
+
+    assert.equal(result.stopped, false);
+    assert.equal(result.running.length, 1);
+    assert.equal(result.running[0].id, oldRunning.id);
+  });
+});
+
+test("running-work does not treat blocked or cancelled as running", async () => {
+  await withTempService(async (_service, root) => {
+    const service = createService(root, { listFilesRecursive });
+    const blocked = await service.executeDelegationRecord({
+      target: "opencode",
+      mission: "Keep one OpenCode delegation blocked.",
+    });
+    const cancelled = await service.executeDelegationRecord({
+      target: "opencode",
+      mission: "Keep one OpenCode delegation cancelled.",
+    });
+    await rewriteDelegationStatus(root, blocked, "blocked");
+    await rewriteDelegationStatus(root, cancelled, "cancelled");
+
+    const result = await service.executeAddonRunningWork({ addonId: "addon.opencode" });
+
+    assert.deepEqual(result.running, []);
+    assert.equal(result.queuedCount, 0);
+    assert.equal(result.stopped, true);
+  });
+});
+
+test("running-work rejects unknown keys", async () => {
+  await withTempService(async (service) => {
+    await assert.rejects(
+      () => service.executeAddonRunningWork({ addonId: "addon.hermes", target: "hermes" }),
+      /^Error: Running-work query rejected: unexpected-keys$/,
+    );
   });
 });
 
