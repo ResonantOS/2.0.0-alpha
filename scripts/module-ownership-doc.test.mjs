@@ -42,8 +42,8 @@ test("module ownership architecture doc covers every module and boundary", () =>
   assert.match(doc, /src-tauri\/src\/.*not present/i, "the current src-tauri/src absence must be explicit");
   assert.match(
     doc,
-    /`browser-first\/host\/addon-delegation-host-service\.mjs`, `addon-delegation-service\.mjs`, `hermes-runtime\.mjs`, and `opencode-runtime\.mjs`/,
-    "addon delegation ownership must include both runtime resolvers",
+    /`browser-first\/host\/addon-delegation-host-service\.mjs`, `addon-delegation-service\.mjs`, `delegation-isolation\.mjs`, `hermes-runtime\.mjs`, and `opencode-runtime\.mjs`/,
+    "addon delegation ownership must include the isolation module and both runtime resolvers",
   );
   assert.match(
     doc,
