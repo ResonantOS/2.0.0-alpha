@@ -1,14 +1,17 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
 import {
+  assertBoundedWritableRoot,
   buildSandboxProfile,
   diffTrees,
   ensureRealpath,
   parseSandboxDenialLines,
+  readSandboxDenialsDefault,
   readDenyRootsFor,
   realpathExisting,
   resolveDelegationIsolation,
@@ -185,16 +188,57 @@ test("writableRootsFor captures Hermes profile, result temp, tmp, and narrowed c
   ]);
 });
 
+test("assertBoundedWritableRoot keeps Hermes profile writes inside unprotected home descendants", () => {
+  const home = "/Users/example";
+  const protectedPaths = [
+    "/Users/example/ResonantOS_User",
+    "/Users/example/ResonantOS_User/Secrets",
+    "/Users/example/.ssh",
+    "/Users/example/Library/Keychains",
+  ];
+  const ancestorOnlyPaths = ["/Users/example/repo"];
+
+  assert.doesNotThrow(() => assertBoundedWritableRoot("/Users/example/.hermes", { home, protectedPaths, ancestorOnlyPaths }));
+  assert.doesNotThrow(() => assertBoundedWritableRoot("/Users/example/Documents/hermes-work", { home, protectedPaths, ancestorOnlyPaths }));
+  assert.doesNotThrow(() => assertBoundedWritableRoot("/Users/example/repo/hermes-home", { home, protectedPaths, ancestorOnlyPaths }), "inside the repository is odd but not a bypass");
+  assert.throws(() => assertBoundedWritableRoot("/Users/example/repo", { home, protectedPaths, ancestorOnlyPaths }), /protected path \/Users\/example\/repo would be writable/);
+
+  for (const root of [
+    "/",
+    "/Users/example",
+    "/Users",
+    "/Users/example/ResonantOS_User",
+    "/Users/example/ResonantOS_User/Secrets",
+    "/Users/example/.ssh",
+    "/Users/example/Library",
+    "/Users/example/.ssh/nested",
+    "/Users/example/ResonantOS_User/Secrets/evil-profile",
+    "/tmp/elsewhere",
+  ]) {
+    assert.throws(
+      () => assertBoundedWritableRoot(root, { home, protectedPaths, ancestorOnlyPaths }),
+      new RegExp(`Delegation isolation refused writable root ${root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}: .+`),
+      root,
+    );
+  }
+});
+
 test("readDenyRootsFor includes provider secret stores and generated bridge config literal", () => {
   const { roots, files } = readDenyRootsFor({
     env: { HOME: "/Users/example" },
+    homedir: "/Users/real",
     repoRoot: "/repo",
     userRoot: "/custom/ResonantOS_User",
   });
 
   assert.ok(roots.includes("/Users/example/.ssh"));
+  assert.ok(roots.includes("/Users/real/.ssh"));
+  assert.ok(roots.includes("/Users/example/Library/Keychains"));
+  assert.ok(roots.includes("/Users/real/Library/Keychains"));
   assert.ok(roots.includes(path.dirname(providerSecretsPath())));
   assert.ok(roots.includes("/custom/ResonantOS_User/Secrets"));
+  assert.ok(files.includes("/Users/example/.netrc"));
+  assert.ok(files.includes("/Users/real/.netrc"));
   assert.ok(files.includes("/repo/browser-first/resonantos-side-panel-extension/src/bridge-config.generated.js"));
 });
 
@@ -233,12 +277,43 @@ test("parseSandboxDenialLines extracts matching process denials only", () => {
   const parsed = parseSandboxDenialLines([
     "2026-09-07 12:00:00 Sandbox: bash(79128) deny(1) file-write-create /private/tmp/outside.txt",
     "2026-09-07 12:00:01 Sandbox: node(79129) deny(1) file-read-data /Users/example/.ssh/id_ed25519",
-    "2026-09-07 12:00:02 Sandbox: zsh(79130) deny(1) file-write-create /tmp/not-matching",
+    "2026-09-07 12:00:02 Sandbox: zsh(79130) deny(2) file-write-create /tmp/zsh-denied",
     "malformed Sandbox: bash deny file-write-create /tmp/nope",
-  ].join("\n"), ["bash", "node"]);
+  ].join("\n"), ["bash", "node", "zsh"]);
 
   assert.deepEqual(parsed, [
     { operation: "file-write-create", path: "/private/tmp/outside.txt" },
     { operation: "file-read-data", path: "/Users/example/.ssh/id_ed25519" },
+    { operation: "file-write-create", path: "/tmp/zsh-denied" },
   ]);
+});
+
+test("readSandboxDenialsDefault escalates timed out log capture and unreferences the child", async () => {
+  const signals = [];
+  let unrefCount = 0;
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.kill = (signal) => {
+    signals.push(signal);
+    return true;
+  };
+  child.unref = () => {
+    unrefCount += 1;
+  };
+
+  await assert.rejects(
+    () => readSandboxDenialsDefault({
+      startedAt: new Date(),
+      processNames: ["bash"],
+      timeoutMs: 5,
+      spawnProcess: () => child,
+    }),
+    /sandbox denial capture timed out after 5ms/,
+  );
+
+  assert.deepEqual(signals, ["SIGTERM"]);
+  assert.equal(unrefCount, 1);
+  await new Promise((resolve) => setTimeout(resolve, 1100));
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
 });

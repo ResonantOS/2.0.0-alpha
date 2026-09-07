@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import * as fsPromises from "node:fs/promises";
-import { access, chmod, mkdtemp, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { access, chmod, mkdtemp, mkdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -48,7 +48,7 @@ function createService(root, overrides = {}) {
     peekOpenCodeServer: overrides.peekOpenCodeServer,
     redactPathForDiagnostics: (value) => String(value ?? "").replace(root, "<root>"),
     readProviderSecrets: overrides.readProviderSecrets ?? (async () => ({})),
-    repoRoot: root,
+    repoRoot: overrides.repoRoot ?? root,
     safeFileSlug,
     fs: overrides.fs,
     isolation: overrides.isolation,
@@ -983,6 +983,48 @@ test("OpenCode delegation fails closed on darwin when sandbox-exec is unavailabl
   });
 });
 
+test("OpenCode delegation audits unresolved mode for unknown isolation overrides", async () => {
+  await withTempService(async (_service, root) => {
+    await withEnv({
+      HOME: root,
+      OPENAI_API_KEY: "synthetic-openai-key",
+      RESONANTOS_OPENCODE_EXECUTION: "enabled",
+      RESONANTOS_DELEGATION_ISOLATION: "sandbox",
+    }, async () => {
+      let spawnCount = 0;
+      const service = createService(root, {
+        platform: "darwin",
+        isolation: {
+          isExecutable: async () => true,
+          readSandboxDenials: async () => ({ count: 0, sample: [] }),
+        },
+        opencodeRuntimeDiagnostics: () => ({
+          installed: true,
+          command: "/usr/local/bin/opencode",
+          commandRedacted: "/usr/local/bin/opencode",
+        }),
+        spawnProcess: () => {
+          spawnCount += 1;
+          throw new Error("must not spawn with unresolved isolation mode");
+        },
+      });
+      const created = await service.executeDelegationRecord({
+        target: "opencode",
+        mission: "Refuse unknown isolation override.",
+      });
+
+      const started = await service.executeOpenCodeDelegationStart({ path: created.path });
+
+      assert.equal(spawnCount, 0);
+      assert.equal(started.status, "failed");
+      assert.match(started.failureReason, /^Unknown RESONANTOS_DELEGATION_ISOLATION value "sandbox"/);
+      const audit = (await readAuditEntries(root)).find((entry) => entry.event === "delegationExecuted");
+      assert.equal(audit.outcome, "failed");
+      assert.equal(audit.isolation.mode, "unresolved");
+    });
+  });
+});
+
 test("OpenCode delegation fails closed without spawning when sandbox profile write fails", async () => {
   await withTempService(async (_service, root) => {
     await withEnv({
@@ -1028,6 +1070,121 @@ test("OpenCode delegation fails closed without spawning when sandbox profile wri
       const audit = (await readAuditEntries(root)).find((entry) => entry.event === "delegationExecuted");
       assert.equal(audit.outcome, "failed");
       assert.equal(audit.isolation.mode, "sandbox-exec");
+    });
+  });
+});
+
+test("OpenCode delegation completes with unavailable workspace changes when snapshot audit fails", async () => {
+  await withTempService(async (_service, root) => {
+    await withEnv({
+      HOME: root,
+      OPENAI_API_KEY: "synthetic-openai-key",
+      RESONANTOS_OPENCODE_EXECUTION: "enabled",
+      RESONANTOS_DELEGATION_ISOLATION: undefined,
+    }, async () => {
+      const workspacePath = path.join(root, "workspace");
+      await mkdir(workspacePath, { recursive: true });
+      const service = createService(root, {
+        platform: "darwin",
+        fs: {
+          ...fsPromises,
+          opendir: async () => {
+            throw new Error("snapshot audit unavailable");
+          },
+        },
+        isolation: {
+          isExecutable: async () => true,
+          readSandboxDenials: async () => ({ count: 0, sample: [] }),
+        },
+        opencodeRuntimeDiagnostics: () => ({
+          installed: true,
+          command: "/usr/local/bin/opencode",
+          commandRedacted: "/usr/local/bin/opencode",
+        }),
+        spawnProcess: (_command, _args, _options) => {
+          const child = fakeChild();
+          queueMicrotask(() => {
+            child.stdout.emit("data", successfulOpenCodeOutput("OpenCode completed despite snapshot audit failure."));
+            child.emit("close", 0, null);
+          });
+          return child;
+        },
+      });
+      const created = await service.executeDelegationRecord({
+        target: "opencode",
+        mission: "Record unavailable change audit.",
+      });
+
+      const started = await service.executeOpenCodeDelegationStart({ path: created.path, workspacePath });
+      const artifact = await service.executeOpenCodeDelegationArtifact({ path: created.path });
+
+      assert.equal(started.status, "completed");
+      assert.match(artifact.content, /Isolation: sandbox-exec \(writes confined to \d+ roots; \d+ protected paths unreadable\)/);
+      assert.match(artifact.content, /Workspace changes: unavailable \(snapshot audit unavailable; snapshot audit unavailable\)/);
+      const audit = (await readAuditEntries(root)).find((entry) => entry.event === "delegationExecuted");
+      assert.equal(audit.outcome, "completed");
+      assert.equal(audit.changeAudit, null);
+    });
+  });
+});
+
+test("OpenCode delegation fails closed when workspace symlink resolves outside the repository", async () => {
+  await withTempService(async (_service, root) => {
+    await withEnv({
+      HOME: root,
+      OPENAI_API_KEY: "synthetic-openai-key",
+      RESONANTOS_OPENCODE_EXECUTION: "enabled",
+      RESONANTOS_DELEGATION_ISOLATION: undefined,
+    }, async () => {
+      const repoRoot = path.join(root, "repo");
+      const outsideTarget = path.join(root, "outside-target");
+      const escapedWorkspace = path.join(repoRoot, "evil");
+      await mkdir(repoRoot, { recursive: true });
+      await mkdir(outsideTarget, { recursive: true });
+      await writeFile(path.join(outsideTarget, "outside.txt"), "outside");
+      await symlink(outsideTarget, escapedWorkspace);
+
+      let spawnCount = 0;
+      const service = createService(root, {
+        repoRoot,
+        platform: "darwin",
+        isolation: {
+          isExecutable: async () => true,
+          readSandboxDenials: async () => ({ count: 0, sample: [] }),
+        },
+        opencodeRuntimeDiagnostics: () => ({
+          installed: true,
+          command: "/usr/local/bin/opencode",
+          commandRedacted: "/usr/local/bin/opencode",
+        }),
+        spawnProcess: () => {
+          spawnCount += 1;
+          const child = fakeChild();
+          queueMicrotask(() => {
+            child.stdout.emit("data", successfulOpenCodeOutput("OpenCode symlink escape should not run."));
+            child.emit("close", 0, null);
+          });
+          return child;
+        },
+      });
+      const created = await service.executeDelegationRecord({
+        target: "opencode",
+        mission: "Refuse an OpenCode workspace symlink that escapes the repo.",
+      });
+
+      const started = await service.executeOpenCodeDelegationStart({
+        path: created.path,
+        workspacePath: escapedWorkspace,
+      });
+
+      assert.equal(started.status, "failed");
+      assert.equal(
+        started.failureReason,
+        "Delegation isolation could not be applied: OpenCode workspace resolves outside the repository.",
+      );
+      assert.equal(spawnCount, 0);
+      const audit = (await readAuditEntries(root)).find((entry) => entry.event === "delegationExecuted");
+      assert.equal(audit.outcome, "failed");
     });
   });
 });
@@ -1143,6 +1300,75 @@ test("Hermes adapter is wrapped with sandbox-exec and PYTHONDONTWRITEBYTECODE", 
       assert.equal(audit.outcome, "completed");
       assert.equal(JSON.stringify(audit).includes("session-minimax-credential"), false);
       assert.equal(JSON.stringify(audit).includes(profileHome), false);
+    });
+  });
+});
+
+test("Hermes delegation fails closed when profileHome would make home or root writable", async () => {
+  await withTempService(async (_service, root) => {
+    await withEnv({
+      HOME: root,
+      MINIMAX_API_KEY: undefined,
+      OPENAI_API_KEY: undefined,
+      RESONANTOS_HERMES_EXECUTION: "enabled",
+      RESONANTOS_DELEGATION_ISOLATION: undefined,
+    }, async () => {
+      const hermesBin = path.join(root, "HermesRuntime", "hermes-agent", "venv", "bin");
+      const hermesCommand = path.join(hermesBin, "hermes");
+      const pythonPath = path.join(hermesBin, "python");
+      await mkdir(hermesBin, { recursive: true });
+      await writeFile(hermesCommand, "");
+      await writeFile(pythonPath, "");
+      await writeFile(path.join(root, "HermesRuntime", "hermes-agent", "run_agent.py"), "");
+
+      let spawnCount = 0;
+      const service = createService(root, {
+        platform: "darwin",
+        hermesCommand: () => hermesCommand,
+        hermesHome: (profileHome) => profileHome ? path.resolve(profileHome) : path.join(root, "HermesHome"),
+        hermesPythonRuntime: () => ({
+          installed: true,
+          agentRoot: path.join(root, "HermesRuntime", "hermes-agent"),
+          pythonPath,
+        }),
+        isolation: {
+          isExecutable: async () => true,
+          readSandboxDenials: async () => ({ count: 0, sample: [] }),
+        },
+        readProviderSecrets: async () => ({ "shared-minimax": "session-minimax-credential" }),
+        spawnProcess: () => {
+          spawnCount += 1;
+          const child = fakeChild();
+          queueMicrotask(() => child.emit("error", new Error("must not spawn with an unbounded profile root")));
+          return child;
+        },
+      });
+
+      const insideSecrets = path.join(root, "ResonantOS_User", "Secrets", "evil-profile");
+      const insideBrowserFirstState = path.join(root, "BrowserFirst", "Settings", "evil-profile");
+      // Lexically a plain home descendant, but a symlink whose target lies inside the protected Secrets tree:
+      // only the post-realpath bound check can catch this one.
+      const secretsTarget = path.join(root, "ResonantOS_User", "Secrets", "linked-target");
+      await mkdir(secretsTarget, { recursive: true });
+      const symlinkedProfileHome = path.join(root, "hermes-link");
+      await symlink(secretsTarget, symlinkedProfileHome);
+      for (const profileHome of [root, "/", insideSecrets, insideBrowserFirstState, symlinkedProfileHome]) {
+        const created = await service.executeDelegationRecord({
+          target: "hermes",
+          mission: `Refuse unsafe Hermes profileHome ${profileHome}.`,
+        });
+        const started = await service.executeHermesDelegationStart({ path: created.path, profileHome });
+
+        assert.equal(started.status, "failed");
+        assert.match(
+          started.failureReason,
+          /^Delegation isolation could not be applied: Delegation isolation refused writable root /,
+        );
+        assert.equal(spawnCount, 0);
+        const audit = (await readAuditEntries(root)).filter((entry) => entry.event === "delegationExecuted").at(-1);
+        assert.equal(audit.outcome, "failed");
+      }
+      await assert.rejects(() => access(insideSecrets), /ENOENT/, "a rejected profileHome must not have been created inside the protected Secrets directory");
     });
   });
 });

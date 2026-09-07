@@ -691,12 +691,7 @@ export function createAddonDelegationService(dependencies) {
         removed: changeAudit.removed,
         truncated: Boolean(changeAudit.truncated),
       }
-      : {
-        added: 0,
-        modified: 0,
-        removed: 0,
-        truncated: false,
-      };
+      : null;
   }
 
   function auditDenialCount(publicIsolation) {
@@ -745,13 +740,16 @@ export function createAddonDelegationService(dependencies) {
   function isolationResultLines(result) {
     const isolationInfo = result?.isolation;
     const changeAudit = result?.changeAudit;
-    if (!isolationInfo || !changeAudit) return [];
+    if (!isolationInfo) return [];
     const isolationLine = isolationInfo.mode === "sandbox-exec"
-      ? `Isolation: sandbox-exec (writes confined to ${isolationInfo.writableRootCount} roots; ${isolationInfo.readDenyRootCount} secret stores unreadable)`
+      ? `Isolation: sandbox-exec (writes confined to ${isolationInfo.writableRootCount} roots; ${isolationInfo.readDenyRootCount} protected paths unreadable)`
       : `Isolation: contract-only (${isolationInfo.reason}) — no OS confinement on this platform`;
+    const changeAuditLine = changeAudit
+      ? `Workspace changes: +${changeAudit.added} ~${changeAudit.modified} -${changeAudit.removed}`
+      : `Workspace changes: unavailable (${result.changeAuditError || "change audit unavailable"})`;
     return [
       isolationLine,
-      `Workspace changes: +${changeAudit.added} ~${changeAudit.modified} -${changeAudit.removed}`,
+      changeAuditLine,
       "",
     ];
   }
@@ -762,8 +760,11 @@ export function createAddonDelegationService(dependencies) {
       resolved = await isolation.resolve();
     } catch (error) {
       const message = errorMessage(error);
+      const mode = message.startsWith("Unknown RESONANTOS_DELEGATION_ISOLATION")
+        ? "unresolved"
+        : "sandbox-exec";
       throw withDelegationRunAudit(error, {
-        isolation: failedIsolation("sandbox-exec", message),
+        isolation: failedIsolation(mode, message),
         changeAudit: emptyChangeAudit(),
         changeAuditError: "",
       });
@@ -780,10 +781,6 @@ export function createAddonDelegationService(dependencies) {
     }
     let profilePath = "";
     try {
-      const writableRoots = [];
-      for (const candidate of isolation.writableRootsFor(addonId, context)) {
-        writableRoots.push(await isolation.ensureRealpath(candidate));
-      }
       const readDeny = isolation.readDenyRootsFor({
         env: context.env,
         repoRoot,
@@ -791,6 +788,50 @@ export function createAddonDelegationService(dependencies) {
       });
       const readDenyRoots = await isolation.realpathExisting(readDeny.roots);
       const readDenyFiles = await isolation.realpathExisting(readDeny.files);
+      if (addonId === "hermes") {
+        // Lexical pre-check before any mkdir, so a rejected payload never creates a directory inside a protected path.
+        isolation.assertBoundedWritableRoot(path.resolve(String(context.profileHome ?? "")), {
+          home: path.resolve(String(context.env?.HOME ?? os.homedir())),
+          // Inside-or-containing forbidden: secret stores, and the ResonantOS state tree a delegation could use to
+          // rewrite its own audit log or execution gates. Containing forbidden: the repository and the user root.
+          protectedPaths: [
+            ...readDeny.roots,
+            ...readDeny.files,
+            path.join(userRoot(), "BrowserFirst"),
+            path.join(os.homedir(), "ResonantOS_User", "BrowserFirst"),
+          ].filter(Boolean).map((candidate) => path.resolve(String(candidate))),
+          ancestorOnlyPaths: [repoRoot, userRoot(), path.join(os.homedir(), "ResonantOS_User")]
+            .filter(Boolean).map((candidate) => path.resolve(String(candidate))),
+        });
+      }
+      const writableRoots = [];
+      let realProfileHome = "";
+      for (const candidate of isolation.writableRootsFor(addonId, context)) {
+        const realWritableRoot = await isolation.ensureRealpath(candidate);
+        writableRoots.push(realWritableRoot);
+        if (addonId === "hermes" && path.resolve(candidate) === path.resolve(context.profileHome)) {
+          realProfileHome = realWritableRoot;
+        }
+      }
+      if (addonId === "hermes") {
+        const [realHome] = await isolation.realpathExisting([context.env?.HOME ?? os.homedir()]);
+        if (!realHome) {
+          throw new Error("Hermes home could not be resolved for writable root boundary.");
+        }
+        const protectedPaths = [
+          ...readDenyRoots,
+          ...readDenyFiles,
+          ...await isolation.realpathExisting([
+            path.join(userRoot(), "BrowserFirst"),
+            path.join(os.homedir(), "ResonantOS_User", "BrowserFirst"),
+          ]),
+        ];
+        isolation.assertBoundedWritableRoot(realProfileHome || context.profileHome, {
+          home: realHome,
+          protectedPaths,
+          ancestorOnlyPaths: await isolation.realpathExisting([repoRoot, userRoot(), path.join(os.homedir(), "ResonantOS_User")]),
+        });
+      }
       const profileText = isolation.buildSandboxProfile({
         writableRoots,
         readDenyRoots,
@@ -1240,6 +1281,7 @@ except BaseException as exc:
         path.basename(runtime.pythonPath),
         "sh",
         "bash",
+        "zsh",
         "python",
         "python3",
       ]);
@@ -1776,6 +1818,15 @@ except BaseException as exc:
       await chmod(promptPath, 0o600).catch(() => undefined);
       const env = scopedOpenCodeEnv(model, secrets);
       const resolvedWorkspacePath = await isolationFs.realpath(workspacePath);
+      const realRepoRoot = await isolationFs.realpath(repoRoot);
+      if (resolvedWorkspacePath !== realRepoRoot && !resolvedWorkspacePath.startsWith(`${realRepoRoot}${path.sep}`)) {
+        const message = "Delegation isolation could not be applied: OpenCode workspace resolves outside the repository.";
+        throw withDelegationRunAudit(new Error(message), {
+          isolation: failedIsolation("sandbox-exec", message),
+          changeAudit: emptyChangeAudit(),
+          changeAuditError: "",
+        });
+      }
       preparedIsolation = await prepareDelegationIsolation("opencode", {
         env,
         promptTempDir: tempDir,
@@ -1814,6 +1865,7 @@ except BaseException as exc:
         path.basename(command),
         "sh",
         "bash",
+        "zsh",
         "bun",
         "node",
       ]);

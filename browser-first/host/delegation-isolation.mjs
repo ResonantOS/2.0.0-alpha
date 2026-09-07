@@ -101,6 +101,43 @@ export async function realpathExisting(paths, { fs = fsPromises } = {}) {
   return result;
 }
 
+// protectedPaths: the root may not equal, contain, or lie inside any of them (secret stores, the user root).
+// ancestorOnlyPaths: the root may not equal or contain any of them (the repository — a profile home inside it is odd but not a bypass).
+export function assertBoundedWritableRoot(realRoot, { home, protectedPaths = [], ancestorOnlyPaths = [] } = {}) {
+  const root = String(realRoot ?? "").trim();
+  const homeRoot = String(home ?? "").trim();
+  const protectedRoots = uniqueOrdered(protectedPaths);
+  const ancestorOnly = uniqueOrdered(ancestorOnlyPaths);
+  let reason = "";
+  if (root === "/") {
+    reason = "filesystem root is not allowed";
+  } else if (root === homeRoot) {
+    reason = "home directory is not allowed";
+  } else if (homeRoot && homeRoot.startsWith(`${root}${path.sep}`)) {
+    reason = "ancestors of home are not allowed";
+  } else {
+    const protectedRoot = protectedRoots.find((candidate) => (
+      root === candidate || candidate.startsWith(`${root}${path.sep}`) || root.startsWith(`${candidate}${path.sep}`)
+    ));
+    const containedRoot = protectedRoot ? "" : ancestorOnly.find((candidate) => (
+      root === candidate || candidate.startsWith(`${root}${path.sep}`)
+    ));
+    if (protectedRoot) {
+      reason = root.startsWith(`${protectedRoot}${path.sep}`)
+        ? `root lies inside protected path ${protectedRoot}`
+        : `protected path ${protectedRoot} would be writable`;
+    } else if (containedRoot) {
+      reason = `protected path ${containedRoot} would be writable`;
+    } else if (!homeRoot || !root.startsWith(`${homeRoot}${path.sep}`)) {
+      reason = "root must be a descendant of home";
+    }
+  }
+  if (reason) {
+    throw new Error(`Delegation isolation refused writable root ${root}: ${reason}`);
+  }
+  return root;
+}
+
 export function writableRootsFor(addon, ctx = {}) {
   const env = ctx.env ?? {};
   const home = String(env.HOME ?? os.homedir()).trim();
@@ -138,29 +175,34 @@ export function writableRootsFor(addon, ctx = {}) {
 export function readDenyRootsFor(ctx = {}) {
   const env = ctx.env ?? {};
   const home = String(env.HOME ?? os.homedir()).trim();
-  const homedir = String(ctx.homedir ?? os.homedir()).trim();
+  const actualHomedir = String(os.homedir()).trim();
+  const homedir = String(ctx.homedir ?? actualHomedir).trim();
   const userRoot = typeof ctx.userRoot === "function" ? ctx.userRoot() : ctx.userRoot;
   const repoRoot = typeof ctx.repoRoot === "function" ? ctx.repoRoot() : ctx.repoRoot;
+  const homes = uniqueOrdered([home, homedir]);
   return {
     roots: uniqueOrdered([
-      joinRoot(home, ".ssh"),
-      joinRoot(home, ".gnupg"),
-      joinRoot(home, ".aws"),
-      joinRoot(home, ".azure"),
-      joinRoot(home, ".config", "gcloud"),
-      joinRoot(home, ".kube"),
-      joinRoot(home, ".docker"),
-      joinRoot(home, "Library", "Keychains"),
-      joinRoot(home, "Library", "Cookies"),
-      joinRoot(home, "Library", "Application Support", "Google"),
-      joinRoot(home, "Library", "Application Support", "BraveSoftware"),
-      joinRoot(home, "Library", "Application Support", "Firefox"),
-      joinRoot(home, "Library", "Application Support", "Claude"),
+      ...homes.flatMap((root) => [
+        joinRoot(root, ".ssh"),
+        joinRoot(root, ".gnupg"),
+        joinRoot(root, ".aws"),
+        joinRoot(root, ".azure"),
+        joinRoot(root, ".config", "gcloud"),
+        joinRoot(root, ".kube"),
+        joinRoot(root, ".docker"),
+        joinRoot(root, "Library", "Keychains"),
+        joinRoot(root, "Library", "Cookies"),
+        joinRoot(root, "Library", "Application Support", "Google"),
+        joinRoot(root, "Library", "Application Support", "BraveSoftware"),
+        joinRoot(root, "Library", "Application Support", "Firefox"),
+        joinRoot(root, "Library", "Application Support", "Claude"),
+      ]),
       joinRoot(homedir, "ResonantOS_User", "Secrets"),
+      joinRoot(actualHomedir, "ResonantOS_User", "Secrets"),
       joinRoot(userRoot, "Secrets"),
     ]),
     files: uniqueOrdered([
-      joinRoot(home, ".netrc"),
+      ...homes.map((root) => joinRoot(root, ".netrc")),
       joinRoot(repoRoot, "browser-first", "resonantos-side-panel-extension", "src", "bridge-config.generated.js"),
     ]),
   };
@@ -177,7 +219,7 @@ export function parseSandboxDenialLines(text, processNames = []) {
   const names = new Set(processNames.map((name) => String(name ?? "").trim()).filter(Boolean));
   const entries = [];
   for (const line of String(text ?? "").split(/\r?\n/)) {
-    const match = /Sandbox:\s*([^(]+)\(\d+\)\s+deny\(1\)\s+(\S+)\s+(.+)$/.exec(line);
+    const match = /Sandbox:\s*([^(]+)\(\d+\)\s+deny\(\d+\)\s+(\S+)\s+(.+)$/.exec(line);
     if (!match) continue;
     const name = match[1].trim();
     if (!names.has(name)) continue;
@@ -228,10 +270,16 @@ export async function readSandboxDenialsDefault({
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let killTimer = null;
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
       child.kill?.("SIGTERM");
+      child.unref?.();
+      killTimer = setTimeout(() => {
+        child.kill?.("SIGKILL");
+      }, 1_000);
+      killTimer.unref?.();
       reject(new Error(`sandbox denial capture timed out after ${timeoutMs}ms`));
     }, timeoutMs);
     child.stdout?.on("data", (chunk) => {
@@ -244,9 +292,11 @@ export async function readSandboxDenialsDefault({
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
       reject(error);
     });
     child.on("close", () => {
+      if (killTimer) clearTimeout(killTimer);
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -387,6 +437,7 @@ export function createDelegationIsolationAdapter({
     ensureRealpath: (dir) => ensureRealpath(dir, { fs }),
     realpathExisting: (paths) => realpathExisting(paths, { fs }),
     buildSandboxProfile,
+    assertBoundedWritableRoot,
     wrapCommandForIsolation,
     writeProfile: async (profileText) => {
       const isolationRoot = path.join(browserFirstRoot(), "Runtime", "isolation");
