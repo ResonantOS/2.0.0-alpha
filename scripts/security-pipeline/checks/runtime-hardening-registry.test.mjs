@@ -248,6 +248,7 @@ function delegatedCliCaptureService(root, calls, runtime) {
       .toLowerCase()
       .replace(/[^a-z0-9._-]+/g, "-")
       .replace(/^-+|-+$/g, "") || "item",
+    platform: "linux",
     socketOpen: async () => true,
     spawnProcess(command, args, options) {
       calls.push({ command, args, options });
