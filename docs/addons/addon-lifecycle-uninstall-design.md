@@ -51,7 +51,7 @@ Gaps:
 - The issue cites `host_state.rs:466`, but this repository has no `*.rs` files.
   The Alpha boundary in this checkout is the Node bridge, and the ownership
   contract states `src-tauri/src/` is not present here
-  (`docs/architecture/MODULE-OWNERSHIP.md:124`).
+  (`docs/architecture/MODULE-OWNERSHIP.md:87`).
 - `src/core/defaults.ts` creates default installation records from manifests
   passed into `buildDefaultState`; it does not enumerate the bundled catalog
   (`src/core/defaults.ts:886`, `src/core/defaults.ts:902`). The bundled catalog
@@ -163,7 +163,7 @@ audit log:
 `BrowserFirst/Settings/addon-governance-audit.jsonl`
 (`browser-first/host/addon-delegation-service.mjs:406`). The current writer
 creates the parent directory, appends one JSON object per line, and chmods the
-file to `0600` (`browser-first/host/addon-delegation-service.mjs:444`). Existing
+file to `0o600` (`browser-first/host/addon-delegation-service.mjs:444`). Existing
 tests assert that real setting changes append entries with `addonId`, `field`,
 `from`, `to`, and `at`, and that no-op writes do not append extra entries
 (`browser-first/test/addon-delegation-service-error-handling.test.mjs:123`).
