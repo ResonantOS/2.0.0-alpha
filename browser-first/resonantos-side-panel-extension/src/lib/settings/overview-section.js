@@ -55,6 +55,7 @@ export function renderOverviewSection(container, { bridgeRequest, getBridgeReque
   const bridge = () => (typeof getBridgeRequest === "function" ? getBridgeRequest() : bridgeRequest);
   const statusNode = document.createElement("p");
   statusNode.className = "settings-status";
+  statusNode.setAttribute("role", "status");
   statusNode.textContent = "Checking ResonantOS health...";
   const grid = document.createElement("div");
   grid.className = "settings-health-grid";
@@ -62,7 +63,7 @@ export function renderOverviewSection(container, { bridgeRequest, getBridgeReque
     metricCard({ label: "Providers", value: "Checking", detail: "loading provider profiles" }),
     metricCard({ label: "Add-ons", value: "Checking", detail: "loading add-on registry" }),
     metricCard({ label: "Memory", value: "Checking", detail: "loading memory-system state" }),
-    metricCard({ label: "Browser bridge", value: "Ready", detail: "extension workspace is active", tone: "success" })
+    metricCard({ label: "Browser bridge", value: "Checking", detail: "waiting for host health status" })
   );
 
   const setupGrid = document.createElement("div");
@@ -182,7 +183,14 @@ export function renderOverviewSection(container, { bridgeRequest, getBridgeReque
       metricCard({ label: "Providers", ...provider }),
       metricCard({ label: "Add-ons", ...addons }),
       metricCard({ label: "Memory", ...memory }),
-      metricCard({ label: "Browser bridge", value: "Ready", detail: "extension workspace is active", tone: "success" })
+      metricCard({
+        label: "Browser bridge",
+        value: statusResult.status === "fulfilled" ? "Connected" : "Unavailable",
+        detail: statusResult.status === "fulfilled"
+          ? "host health status received"
+          : "host health check failed; open Diagnostics for connection help",
+        tone: statusResult.status === "fulfilled" ? "success" : "warning"
+      })
     );
     const failed = [providerResult, statusResult].filter((result) => result.status === "rejected").length;
     setStatus(statusNode, failed
