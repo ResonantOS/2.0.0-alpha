@@ -705,7 +705,8 @@
   accent-color: var(--accent);
 }
 
-.settings-provider-actions {
+.settings-provider-actions,
+.settings-provider-account-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
