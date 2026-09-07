@@ -1,4 +1,15 @@
 import { metricCard, noteCard, safeCount, safeErrorMessage, setStatus, settingsHeader } from "./settings-common.js";
+import { isBridgeAuthError, isBridgeNetworkError } from "../runtime-error-messages.js";
+
+function healthFailureDetail(error) {
+  if ([401, 403].includes(error?.bridgeStatus) || isBridgeAuthError(error)) {
+    return "Host health authorization failed; open Diagnostics to check bridge credentials and capability setup.";
+  }
+  if (isBridgeNetworkError(error)) {
+    return "Host is unreachable; start the bridge, verify Bridge Target, and open Diagnostics.";
+  }
+  return "Host health check failed; open Diagnostics for details.";
+}
 
 function providerSummary(providers) {
   const total = safeCount(providers);
@@ -188,7 +199,7 @@ export function renderOverviewSection(container, { bridgeRequest, getBridgeReque
         value: statusResult.status === "fulfilled" ? "Connected" : "Unavailable",
         detail: statusResult.status === "fulfilled"
           ? "host health status received"
-          : "host health check failed; open Diagnostics for connection help",
+          : healthFailureDetail(statusResult.reason),
         tone: statusResult.status === "fulfilled" ? "success" : "warning"
       })
     );
