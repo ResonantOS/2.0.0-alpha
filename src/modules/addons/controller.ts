@@ -65,6 +65,12 @@ export const toggleAddonInstallation = (
       return draft;
     }
     if (!installation.installed) {
+      if (installation.status === "uninstalled") {
+        // Reinstall after uninstall is a fresh grant flow: nothing from the removed installation carries over.
+        installation.grantedCapabilities = manifest.requestedCapabilities.map((grant) => ({ ...grant, granted: false }));
+        installation.privateProviderProfileIds = [];
+        delete installation.config;
+      }
       installation.installed = true;
       installation.enabled = true;
       installation.status = "enabled";

@@ -130,6 +130,34 @@ describe("toggleAddonInstallation", () => {
     expect(state.installations["addon.test"].status).toBe("enabled");
   });
 
+  it("reinstalling an uninstalled addon rebuilds fresh grants from the manifest", () => {
+    const manifest = {
+      ...createMinimalManifest("addon.test", "Test Addon"),
+      requestedCapabilities: [capability("network"), capability("archive-read")],
+    };
+    let state = buildDefaultState([manifest]);
+    state.installations["addon.test"] = {
+      ...createMinimalInstallation("addon.test", false, false, "uninstalled"),
+      grantedCapabilities: [{ ...capability("network"), granted: true }],
+      privateProviderProfileIds: ["profile-stale"],
+      config: { vaultPath: "/tmp/stale-vault" },
+    };
+
+    toggleAddonInstallation(manifest, (updater) => {
+      state = updater(state);
+    });
+
+    const installation = state.installations["addon.test"];
+    expect(installation.installed).toBe(true);
+    expect(installation.status).toBe("enabled");
+    expect(installation.grantedCapabilities).toEqual([
+      { ...capability("network"), granted: false },
+      { ...capability("archive-read"), granted: false },
+    ]);
+    expect(installation.privateProviderProfileIds).toEqual([]);
+    expect("config" in installation).toBe(false);
+  });
+
   it("disables an enabled addon", () => {
     const manifest = createMinimalManifest("addon.test", "Test Addon");
     let state = buildDefaultState([manifest]);
