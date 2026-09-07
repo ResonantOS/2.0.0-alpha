@@ -905,3 +905,68 @@ test("bridge auth self-test summary only reports ok when default-deny held", () 
   const tokenRegressed = summarizeBridgeAuthSelfTest({ unauthorizedStatus: 200, wrongTokenStatus: 401, missingCapabilityStatus: 403, authorizedStatus: 200 });
   assert.equal(tokenRegressed.ok, false);
 });
+
+test("raw caller-id header for a known caller cannot be paired with a foreign caller's token", async () => {
+  const bridgeToken = "spoof-auth-token";
+  const perCallerGrants = {
+    "alpha-caller": { "provider-credential-write": "alpha-grant-token" },
+    "beta-caller": { "provider-credential-write": "beta-grant-token" },
+  };
+  const result = await evaluateBridgeRequestForSelfTest({
+    method: "POST",
+    url: "/providers/credentials",
+    headers: {
+      "X-ResonantOS-Bridge-Token": bridgeToken,
+      "X-ResonantOS-Bridge-Capability-Token": "beta-grant-token",
+      "X-ResonantOS-Bridge-Caller-Id": "alpha-caller",
+    },
+    body: { providerId: "shared-minimax" },
+    bridgeToken,
+    bridgeCapabilityTokens: {},
+    perCallerGrants,
+    routes: [
+      {
+        method: "POST",
+        path: "/providers/credentials",
+        requiredCapability: "provider-credential-write",
+        handler: async () => ({ saved: true }),
+      },
+    ],
+  });
+  assert.equal(result.status, 403, "a caller-id header must not re-bind a foreign token to another caller");
+});
+
+test("raw caller-id header for an unknown caller cannot spoof audit attribution", async () => {
+  const bridgeToken = "spoof-audit-token";
+  const staticToken = "spoof-static-token";
+  const perCallerGrants = {
+    "alpha-caller": { "provider-credential-write": "alpha-grant-token" },
+  };
+  const records = [];
+  const result = await evaluateBridgeRequestForSelfTest({
+    method: "POST",
+    url: "/providers/credentials",
+    headers: {
+      "X-ResonantOS-Bridge-Token": bridgeToken,
+      "X-ResonantOS-Bridge-Capability-Token": staticToken,
+      "X-ResonantOS-Bridge-Caller-Id": "rogue-caller",
+    },
+    body: { providerId: "shared-minimax" },
+    bridgeToken,
+    bridgeCapabilityTokens: { "provider-credential-write": staticToken },
+    perCallerGrants,
+    auditSink: (record) => records.push(record),
+    routes: [
+      {
+        method: "POST",
+        path: "/providers/credentials",
+        requiredCapability: "provider-credential-write",
+        handler: async () => ({ saved: true }),
+      },
+    ],
+  });
+  assert.equal(result.status, 200, "a valid static capability token must authorize");
+  assert.equal(records.length, 1);
+  assert.equal(records[0].reason, "authorized");
+  assert.equal(records[0].callerId, "__extension__", "an unverified caller-id header must not be written to the audit ledger");
+});
