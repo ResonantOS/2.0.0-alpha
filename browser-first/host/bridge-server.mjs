@@ -1428,6 +1428,7 @@ export async function startBridgeServersWithTls({
 }) {
   const bindHost = host ?? getBridgeHost();
   const effectiveAllowedCidrs = allowedCidrs ?? getBridgeAllowedCidrs();
+  const effectiveOpenPathPrefixes = openPathPrefixes ?? getBridgeOpenProxyPrefixes({ host: bindHost, allowedCidrs: effectiveAllowedCidrs });
   const handle = createBridgeRequestHandler({
     bridgeToken,
     bridgeCapabilityTokens,
@@ -1523,6 +1524,7 @@ export async function startBridgeServerWithFallback({
   tls = null,
   httpsPort,
   fallbackPorts = [0],
+  dashboardProxyHandler = null,
   openPathPrefixes,
 }) {
   const attempts = [port, ...fallbackPorts].filter((candidate, index, list) =>

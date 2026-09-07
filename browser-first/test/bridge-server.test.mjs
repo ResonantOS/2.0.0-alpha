@@ -906,6 +906,64 @@ test("bridge auth self-test summary only reports ok when default-deny held", () 
   assert.equal(tokenRegressed.ok, false);
 });
 
+test("startBridgeServerWithFallback starts with an omitted dashboard proxy handler and keeps default-deny", async () => {
+  const { startBridgeServerWithFallback } = await import("../host/bridge-server.mjs");
+  const bridgeToken = "fallback-start-token";
+  const capabilityToken = "fallback-cap-token";
+  const result = await startBridgeServerWithFallback({
+    port: 0,
+    bridgeToken,
+    bridgeCapabilityTokens: { "bridge-diagnostics-read": capabilityToken },
+    extensionOrigin: "chrome-extension://test",
+    routes: [{
+      method: "GET",
+      path: "/status",
+      requiredCapability: "bridge-diagnostics-read",
+      handler: async () => ({ bridge: "fallback-ok" }),
+    }],
+  });
+  const base = `http://127.0.0.1:${result.actualPort}`;
+  try {
+    assert.ok(result.actualPort > 0, "omitting dashboardProxyHandler must not crash bridge startup");
+    const unauthorized = await fetch(`${base}/status`);
+    assert.equal(unauthorized.status, 401, "omitting the dashboard handler must not open an unauthenticated route");
+    const tokenOnly = await fetch(`${base}/status`, {
+      headers: { "X-ResonantOS-Bridge-Token": bridgeToken },
+    });
+    assert.equal(tokenOnly.status, 403, "a bridge token without the required capability must still be refused");
+    const authorized = await fetch(`${base}/status`, {
+      headers: {
+        "X-ResonantOS-Bridge-Token": bridgeToken,
+        "X-ResonantOS-Bridge-Capability-Token": capabilityToken,
+      },
+    });
+    assert.equal(authorized.status, 200, "a valid bridge token plus capability must authorize");
+  } finally {
+    await new Promise((resolve) => result.httpServer.close(resolve));
+  }
+});
+
+test("startBridgeServerWithFallback honors a supplied dashboard proxy handler", async () => {
+  const { startBridgeServerWithFallback } = await import("../host/bridge-server.mjs");
+  const result = await startBridgeServerWithFallback({
+    port: 0,
+    bridgeToken: "fallback-dashboard-token",
+    extensionOrigin: "chrome-extension://test",
+    dashboardProxyHandler: (request, response) => {
+      response.writeHead(200, { "content-type": "text/plain" });
+      response.end("supplied-dashboard-handler");
+    },
+    routes: [],
+  });
+  try {
+    const response = await fetch(`http://127.0.0.1:${result.actualPort}/hermes-dashboard/`);
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), "supplied-dashboard-handler", "the supplied dashboard handler must be wired through startBridgeServerWithFallback");
+  } finally {
+    await new Promise((resolve) => result.httpServer.close(resolve));
+  }
+});
+
 test("raw caller-id header for a known caller cannot be paired with a foreign caller's token", async () => {
   const bridgeToken = "spoof-auth-token";
   const perCallerGrants = {
