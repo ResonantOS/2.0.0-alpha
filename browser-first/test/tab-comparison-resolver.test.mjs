@@ -3,7 +3,9 @@ import test from "node:test";
 
 import {
   isCompareIntent,
+  parseTabMentionTokens,
   parseTabMentions,
+  resolveScopedTabs,
   resolveTabComparison
 } from "../resonantos-side-panel-extension/src/lib/tab-comparison-resolver.js";
 
@@ -45,6 +47,30 @@ test("parseTabMentions returns empty for prose containing @ that is not a tab me
   // never tokens. The previous pattern counted them as two mentions.
   assert.deepEqual(parseTabMentions("email bob@acme.com, sue@corp.io re: plan"), []);
   assert.deepEqual(parseTabMentions("contact @someone on X"), ["someone"]);
+});
+
+test("parseTabMentionTokens marks quoted, bare, and @tab N forms", () => {
+  assert.deepEqual(parseTabMentionTokens('sum @"Alpha Beta" and @Beta and @tab 2'), [
+    { mention: "Alpha Beta", quoted: true, tabRef: false },
+    { mention: "Beta", quoted: false, tabRef: false },
+    { mention: "tab 2", quoted: false, tabRef: true }
+  ]);
+  assert.deepEqual(parseTabMentionTokens("email bob@acme.com"), []);
+});
+
+test("resolveScopedTabs keeps token flags; resolveTabComparison strips them", () => {
+  const scoped = resolveScopedTabs('sum @"Alpha News" and @"Gone Tab" and @Also Gone', twoPlusUnreadable, isReadable);
+  assert.equal(scoped.items.length, 1);
+  assert.equal(scoped.items[0].quoted, true, "resolved quoted mention keeps its flag");
+  assert.equal(scoped.items[0].tabId, 1);
+  const quotedSkip = scoped.skipped.find((entry) => entry.mention === "Gone Tab");
+  const bareSkip = scoped.skipped.find((entry) => entry.mention === "Also");
+  assert.equal(quotedSkip.quoted, true, "closed quoted reference is visibly explicit");
+  assert.equal(bareSkip.quoted, false, "bare mention stays a prose mention");
+
+  const comparison = resolveTabComparison('sum @"Alpha News" and @"Gone Tab"', twoPlusUnreadable, isReadable);
+  assert.deepEqual(Object.keys(comparison.items[0]).sort(), ["mention", "tabId", "title", "url"].sort());
+  assert.deepEqual(Object.keys(comparison.skipped[0]).sort(), ["mention", "reason", "title", "url"].sort());
 });
 
 test("isCompareIntent recognizes compare/versus/vs/diff/between (and nothing else)", () => {

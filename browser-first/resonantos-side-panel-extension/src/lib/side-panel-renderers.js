@@ -159,7 +159,23 @@ export function createSidePanelRenderers({
       }
       actions.append(actionButton("delete", "Delete", "Delete this message", () => void onDeleteMessage(message.id)));
 
-      article.append(header, paragraph, actions);
+      // Referenced-tab provenance chips (#252): deterministic, request-side
+      // truth — they record which tabs were scoped into this message, never
+      // model-claimed citations.
+      if (Array.isArray(message.chips) && message.chips.length) {
+        const chipRow = document.createElement("div");
+        chipRow.className = "message-tab-chips";
+        for (const chip of message.chips) {
+          const element = document.createElement("span");
+          element.className = "tab-provenance-chip";
+          element.textContent = chip.title || chip.url || "referenced tab";
+          if (chip.url) element.title = chip.url;
+          chipRow.append(element);
+        }
+        article.append(header, chipRow, paragraph, actions);
+      } else {
+        article.append(header, paragraph, actions);
+      }
       transcript.append(article);
     });
     scrollTranscriptToBottom();

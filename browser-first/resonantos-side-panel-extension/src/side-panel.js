@@ -54,6 +54,7 @@ import { createSidePanelUiController } from "./lib/side-panel-ui-controller.js";
 import { readPersonalizationSettings } from "./lib/personalization-settings.js";
 import { createSitePermissionStore } from "./lib/site-permission-store.js";
 import { createTabContextController } from "./lib/tab-context-controller.js";
+import { createTabMentionTypeahead } from "./lib/tab-mention-typeahead.js";
 import { createSessionSummaryController } from "./lib/session-summary-controller.js";
 import { createTaskConsentStore } from "./lib/task-consent-store.js";
 
@@ -267,7 +268,6 @@ const composerController = createComposerController({
   forceClipboardFallback: true,
   navigator
 });
-
 const chatInstanceId = `sidecar-${Math.random().toString(36).slice(2, 10)}`;
 const chatSessionStore = createChatSessionStore({
   storage: chrome.storage?.local,
@@ -290,6 +290,16 @@ const browserJobStore = createBrowserJobStore({
 });
 
 const isReadableBrowserTab = (tab) => isControllableTabUrl(tab?.url);
+// @tab mention typeahead (#252): typing `@` lists open, readable tabs; selecting one
+// inserts the deliberate @"…" mention form that the command router treats as an
+// explicit tab scope. Wired here, after isReadableBrowserTab is initialized — on the
+// rebased tree the original placement above ran in the const's temporal dead zone and
+// the panel never reached its ready marker (caught by the live lanes, not unit tests).
+createTabMentionTypeahead({
+  chrome,
+  input: commandInput,
+  isReadableBrowserTab
+});
 const sidePanelUi = createSidePanelUiController({
   activityDetail,
   activityLabel,
@@ -491,8 +501,8 @@ dockNewChat?.addEventListener("click", async () => {
   commandInput?.focus();
 });
 
-const addMessage = async (role, content, { persist = true, usage = null } = {}) => {
-  const message = await chatSessionStore.addMessage(role, content, { persist, usage });
+const addMessage = async (role, content, { persist = true, usage = null, chips = null } = {}) => {
+  const message = await chatSessionStore.addMessage(role, content, { persist, usage, chips });
   if (!message) return null;
   renderMessages();
   chatsTreeRenderer.render();
@@ -722,6 +732,7 @@ const tabContextController = createTabContextController({
   chrome,
   getControlledTabId: () => controlledTabId,
   isReadableBrowserTab,
+  readTabPage: (tab) => browserPageActions.readSpecificTabPage(tab),
   refreshTabContext,
   renderSitePermissionPanel,
   setContextMeter,
@@ -735,6 +746,8 @@ const tabContextController = createTabContextController({
 });
 const bindMentionedTab = tabContextController.bindMentionedTab;
 const resolveComparisonContext = tabContextController.resolveComparisonContext;
+const resolveScopedTabContext = tabContextController.resolveScopedTabContext;
+const consumeScopedTabContexts = tabContextController.consumeScopedTabContexts;
 const sessionSummaryController = createSessionSummaryController({
   chrome,
   isReadableBrowserTab,
@@ -1030,6 +1043,7 @@ const chatTurnController = createChatTurnController({
   chatSessionStore,
   clearActivitySoon,
   clearAttachments: () => messageActions.clearAttachments(),
+  consumeScopedTabContexts,
   getLastSnapshot: () => lastSnapshot,
   getModel: () => modelSelect.value,
   getThinkingDepth: () => thinkingDepthSelect.value,
@@ -1138,6 +1152,7 @@ const commandRouter = createSidePanelCommandRouter({
   allowControlPreflightOnceForTaskClass,
   bindMentionedTab,
   resolveComparisonContext,
+  resolveScopedTabContext,
   runSessionCommand,
   clickActivePageText,
   detectActivePageForms,

@@ -17,6 +17,21 @@ export function augmentorSurfaceInstruction(surface = "side-panel") {
   return "You are running inside the ResonantOS browser side bar.";
 }
 
+// Browser tabs the user explicitly referenced with @tab mentions (#252). Each
+// block carries title/URL provenance so answers can cite which tab a claim
+// came from. Content is sanitized and budgeted by the extension; the host
+// re-slices defensively and caps the whole section.
+function referencedTabsContext(tabContexts) {
+  if (!Array.isArray(tabContexts) || !tabContexts.length) return "";
+  const blocks = tabContexts.slice(0, 8).map((tab, index) => {
+    const title = String(tab?.title ?? "").slice(0, 160) || "Untitled";
+    const url = String(tab?.url ?? "").slice(0, 400) || "unknown";
+    const text = String(tab?.text ?? "").slice(0, 4000);
+    return `--- Referenced tab ${index + 1}: ${title} — ${url} ---\n${text}`;
+  });
+  return `Browser tabs explicitly referenced by the user (scope the answer to these tabs; each block carries its tab provenance):\n${blocks.join("\n\n")}`.slice(0, 12000);
+}
+
 export function buildAugmentorSystemPrompt(payload = {}) {
   return [
     "You are Augmentor, the Strategist agent inside ResonantOS.",
@@ -34,6 +49,7 @@ export function buildAugmentorSystemPrompt(payload = {}) {
     "If browser page context is provided, use it as context but do not claim to mutate memory or execute tools unless the host explicitly returned that result.",
     payload.systemPrompt ? `Additional user-configured Augmentor system prompt:\n${String(payload.systemPrompt).slice(0, 8000)}` : "",
     payload.pageContext ? `Current browser page context:\n${String(payload.pageContext).slice(0, 8000)}` : "",
+    referencedTabsContext(payload.tabContexts),
     payload.runtimeContext ? `Current ResonantOS runtime context:\n${String(payload.runtimeContext).slice(0, 6000)}` : "",
   ].filter(Boolean).join("\n\n");
 }

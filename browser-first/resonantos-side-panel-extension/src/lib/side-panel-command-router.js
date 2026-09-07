@@ -14,18 +14,25 @@ import {
   parseSummarizePageIntent,
   parseTypeIntent
 } from "./browser-command-parser.js";
-import { isCompareIntent, parseTabMentions } from "./tab-comparison-resolver.js";
+import { isCompareIntent, parseTabMentionTokens } from "./tab-comparison-resolver.js";
 
 export function createSidePanelCommandRouter(handlers) {
   async function respondToCommand(value) {
-    // The cross-tab comparison path is gated on BOTH ≥2 mentions AND an explicit
-    // compare verb (compare/versus/vs/diff/between). This prevents ordinary
-    // prose containing two coincidental `@` symbols (e.g. an email address +
-    // handle) from being diverted into the comparison path on the strength of
-    // token count alone. The previous gate tripped on natural "@A and @B"
-    // phrasing and on email-handled text.
-    if (parseTabMentions(value).length >= 2 && isCompareIntent(value)) {
+    // Mention routing (three deliberate paths):
+    // 1. ≥2 mentions + compare verb → cross-tab comparison (#220). The verb
+    //    gate prevents prose with two coincidental `@` symbols (an email
+    //    address + a handle) from diverting on token count alone.
+    // 2. Any quoted @"…" mention → explicit tab scoping (#252). The quoted
+    //    form is what the composer typeahead inserts, so it signals a
+    //    deliberate reference: referenced tabs' content is captured and
+    //    attached to the request, and unresolved references fail loudly.
+    // 3. Otherwise → the legacy single-tab bind (bare single mention), which
+    //    stays silent when nothing resolves.
+    const mentionTokens = parseTabMentionTokens(value);
+    if (mentionTokens.length >= 2 && isCompareIntent(value)) {
       await handlers.resolveComparisonContext(value);
+    } else if (mentionTokens.some((token) => token.quoted)) {
+      await handlers.resolveScopedTabContext(value);
     } else {
       await handlers.bindMentionedTab(value);
     }

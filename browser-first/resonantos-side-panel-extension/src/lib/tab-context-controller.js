@@ -1,4 +1,8 @@
-import { resolveTabComparison } from "./tab-comparison-resolver.js";
+import { parseTabMentionTokens, resolveScopedTabs, resolveTabComparison } from "./tab-comparison-resolver.js";
+
+// Raw per-tab text cap at capture time; chat-turn-controller applies the
+// shared per-request budget and sanitization on top of this.
+const SCOPED_CAPTURE_TEXT_LIMIT = 12000;
 const INLINE_DRAFT_KEY = "augmentorInlineDraft";
 
 // Token grammar matches tab-comparison-resolver (Tom's review): no greedy
@@ -20,6 +24,7 @@ export function createTabContextController({
   chrome,
   getControlledTabId,
   isReadableBrowserTab,
+  readTabPage = async () => ({ ok: false, error: "Tab page capture unavailable." }),
   refreshTabContext,
   renderSitePermissionPanel,
   setContextMeter,
@@ -95,6 +100,74 @@ export function createTabContextController({
     const draft = await chrome.storage?.local?.get?.(INLINE_DRAFT_KEY).catch(() => ({}));
     await consumeInlineDraft(draft?.[INLINE_DRAFT_KEY]);
   };
+  // Scoped tab references (#252): contexts captured for the CURRENT composer
+  // submit only. The router resolves mentions before runChatTurn, and the
+  // chat-turn controller consumes (and clears) them when building the request
+  // payload, so a stale scope can never leak into a later turn.
+  let pendingScopedContexts = [];
+
+  const resolveScopedTabContext = async (message) => {
+    const allTabs = (await chrome.tabs.query({}).catch(() => []));
+    const scoped = resolveScopedTabs(message, allTabs, isReadableBrowserTab);
+    const { items, skipped, ambiguous } = scoped;
+    pendingScopedContexts = [];
+
+    // Explicit (quoted, typeahead-inserted) references that no longer resolve
+    // fail loudly and NEVER widen scope. Bare mentions keep the #308 prose
+    // rule: silent unless they named an unreadable/internal tab.
+    for (const entry of skipped) {
+      if (entry.quoted) {
+        await addMessage("system", `@"${entry.mention}" could not be resolved — the tab is closed or not readable in this session. The request scope was not widened.`);
+      } else if (entry.title || entry.url) {
+        await addMessage("system", entry.reason);
+      }
+    }
+
+    for (const entry of ambiguous) {
+      const candidates = entry.candidates
+        .map((candidate) => `"${candidate.title || candidate.url}"`)
+        .join(", ");
+      await addMessage("system", `@${entry.mention} matched ${entry.candidates.length} open tabs: ${candidates}. Specify which tab you mean (e.g. by full title or @tab N).`);
+    }
+
+    if (items.length === 0) return { ...scoped, contexts: [] };
+
+    const contexts = [];
+    for (const item of items) {
+      const read = await readTabPage({ id: item.tabId, title: item.title, url: item.url }).catch(() => null);
+      if (!read?.ok) {
+        await addMessage("system", `Skipped: could not read "${item.title || item.url || "referenced tab"}" (${read?.error ?? "no page context"}).`);
+        continue;
+      }
+      const snapshot = read.snapshot ?? {};
+      contexts.push({
+        tabId: item.tabId,
+        mention: item.mention,
+        title: snapshot.title || item.title,
+        url: snapshot.url || item.url,
+        text: String(snapshot.text ?? snapshot.page?.visibleText ?? "").slice(0, SCOPED_CAPTURE_TEXT_LIMIT)
+      });
+    }
+    pendingScopedContexts = contexts;
+
+    if (contexts.length > 0) {
+      const provenanceLines = contexts.map((context) =>
+        `- @${context.mention}: ${context.title || context.url || "(no title)"} — ${context.url || "(no url)"}`
+      );
+      await addMessage(
+        "system",
+        `Scoped to ${contexts.length} referenced tab${contexts.length === 1 ? "" : "s"} (content attached to this request; no tab activated):\n${provenanceLines.join("\n")}`,
+        { chips: contexts.map((context) => ({ title: context.title, url: context.url })) }
+      );
+    }
+    return { ...scoped, contexts };
+  };
+
+  const consumeScopedTabContexts = () => {
+    const contexts = pendingScopedContexts;
+    pendingScopedContexts = [];
+    return contexts;
+  };
   const resolveComparisonContext = async (message) => {
     const allTabs = (await chrome.tabs.query({}).catch(() => []));
     const comparison = resolveTabComparison(message, allTabs, isReadableBrowserTab);
@@ -149,10 +222,12 @@ export function createTabContextController({
     bindBrowserListeners,
     bindMentionedTab,
     consumeInlineDraft,
+    consumeScopedTabContexts,
     handleStorageChanged,
     handleTabUpdated,
     hydrateInitialContext,
     resolveComparisonContext,
+    resolveScopedTabContext,
     resolveTabMention
   };
 }

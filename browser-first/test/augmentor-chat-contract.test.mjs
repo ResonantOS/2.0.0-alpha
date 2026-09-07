@@ -71,3 +71,21 @@ test("Augmentor chat request messages require a human/assistant turn and prepend
     { role: "user", content: "can you delegate this to Hermes?" }
   ]);
 });
+test("Augmentor chat contract renders explicitly referenced tabs with provenance", () => {
+  const prompt = buildAugmentorSystemPrompt({
+    tabContexts: [
+      { title: "Alpha News", url: "https://alpha.test/", text: "Alpha visible text" },
+      { title: "Beta Report", url: "https://beta.test/", text: "Beta visible text" }
+    ]
+  });
+
+  assert.match(prompt, /Browser tabs explicitly referenced by the user/);
+  assert.match(prompt, /Referenced tab 1: Alpha News — https:\/\/alpha\.test\//);
+  assert.match(prompt, /Referenced tab 2: Beta Report — https:\/\/beta\.test\//);
+  assert.match(prompt, /Alpha visible text/);
+  assert.match(prompt, /scope the answer to these tabs/);
+
+  assert.doesNotMatch(buildAugmentorSystemPrompt({}), /explicitly referenced by the user/);
+  assert.doesNotMatch(buildAugmentorSystemPrompt({ tabContexts: [] }), /explicitly referenced by the user/);
+  assert.doesNotMatch(buildAugmentorSystemPrompt({ tabContexts: "not-an-array" }), /explicitly referenced by the user/);
+});

@@ -317,7 +317,7 @@ export function createChatSessionStore({
     return messages.find((message) => message.id === id) ?? null;
   }
 
-  async function addMessage(role, content, { persist: shouldPersist = true, usage = null } = {}) {
+  async function addMessage(role, content, { persist: shouldPersist = true, usage = null, chips = null } = {}) {
     const text = String(content ?? "").trim();
     if (!text) return null;
     const message = {
@@ -325,6 +325,7 @@ export function createChatSessionStore({
       role,
       content: text,
       usage,
+      chips: Array.isArray(chips) && chips.length ? chips.map((chip) => ({ title: String(chip?.title ?? ""), url: String(chip?.url ?? "") })) : null,
       createdAt: now()
     };
     messages = [...messages, message];
