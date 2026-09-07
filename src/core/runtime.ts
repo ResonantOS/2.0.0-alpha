@@ -91,7 +91,7 @@ import type {
   TrustKernelAdvisory,
 } from "./contracts";
 import type { BrowserToolResult } from "./browser-tools";
-import { buildDefaultState } from "./defaults";
+import { buildDefaultState, selectRecommendedDefaultSystemSlotProviderIds } from "./defaults";
 import { renderDelegationTaskMarkdown, validateDelegationPacket } from "./delegation";
 import { normalizeGoalWorkspaces } from "./goal-workspace";
 import { providerNeedsStoredCredential } from "./provider-credentials";
@@ -1518,6 +1518,10 @@ export const rebaseStateOnManifests = (
   sideloadedIds: string[],
 ): ResonantShellState => {
   const installations = { ...state.installations };
+  const activeSystemSlotProviderIds = selectRecommendedDefaultSystemSlotProviderIds(
+    manifests,
+    state.activeSystemSlotProviderIds ?? {},
+  );
   for (const manifest of manifests) {
     const snapshot = createInstallationSnapshot(
       manifest,
@@ -1545,7 +1549,9 @@ export const rebaseStateOnManifests = (
     }
   }
 
-  return { ...state, installations };
+  // If a selected provider is absent from the current catalog, keep the selection;
+  // replacement policy for absent selected providers belongs to a later task.
+  return { ...state, installations, activeSystemSlotProviderIds };
 };
 
 export const applyProviderCredentialStatuses = (
@@ -1891,6 +1897,10 @@ export const normalizeState = (state: ResonantShellState, base: ResonantShellSta
   return {
     ...base,
     ...state,
+    activeSystemSlotProviderIds: {
+      ...base.activeSystemSlotProviderIds,
+      ...(state.activeSystemSlotProviderIds ?? {}),
+    },
     strategistIdentity: { ...base.strategistIdentity, ...state.strategistIdentity },
     uiPreferences: {
       ...base.uiPreferences,

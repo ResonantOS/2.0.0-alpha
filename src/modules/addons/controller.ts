@@ -8,11 +8,13 @@ import type {
   AddOnManifest,
   AddOnScriptDefinition,
   CapabilityGrant,
+  InstallationStatus,
   LogicianExecutionArtifact,
   ResonantShellState,
 } from "../../core/contracts";
 import { executeLogicianHook, executeLogicianScript } from "../../core/logician";
 import { applyProviderCredentialStatuses, hydrateState, loadProviderCredentialStatuses, sideloadManifest } from "../../core/runtime";
+import { selectedSystemSlotProviderId } from "../shell/system-slots";
 
 type SideloadControllerInput = {
   sideloadPath: string;
@@ -92,6 +94,157 @@ export const toggleAddonInstallation = (
     }
     return draft;
   });
+};
+
+export type UninstallAddonBlockReason =
+  | "not-installed"
+  | "already-uninstalled"
+  | "active-system-slot-provider"
+  | "running-work-not-stopped";
+
+export interface UninstallAddonAuditRecord {
+  at: string;
+  event: "addonUninstalled";
+  addonId: string;
+  source: AddOnInstallation["source"];
+  previousStatus: InstallationStatus;
+  previousInstalled: boolean;
+  previousEnabled: boolean;
+  clearedCapabilities: CapabilityGrant["capability"][];
+  clearedPrivateProviderProfileIds: number;
+  configDeleted: boolean;
+  userDataRetained: true;
+  alsoDeleteUserDataOffered: boolean;
+  actor: "human";
+}
+
+export interface UninstallAddonResult {
+  outcome: "uninstalled" | "blocked";
+  blockReason?: UninstallAddonBlockReason;
+  blockDetail?: string;
+  audit?: UninstallAddonAuditRecord;
+}
+
+export interface UninstallAddonDependencies {
+  getState: () => ResonantShellState;
+  updateRuntimeState: (updater: (current: ResonantShellState) => ResonantShellState) => void;
+  stopRunningWork?: (input: { addonId: string }) => Promise<{ stopped: boolean; detail?: string }>;
+  now?: () => Date;
+}
+
+type UninstallDecision =
+  | { ok: true; installation: AddOnInstallation }
+  | { ok: false; blockReason: UninstallAddonBlockReason; blockDetail?: string };
+
+const decideUninstall = (state: ResonantShellState, manifest: AddOnManifest): UninstallDecision => {
+  const installation = state.installations[manifest.id];
+  if (!installation || (!installation.installed && installation.status !== "uninstalled")) {
+    return { ok: false, blockReason: "not-installed" };
+  }
+  if (installation.status === "uninstalled") {
+    return { ok: false, blockReason: "already-uninstalled" };
+  }
+  const activeDefaultSlotIds =
+    installation.source === "bundled"
+      ? (manifest.systemSlots ?? [])
+          .filter(
+            (slot) =>
+              slot.role === "default-provider" &&
+              slot.recommended === true &&
+              selectedSystemSlotProviderId(state, slot.id) === manifest.id,
+          )
+          .map((slot) => slot.id)
+      : [];
+  if (activeDefaultSlotIds.length > 0) {
+    return {
+      ok: false,
+      blockReason: "active-system-slot-provider",
+      blockDetail: activeDefaultSlotIds.join(", "),
+    };
+  }
+  return { ok: true, installation };
+};
+
+const runningWorkBlockDetail = (error: unknown): string =>
+  error instanceof Error ? error.message : typeof error === "string" ? error : "Running add-on work could not be stopped.";
+
+export const uninstallAddon = async (
+  manifest: AddOnManifest,
+  deps: UninstallAddonDependencies,
+): Promise<UninstallAddonResult> => {
+  const initialDecision = decideUninstall(deps.getState(), manifest);
+  if (!initialDecision.ok) {
+    return { outcome: "blocked", blockReason: initialDecision.blockReason, blockDetail: initialDecision.blockDetail };
+  }
+
+  if (deps.stopRunningWork) {
+    try {
+      const stopResult = await deps.stopRunningWork({ addonId: manifest.id });
+      if (!stopResult.stopped) {
+        return {
+          outcome: "blocked",
+          blockReason: "running-work-not-stopped",
+          blockDetail: stopResult.detail,
+        };
+      }
+    } catch (error) {
+      return {
+        outcome: "blocked",
+        blockReason: "running-work-not-stopped",
+        blockDetail: runningWorkBlockDetail(error),
+      };
+    }
+  }
+
+  let result: UninstallAddonResult = {
+    outcome: "blocked",
+    blockReason: "not-installed",
+  };
+  deps.updateRuntimeState((draft) => {
+    const draftDecision = decideUninstall(draft, manifest);
+    if (!draftDecision.ok) {
+      result = { outcome: "blocked", blockReason: draftDecision.blockReason, blockDetail: draftDecision.blockDetail };
+      return draft;
+    }
+
+    const installation = draftDecision.installation;
+    const audit: UninstallAddonAuditRecord = {
+      at: (deps.now ?? (() => new Date()))().toISOString(),
+      event: "addonUninstalled",
+      addonId: manifest.id,
+      source: installation.source,
+      previousStatus: installation.status,
+      previousInstalled: installation.installed,
+      previousEnabled: installation.enabled,
+      clearedCapabilities: installation.grantedCapabilities
+        .filter((grant) => grant.granted)
+        .map((grant) => grant.capability),
+      clearedPrivateProviderProfileIds: installation.privateProviderProfileIds.length,
+      configDeleted: installation.config !== undefined,
+      userDataRetained: true,
+      alsoDeleteUserDataOffered: false,
+      actor: "human",
+    };
+
+    installation.status = "uninstalled";
+    installation.installed = false;
+    installation.enabled = false;
+    installation.grantedCapabilities = [];
+    installation.privateProviderProfileIds = [];
+    delete installation.config;
+    installation.notes = ["Uninstalled; capability grants and add-on config were cleared. User data was retained."];
+    if (manifest.id === "addon.hermes") {
+      const hermesChannel = draft.channels.find((channel) => channel.id === "desktop-hermes");
+      if (hermesChannel) {
+        hermesChannel.enabled = false;
+      }
+    }
+
+    result = { outcome: "uninstalled", audit };
+    return draft;
+  });
+
+  return result;
 };
 
 export const toggleAddonCapabilityGrant = (

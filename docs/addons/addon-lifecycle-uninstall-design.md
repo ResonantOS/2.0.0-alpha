@@ -212,6 +212,7 @@ while they are the active provider for a kernel-adjacent system slot; disable is
 still allowed. Sideloaded add-ons are always uninstallable. Once a replacement
 owns the affected slot, the bundled default can be uninstalled because ADR-026
 requires replaceability.
+The typed selection lives in `ResonantShellState.activeSystemSlotProviderIds`, `activeSystemSlotProvider` consults it first, and changing a selection is a later task.
 
 Build-testable predicate:
 
@@ -237,10 +238,10 @@ when the sideloaded add-on provides a system slot.
 2. Should uninstall stop or cancel currently running local add-on work first?
    Recommended default: yes, attempt a best-effort stop before the state
    mutation and block uninstall if the runtime cannot reach a safe stopped
-   state.
+   state. **Answered 2026-09-07 (release owner): yes — implemented in task 2.**
 3. Which surface owns active system-slot provider selection?
    Recommended default: add an explicit typed field under shared runtime state
-   before enforcing kernel-adjacent uninstall blocking.
+   before enforcing kernel-adjacent uninstall blocking. **Answered 2026-09-07 (release owner): yes — implemented in task 2.**
 4. Should "also delete user data" delete app-owned delegation and intake records
    together or as separate choices?
    Recommended default: separate choices, because Living Archive intake/review

@@ -2866,6 +2866,7 @@ export interface ResonantShellState {
   goalWorkspaces: GoalWorkspace[];
   recoverySession: RecoverySession;
   installations: Record<string, AddOnInstallation>;
+  activeSystemSlotProviderIds: Partial<Record<SystemSlotId, string>>;
   uiPreferences: UiPreferences;
   distributionModel: "curated-plus-sideload";
 }

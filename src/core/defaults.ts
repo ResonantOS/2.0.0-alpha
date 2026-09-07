@@ -19,6 +19,7 @@ import type {
   ProviderRoutingState,
   ProviderRuntimeNode,
   ResonantShellState,
+  SystemSlotId,
   WorkspaceDefinition,
 } from "./contracts";
 
@@ -899,6 +900,21 @@ export const createDefaultInstallation = (manifest: AddOnManifest, source: AddOn
   notes: ["Not installed yet."],
 });
 
+export const selectRecommendedDefaultSystemSlotProviderIds = (
+  manifests: AddOnManifest[],
+  current: Partial<Record<SystemSlotId, string>> = {},
+): Partial<Record<SystemSlotId, string>> => {
+  const selected = { ...current };
+  for (const manifest of manifests) {
+    for (const slot of manifest.systemSlots ?? []) {
+      if (slot.role === "default-provider" && slot.recommended === true && !selected[slot.id]) {
+        selected[slot.id] = manifest.id;
+      }
+    }
+  }
+  return selected;
+};
+
 export const buildDefaultState = (manifests: AddOnManifest[]): ResonantShellState => {
   const installations = Object.fromEntries(
     manifests.map((manifest) => [manifest.id, createDefaultInstallation(manifest, "bundled")]),
@@ -928,6 +944,7 @@ export const buildDefaultState = (manifests: AddOnManifest[]): ResonantShellStat
     goalWorkspaces: [],
     recoverySession,
     installations,
+    activeSystemSlotProviderIds: selectRecommendedDefaultSystemSlotProviderIds(manifests),
     uiPreferences: {
       activeSection: "overview",
       activeChatThreadId: "thread-main-desktop",
