@@ -249,7 +249,12 @@ export function renderMemorySection(container, { bridgeRequest, getBridgeRequest
   const bridge = () => (typeof getBridgeRequest === "function" ? getBridgeRequest() : bridgeRequest);
   const statusNode = document.createElement("p");
   statusNode.className = "settings-status";
+  statusNode.setAttribute("role", "status");
   statusNode.textContent = "Loading memory settings...";
+  const retryRefresh = document.createElement("button");
+  retryRefresh.type = "button";
+  retryRefresh.textContent = "Retry refresh";
+  retryRefresh.hidden = true;
   const metrics = document.createElement("div");
   metrics.className = "settings-health-grid";
   const sourceList = document.createElement("ol");
@@ -370,6 +375,7 @@ export function renderMemorySection(container, { bridgeRequest, getBridgeRequest
       body: "Connect the folders or vaults Augmentor can learn from. ResonantOS preserves source evidence first, then updates AI Memory through the governed archive pipeline."
     }),
     statusNode,
+    retryRefresh,
     metrics,
     sourceSection,
     addSourceCard,
@@ -628,8 +634,33 @@ export function renderMemorySection(container, { bridgeRequest, getBridgeRequest
     }
   });
 
+  // Persistence has already succeeded here; retry only the read, never the source write.
+  const refreshSavedSettings = async () => {
+    retryRefresh.disabled = true;
+    try {
+      await load();
+      retryRefresh.hidden = true;
+      setStatus(statusNode, "Memory settings saved.", "success");
+    } catch (error) {
+      retryRefresh.hidden = false;
+      setStatus(statusNode, `Memory settings saved, but the view could not refresh: ${safeErrorMessage(error)}. Retry refresh to update the source list.`, "warning");
+    } finally {
+      retryRefresh.disabled = false;
+    }
+  };
+  retryRefresh.addEventListener("click", async () => {
+    if (save.disabled || retryRefresh.disabled) return;
+    save.disabled = true;
+    try {
+      await refreshSavedSettings();
+    } finally {
+      save.disabled = false;
+    }
+  });
+
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (save.disabled) return;
     if (importMode.value === "move-on-import" && pathInput.value.trim()) {
       try {
         await executeMovePreflight();
@@ -639,6 +670,7 @@ export function renderMemorySection(container, { bridgeRequest, getBridgeRequest
       return;
     }
     save.disabled = true;
+    retryRefresh.hidden = true;
     setStatus(statusNode, "Saving memory settings...");
     try {
       await bridge()("/memory/settings", {
@@ -658,8 +690,7 @@ export function renderMemorySection(container, { bridgeRequest, getBridgeRequest
         }
       });
       pathInput.value = "";
-      await load();
-      setStatus(statusNode, "Memory settings saved.", "success");
+      await refreshSavedSettings();
     } catch (error) {
       setStatus(statusNode, `Save failed: ${safeErrorMessage(error)}`, "error");
     } finally {
