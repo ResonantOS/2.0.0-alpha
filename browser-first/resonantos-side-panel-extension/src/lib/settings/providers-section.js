@@ -102,15 +102,17 @@ export function providerAccountForm(provider = {}) {
 
   updateCredentialRequirement(template.value);
 
-  function lockUrlForTemplate(templateId) {
+  function lockUrlForTemplate(templateId, { preserveSavedValue = false } = {}) {
     const preset = providerTypePresets[templateId] ?? providerTypePresets.minimax;
     const editable = allowsCustomProviderEndpoint(templateId);
     apiBaseUrl.disabled = !editable;
     apiBaseUrl.title = editable ? "" : "This provider requires its built-in endpoint URL.";
-    apiBaseUrl.value = preset.apiBaseUrl;
+    if (!preserveSavedValue || !editable) {
+      apiBaseUrl.value = preset.apiBaseUrl;
+    }
   }
 
-  lockUrlForTemplate(template.value);
+  lockUrlForTemplate(template.value, { preserveSavedValue: true });
 
   template.addEventListener("change", () => {
     const preset = providerTypePresets[template.value] ?? providerTypePresets.minimax;

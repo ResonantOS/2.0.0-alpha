@@ -265,6 +265,26 @@ export function createProviderBridgeService({
         ],
       };
     }
+    // Known local-software templates are keyless local runtimes regardless of
+    // the providerType a legacy caller sends; templateId is authoritative.
+    const localPresets = {
+      ollama: { apiBaseUrl: "http://127.0.0.1:11434/v1", models: ["batiai/gemma4-e2b:q4"] },
+      "lm-studio": { apiBaseUrl: "http://127.0.0.1:1234/v1", models: ["local-model"] },
+      "dgx-spark": { apiBaseUrl: "http://dgx-spark.local:11434/v1", models: ["local-model"] },
+      localai: { apiBaseUrl: "http://127.0.0.1:8080/v1", models: ["local-model"] },
+      "llama-cpp": { apiBaseUrl: "http://127.0.0.1:8080/v1", models: ["local-model"] },
+      vllm: { apiBaseUrl: "http://127.0.0.1:8000/v1", models: ["local-model"] },
+      "text-generation-webui": { apiBaseUrl: "http://127.0.0.1:5000/v1", models: ["local-model"] },
+    };
+    if (localPresets[templateId] || type === "local") {
+      const preset = localPresets[templateId] ?? localPresets.ollama;
+      return {
+        providerType: "local",
+        authType: "local-runtime",
+        apiBaseUrl: preset.apiBaseUrl,
+        models: preset.models.map((model) => ({ model, label: model, runtime: "local", costTier: "local-free", qualityTier: "local runtime" })),
+      };
+    }
     const openAiCompatiblePresets = {
       xai: { apiBaseUrl: "https://api.x.ai/v1", models: ["grok-4", "grok-3"] },
       deepseek: { apiBaseUrl: "https://api.deepseek.com/v1", models: ["deepseek-chat", "deepseek-reasoner"] },
@@ -283,10 +303,6 @@ export function createProviderBridgeService({
       "cloudflare-ai-gateway": { apiBaseUrl: "", models: ["gateway-model-id"] },
       litellm: { apiBaseUrl: "http://127.0.0.1:4000/v1", models: ["configured-model-alias"] },
       bifrost: { apiBaseUrl: "", models: ["bifrost-model-alias"] },
-      localai: { apiBaseUrl: "http://127.0.0.1:8080/v1", models: ["local-model"] },
-      "llama-cpp": { apiBaseUrl: "http://127.0.0.1:8080/v1", models: ["local-model"] },
-      vllm: { apiBaseUrl: "http://127.0.0.1:8000/v1", models: ["local-model"] },
-      "text-generation-webui": { apiBaseUrl: "http://127.0.0.1:5000/v1", models: ["local-model"] },
       "asus-gx10": { apiBaseUrl: "http://192.168.1.77:30004/v1", models: ["Qwen3.6-35B-A3B-Q4_K_M.gguf"] },
       "openai-compatible": { apiBaseUrl: "", models: ["model-id"] },
     };
@@ -320,20 +336,6 @@ export function createProviderBridgeService({
           { model: "gemini-2.5-flash", label: "Gemini 2.5 Flash", runtime: "cloud", costTier: "paid-per-call", qualityTier: "fast lightweight" },
           { model: "gemma", label: "Gemma", runtime: "cloud", costTier: "custom", qualityTier: "open model family" },
         ],
-      };
-    }
-    const localPresets = {
-      ollama: { apiBaseUrl: "http://127.0.0.1:11434/v1", models: ["batiai/gemma4-e2b:q4"] },
-      "lm-studio": { apiBaseUrl: "http://127.0.0.1:1234/v1", models: ["local-model"] },
-      "dgx-spark": { apiBaseUrl: "http://dgx-spark.local:11434/v1", models: ["local-model"] },
-    };
-    if (localPresets[templateId] || type === "local") {
-      const preset = localPresets[templateId] ?? localPresets.ollama;
-      return {
-        providerType: "local",
-        authType: "local-runtime",
-        apiBaseUrl: preset.apiBaseUrl,
-        models: preset.models.map((model) => ({ model, label: model, runtime: "local", costTier: "local-free", qualityTier: "local runtime" })),
       };
     }
     const customPresets = {

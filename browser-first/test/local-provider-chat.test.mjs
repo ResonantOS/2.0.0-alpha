@@ -156,3 +156,36 @@ test("inline assistant routes to local provider instead of falling back to local
     assert.notEqual(out.model, "local-inline-fallback");
   });
 });
+
+test("local software templates saved as openai-compatible are reclassified as keyless local runtimes", async () => {
+  await withService(async (svc, setFetch) => {
+    const legacyVllm = {
+      mode: "create",
+      templateId: "vllm",
+      label: "vLLM local",
+      providerType: "openai-compatible",
+      apiBaseUrl: "http://127.0.0.1:8000/v1",
+      models: ["local-model"],
+      credential: "",
+    };
+    const { provider } = await svc.executeProviderAccountSave(legacyVllm);
+    assert.equal(provider.providerType, "local", "vllm template should be reclassified as local");
+    assert.equal(provider.authType, "local-runtime", "vllm template should not require an API key");
+
+    let requestedUrl;
+    setFetch(async (url, init) => {
+      requestedUrl = String(url);
+      assert.equal(init.headers?.Authorization, undefined, "reclassified local runtime must not send an Authorization header");
+      return reply("hello from vLLM");
+    });
+
+    const out = await svc.executeBridgeChat({
+      workload: "augmentor-chat",
+      model: "local-model",
+      messages: [{ role: "user", content: "hi" }],
+    });
+
+    assert.match(requestedUrl, /127\.0\.0\.1:8000\/v1\/chat\/completions$/);
+    assert.equal(out.reply, "hello from vLLM");
+  });
+});
