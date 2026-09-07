@@ -191,6 +191,10 @@ export function renderBridgeTargetSection(container, { bridgeRequest, onBridgeCo
             setStatus(syncStatus, "Pushing to bridge...", "");
             try {
               await prefsSync.flush();
+              const state = prefsSync.getState();
+              setStatus(syncStatus, state.lastError
+                ? `Push failed: ${safeErrorMessage(state.lastError)}`
+                : "Preferences pushed to bridge.", state.lastError ? "error" : "success");
               refreshSyncStatus();
             } catch (error) {
               setStatus(syncStatus, safeErrorMessage(error), "error");
