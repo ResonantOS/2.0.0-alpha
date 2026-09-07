@@ -268,15 +268,6 @@ const composerController = createComposerController({
   forceClipboardFallback: true,
   navigator
 });
-// @tab mention typeahead (#252): typing `@` lists open, readable tabs;
-// selecting one inserts the deliberate @"…" mention form that the command
-// router treats as an explicit tab scope.
-createTabMentionTypeahead({
-  chrome,
-  input: commandInput,
-  isReadableBrowserTab
-});
-
 const chatInstanceId = `sidecar-${Math.random().toString(36).slice(2, 10)}`;
 const chatSessionStore = createChatSessionStore({
   storage: chrome.storage?.local,
@@ -299,6 +290,16 @@ const browserJobStore = createBrowserJobStore({
 });
 
 const isReadableBrowserTab = (tab) => isControllableTabUrl(tab?.url);
+// @tab mention typeahead (#252): typing `@` lists open, readable tabs; selecting one
+// inserts the deliberate @"…" mention form that the command router treats as an
+// explicit tab scope. Wired here, after isReadableBrowserTab is initialized — on the
+// rebased tree the original placement above ran in the const's temporal dead zone and
+// the panel never reached its ready marker (caught by the live lanes, not unit tests).
+createTabMentionTypeahead({
+  chrome,
+  input: commandInput,
+  isReadableBrowserTab
+});
 const sidePanelUi = createSidePanelUiController({
   activityDetail,
   activityLabel,
