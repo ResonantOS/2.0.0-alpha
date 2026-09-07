@@ -692,7 +692,7 @@ export function createProviderBridgeService({
       throw new Error("Unknown provider profile.");
     }
     const secrets = await readProviderSecrets();
-    const requiresCredential = String(profile.authType ?? "api-key").toLowerCase() !== "none";
+    const requiresCredential = !["none", "local-runtime"].includes(String(profile.authType ?? "api-key").toLowerCase());
     const credential = secrets[providerId] ?? "";
     if (requiresCredential && !credential) {
       const result = {

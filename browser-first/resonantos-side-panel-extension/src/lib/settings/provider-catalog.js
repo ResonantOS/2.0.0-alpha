@@ -227,7 +227,7 @@ export const providerTypePresets = {
     label: "NVIDIA DGX Spark",
     providerType: "local",
     category: "User-owned machines",
-    apiBaseUrl: "http://dgx-spark.local:11434",
+    apiBaseUrl: "http://dgx-spark.local:11434/v1",
     models: ["local-model"],
   },
   "asus-gx10": {

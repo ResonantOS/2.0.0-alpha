@@ -2838,3 +2838,45 @@ test("settings browser control section degrades when browser stores are unavaila
     cleanup();
   }
 });
+
+test("a keyless local account card does not ask for a credential", async () => {
+  const { container, cleanup } = setupDom();
+  const providers = [
+    {
+      id: "vllm-lab",
+      label: "vLLM Lab",
+      providerType: "local",
+      templateId: "vllm",
+      authType: "local-runtime",
+      apiBaseUrl: "http://127.0.0.1:8000/v1",
+      role: "Lab runtime",
+      source: "user",
+      models: [{ model: "local-model", label: "local-model", costTier: "local-free", qualityTier: "local runtime", allowed: true }],
+      routeConsumers: [],
+      configured: true,
+      credentialPreview: "missing"
+    }
+  ];
+  const bridgeRequest = async (route) => {
+    if (route === "/providers/status") {
+      return { providers, vault: { configured: true, location: "ResonantOS local provider vault" } };
+    }
+    if (route === "/providers/diagnostics-history") return { entries: [] };
+    throw new Error(`Unexpected route ${route}`);
+  };
+
+  try {
+    renderSettingsWorkspace({ container, bridgeRequest, initialSection: "providers" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const card = [...container.querySelectorAll(".settings-provider-card")]
+      .find((node) => /vLLM Lab/.test(node.textContent));
+    assert.ok(card, "the keyless account renders a card");
+    assert.match(card.textContent, /Ready/, "a keyless runtime counts as configured");
+    assert.match(card.textContent, /Credential: not required/);
+    assert.doesNotMatch(card.textContent, /Credential: missing/);
+    assert.equal(card.querySelector(".settings-provider-form input[name='credential']"), null, "keyless accounts must not offer a key field");
+    assert.ok(card.querySelector(".settings-provider-remove"), "user accounts keep their Remove control");
+  } finally {
+    cleanup();
+  }
+});

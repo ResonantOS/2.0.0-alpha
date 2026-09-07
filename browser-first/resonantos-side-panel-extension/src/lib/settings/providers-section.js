@@ -400,11 +400,14 @@ function providerCard({ provider, bridgeRequest, getBridgeRequest, statusNode, r
 
   const auth = document.createElement("p");
   auth.className = "settings-model-list";
-  const credentialState = provider.credentialPreview === "session"
-    ? "session-only in host memory"
-    : provider.credentialPreview === "stored"
-      ? "configured in host credential store"
-      : "missing";
+  const keyless = ["none", "local-runtime"].includes(String(provider.authType ?? "api-key").toLowerCase());
+  const credentialState = keyless
+    ? "not required"
+    : provider.credentialPreview === "session"
+      ? "session-only in host memory"
+      : provider.credentialPreview === "stored"
+        ? "configured in host credential store"
+        : "missing";
   auth.textContent = `Auth: ${formatLabel(provider.authType)} · Credential: ${credentialState}`;
 
   const form = document.createElement("form");
@@ -418,7 +421,9 @@ function providerCard({ provider, bridgeRequest, getBridgeRequest, statusNode, r
   const save = document.createElement("button");
   save.type = "submit";
   save.textContent = provider.configured ? "Update" : "Save";
-  form.append(input, save);
+  if (!keyless) {
+    form.append(input, save);
+  }
   if (provider.source === "user") {
     const remove = document.createElement("button");
     remove.type = "button";

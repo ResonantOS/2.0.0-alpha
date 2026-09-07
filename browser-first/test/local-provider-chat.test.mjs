@@ -189,3 +189,31 @@ test("local software templates saved as openai-compatible are reclassified as ke
     assert.equal(out.reply, "hello from vLLM");
   });
 });
+
+test("connectivity test probes a keyless local runtime instead of demanding a credential", async () => {
+  await withService(async (svc, setFetch) => {
+    const { provider } = await svc.executeProviderAccountSave(localOllamaAccount);
+    assert.equal(provider.authType, "local-runtime");
+
+    let requestedUrl;
+    let authHeader = "unset";
+    setFetch(async (url, init) => {
+      requestedUrl = String(url);
+      authHeader = init?.headers?.Authorization;
+      return { ok: true, status: 200, json: async () => ({ data: [] }) };
+    });
+
+    const result = await svc.executeProviderConnectivityTest({ providerId: provider.id });
+    assert.notEqual(result.state, "missing-credential", "a keyless local runtime must be probed, not refused for lacking a key");
+    assert.equal(result.state, "reachable");
+    assert.match(requestedUrl, /^http:\/\/127\.0\.0\.1:11434\/v1\/models$/, "probe targets the account's own endpoint");
+    assert.equal(authHeader, undefined, "keyless local runtime connectivity test must not send an Authorization header");
+
+    // A key stored against a local runtime is still never sent — matching the chat path.
+    await svc.executeProviderCredentialSave({ providerId: provider.id, credential: "unused-local-key-12345" });
+    authHeader = "unset";
+    const withKey = await svc.executeProviderConnectivityTest({ providerId: provider.id });
+    assert.equal(withKey.state, "reachable");
+    assert.equal(authHeader, undefined, "a stored key must not be sent to a local runtime by the connectivity test either");
+  });
+});
