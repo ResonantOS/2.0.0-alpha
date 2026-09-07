@@ -6,13 +6,13 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import {
-  constantTimeEqual,
   createBridgeToken,
   getBridgeHost,
   getBridgePublicUrl,
   startBridgeServerWithFallback,
   writeBridgeConfig,
 } from "./bridge-server.mjs";
+import { createBridgeRouteSelfTestInvoker } from "./bridge-self-test-invoker.mjs";
 import {
   countFiles,
   dashboardTarget,
@@ -392,21 +392,12 @@ const capabilityBootstrapToken = args.get("capability-bootstrap-token") ??
   createBridgeToken();
 const bridgeCapabilityTokens = buildBridgeCapabilityTokens({ args, mint: createBridgeToken });
 
-async function invokeBridgeRouteForSelfTest({ method = "POST", routePath, body = {}, capabilityToken = "" } = {}) {
-  const route = bridgeRoutes.find((entry) => entry.method === method && entry.path === routePath);
-  if (!route) {
-    return { status: 404, payload: { ok: false, error: "Unknown browser-first bridge route." } };
-  }
-  if (route.requiredCapability && !constantTimeEqual(capabilityToken, bridgeCapabilityTokens[route.requiredCapability])) {
-    return { status: 403, payload: { ok: false, error: `Bridge route requires ${route.requiredCapability} capability.` } };
-  }
-  try {
-    const result = await route.handler(body, { headers: {} });
-    return { status: 200, payload: { ok: true, ...result } };
-  } catch (error) {
-    return { status: 500, payload: { ok: false, error: error instanceof Error ? error.message : String(error) } };
-  }
-}
+const invokeBridgeRouteForSelfTest = createBridgeRouteSelfTestInvoker({
+  bridgeToken,
+  bridgeCapabilityTokens,
+  capabilityBootstrapToken,
+  routes: bridgeRoutes,
+});
 
 const selfTestHandled = await runBrowserFirstSelfTest({
   args,
