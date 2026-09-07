@@ -6,6 +6,9 @@ for anyone building panels, add-ons, or app-shell UI.
 
 ## ROSI — Resonant OS Interface design system
 
+For implemented Settings density behavior, see
+[Settings control sizing](SETTINGS-CONTROL-SIZING.md).
+
 Contributed by Michel Navarra (PR #208). Extracted from the live Browser
 extension UI into a token catalog.
 
