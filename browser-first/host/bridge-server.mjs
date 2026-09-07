@@ -1068,18 +1068,13 @@ export async function evaluateBridgeRequestForSelfTest({
     if (route.requiredCapabilityBootstrap && !isAuthorizedCapabilityBootstrapRequest(request, capabilityBootstrapToken)) {
       return { status: 403, payload: { ok: false, error: "Bridge route requires capability bootstrap authorization." } };
     }
-    if (!route.requiredCapability) {
-      if (route.requiredCapabilityBootstrap) {
-        const payload = method === "POST" ? body : {};
-        const result = await route.handler(payload, request);
-        return { status: 200, payload: { ok: true, ...result } };
-      }
+    if (!route.requiredCapability && !route.requiredCapabilityBootstrap) {
       return {
         status: 403,
         payload: { ok: false, error: "Bridge route declares no capability; refused by default." },
       };
     }
-    if (!isAuthorizedCapabilityRequest(request, bridgeCapabilityTokens, route.requiredCapability)) {
+    if (route.requiredCapability && !isAuthorizedCapabilityRequest(request, bridgeCapabilityTokens, route.requiredCapability)) {
       return { status: 403, payload: { ok: false, error: `Bridge route requires ${route.requiredCapability} capability.` } };
     }
     const payload = method === "POST" ? body : {};

@@ -16,6 +16,7 @@ test("constant-time token comparison preserves exact-match and length checks", (
   assert.equal(constantTimeEqual("capability-token", "capability-tokfn"), false);
   assert.equal(constantTimeEqual("capability-token", "capability-token-extra"), false);
   assert.equal(constantTimeEqual("", undefined), false);
+  assert.equal(constantTimeEqual("", ""), false, "two empty tokens must never compare equal (fail closed)");
 });
 
 test("bridge capability behavior is deterministic without localhost binding", async () => {
@@ -702,4 +703,18 @@ test("bridge client uses runtime-scoped capability tokens after bootstrap", asyn
     body: { providerId: "shared-minimax", credential: "minimax-test-credential" },
   });
   assert.equal(saved.saved, true);
+});
+
+test("runBridgeAuthSelfTest proves token auth and default-deny on a real socket", async () => {
+  const { runBridgeAuthSelfTest } = await import("../host/bridge-server.mjs");
+  const result = await runBridgeAuthSelfTest({
+    port: 0,
+    bridgeToken: "self-test-bridge-token",
+    extensionOrigin: "chrome-extension://test",
+  });
+  assert.equal(result.unauthorizedStatus, 401);
+  assert.equal(result.wrongTokenStatus, 401);
+  assert.equal(result.missingCapabilityStatus, 403, "a valid bridge token without the capability header must be refused");
+  assert.equal(result.authorizedStatus, 200);
+  assert.equal(result.ok, true);
 });
