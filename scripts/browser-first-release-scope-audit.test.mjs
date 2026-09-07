@@ -385,3 +385,13 @@ test("Resonant Extension Framework specification docs are approved release docum
   assert.equal(classify("docs/addons/other-framework/notes.md", "added").bucket, "review");
   assert.equal(classify("docs/REVIEW_PACKET_2026-08-25.md", "added").bucket, "review", "process artifacts at the docs root still need manual review");
 });
+
+test("the add-on lifecycle uninstall design note is approved release documentation", () => {
+  const classify = requireExport("classify");
+
+  assert.deepEqual(classify("docs/addons/addon-lifecycle-uninstall-design.md", "added"), {
+    bucket: "include",
+    reason: "browser-first release documentation",
+  });
+  assert.equal(classify("docs/addons/some-other-note.md", "added").bucket, "review", "docs/addons/ stays manual-review by default; only the listed note is approved");
+});
