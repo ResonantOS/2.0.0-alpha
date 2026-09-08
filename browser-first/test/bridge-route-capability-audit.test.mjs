@@ -78,6 +78,8 @@ const addonHandlers = [
   "executeDelegationList",
   "executeAddonUninstallAudit",
   "executeAddonRunningWork",
+  "executeAddonUserDataList",
+  "executeAddonUserDataDelete",
   "executeGoalRecord",
 ];
 

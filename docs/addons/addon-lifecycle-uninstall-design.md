@@ -109,6 +109,10 @@ applied from the manifest or current preset, not from pre-uninstall state.
 
 Default policy: uninstall deletes add-on config and capability/private-provider
 links, but retains user data with a warning.
+Bridge task-5 cleanup can delete queued, completed, failed, blocked, and
+cancelled delegation packets and regular result artifacts while refusing running
+packets; no bridge intake file currently carries a structured add-on id, so
+intake lists and deletes nothing until attribution is added.
 
 In this codebase, add-on config means `AddOnInstallation.config`, including:
 
@@ -256,7 +260,7 @@ when the sideloaded add-on provides a system slot.
 4. Should "also delete user data" delete app-owned delegation and intake records
    together or as separate choices?
    Recommended default: separate choices, because Living Archive intake/review
-   has a different retention policy than delegation artifacts.
+   has a different retention policy than delegation artifacts. **Answered 2026-09-08 (release owner): separate choices — implemented in task 5 as two buckets (`delegation`, `intake`) with independent acknowledgements.**
 5. Should uninstall audit retention be user-prunable?
    Recommended default: retain governance audit indefinitely for Alpha/Beta and
    add export/prune policy later.
@@ -310,7 +314,7 @@ when the sideloaded add-on provides a system slot.
    - TDD first: add `also delete user data lists app-owned paths before delete`,
      `also delete user data refuses external vault paths`, and `also delete user data deletes selected delegation artifacts only after confirmation`.
    - Implementation: expose a second-step cleanup flow limited to app-owned
-     roots and keep external source files out of scope.
+     roots and keep external source files out of scope. **Implemented in task 5 (2026-09-08): bridge routes only** — `POST /addons/user-data/list` (`addon-record-read`) and `POST /addons/user-data/delete` (`addon-record-write`; this capability now includes unlinking files under `Delegations/` and `DelegationArtifacts/`, and the `confirm` token is an acknowledgement, not an authorization boundary). The desktop shell's second-step UI follows #374. No intake file on the bridge carries a structured add-on id — neither the browser-job writer nor the Living Archive source-intake writer records one — so the intake choice lists and deletes nothing until a later Living Archive task adds attribution.
 
 6. Docs update (S)
    - Files: `docs/addons/addon-lifecycle-uninstall-design.md`,

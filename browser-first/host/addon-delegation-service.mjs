@@ -10,6 +10,7 @@ import {
   buildProviderDraftHandoff,
   parseDraftPacketMarkdown,
 } from "./addon-draft-connectors.mjs";
+import { isInsidePath } from "./browser-first-host-utils.mjs";
 import { dashboardProxyUrl } from "./bridge-server.mjs";
 import { createDelegationIsolationAdapter } from "./delegation-isolation.mjs";
 import { ensureOpencodeServer, peekOpencodeServer } from "./opencode-client.mjs";
@@ -504,6 +505,13 @@ export function createAddonDelegationService(dependencies) {
 
   const addonIdPattern = /^[a-z0-9][a-z0-9._-]{0,119}$/i;
   const addonCapabilityPattern = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
+  const userDataListKeys = Object.freeze(["addonId"]);
+  const userDataDeleteKeys = Object.freeze(["addonId", "bucket", "paths", "confirm"]);
+  const addonDelegationTargets = new Map([
+    ["addon.hermes", ["hermes"]],
+    ["addon.opencode", ["opencode"]],
+  ]);
+  const intakeNotAttributableReason = "No intake file on the bridge carries a structured add-on id; the browser-job and Living Archive source-intake writers do not record one, so nothing can be listed or deleted for this add-on.";
   const uninstallAuditKeys = Object.freeze([
     "actor",
     "addonId",
@@ -538,6 +546,14 @@ export function createAddonDelegationService(dependencies) {
     throw new Error(`Running-work query rejected: ${reason}`);
   }
 
+  function rejectUserDataQuery(reason) {
+    throw new Error(`User-data query rejected: ${reason}`);
+  }
+
+  function rejectUserDataDelete(reason) {
+    throw new Error(`User-data delete rejected: ${reason}`);
+  }
+
   function hasExactKeys(payload, allowedKeys) {
     const keys = Object.keys(payload);
     const allowed = new Set(allowedKeys);
@@ -551,6 +567,54 @@ export function createAddonDelegationService(dependencies) {
     const parsed = new Date(value);
     if (Number.isNaN(parsed.getTime())) return false;
     return parsed.toISOString() === value;
+  }
+
+  function validateUserDataListPayload(payload) {
+    if (!isPlainObject(payload)) rejectUserDataQuery("not-an-object");
+    const keyError = hasExactKeys(payload, userDataListKeys);
+    if (keyError) rejectUserDataQuery(keyError);
+    if (typeof payload.addonId !== "string" || !addonIdPattern.test(payload.addonId)) {
+      rejectUserDataQuery("addonId");
+    }
+    return { addonId: payload.addonId };
+  }
+
+  function hasParentPathSegment(value) {
+    return String(value).split(/[\\/]+/).includes("..");
+  }
+
+  function isAbsoluteRequestPath(value) {
+    return path.isAbsolute(value) || /^[a-zA-Z]:[\\/]/.test(value) || /^\\\\/.test(value);
+  }
+
+  function validateUserDataDeletePayload(payload) {
+    if (!isPlainObject(payload)) rejectUserDataDelete("not-an-object");
+    const keyError = hasExactKeys(payload, userDataDeleteKeys);
+    if (keyError) rejectUserDataDelete(keyError);
+    if (typeof payload.addonId !== "string" || !addonIdPattern.test(payload.addonId)) {
+      rejectUserDataDelete("addonId");
+    }
+    if (!["delegation", "intake"].includes(payload.bucket)) rejectUserDataDelete("bucket");
+    if (
+      !Array.isArray(payload.paths) ||
+      payload.paths.length === 0 ||
+      payload.paths.length > 300 ||
+      payload.paths.some((entry) => (
+        typeof entry !== "string" ||
+        !entry ||
+        entry.length > 512 ||
+        isAbsoluteRequestPath(entry) ||
+        hasParentPathSegment(entry)
+      ))
+    ) {
+      rejectUserDataDelete("paths");
+    }
+    if (payload.confirm !== `delete:${payload.addonId}:${payload.bucket}`) rejectUserDataDelete("confirm");
+    return {
+      addonId: payload.addonId,
+      bucket: payload.bucket,
+      paths: [...new Set(payload.paths)],
+    };
   }
 
   function validateUninstallAuditRecord(payload) {
@@ -704,6 +768,260 @@ export function createAddonDelegationService(dependencies) {
     return { recorded: true, addonId: record.addonId, recordedAt };
   }
 
+  function emptyUserDataDelegation(targets = []) {
+    return {
+      targets,
+      records: [],
+      artifacts: [],
+      truncated: false,
+      dropped: 0,
+    };
+  }
+
+  async function safeLstat(filePath) {
+    try {
+      return await isolationFs.lstat(filePath);
+    } catch {
+      return null;
+    }
+  }
+
+  async function safeRealpath(filePath) {
+    try {
+      return await isolationFs.realpath(filePath);
+    } catch {
+      return "";
+    }
+  }
+
+  async function userDataTrustedRoots() {
+    const browserRoot = browserFirstRoot();
+    const recordsRoot = delegationRoot();
+    const artifactsRoot = delegationArtifactRoot();
+    const result = {
+      base: "",
+      records: { root: recordsRoot, real: "", available: false, untrusted: false },
+      artifacts: { root: artifactsRoot, real: "", available: false, untrusted: false },
+      untrusted: false,
+    };
+    const baseDetails = await safeLstat(browserRoot);
+    if (!baseDetails) return result;
+    if (!baseDetails.isDirectory() || baseDetails.isSymbolicLink()) {
+      result.untrusted = true;
+      return result;
+    }
+    result.base = await safeRealpath(browserRoot);
+    if (!result.base) {
+      result.untrusted = true;
+      return result;
+    }
+    for (const bucket of ["records", "artifacts"]) {
+      const entry = result[bucket];
+      const details = await safeLstat(entry.root);
+      if (!details) continue;
+      if (!details.isDirectory() || details.isSymbolicLink()) {
+        entry.untrusted = true;
+        result.untrusted = true;
+        continue;
+      }
+      const real = await safeRealpath(entry.root);
+      if (!real || !isInsidePath(real, result.base)) {
+        entry.untrusted = true;
+        result.untrusted = true;
+        continue;
+      }
+      entry.real = real;
+      entry.available = true;
+    }
+    return result;
+  }
+
+  async function targetDirectoryState(root, target) {
+    const targetDir = path.join(root, target);
+    const details = await safeLstat(targetDir);
+    if (!details) return { target, targetDir, available: false, invalid: false };
+    if (!details.isDirectory() || details.isSymbolicLink()) {
+      return { target, targetDir, available: false, invalid: true };
+    }
+    return { target, targetDir, available: true, invalid: false };
+  }
+
+  function safeUserRelativePath(filePath) {
+    const relativePath = path.relative(userRoot(), filePath);
+    if (!relativePath || relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+      return "";
+    }
+    return relativePath;
+  }
+
+  async function executeAddonUserDataListInternal(addonId) {
+    const targets = addonDelegationTargets.get(addonId) ?? [];
+    const delegation = emptyUserDataDelegation(targets);
+    const listed = new Map();
+    const invalidTargetDirs = [];
+    const trusted = await userDataTrustedRoots();
+
+    async function collect(kind, rootInfo, predicate) {
+      if (!rootInfo.available || rootInfo.untrusted) return;
+      for (const target of targets) {
+        const targetState = await targetDirectoryState(rootInfo.root, target);
+        if (targetState.invalid) {
+          invalidTargetDirs.push(targetState.targetDir);
+          continue;
+        }
+        if (!targetState.available) continue;
+        let files = [];
+        try {
+          files = await listFilesRecursive(targetState.targetDir, predicate, 300);
+        } catch {
+          files = [];
+        }
+        if (files.length >= 300) delegation.truncated = true;
+        for (const filePath of files) {
+          const relativePath = safeUserRelativePath(filePath);
+          if (!relativePath) {
+            delegation.dropped += 1;
+            continue;
+          }
+          if (kind === "records") {
+            const content = await isolationFs.readFile(filePath, "utf8").catch(() => "");
+            const status = (fieldFromMarkdown(content, "status") || "queued").toLowerCase();
+            const record = {
+              path: relativePath,
+              id: fieldFromMarkdown(content, "id") || path.basename(filePath, ".md"),
+              status,
+              running: status === "running",
+            };
+            delegation.records.push(record);
+            listed.set(relativePath, { ...record, kind, target });
+          } else {
+            const artifact = { path: relativePath };
+            delegation.artifacts.push(artifact);
+            listed.set(relativePath, { ...artifact, kind, target, running: false });
+          }
+        }
+      }
+    }
+
+    await collect("records", trusted.records, (filePath) => filePath.endsWith(".md"));
+    await collect("artifacts", trusted.artifacts, () => true);
+
+    return {
+      addonId,
+      delegation,
+      intake: {
+        attributable: false,
+        reason: intakeNotAttributableReason,
+        entries: [],
+      },
+      listed,
+      invalidTargetDirs,
+      trusted,
+    };
+  }
+
+  async function executeAddonUserDataList(payload) {
+    const { addonId } = validateUserDataListPayload(payload);
+    const { delegation, intake } = await executeAddonUserDataListInternal(addonId);
+    return { addonId, delegation, intake };
+  }
+
+  function refusalReasonCounts(refused) {
+    return refused.reduce((counts, entry) => {
+      counts[entry.reason] = (counts[entry.reason] ?? 0) + 1;
+      return counts;
+    }, {});
+  }
+
+  async function auditAddonUserDataDelete({ addonId, bucket, requested, deleted, refused }) {
+    await appendAddonGovernanceAuditEntry({
+      at: new Date().toISOString(),
+      event: "addonUserDataDeleted",
+      addonId,
+      bucket,
+      requested,
+      deleted: deleted.length,
+      refused: refused.length,
+      refusalReasons: refusalReasonCounts(refused),
+    });
+  }
+
+  function pathInsideAnyTarget(absPath, targets, rootForTarget) {
+    return targets.some((target) => isInsidePath(absPath, rootForTarget(target)));
+  }
+
+  async function stoppedAfterUserDataDelete(addonId) {
+    const listing = await executeAddonUserDataListInternal(addonId);
+    return !listing.delegation.records.some((record) => record.running);
+  }
+
+  async function executeAddonUserDataDelete(payload) {
+    const { addonId, bucket, paths } = validateUserDataDeletePayload(payload);
+    const deleted = [];
+    const refused = [];
+
+    if (bucket === "intake") {
+      refused.push(...paths.map((entryPath) => ({ path: entryPath, reason: "intake-not-attributable" })));
+      const stopped = await stoppedAfterUserDataDelete(addonId);
+      await auditAddonUserDataDelete({ addonId, bucket, requested: paths.length, deleted, refused });
+      return { addonId, bucket, deleted, refused, stopped };
+    }
+
+    const listing = await executeAddonUserDataListInternal(addonId);
+    const targets = listing.delegation.targets;
+    if (listing.trusted.untrusted) {
+      refused.push(...paths.map((entryPath) => ({ path: entryPath, reason: "roots-untrusted" })));
+      const stopped = await stoppedAfterUserDataDelete(addonId);
+      await auditAddonUserDataDelete({ addonId, bucket, requested: paths.length, deleted, refused });
+      return { addonId, bucket, deleted, refused, stopped };
+    }
+
+    for (const relativePath of paths) {
+      const absPath = path.resolve(userRoot(), relativePath);
+      if (listing.invalidTargetDirs.some((targetDir) => isInsidePath(absPath, targetDir))) {
+        refused.push({ path: relativePath, reason: "outside-root" });
+        continue;
+      }
+      const listed = listing.listed.get(relativePath);
+      if (!listed) {
+        refused.push({ path: relativePath, reason: "not-listed" });
+        continue;
+      }
+      if (listed.running) {
+        refused.push({ path: relativePath, reason: "running" });
+        continue;
+      }
+      if (!pathInsideAnyTarget(absPath, targets, (target) => path.join(delegationRoot(), target)) &&
+        !pathInsideAnyTarget(absPath, targets, (target) => path.join(delegationArtifactRoot(), target))) {
+        refused.push({ path: relativePath, reason: "outside-root" });
+        continue;
+      }
+      const details = await safeLstat(absPath);
+      if (!details || !details.isFile() || details.isSymbolicLink()) {
+        refused.push({ path: relativePath, reason: "not-a-file" });
+        continue;
+      }
+      const realPath = await safeRealpath(absPath);
+      if (!realPath || (
+        (!listing.trusted.records.real || !isInsidePath(realPath, listing.trusted.records.real)) &&
+        (!listing.trusted.artifacts.real || !isInsidePath(realPath, listing.trusted.artifacts.real))
+      )) {
+        refused.push({ path: relativePath, reason: "outside-root" });
+        continue;
+      }
+      try {
+        await isolationFs.rm(absPath, { force: false });
+        deleted.push(relativePath);
+      } catch {
+        refused.push({ path: relativePath, reason: "delete-failed" });
+      }
+    }
+
+    const stopped = await stoppedAfterUserDataDelete(addonId);
+    await auditAddonUserDataDelete({ addonId, bucket, requested: paths.length, deleted, refused });
+    return { addonId, bucket, deleted, refused, stopped };
+  }
+
   async function executeAddonRunningWork(payload) {
     if (!isPlainObject(payload)) rejectRunningWork("not-an-object");
     const keyError = hasExactKeys(payload, ["addonId"]);
@@ -712,11 +1030,7 @@ export function createAddonDelegationService(dependencies) {
       rejectRunningWork("addonId");
     }
 
-    const targetMap = new Map([
-      ["addon.hermes", ["hermes"]],
-      ["addon.opencode", ["opencode"]],
-    ]);
-    const targets = targetMap.get(payload.addonId) ?? [];
+    const targets = addonDelegationTargets.get(payload.addonId) ?? [];
     const running = [];
     let queuedCount = 0;
 
@@ -2554,6 +2868,8 @@ except BaseException as exc:
     executeAddonExecutionSettingsUpdate,
     executeAddonUninstallAudit,
     executeAddonRunningWork,
+    executeAddonUserDataList,
+    executeAddonUserDataDelete,
     executeHermesDashboardStatus,
     executeHermesDashboardStart,
     executeHermesDashboardStop,
