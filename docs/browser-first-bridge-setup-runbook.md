@@ -25,6 +25,11 @@ Chrome (extension side panel)  --HTTPS/h1-->  Caddy :19443  --HTTP-->  bridge :4
 - The bridge can bind to `0.0.0.0` for LAN/Tailscale (`RESONANTOS_BRIDGE_HOST`);
   gate clients with `RESONANTOS_BRIDGE_ALLOWED_IPS` (e.g. `192.168.0.0/16,100.64.0.0/10`).
 
+## Dev server hardening (#429)
+
+The dev server refuses to serve `bridge-config.generated.js` and anything under `ResonantOS_User/`.
+The exposure only existed while `npm run dev` was running.
+
 ## The five first-run bug classes
 
 | # | Symptom | Root cause | Fix / status |
