@@ -742,7 +742,7 @@ test("user-data delete refuses running, unlisted, foreign-target, look-alike, me
   });
 });
 
-test("user-data delete refuses everything when the Delegations root is a symlink", async () => {
+async function assertSymlinkedDelegationsRootRefused(movedRootFor) {
   await withTempService(async (_service, root) => {
     const realService = createService(root, { listFilesRecursive });
     const record = await realService.executeDelegationRecord({
@@ -750,7 +750,7 @@ test("user-data delete refuses everything when the Delegations root is a symlink
       mission: "Refuse deletion while Delegations is symlinked.",
     });
     const delegationsRoot = path.join(root, "BrowserFirst", "Delegations");
-    const movedDelegationsRoot = path.join(root, "elsewhere-delegations");
+    const movedDelegationsRoot = movedRootFor(root);
     await rename(delegationsRoot, movedDelegationsRoot);
     await symlink(movedDelegationsRoot, delegationsRoot, "dir");
     const service = createService(root, { listFilesRecursive });
@@ -773,6 +773,14 @@ test("user-data delete refuses everything when the Delegations root is a symlink
     assert.deepEqual(audit.refusalReasons, { "roots-untrusted": 1 });
     assert.equal(JSON.stringify(result).includes("elsewhere-delegations"), false);
   });
+}
+
+test("user-data delete refuses everything when the Delegations root is a symlink", async () => {
+  await assertSymlinkedDelegationsRootRefused((root) => path.join(root, "elsewhere-delegations"));
+});
+
+test("user-data delete refuses a symlinked Delegations root even when its target stays inside BrowserFirst", async () => {
+  await assertSymlinkedDelegationsRootRefused((root) => path.join(root, "BrowserFirst", "elsewhere-delegations"));
 });
 
 test("user-data delete refuses paths swapped after the listing", async () => {
