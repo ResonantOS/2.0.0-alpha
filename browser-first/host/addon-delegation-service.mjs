@@ -462,9 +462,9 @@ export function createAddonDelegationService(dependencies) {
 
   async function appendAddonGovernanceAuditEntry(entry) {
     const filePath = addonGovernanceAuditPath();
-    await mkdir(path.dirname(filePath), { recursive: true });
-    await appendFile(filePath, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
-    await chmod(filePath, 0o600).catch(() => undefined);
+    await isolationFs.mkdir(path.dirname(filePath), { recursive: true });
+    await isolationFs.appendFile(filePath, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
+    await isolationFs.chmod(filePath, 0o600).catch(() => undefined);
   }
 
   function addonLocalCliExecutionEnabled(addon, payload = {}, settings = defaultAddonExecutionSettings()) {
@@ -934,16 +934,21 @@ export function createAddonDelegationService(dependencies) {
   }
 
   async function auditAddonUserDataDelete({ addonId, bucket, requested, deleted, refused }) {
-    await appendAddonGovernanceAuditEntry({
-      at: new Date().toISOString(),
-      event: "addonUserDataDeleted",
-      addonId,
-      bucket,
-      requested,
-      deleted: deleted.length,
-      refused: refused.length,
-      refusalReasons: refusalReasonCounts(refused),
-    });
+    try {
+      await appendAddonGovernanceAuditEntry({
+        at: new Date().toISOString(),
+        event: "addonUserDataDeleted",
+        addonId,
+        bucket,
+        requested,
+        deleted: deleted.length,
+        refused: refused.length,
+        refusalReasons: refusalReasonCounts(refused),
+      });
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   function pathInsideAnyTarget(absPath, targets, rootForTarget) {
@@ -963,8 +968,8 @@ export function createAddonDelegationService(dependencies) {
     if (bucket === "intake") {
       refused.push(...paths.map((entryPath) => ({ path: entryPath, reason: "intake-not-attributable" })));
       const stopped = await stoppedAfterUserDataDelete(addonId);
-      await auditAddonUserDataDelete({ addonId, bucket, requested: paths.length, deleted, refused });
-      return { addonId, bucket, deleted, refused, stopped };
+      const auditRecorded = await auditAddonUserDataDelete({ addonId, bucket, requested: paths.length, deleted, refused });
+      return { addonId, bucket, deleted, refused, stopped, auditRecorded };
     }
 
     const listing = await executeAddonUserDataListInternal(addonId);
@@ -972,8 +977,8 @@ export function createAddonDelegationService(dependencies) {
     if (listing.trusted.untrusted) {
       refused.push(...paths.map((entryPath) => ({ path: entryPath, reason: "roots-untrusted" })));
       const stopped = await stoppedAfterUserDataDelete(addonId);
-      await auditAddonUserDataDelete({ addonId, bucket, requested: paths.length, deleted, refused });
-      return { addonId, bucket, deleted, refused, stopped };
+      const auditRecorded = await auditAddonUserDataDelete({ addonId, bucket, requested: paths.length, deleted, refused });
+      return { addonId, bucket, deleted, refused, stopped, auditRecorded };
     }
 
     for (const relativePath of paths) {
@@ -1010,7 +1015,7 @@ export function createAddonDelegationService(dependencies) {
         continue;
       }
       try {
-        await isolationFs.rm(absPath, { force: false });
+        await isolationFs.rm(realPath, { force: false });
         deleted.push(relativePath);
       } catch {
         refused.push({ path: relativePath, reason: "delete-failed" });
@@ -1018,8 +1023,8 @@ export function createAddonDelegationService(dependencies) {
     }
 
     const stopped = await stoppedAfterUserDataDelete(addonId);
-    await auditAddonUserDataDelete({ addonId, bucket, requested: paths.length, deleted, refused });
-    return { addonId, bucket, deleted, refused, stopped };
+    const auditRecorded = await auditAddonUserDataDelete({ addonId, bucket, requested: paths.length, deleted, refused });
+    return { addonId, bucket, deleted, refused, stopped, auditRecorded };
   }
 
   async function executeAddonRunningWork(payload) {
