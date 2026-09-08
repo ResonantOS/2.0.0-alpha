@@ -102,5 +102,3 @@ is next in the architecture sequence). The ADR should:
   Third-Party SDK capability separation row)
 - `RESOLUTIONS_V0.1.md` C5 (mapping table ownership)
 - `RESOLUTIONS_V0.1.md` C3 (privilege-not-directory boundary)
-- `ADDON_SDK_CODE_REVIEW_FEEDBACK_2026-08-24.md` Finding 3 (channel
-  capability refinement)

@@ -19,7 +19,7 @@
 - Lifecycle security contract: §16 (recorded 2026-08-31; per #180 audit)
 
 The trust-tier mapping (§4), capability model (§5), and runtime boundary (§7) are locked enough to be cross-referenced from `RESOLUTIONS_V0.1.md`. The remaining sections (1, 2, 3, 6, 8, 9, 10, 11, 13, 14) are drafted prose from existing source documents, ready for reviewer shaping.
-- Source: forked from `PROPOSAL-resonant-extension-framework.md`, with the resolutions from `RESOLUTIONS_V0.1.md`, the conflict framing from `OPEN_DESIGN_CONFLICTS_V0.1.md`, the review-feedback notes (`EXTERNAL_REVIEW_FEEDBACK_V0.1.md`, `ADDON_SDK_CODE_REVIEW_FEEDBACK_2026-08-24.md`, `ADDON_PERSONAL_PLUGIN_GOVERNANCE.md`), and the runtime hardening notes (`docs/security-pipeline/REF_HARDENING_NOTES_V0.1.md`).
+- Source: forked from `PROPOSAL-resonant-extension-framework.md`, with the resolutions from `RESOLUTIONS_V0.1.md`, the conflict framing from `OPEN_DESIGN_CONFLICTS_V0.1.md`, the review-feedback notes (`EXTERNAL_REVIEW_FEEDBACK_V0.1.md`, `ADDON_PERSONAL_PLUGIN_GOVERNANCE.md`), and the runtime hardening notes (`docs/security-pipeline/REF_HARDENING_NOTES_V0.1.md`).
 
 ## 1. Decision
 
@@ -97,13 +97,11 @@ The core principle, restated from the framework package and
 >
 > Approval is never a substitute for runtime authorization.
 
-SDK validation, approval, and runtime authority stay separate. Per
-`ADDON_SDK_CODE_REVIEW_FEEDBACK_2026-08-24.md` Finding 6, a positive
-review decision **never lowers** a runtime authority check.
+SDK validation, approval, and runtime authority stay separate. A
+positive review decision **never lowers** a runtime authority check.
 
 Source: `PROPOSAL-resonant-extension-framework.md` Architectural
-Principle; `OPEN_DESIGN_CONFLICTS_V0.1.md` Background in Sixty Seconds;
-`ADDON_SDK_CODE_REVIEW_FEEDBACK_2026-08-24.md` Finding 6.
+Principle; `OPEN_DESIGN_CONFLICTS_V0.1.md` Background in Sixty Seconds.
 
 ## 3. Lineage
 
@@ -124,11 +122,9 @@ provenance, capabilities, and host mediation. ADR-018 establishes the
 binding internal standard at `src/sdk/addons/`. ADR-055 extends both
 toward a public, third-party-capable contract.
 
-`ADDON_SDK_CODE_REVIEW_FEEDBACK_2026-08-24.md` Finding 8 makes the
-evolution-not-replacement posture explicit: future public/third-party
-work should extend the existing Add-on SDK decisions, not introduce an
-unrelated extension framework that duplicates manifests, capabilities,
-lifecycle, or runtime authority.
+Future public/third-party work should extend the existing Add-on SDK
+decisions rather than introduce an unrelated extension framework that
+duplicates manifests, capabilities, lifecycle, or runtime authority.
 
 The framework package (`docs/addons/resonant-extension-framework/`)
 carries the design-stage documentation that this ADR accepts. On
@@ -137,8 +133,7 @@ specifications move to `docs/addons/`, per the framework README
 "Staging" section.
 
 Source: `EXTERNAL_REVIEW_FEEDBACK_V0.1.md` Alignment Map and Fork
-Strategy; `ADDON_SDK_CODE_REVIEW_FEEDBACK_2026-08-24.md` Finding 8;
-framework package README.
+Strategy; framework package README.
 
 ## 4. Trust Model
 
@@ -219,15 +214,13 @@ The principle: **manifest declares; bridge enforces at route granularity.**
 The host retains final authority over what any operation actually does,
 independent of manifest or signing.
 
-`ADDON_SDK_CODE_REVIEW_FEEDBACK_2026-08-24.md` Finding 3 records the
-deferred refinement for V1: `channel.receive` and `channel.account-read`
-as further subdivisions of the `communication-channel` capability.
-The C5 mapping table picks up all capability entries including the
-`channel.*` additions.
+The deferred refinement for V1 is `channel.receive` and
+`channel.account-read` as further subdivisions of the
+`communication-channel` capability. The C5 mapping table picks up all
+capability entries including the `channel.*` additions.
 
 Source: `OPEN_DESIGN_CONFLICTS_V0.1.md` §"Three capability
-vocabularies coexist"; `RESOLUTIONS_V0.1.md` C5;
-`ADDON_SDK_CODE_REVIEW_FEEDBACK_2026-08-24.md` Finding 3.
+vocabularies coexist"; `RESOLUTIONS_V0.1.md` C5.
 
 ## 6. Manifest & Package Format
 
@@ -704,10 +697,9 @@ See also:
 
 - **Communication-channel capability refinement** — **V0.1:** add
   `channel.send` and `channel.account-write` as new manifest
-  capabilities alongside the existing `notifications.send`. The chatgpt
-  `ADDON_SDK_CODE_REVIEW_FEEDBACK_2026-08-24.md` Finding 3 subdivisions
-  into `channel.receive` and `channel.account-read` are deferred to
-  V1. `notifications.send` remains for V0.1 backward-compat. The SDK
+  capabilities alongside the existing `notifications.send`.
+  `channel.receive` and `channel.account-read` are deferred to V1.
+  `notifications.send` remains for V0.1 backward-compat. The SDK
   spec records the migration in
   `RESONANT_ADDON_SDK_SPEC_V0.1.md` Capability Model section. The C5
   mapping table picks up the new entries in the same file.
@@ -727,8 +719,8 @@ Every commitment above is grounded in source documents:
 |---|---|
 | §4 Trust Model mapping table | `RESOLUTIONS_V0.1.md` C1 + `PROPOSAL-resonant-extension-framework.md` Trust Tiers |
 | `personal-local` display-only stance | `ADDON_PERSONAL_PLUGIN_GOVERNANCE.md` + user policy |
-| `channel.send` / `channel.account-write` V0.1 additions | `ADDON_SDK_CODE_REVIEW_FEEDBACK_2026-08-24.md` Finding 3 |
-| `channel.receive` / `channel.account-read` V1 deferral | Same Finding 3 |
+| `channel.send` / `channel.account-write` V0.1 additions | `packages/addon-sdk/README.md` Capability additions |
+| `channel.receive` / `channel.account-read` V1 deferral | §5 Capability Model |
 | Public SDK external boundary inventory | Phase 0 deliverable; `IMPLEMENTATION_ROADMAP_V0.1.md` Phase 0 |
 | C6 `.rpkg` stays official | `ADDON_PACKAGE_AND_MANIFEST_SPEC_V0.1.md` + `check-repo-hygiene.mjs` amend |
 | C8 sideload enablement | `RESOLUTIONS_V0.1.md` C8 + Phase 3.5 hardening notes |
@@ -765,10 +757,8 @@ Three items are recorded as deferred and not addressed in V0.1:
   Capability classification: each capability gets a visibility tier
   (Resonant-OS-internal, curated-approved-only, public). The
   third-party SDK rejects capability names above its visibility tier at
-  `validateAddOnManifest` time, per chatgpt
-  `ADDON_SDK_CODE_REVIEW_FEEDBACK_2026-08-24.md` Finding 6
-  ("SDK validation, approval, and runtime authority must stay
-  separate"). V0.1 keeps the current all-public surface; V1 introduces
+  `validateAddOnManifest` time. V0.1 keeps the current all-public
+  surface; V1 introduces
   the visibility-tier classification in the SDK spec and runtime.
   The classification table itself is a follow-on design call requiring
   review of each capability's blast radius. **Deferred record landed:**
@@ -810,9 +800,7 @@ Three items are recorded as deferred and not addressed in V0.1:
   **V1:** upstream rebase is its own problem; `UPSTREAM_DELTA.md`
   records the fork-only status. The cutover is prerequisite to M0
   (external fixture project compiles and validates while importing only
-  the SDK package) and to Phase 4 (host install + lifecycle), per the
-  chatgpt `ADDON_SDK_CODE_REVIEW_FEEDBACK_2026-08-24.md` Findings 9
-  and 10.
+  the SDK package) and to Phase 4 (host install + lifecycle).
 
 ## 13. Fork Strategy and Hygiene
 
@@ -1053,7 +1041,6 @@ Every claim in this outline is traceable to one of these sources.
 | Open design conflicts | `docs/addons/resonant-extension-framework/OPEN_DESIGN_CONFLICTS_V0.1.md` | §3 lineage grounding, §4-§7 conflict-driven decisions, §12 deferred |
 | Resolutions | `docs/addons/resonant-extension-framework/RESOLUTIONS_V0.1.md` | §4 C1, §5 C5, §7 C3, §8 C2, §9 C4, §10 sequencing, §12 deferred C6-C12 |
 | External review | `docs/addons/resonant-extension-framework/EXTERNAL_REVIEW_FEEDBACK_V0.1.md` | §13 fork strategy, alignment map |
-| SDK code-review feedback | `docs/addons/resonant-extension-framework/ADDON_SDK_CODE_REVIEW_FEEDBACK_2026-08-24.md` | §12 communication-channel refinement; §12 external SDK boundary; §13 M0-first priority |
 | Personal/local governance | `docs/addons/resonant-extension-framework/ADDON_PERSONAL_PLUGIN_GOVERNANCE.md` | §12 `personal-local` tier proposal (deferred) |
 | SDK Reviewer Agent | `docs/addons/resonant-extension-framework/SDK_REVIEWER_AGENT_V0.1.md` | §10 dogfooded reviewer add-on |
 | Runtime hardening notes | `docs/security-pipeline/REF_HARDENING_NOTES_V0.1.md` | §8 H1–H4 hardening is part of the runtime contract |

@@ -140,10 +140,8 @@ Host capability enforcement is never optional.
 
 ## Cross-References
 
-This document is the governance companion to the engineering review in
-`ADDON_SDK_CODE_REVIEW_FEEDBACK_2026-08-24.md`. Specifically Finding 7
-of that review asks for explicit support of personal/local add-ons; this
-document proposes the policy shape.
+This document proposes the governance policy shape for explicit support
+of personal/local add-ons.
 
 The two-axis table (SDK required × Resonant review) extends the
 provenance work in `RESOLUTIONS_V0.1.md` C1, which currently maps the

@@ -223,7 +223,6 @@ These are explicit deferrals, not omissions:
 - `examples/addons/recursive-mas.json` (canonical local-service add-on pattern)
 - `docs/architecture/addon-runbooks/recursive-mas/ENGINEER_SETUP.md`
 - `docs/addons/resonant-extension-framework/RESOLUTIONS_V0.1.md` C2 (Phase 3.5 hardening), C3 (privilege-not-directory boundary), C5 (mapping table ownership)
-- `docs/addons/resonant-extension-framework/ADDON_SDK_CODE_REVIEW_FEEDBACK_2026-08-24.md` Finding 6 (SDK validation, approval, and runtime authority must stay separate)
 - `docs/addons/resonant-extension-framework/REF_HARDENING_NOTES_V0.1.md` H1/H2/H3 caller-attributed token design
 
 ## 12. Appendix — Negotiation Summary
