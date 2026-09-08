@@ -395,3 +395,52 @@ test("the add-on lifecycle uninstall design note is approved release documentati
   });
   assert.equal(classify("docs/addons/some-other-note.md", "added").bucket, "review", "docs/addons/ stays manual-review by default; only the listed note is approved");
 });
+
+test("DeepSeek SDK certification inputs are admitted by exact path", () => {
+  const classify = requireExport("classify");
+  const reason = "DeepSeek SDK certification input (ADR-040 §9 exemplar manifest, Cordis stub, and developer env guidance)";
+
+  for (const p of [
+    ".env.example",
+    "examples/addons/addon.deepseek-harness.json",
+    "examples/fixtures/cordis-stub.mjs",
+  ]) {
+    assert.deepEqual(classify(p, "added"), { bucket: "include", reason }, `${p} must be in release scope`);
+  }
+});
+
+test("DeepSeek SDK certification admission stays exact-path, not a family", () => {
+  const classify = requireExport("classify");
+  const negativeControls = [
+    ".env",
+    ".env.production",
+    "examples/addons/recursive-mas.json",
+    "examples/addons/some-other-addon.json",
+    "examples/fixtures/other-stub.mjs",
+    "examples/unrelated/notes.ts",
+  ];
+  for (const p of negativeControls) {
+    assert.equal(classify(p, "added").bucket, "review", `${p} must remain manual-review`);
+  }
+});
+
+test("unknown example path still fails strict committed audit", () => {
+  const main = requireExport("main");
+  let stderr = "";
+  const processRef = { exitCode: undefined };
+  const hashes = ["a".repeat(40), "b".repeat(40)];
+
+  const result = main({
+    argv: ["--committed", "--strict"],
+    gitRunner: (args) => args[0] === "rev-parse"
+      ? `${hashes.shift()}\n`
+      : "A\0examples/addons/unapproved.json\0",
+    processRef,
+    stderr: { write: (chunk) => { stderr += chunk; } },
+    stdout: { write: () => {} },
+  });
+
+  assert.equal(result, 1);
+  assert.equal(processRef.exitCode, 1);
+  assert.match(stderr, /strict mode failed/i);
+});

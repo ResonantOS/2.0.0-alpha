@@ -46,6 +46,11 @@ const includeDocs = new Set([
   "docs/recipes/travel.md",
   "docs/addons/addon-lifecycle-uninstall-design.md",
 ]);
+const deepseekSdkCertificationInputs = new Set([
+  ".env.example",
+  "examples/addons/addon.deepseek-harness.json",
+  "examples/fixtures/cordis-stub.mjs",
+]);
 
 function readOptionValue(argv, index, name) {
   const value = argv[index + 1];
@@ -291,6 +296,13 @@ export function classify(changedPath, state) {
       reason: "add-on SDK package family (ADR-018/ADR-040), part of the browser-first extension release surface",
     };
   }
+  if (deepseekSdkCertificationInputs.has(changedPath)) {
+    return {
+      bucket: "include",
+      reason: "DeepSeek SDK certification input (ADR-040 §9 exemplar manifest, Cordis stub, and developer env guidance)",
+    };
+  }
+
   if (
     changedPath.startsWith("src/") ||
     changedPath.startsWith("public/addons/") ||
