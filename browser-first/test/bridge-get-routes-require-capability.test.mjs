@@ -127,6 +127,8 @@ function createRoutes(root) {
     executeDelegationList: async () => ({}),
     executeAddonUninstallAudit: async () => ({}),
     executeAddonRunningWork: async () => ({}),
+    executeAddonUserDataList: async () => ({}),
+    executeAddonUserDataDelete: async () => ({}),
     executeGoalRecord: async () => ({}),
   });
   const prefs = createExtensionPrefsHostService({ userRoot: () => root });

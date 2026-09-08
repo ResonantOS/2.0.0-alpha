@@ -29,6 +29,8 @@ const requiredHandlers = [
   "executeDelegationList",
   "executeAddonUninstallAudit",
   "executeAddonRunningWork",
+  "executeAddonUserDataList",
+  "executeAddonUserDataDelete",
   "executeGoalRecord",
 ];
 
@@ -67,6 +69,8 @@ test("add-on delegation host service owns add-on, delegation, draft, and goal ro
     "POST /addons/delegate/list",
     "POST /addons/uninstall-audit",
     "POST /addons/running-work",
+    "POST /addons/user-data/list",
+    "POST /addons/user-data/delete",
     "POST /goals",
   ]);
   assert.equal(routes.get("POST /addons/execution-settings").requiredCapability, "addon-execution-settings-write");
@@ -92,6 +96,8 @@ test("add-on delegation host service owns add-on, delegation, draft, and goal ro
   assert.equal(routes.get("POST /addons/delegate/list").requiredCapability, "addon-record-read");
   assert.equal(routes.get("POST /addons/uninstall-audit").requiredCapability, "addon-record-write");
   assert.equal(routes.get("POST /addons/running-work").requiredCapability, "addon-record-read");
+  assert.equal(routes.get("POST /addons/user-data/list").requiredCapability, "addon-record-read");
+  assert.equal(routes.get("POST /addons/user-data/delete").requiredCapability, "addon-record-write");
   assert.equal(routes.get("POST /goals").requiredCapability, "addon-record-write");
 });
 

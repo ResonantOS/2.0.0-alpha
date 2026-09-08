@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import * as fsPromises from "node:fs/promises";
-import { access, chmod, mkdtemp, mkdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { access, chmod, link, mkdtemp, mkdir, readFile, realpath, rename, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -112,7 +112,9 @@ function fakeChild() {
 
 async function readAuditEntries(root) {
   const auditPath = path.join(root, "BrowserFirst", "Settings", "addon-governance-audit.jsonl");
-  return (await readFile(auditPath, "utf8"))
+  const content = await readFile(auditPath, "utf8").catch(() => "");
+  if (!content.trim()) return [];
+  return content
     .trim()
     .split("\n")
     .filter(Boolean)
@@ -143,6 +145,22 @@ async function rewriteDelegationStatus(root, delegation, statusValue) {
   const content = await readFile(filePath, "utf8");
   await writeFile(filePath, content.replace(/^- status:\s*.+$/mi, `- status: ${statusValue}`));
   return filePath;
+}
+
+async function writeDelegationArtifact(root, target, name, content = "artifact") {
+  const artifactPath = path.join(root, "BrowserFirst", "DelegationArtifacts", target, name);
+  await mkdir(path.dirname(artifactPath), { recursive: true });
+  await writeFile(artifactPath, content);
+  return path.relative(root, artifactPath);
+}
+
+async function pathExists(filePath) {
+  try {
+    await access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function withTempService(fn) {
@@ -460,6 +478,520 @@ test("running-work rejects unknown keys", async () => {
         return true;
       },
     );
+  });
+});
+
+test("user-data list reports delegation records and artifacts per add-on with relative paths", async () => {
+  await withTempService(async (_service, root) => {
+    const service = createService(root, { listFilesRecursive });
+    const running = await service.executeDelegationRecord({
+      target: "hermes",
+      mission: "List a running Hermes delegation packet.",
+    });
+    const queued = await service.executeDelegationRecord({
+      target: "hermes",
+      mission: "List a queued Hermes delegation packet.",
+    });
+    const completed = await service.executeDelegationRecord({
+      target: "hermes",
+      mission: "List a completed Hermes delegation packet.",
+    });
+    const opencode = await service.executeDelegationRecord({
+      target: "opencode",
+      mission: "Keep OpenCode out of the Hermes listing.",
+    });
+    await rewriteDelegationStatus(root, running, "running");
+    await rewriteDelegationStatus(root, completed, "completed");
+    const artifactPath = await writeDelegationArtifact(root, "hermes", "summary.txt", "Hermes artifact");
+
+    const hermes = await service.executeAddonUserDataList({ addonId: "addon.hermes" });
+    const opencodeListing = await service.executeAddonUserDataList({ addonId: "addon.opencode" });
+    const obsidian = await service.executeAddonUserDataList({ addonId: "addon.obsidian" });
+
+    assert.equal(hermes.addonId, "addon.hermes");
+    assert.deepEqual(hermes.delegation.targets, ["hermes"]);
+    assert.deepEqual(hermes.delegation.records.map((entry) => entry.path).sort(), [
+      completed.path,
+      queued.path,
+      running.path,
+    ].sort());
+    assert.deepEqual(
+      Object.fromEntries(hermes.delegation.records.map((entry) => [entry.id, [entry.status, entry.running]])),
+      {
+        [completed.id]: ["completed", false],
+        [queued.id]: ["queued", false],
+        [running.id]: ["running", true],
+      },
+    );
+    assert.deepEqual(hermes.delegation.artifacts, [{ path: artifactPath }]);
+    assert.equal(hermes.delegation.truncated, false);
+    assert.equal(hermes.delegation.dropped, 0);
+    assert.equal(JSON.stringify(hermes).includes(root), false);
+    assert.equal(JSON.stringify(hermes).includes(opencode.path), false);
+    assert.equal(hermes.intake.attributable, false);
+    assert.deepEqual(hermes.intake.entries, []);
+    assert.match(hermes.intake.reason, /No intake file on the bridge carries a structured add-on id/);
+    assert.deepEqual(opencodeListing.delegation.records.map((entry) => entry.path), [opencode.path]);
+    assert.deepEqual(obsidian.delegation.targets, []);
+    assert.deepEqual(obsidian.delegation.records, []);
+    assert.deepEqual(obsidian.delegation.artifacts, []);
+  });
+});
+
+test("user-data list rejects malformed payloads with fixed reasons", async () => {
+  await withTempService(async (service) => {
+    await assert.rejects(
+      () => service.executeAddonUserDataList(["addon.hermes"]),
+      /^Error: User-data query rejected: not-an-object$/,
+    );
+    await assert.rejects(
+      () => service.executeAddonUserDataList({ addonId: "addon.hermes", bucket: "delegation" }),
+      /^Error: User-data query rejected: unexpected-keys$/,
+    );
+    await assert.rejects(
+      () => service.executeAddonUserDataList({}),
+      /^Error: User-data query rejected: missing-keys$/,
+    );
+    await assert.rejects(
+      () => service.executeAddonUserDataList({ addonId: "../hermes" }),
+      (error) => {
+        assert.match(error.message, /^User-data query rejected: addonId$/);
+        assert.equal(error.message.includes("../"), false);
+        return true;
+      },
+    );
+  });
+});
+
+test("user-data list refuses a symlinked target directory", async () => {
+  await withTempService(async (_service, root) => {
+    const service = createService(root, { listFilesRecursive });
+    const settingsFile = path.join(root, "BrowserFirst", "Settings", "do-not-delete.md");
+    const hermesDir = path.join(root, "BrowserFirst", "Delegations", "hermes");
+    await mkdir(path.dirname(settingsFile), { recursive: true });
+    await writeFile(settingsFile, "settings content");
+    await mkdir(hermesDir, { recursive: true });
+    await rm(hermesDir, { recursive: true, force: true });
+    await symlink(path.dirname(settingsFile), hermesDir);
+
+    const listed = await service.executeAddonUserDataList({ addonId: "addon.hermes" });
+    const deleted = await service.executeAddonUserDataDelete({
+      addonId: "addon.hermes",
+      bucket: "delegation",
+      paths: ["BrowserFirst/Delegations/hermes/do-not-delete.md"],
+      confirm: "delete:addon.hermes:delegation",
+    });
+
+    assert.deepEqual(listed.delegation.records, []);
+    assert.deepEqual(deleted.deleted, []);
+    assert.deepEqual(deleted.refused, [
+      { path: "BrowserFirst/Delegations/hermes/do-not-delete.md", reason: "outside-root" },
+    ]);
+    assert.equal(await readFile(settingsFile, "utf8"), "settings content");
+  });
+});
+
+test("user-data delete removes exactly the listed files after confirmation", async () => {
+  await withTempService(async (_service, root) => {
+    const service = createService(root, { listFilesRecursive });
+    const completed = await service.executeDelegationRecord({
+      target: "hermes",
+      mission: "Delete a completed Hermes packet.",
+    });
+    const queued = await service.executeDelegationRecord({
+      target: "hermes",
+      mission: "Delete a queued Hermes packet.",
+    });
+    const running = await service.executeDelegationRecord({
+      target: "hermes",
+      mission: "Keep a running Hermes packet.",
+    });
+    await rewriteDelegationStatus(root, completed, "completed");
+    await rewriteDelegationStatus(root, running, "running");
+    const artifactPath = await writeDelegationArtifact(root, "hermes", "completed-result.txt");
+
+    const result = await service.executeAddonUserDataDelete({
+      addonId: "addon.hermes",
+      bucket: "delegation",
+      paths: [completed.path, queued.path, artifactPath],
+      confirm: "delete:addon.hermes:delegation",
+    });
+
+    assert.deepEqual(result.deleted.sort(), [artifactPath, completed.path, queued.path].sort());
+    assert.deepEqual(result.refused, []);
+    assert.equal(result.stopped, false);
+    assert.equal(result.auditRecorded, true);
+    assert.equal(await pathExists(path.join(root, completed.path)), false);
+    assert.equal(await pathExists(path.join(root, queued.path)), false);
+    assert.equal(await pathExists(path.join(root, artifactPath)), false);
+    assert.equal(await pathExists(path.join(root, running.path)), true);
+    const [audit] = await readAuditEntries(root);
+    assert.equal(audit.event, "addonUserDataDeleted");
+    assert.equal(audit.addonId, "addon.hermes");
+    assert.equal(audit.bucket, "delegation");
+    assert.equal(audit.requested, 3);
+    assert.equal(audit.deleted, 3);
+    assert.equal(audit.refused, 0);
+    assert.deepEqual(audit.refusalReasons, {});
+    assert.equal(JSON.stringify(audit).includes("BrowserFirst/"), false);
+  });
+});
+
+test("user-data delete validation table", async () => {
+  await withTempService(async (service) => {
+    const valid = {
+      addonId: "addon.hermes",
+      bucket: "delegation",
+      paths: ["BrowserFirst/Delegations/hermes/x.md"],
+      confirm: "delete:addon.hermes:delegation",
+    };
+    const cases = [
+      ["array payload", [valid], "not-an-object"],
+      ["extra key", { ...valid, force: true }, "unexpected-keys"],
+      ["missing confirm", (() => { const payload = { ...valid }; delete payload.confirm; return payload; })(), "missing-keys"],
+      ["wrong confirm", { ...valid, confirm: "delete:addon.hermes:intake" }, "confirm"],
+      ["bad bucket", { ...valid, bucket: "settings", confirm: "delete:addon.hermes:settings" }, "bucket"],
+      ["empty paths", { ...valid, paths: [] }, "paths"],
+      ["301 paths", { ...valid, paths: Array.from({ length: 301 }, (_, index) => `BrowserFirst/Delegations/hermes/${index}.md`) }, "paths"],
+      ["non-string path", { ...valid, paths: [42] }, "paths"],
+      ["absolute path", { ...valid, paths: ["/Users/x/ResonantOS_User/BrowserFirst/Delegations/hermes/x.md"] }, "paths"],
+      ["windows drive backslash path", { ...valid, paths: ["C:\\foo\\bar.md"] }, "paths"],
+      ["windows drive slash path", { ...valid, paths: ["C:/foo/bar.md"] }, "paths"],
+      ["windows unc path", { ...valid, paths: ["\\\\server\\share\\x.md"] }, "paths"],
+      ["513 character path", { ...valid, paths: ["a".repeat(513)] }, "paths"],
+      ["dotdot path", { ...valid, paths: ["BrowserFirst/Delegations/hermes/../opencode/x.md"] }, "paths"],
+    ];
+
+    for (const [name, payload, reason] of cases) {
+      await assert.rejects(
+        () => service.executeAddonUserDataDelete(payload),
+        new RegExp(`^Error: User-data delete rejected: ${reason}$`),
+        name,
+      );
+    }
+
+    const duplicateResult = await service.executeAddonUserDataDelete({
+      ...valid,
+      paths: [valid.paths[0], valid.paths[0]],
+    });
+    assert.equal(duplicateResult.refused.length, 1);
+    assert.deepEqual(duplicateResult.refused, [{ path: valid.paths[0], reason: "not-listed" }]);
+  });
+});
+
+test("user-data delete refuses running, unlisted, foreign-target, look-alike, memory, drafts, settings and vault paths", async () => {
+  await withTempService(async (_service, root) => {
+    const service = createService(root, { listFilesRecursive });
+    const running = await service.executeDelegationRecord({
+      target: "hermes",
+      mission: "Refuse a running Hermes packet.",
+    });
+    await rewriteDelegationStatus(root, running, "running");
+    const foreignPath = path.join(root, "BrowserFirst", "Delegations", "engineer", "x.md");
+    const lookalikePath = path.join(root, "BrowserFirst", "Delegations", "hermes-evil", "x.md");
+    const memoryPath = path.join(root, "Memory", "INTAKE", "browser", "x.md");
+    const draftPath = path.join(root, "BrowserFirst", "AddOnDrafts", "email", "x.md");
+    const settingsPath = path.join(root, "BrowserFirst", "Settings", "addon-governance-audit.jsonl");
+    for (const filePath of [foreignPath, lookalikePath, memoryPath, draftPath]) {
+      await mkdir(path.dirname(filePath), { recursive: true });
+      await writeFile(filePath, "keep");
+    }
+    await mkdir(path.dirname(settingsPath), { recursive: true });
+    await writeFile(settingsPath, `${JSON.stringify({ event: "preexisting" })}\n`);
+
+    const result = await service.executeAddonUserDataDelete({
+      addonId: "addon.hermes",
+      bucket: "delegation",
+      paths: [
+        running.path,
+        "BrowserFirst/Delegations/hermes/missing.md",
+        "BrowserFirst/Delegations/engineer/x.md",
+        "BrowserFirst/Delegations/hermes-evil/x.md",
+        "Memory/INTAKE/browser/x.md",
+        "BrowserFirst/AddOnDrafts/email/x.md",
+        "BrowserFirst/Settings/addon-governance-audit.jsonl",
+      ],
+      confirm: "delete:addon.hermes:delegation",
+    });
+    await assert.rejects(
+      () => service.executeAddonUserDataDelete({
+        addonId: "addon.hermes",
+        bucket: "delegation",
+        paths: [path.join(root, "Vault", "note.md")],
+        confirm: "delete:addon.hermes:delegation",
+      }),
+      /^Error: User-data delete rejected: paths$/,
+    );
+
+    assert.deepEqual(result.deleted, []);
+    assert.deepEqual(result.refused, [
+      { path: running.path, reason: "running" },
+      { path: "BrowserFirst/Delegations/hermes/missing.md", reason: "not-listed" },
+      { path: "BrowserFirst/Delegations/engineer/x.md", reason: "not-listed" },
+      { path: "BrowserFirst/Delegations/hermes-evil/x.md", reason: "not-listed" },
+      { path: "Memory/INTAKE/browser/x.md", reason: "not-listed" },
+      { path: "BrowserFirst/AddOnDrafts/email/x.md", reason: "not-listed" },
+      { path: "BrowserFirst/Settings/addon-governance-audit.jsonl", reason: "not-listed" },
+    ]);
+    for (const filePath of [path.join(root, running.path), foreignPath, lookalikePath, memoryPath, draftPath, settingsPath]) {
+      assert.equal(await pathExists(filePath), true);
+    }
+    const entries = await readAuditEntries(root);
+    const audit = entries.at(-1);
+    assert.deepEqual(audit.refusalReasons, { running: 1, "not-listed": 6 });
+  });
+});
+
+async function assertSymlinkedDelegationsRootRefused(movedRootFor) {
+  await withTempService(async (_service, root) => {
+    const realService = createService(root, { listFilesRecursive });
+    const record = await realService.executeDelegationRecord({
+      target: "hermes",
+      mission: "Refuse deletion while Delegations is symlinked.",
+    });
+    const delegationsRoot = path.join(root, "BrowserFirst", "Delegations");
+    const movedDelegationsRoot = movedRootFor(root);
+    await rename(delegationsRoot, movedDelegationsRoot);
+    await symlink(movedDelegationsRoot, delegationsRoot, "dir");
+    const service = createService(root, { listFilesRecursive });
+
+    const listed = await service.executeAddonUserDataList({ addonId: "addon.hermes" });
+    const result = await service.executeAddonUserDataDelete({
+      addonId: "addon.hermes",
+      bucket: "delegation",
+      paths: [record.path],
+      confirm: "delete:addon.hermes:delegation",
+    });
+
+    assert.equal("trusted" in listed.delegation, false);
+    assert.deepEqual(result.refused, [{ path: record.path, reason: "roots-untrusted" }]);
+    assert.deepEqual(result.deleted, []);
+    assert.equal(result.auditRecorded, true);
+    assert.equal(await pathExists(path.join(root, record.path)), true);
+    const [audit] = await readAuditEntries(root);
+    assert.equal(audit.refused, 1);
+    assert.deepEqual(audit.refusalReasons, { "roots-untrusted": 1 });
+    assert.equal(JSON.stringify(result).includes("elsewhere-delegations"), false);
+  });
+}
+
+test("user-data delete refuses everything when the Delegations root is a symlink", async () => {
+  await assertSymlinkedDelegationsRootRefused((root) => path.join(root, "elsewhere-delegations"));
+});
+
+test("user-data delete refuses a symlinked Delegations root even when its target stays inside BrowserFirst", async () => {
+  await assertSymlinkedDelegationsRootRefused((root) => path.join(root, "BrowserFirst", "elsewhere-delegations"));
+});
+
+test("user-data delete refuses paths swapped after the listing", async () => {
+  await withTempService(async (_service, root) => {
+    const listedSymlink = path.join(root, "BrowserFirst", "Delegations", "hermes", "symlink.md");
+    const listedDirectory = path.join(root, "BrowserFirst", "Delegations", "hermes", "directory.md");
+    const listedHardLink = path.join(root, "BrowserFirst", "DelegationArtifacts", "hermes", "hard-link.txt");
+    const settingsFile = path.join(root, "BrowserFirst", "Settings", "source.txt");
+    await mkdir(path.dirname(listedSymlink), { recursive: true });
+    await mkdir(path.dirname(listedHardLink), { recursive: true });
+    await mkdir(path.dirname(settingsFile), { recursive: true });
+    await writeFile(listedSymlink, "original");
+    await writeFile(listedDirectory, "original");
+    await writeFile(settingsFile, "settings content");
+    await link(settingsFile, listedHardLink);
+    const fixedListing = [listedSymlink, listedDirectory, listedHardLink];
+    await unlink(listedSymlink);
+    await symlink(settingsFile, listedSymlink);
+    await rm(listedDirectory);
+    await mkdir(listedDirectory);
+    const service = createService(root, { listFilesRecursive: async () => fixedListing });
+
+    const result = await service.executeAddonUserDataDelete({
+      addonId: "addon.hermes",
+      bucket: "delegation",
+      paths: fixedListing.map((filePath) => path.relative(root, filePath)),
+      confirm: "delete:addon.hermes:delegation",
+    });
+
+    assert.deepEqual(result.deleted, [path.relative(root, listedHardLink)]);
+    assert.deepEqual(result.refused, [
+      { path: path.relative(root, listedSymlink), reason: "not-a-file" },
+      { path: path.relative(root, listedDirectory), reason: "not-a-file" },
+    ]);
+    assert.equal(await pathExists(listedHardLink), false);
+    assert.equal(await readFile(settingsFile, "utf8"), "settings content");
+  });
+});
+
+test("user-data delete never echoes filesystem error text", async () => {
+  await withTempService(async (_service, root) => {
+    const realService = createService(root, { listFilesRecursive });
+    const delegation = await realService.executeDelegationRecord({
+      target: "hermes",
+      mission: "Exercise safe filesystem error mapping.",
+    });
+    const lstatFailurePath = await writeDelegationArtifact(root, "hermes", "lstat-fail.txt");
+    const artifactPath = await writeDelegationArtifact(root, "hermes", "delete-fail.txt");
+    const secretError = new Error("ENOENT: no such file, open '/Users/x/secret-vault/note.md'");
+    const throwingFs = {
+      ...fsPromises,
+      lstat: async (filePath) => {
+        if (String(filePath).endsWith("lstat-fail.txt")) throw secretError;
+        return fsPromises.lstat(filePath);
+      },
+      realpath: async (filePath) => {
+        if (String(filePath).endsWith(path.basename(delegation.path))) throw secretError;
+        return fsPromises.realpath(filePath);
+      },
+      rm: async (filePath, options) => {
+        if (String(filePath).endsWith("delete-fail.txt")) throw secretError;
+        return fsPromises.rm(filePath, options);
+      },
+    };
+    const service = createService(root, { listFilesRecursive, fs: throwingFs });
+
+    const result = await service.executeAddonUserDataDelete({
+      addonId: "addon.hermes",
+      bucket: "delegation",
+      paths: [delegation.path, lstatFailurePath, artifactPath],
+      confirm: "delete:addon.hermes:delegation",
+    });
+
+    assert.deepEqual(result.refused, [
+      { path: delegation.path, reason: "outside-root" },
+      { path: lstatFailurePath, reason: "not-a-file" },
+      { path: artifactPath, reason: "delete-failed" },
+    ]);
+    const serialized = JSON.stringify(result);
+    assert.equal(serialized.includes("/Users"), false);
+    assert.equal(serialized.includes("secret-vault"), false);
+  });
+});
+
+test("user-data delete audits a refused intake attempt", async () => {
+  await withTempService(async (service, root) => {
+    const result = await service.executeAddonUserDataDelete({
+      addonId: "addon.hermes",
+      bucket: "intake",
+      paths: ["Memory/INTAKE/browser/x.md", "Memory/INTAKE/sources/y.md"],
+      confirm: "delete:addon.hermes:intake",
+    });
+
+    assert.deepEqual(result.deleted, []);
+    assert.equal(result.stopped, true);
+    assert.deepEqual(result.refused, [
+      { path: "Memory/INTAKE/browser/x.md", reason: "intake-not-attributable" },
+      { path: "Memory/INTAKE/sources/y.md", reason: "intake-not-attributable" },
+    ]);
+    assert.equal(result.auditRecorded, true);
+    const [audit] = await readAuditEntries(root);
+    assert.equal(audit.event, "addonUserDataDeleted");
+    assert.equal(audit.bucket, "intake");
+    assert.equal(audit.requested, 2);
+    assert.equal(audit.deleted, 0);
+    assert.equal(audit.refused, 2);
+    assert.deepEqual(audit.refusalReasons, { "intake-not-attributable": 2 });
+  });
+});
+
+test("user-data delete tolerates a file that vanished between list and delete", async () => {
+  await withTempService(async (_service, root) => {
+    const realService = createService(root, { listFilesRecursive });
+    const vanished = await realService.executeDelegationRecord({
+      target: "hermes",
+      mission: "Vanish before user data delete.",
+    });
+    const kept = await realService.executeDelegationRecord({
+      target: "hermes",
+      mission: "Delete after another packet vanished.",
+    });
+    const vanishedReal = await realpath(path.join(root, vanished.path));
+    let removed = false;
+    const vanishingFs = {
+      ...fsPromises,
+      rm: async (filePath, options) => {
+        if (!removed && path.resolve(filePath) === vanishedReal) {
+          removed = true;
+          await fsPromises.rm(filePath, { force: true });
+          throw new Error("file vanished");
+        }
+        return fsPromises.rm(filePath, options);
+      },
+    };
+    const service = createService(root, { listFilesRecursive, fs: vanishingFs });
+
+    const result = await service.executeAddonUserDataDelete({
+      addonId: "addon.hermes",
+      bucket: "delegation",
+      paths: [vanished.path, kept.path],
+      confirm: "delete:addon.hermes:delegation",
+    });
+
+    assert.deepEqual(result.deleted, [kept.path]);
+    assert.deepEqual(result.refused, [{ path: vanished.path, reason: "delete-failed" }]);
+    assert.equal(await pathExists(path.join(root, vanished.path)), false);
+    assert.equal(await pathExists(path.join(root, kept.path)), false);
+  });
+});
+
+test("user-data delete unlinks the path it verified, not the lexical request path", async () => {
+  await withTempService(async (_service, root) => {
+    const realService = createService(root, { listFilesRecursive });
+    const victim = await realService.executeDelegationRecord({
+      target: "hermes",
+      mission: "Verify realpath unlink target.",
+    });
+    const decoyPath = await writeDelegationArtifact(root, "hermes", "decoy.txt");
+    const decoyReal = await fsPromises.realpath(path.join(root, decoyPath));
+    const redirectingFs = {
+      ...fsPromises,
+      realpath: async (filePath) => {
+        if (path.resolve(filePath) === path.join(root, victim.path)) return decoyReal;
+        return fsPromises.realpath(filePath);
+      },
+    };
+    const service = createService(root, { listFilesRecursive, fs: redirectingFs });
+
+    const result = await service.executeAddonUserDataDelete({
+      addonId: "addon.hermes",
+      bucket: "delegation",
+      paths: [victim.path],
+      confirm: "delete:addon.hermes:delegation",
+    });
+
+    assert.deepEqual(result.deleted, [victim.path]);
+    assert.deepEqual(result.refused, []);
+    assert.equal(await pathExists(path.join(root, decoyPath)), false);
+    assert.equal(await pathExists(path.join(root, victim.path)), true);
+  });
+});
+
+test("user-data delete reports an unrecorded audit instead of failing the request", async () => {
+  await withTempService(async (_service, root) => {
+    const realService = createService(root, { listFilesRecursive });
+    const record = await realService.executeDelegationRecord({
+      target: "hermes",
+      mission: "Delete even when audit append fails.",
+    });
+    const auditFailingFs = {
+      ...fsPromises,
+      appendFile: async () => {
+        throw new Error("EACCES: permission denied, open '/Users/x/ResonantOS_User/Settings/addon-governance-audit.jsonl'");
+      },
+    };
+    const service = createService(root, { listFilesRecursive, fs: auditFailingFs });
+
+    const result = await service.executeAddonUserDataDelete({
+      addonId: "addon.hermes",
+      bucket: "delegation",
+      paths: [record.path],
+      confirm: "delete:addon.hermes:delegation",
+    });
+
+    assert.deepEqual(result.deleted, [record.path]);
+    assert.equal(result.auditRecorded, false);
+    assert.equal(await pathExists(path.join(root, record.path)), false);
+    assert.deepEqual(await readAuditEntries(root), []);
+    const serialized = JSON.stringify(result);
+    assert.equal(serialized.includes("/Users"), false);
+    assert.equal(serialized.includes("addon-governance-audit"), false);
   });
 });
 
