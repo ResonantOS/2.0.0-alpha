@@ -170,16 +170,17 @@ describe("web-mode capability transport", () => {
     expect(bootstrapCalls()).toHaveLength(1);
   });
 
-  it.each(["capabilityBootstrapToken", "bridgeToken", "bridgeUrl"] as const)("D13 re-bootstraps only when config key %s changes", async (key) => {
+  it.each(["capabilityBootstrapToken", "bridgeToken", "bridgeUrl", "httpsBridgeUrl"] as const)("D13 re-bootstraps only when config key %s changes", async (key) => {
     await transport.webInvoke(diagnostics);
     await transport.webInvoke(diagnostics);
     expect(bootstrapCalls()).toHaveLength(1);
-    globals.__RESONANTOS_BRIDGE_CONFIG__ = { ...config, [key]: key === "bridgeUrl" ? "http://127.0.0.1:47774" : "changed-test-token" };
+    globals.__RESONANTOS_BRIDGE_CONFIG__ = { ...config, [key]: key === "bridgeUrl" ? "http://127.0.0.1:47774" : key === "httpsBridgeUrl" ? "https://127.0.0.1:47775" : "changed-test-token" };
     await transport.webInvoke(diagnostics);
     await transport.webInvoke(diagnostics);
     expect(bootstrapCalls()).toHaveLength(2);
     expect(routeCalls()).toHaveLength(4);
     if (key === "bridgeUrl") expect(bootstrapCalls()[1][0]).toBe("http://127.0.0.1:47774/api/capability-tokens");
+    else if (key === "httpsBridgeUrl") expect(bootstrapCalls()[1][0]).toBe("https://127.0.0.1:47775/api/capability-tokens");
     else expect(headers(bootstrapCalls()[1]).get(key === "bridgeToken" ? "X-ResonantOS-Bridge-Token" : "X-ResonantOS-Capability-Bootstrap-Token")).toBe("changed-test-token");
   });
 
@@ -206,6 +207,7 @@ describe("web-mode capability transport", () => {
 
   it.each([
     [401, "Unauthorized browser-first bridge request."],
+    [401, capabilityError],
     [403, "Bridge client IP not allowed."],
     [403, "Client IP not allowlisted for browser-first bridge."],
     [403, `prefix ${capabilityError}`],
@@ -216,6 +218,26 @@ describe("web-mode capability transport", () => {
     await expectSafeError(transport.webInvoke(diagnostics), String(error));
     expect(bootstrapCalls()).toHaveLength(1);
     expect(routeCalls()).toHaveLength(1);
+  });
+
+  it("D16b does not retry a capability 403 whose body lacks ok:false", async () => {
+    fetchMock.mockImplementation(async (url) => String(url).endsWith("/api/capability-tokens")
+      ? bootstrap() : response({ error: capabilityError }, 403));
+    await expectSafeError(transport.webInvoke(diagnostics), capabilityError);
+    expect(bootstrapCalls()).toHaveLength(1);
+    expect(routeCalls()).toHaveLength(1);
+  });
+
+  it("D18b fallback error text carries no token when the bridge answers without a body", async () => {
+    fetchMock.mockImplementation(async (url) => String(url).endsWith("/api/capability-tokens")
+      ? bootstrap() : new Response("", { status: 500 }));
+    await expectSafeError(transport.webInvoke(diagnostics), `Bridge request failed for ${diagnostics}.`);
+  });
+
+  it("A3b module never logs", async () => {
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync(new URL("./web-transport.ts", import.meta.url), "utf8");
+    expect(/console\./.test(source)).toBe(false);
   });
 
   it("D17 preserves GET payload mapping without body or Content-Type", async () => {
