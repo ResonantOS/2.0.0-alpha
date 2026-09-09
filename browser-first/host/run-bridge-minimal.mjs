@@ -39,6 +39,7 @@ import { createBridgeAuditLedger } from "./bridge-audit-ledger.mjs";
 import { createBridgeTokenKey } from "./bridge-token-key.mjs";
 import { createAddonDelegationHostService } from "./addon-delegation-host-service.mjs";
 import { createAddonDelegationService } from "./addon-delegation-service.mjs";
+import { createDevExternalAgentRuntimesPanelService } from "./dev-external-agent-runtimes-panel.mjs";
 import { createOpencodeHttpClient, ensureOpencodeServer } from "./opencode-client.mjs";
 import { createOpencodeSessionHandlers, createOpencodeSessionHostService } from "./opencode-session-host-service.mjs";
 import { createArchiveReviewHostService } from "./archive-review-host-service.mjs";
@@ -211,6 +212,13 @@ const { addonDelegationRoutes } = createAddonDelegationHostService(addonDelegati
   fetchImpl: globalThis.fetch,
   repoRoot,
 });
+
+// Dev-only external-agent-runtimes panel (manifest listing). Registered only
+// here — the minimal/development launcher — never by the production launcher.
+// `repoRoot` is computed above and passed directly; the panel enumerates
+// examples/addons/*.json from it. Both routes keep the bridge's normal
+// bridge-token + capability enforcement.
+const { devPanelRoutes } = createDevExternalAgentRuntimesPanelService({ repoRoot });
 
 // Live OpenCode session: the bridge starts (reuses) `opencode serve` on an
 // ephemeral loopback port with a bridge-minted credential and proxies
@@ -396,6 +404,7 @@ const bridgeRoutes = [
   ...addonDelegationRoutes,
   ...opencodeSessionRoutes,
   ...extensionPrefsRoutes,
+  ...devPanelRoutes,
 ];
 
 const bridgeToken = args.get("bridge-token") ?? process.env.RESONANTOS_BROWSER_FIRST_BRIDGE_TOKEN ?? createBridgeToken();

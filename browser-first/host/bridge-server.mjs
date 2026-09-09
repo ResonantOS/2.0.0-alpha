@@ -250,6 +250,27 @@ function writeJson(response, status, payload, extensionOrigin, requestHeaders, a
   response.end(JSON.stringify(payload));
 }
 
+// HTML counterpart of writeJson. Used by the dev-only panel
+// (`/dev/external-agent-runtimes/`) when a route result carries an `__html`
+// marker. It reuses pickAllowedOrigin exactly like writeJson, so the CORS
+// behaviour is identical: the Access-Control-Allow-Origin header is only
+// emitted for an allowed origin, never a wildcard. This adds no auth path —
+// the route is still resolved and gated by evaluateBridgeRequestForSelfTest.
+function writeHtml(response, status, html, contentType, extensionOrigin, requestHeaders, allowedOrigins) {
+  const allowOrigin = pickAllowedOrigin(requestHeaders, extensionOrigin, allowedOrigins);
+  const headers = {
+    "Content-Type": contentType ?? "text/html; charset=utf-8",
+    "Access-Control-Allow-Headers": `Content-Type, ${bridgeTokenHeaderName}, ${bridgeCapabilityHeaderName}, ${bridgeCapabilityBootstrapHeaderName}`,
+    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+    "Vary": "Origin",
+  };
+  if (allowOrigin) {
+    headers["Access-Control-Allow-Origin"] = allowOrigin;
+  }
+  response.writeHead(status, headers);
+  response.end(html);
+}
+
 async function readJsonBody(request) {
   return new Promise((resolve, reject) => {
     let body = "";
@@ -1303,6 +1324,17 @@ export function createBridgeRequestHandler({
         capabilityBootstrapToken,
         routes: internalRoutes,
       });
+      // A route that wants to serve an HTML document signals it via a top-level
+      // `__html` marker on the result payload. This only affects the response
+      // writer; the request was already authorised by evaluateBridgeRequestForSelfTest.
+      const htmlBody =
+        result.payload && typeof result.payload === "object" && typeof result.payload.__html === "string"
+          ? result.payload
+          : null;
+      if (htmlBody) {
+        writeHtml(response, result.status, htmlBody.__html, htmlBody.contentType, extensionOrigin, request.headers, allowedOrigins);
+        return;
+      }
       writeJson(response, result.status, result.payload, extensionOrigin, request.headers, allowedOrigins);
     } catch (error) {
       writeJson(

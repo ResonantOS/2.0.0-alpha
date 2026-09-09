@@ -8,6 +8,7 @@ import { createAddonDelegationHostService } from "../host/addon-delegation-host-
 import { createAgentControlHostService } from "../host/agent-control-host-service.mjs";
 import { BRIDGE_CAPABILITIES } from "../host/bridge-capability-tokens.mjs";
 import { createBrowserDiagnosticsHostService } from "../host/browser-diagnostics-host-service.mjs";
+import { createDevExternalAgentRuntimesPanelService } from "../host/dev-external-agent-runtimes-panel.mjs";
 import { createExtensionPrefsHostService } from "../host/extension-prefs-host-service.mjs";
 import { createMemoryHostService } from "../host/memory-host-service.mjs";
 import { createOpencodeSessionHostService } from "../host/opencode-session-host-service.mjs";
@@ -125,6 +126,7 @@ async function withBridgeRoutes(callback) {
     });
     const memory = createMemoryHostService(handlers(memoryHandlers));
     const addon = createAddonDelegationHostService(handlers(addonHandlers));
+    const devPanel = createDevExternalAgentRuntimesPanelService({ repoRoot: root });
     const opencodeSession = createOpencodeSessionHostService(handlers(opencodeSessionHandlers));
     const prefs = createExtensionPrefsHostService({ userRoot: () => root });
     const diagnostics = createBrowserDiagnosticsHostService({
@@ -153,6 +155,7 @@ async function withBridgeRoutes(callback) {
       addonDelegationRoutes: addon.addonDelegationRoutes,
       opencodeSessionRoutes: opencodeSession.opencodeSessionRoutes,
       extensionPrefsRoutes: prefs.extensionPrefsRoutes,
+      devPanelRoutes: devPanel.devPanelRoutes,
     };
     const routes = Object.values(routeArrays).flat();
 

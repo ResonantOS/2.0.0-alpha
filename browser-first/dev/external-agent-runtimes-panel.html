@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>External Agent Runtimes — Dev Panel</title>
+  <style>
+    :root { color-scheme: light dark; --bg: #0e1116; --fg: #e6edf3; --muted: #8b949e; --ok: #3fb950; --fail: #f85149; --card: #161b22; --border: #30363d; }
+    body { font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--fg); margin: 0; padding: 24px; }
+    h1 { margin: 0 0 4px 0; font-size: 22px; }
+    .subtitle { color: var(--muted); margin: 0 0 24px 0; }
+    .meta { color: var(--muted); font-size: 12px; margin-bottom: 16px; }
+    .addon { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+    .addon h2 { margin: 0 0 4px 0; font-size: 16px; }
+    .addon .file { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+    .addon .row { display: grid; grid-template-columns: 160px 1fr; gap: 8px; margin: 4px 0; font-size: 13px; }
+    .addon .row .k { color: var(--muted); }
+    .addon .row .v { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
+    .trigger { color: var(--ok); }
+    .no-trigger { color: var(--muted); }
+    .err { color: var(--fail); margin: 4px 0; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <h1>External Agent Runtimes</h1>
+  <p class="subtitle">Dev-only panel. Enumerates <code>examples/addons/*.json</code> as discovered by the running bridge. Run <code>npm run deepseek-harness:smoke</code> for F1–F10 boundary-contract verdicts.</p>
+  <div class="meta" id="meta"></div>
+  <div id="root"></div>
+
+  <script>
+    // Server-injected by dev-external-agent-runtimes-panel.mjs; the token is
+    // replaced with an inert JSON literal at request time.
+    window.__ADDONS_DATA__ = __EXTERNAL_AGENT_RUNTIMES_DATA__;
+
+    (function () {
+      var root = document.getElementById("root");
+      var meta = document.getElementById("meta");
+      var data = window.__ADDONS_DATA__ || {};
+
+      function esc(value) {
+        return String(value == null ? "" : value).replace(/[<>&"]/g, function (c) {
+          return { "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c];
+        });
+      }
+
+      function row(label, value, className) {
+        var div = document.createElement("div");
+        div.className = "row";
+        div.innerHTML = '<span class="k">' + esc(label) + '</span><span class="v ' + (className || "") + '">' + esc(value) + "</span>";
+        return div;
+      }
+
+      function renderAddon(addon) {
+        var card = document.createElement("div");
+        card.className = "addon";
+
+        var h2 = document.createElement("h2");
+        h2.textContent = addon.name || addon.id || addon.fileName;
+        card.appendChild(h2);
+
+        var file = document.createElement("div");
+        file.className = "file";
+        file.textContent = addon.fileName + (addon.version ? " · v" + addon.version : "");
+        card.appendChild(file);
+
+        if (addon.error) {
+          var err = document.createElement("div");
+          err.className = "err";
+          err.textContent = addon.error;
+          card.appendChild(err);
+          return card;
+        }
+
+        card.appendChild(row("id", addon.id || "(missing)"));
+        card.appendChild(row("runtimeType", addon.runtimeType || "(missing)"));
+        card.appendChild(row("service.entrypoint", addon.serviceEntrypoint || "(none)"));
+        card.appendChild(row("tools", (addon.tools && addon.tools.length ? addon.tools.join(", ") : "—")));
+        card.appendChild(row("§3 trigger", addon.hasTrigger ? "providers + agent-delegation" : "—", addon.hasTrigger ? "trigger" : "no-trigger"));
+        return card;
+      }
+
+      meta.textContent = "generated at " + (data.generatedAt || "?") + " · " + ((data.addons && data.addons.length) || 0) + " addon(s)";
+
+      if (data.error) {
+        var dirErr = document.createElement("div");
+        dirErr.className = "err";
+        dirErr.textContent = data.error;
+        root.appendChild(dirErr);
+        return;
+      }
+
+      var addons = data.addons || [];
+      if (addons.length === 0) {
+        var empty = document.createElement("p");
+        empty.className = "meta";
+        empty.textContent = "No addon manifests under examples/addons/.";
+        root.appendChild(empty);
+        return;
+      }
+
+      for (var i = 0; i < addons.length; i++) {
+        root.appendChild(renderAddon(addons[i]));
+      }
+    })();
+  </script>
+</body>
+</html>
