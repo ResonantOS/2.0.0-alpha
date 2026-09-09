@@ -90,6 +90,40 @@ Use `npm run browser-first:audit-scope:staged` on the intentionally staged
 candidate paths. A strict scope audit is meaningful only when the index contains
 the complete candidate and unrelated work is absent.
 
+## Workflow policy (incident 2026-09-04)
+
+`npm run repo:hygiene` runs `scripts/check-repo-hygiene.mjs`, including these
+workflow rules as part of `verify:alpha`:
+
+1. Every file under `.github/workflows/` must be listed in the exported
+   `WORKFLOW_ALLOWLIST`: `agent-control-live.yml`, `alpha-build.yml`,
+   `project-issue-sync.yml`, and `security.yml`.
+2. A secret-bearing `run:` block must not send secrets to an IP literal or a
+   host outside `WORKFLOW_ALLOWED_HOSTS`. The check also follows secret values
+   assigned through `env:` and referenced by a run in the same job. GitHub
+   token use with `gh` and approved GitHub hosts is permitted.
+3. Each job referencing `secrets.PROJECT_SYNC_TOKEN` must declare
+   `environment: project-sync`, either as a string or a mapping with that name.
+4. A workflow referencing secrets must filter its `push` trigger with branches
+   or paths; an unfiltered push is rejected.
+
+To add a workflow deliberately, review its triggers, destinations, permissions,
+and environment binding, then update `WORKFLOW_ALLOWLIST` in the same reviewed
+change as the workflow, policy tests, and this list. Run `npm run repo:hygiene`
+and `node --test scripts/check-repo-hygiene.test.mjs` before review. Host changes
+require a deliberate review of `WORKFLOW_ALLOWED_HOSTS` as well.
+
+The dependency-free reader checks indentation-based YAML mappings and single-line
+or block-scalar runs. It is a best-effort guard: it does not expand YAML aliases
+or general flow mappings, evaluate expressions or shell substitutions, or track
+encoded/computed destinations. Same-job environment tracing does not model step
+order or variable shadowing; URL-less host detection may also flag dotted
+filenames in secret-bearing network commands. Review remains necessary.
+
+During token rotation, until a maintainer re-creates `PROJECT_SYNC_TOKEN` as a
+`project-sync` environment secret, the workflow's `HAS_PROJECT_SYNC_TOKEN` guard
+sees it as absent and synchronization no-ops. This is intended during rotation.
+
 ## Secret And State Boundary
 
 Bridge startup writes

