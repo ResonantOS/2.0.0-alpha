@@ -68,9 +68,16 @@ async function enumerateAddons(repoRoot) {
   try {
     fileNames = (await readdir(examplesDir)).filter((name) => name.endsWith(".json")).sort();
   } catch (error) {
+    // Report a stable reason code only. The failing path is the developer's
+    // absolute workstation path (and Node's fs error message embeds it too),
+    // so neither may leak into the panel response.
+    const code =
+      error && typeof error === "object" && "code" in error && typeof error.code === "string"
+        ? error.code
+        : "unknown";
     return {
       addons: [],
-      error: `unable to read ${examplesDir}: ${error instanceof Error ? error.message : String(error)}`,
+      error: `unable to read examples/addons (${code})`,
     };
   }
   const addons = [];
@@ -80,29 +87,60 @@ async function enumerateAddons(repoRoot) {
     try {
       manifest = JSON.parse(await readFile(absPath, "utf8"));
     } catch (error) {
+      // Node >= 21 JSON.parse messages carry position info only — no source
+      // excerpt — so the message cannot echo manifest content.
       addons.push({
         fileName,
         error: `parse failed: ${error instanceof Error ? error.message : String(error)}`,
       });
       continue;
     }
-    const capabilities = new Set(
-      (manifest.requestedCapabilities ?? []).map((entry) => entry?.capability).filter(Boolean),
-    );
-    addons.push({
-      fileName,
-      id: manifest.id ?? null,
-      name: manifest.name ?? null,
-      version: manifest.version ?? null,
-      runtimeType: manifest.runtimeType ?? null,
-      serviceEntrypoint: manifest.service?.entrypoint ?? null,
-      tools: (manifest.tools ?? []).map((tool) => tool?.name).filter(Boolean),
-      // ADR-040 §3 external-agent-runtime trigger: the manifest requests both
-      // `providers` and `agent-delegation`.
-      hasTrigger: capabilities.has("providers") && capabilities.has("agent-delegation"),
-    });
+    try {
+      addons.push(describeManifest(fileName, manifest));
+    } catch (error) {
+      // Shape errors are our own constant messages, never manifest content.
+      addons.push({
+        fileName,
+        error: `invalid manifest: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
   }
   return { addons };
+}
+
+// Project one manifest into the per-manifest card fields the panel renders.
+// Only the explicitly selected fields below are copied — unknown or extension
+// fields (credentials, prompts, paths, `__proto__`, arbitrary nested objects)
+// never pass through to the JSON response or the HTML. Structurally invalid
+// manifests throw so the caller can report the file inline (fail honestly)
+// instead of aborting the whole listing with a 500.
+function describeManifest(fileName, manifest) {
+  if (typeof manifest !== "object" || manifest === null || Array.isArray(manifest)) {
+    throw new Error("manifest root must be a JSON object");
+  }
+  const requestedCapabilities = manifest.requestedCapabilities ?? [];
+  if (!Array.isArray(requestedCapabilities)) {
+    throw new Error("requestedCapabilities must be an array");
+  }
+  const manifestTools = manifest.tools ?? [];
+  if (!Array.isArray(manifestTools)) {
+    throw new Error("tools must be an array");
+  }
+  const capabilities = new Set(
+    requestedCapabilities.map((entry) => entry?.capability).filter(Boolean),
+  );
+  return {
+    fileName,
+    id: manifest.id ?? null,
+    name: manifest.name ?? null,
+    version: manifest.version ?? null,
+    runtimeType: manifest.runtimeType ?? null,
+    serviceEntrypoint: manifest.service?.entrypoint ?? null,
+    tools: manifestTools.map((tool) => tool?.name).filter(Boolean),
+    // ADR-040 §3 external-agent-runtime trigger: the manifest requests both
+    // `providers` and `agent-delegation`.
+    hasTrigger: capabilities.has("providers") && capabilities.has("agent-delegation"),
+  };
 }
 
 function buildPanelPayload(enumerate) {

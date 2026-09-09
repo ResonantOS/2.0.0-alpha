@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, stat, writeFile, mkdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -129,6 +129,144 @@ test("JSON route returns an honest error when the addons directory is missing", 
     const result = await jsonRoute.handler({}, {});
     assert.deepEqual(result.addons, []);
     assert.match(result.error, /unable to read/);
+    assert.match(result.error, /ENOENT/, "a stable reason code keeps the failure actionable");
+    // The error must not leak the absolute repository path (the developer's
+    // workstation path) into the JSON or HTML response.
+    assert.ok(!result.error.includes(root), `error must not contain the absolute path: ${result.error}`);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("JSON route fails honestly on structurally invalid manifests without aborting", async () => {
+  await withAddonsDir(
+    {
+      "a-good.json": JSON.stringify(memoryManifest),
+      "b-null.json": "null",
+      "c-array.json": "[]",
+      "d-string.json": JSON.stringify("just a string"),
+      "e-bad-caps.json": JSON.stringify({ id: "x", requestedCapabilities: "providers" }),
+      "f-bad-tools.json": JSON.stringify({ id: "y", tools: { name: "nope" } }),
+    },
+    async (root) => {
+      const { devPanelRoutes } = createDevExternalAgentRuntimesPanelService({ repoRoot: root });
+      const jsonRoute = devPanelRoutes.find((route) => route.path === "/dev/external-agent-runtimes");
+      // Must resolve, not throw: one bad manifest never 500s the whole listing.
+      const result = await jsonRoute.handler({}, {});
+      assert.equal(result.error, null);
+      assert.equal(result.addons.length, 6);
+      const good = result.addons.find((addon) => addon.fileName === "a-good.json");
+      assert.equal(good.id, "reference-memory", "the valid manifest is still listed");
+      const expectations = [
+        ["b-null.json", /^invalid manifest: manifest root/],
+        ["c-array.json", /^invalid manifest: manifest root/],
+        ["d-string.json", /^invalid manifest: manifest root/],
+        ["e-bad-caps.json", /^invalid manifest: requestedCapabilities/],
+        ["f-bad-tools.json", /^invalid manifest: tools/],
+      ];
+      for (const [fileName, pattern] of expectations) {
+        const entry = result.addons.find((addon) => addon.fileName === fileName);
+        assert.ok(entry, `${fileName} is enumerated`);
+        assert.match(entry.error, pattern, fileName);
+      }
+    },
+  );
+});
+
+test("panel omits unknown and sensitive manifest fields (data minimization)", async () => {
+  // Token-shaped value assembled at runtime from individually harmless
+  // fragments so no committed line carries a scanner-matching credential
+  // literal (repo convention: syntheticLeakedBearerToken in addon-sdk-testing).
+  const syntheticToken = ["sk", "panel", "0000111122223333"].join("-");
+  const hostileFields = {
+    email: "developer@example.com",
+    systemPrompt: "You are a helpful assistant with full access",
+    absolutePath: "/Users/someone/private/secrets.json",
+    apiKey: syntheticToken,
+    onmouseover: "alert(1)",
+    nestedConfig: { home: "/Users/someone", env: "DEEPSEEK_API_KEY" },
+  };
+  // Computed key: an own "__proto__" property that JSON.parse would also
+  // produce as an own property — it must neither pollute nor pass through.
+  const manifest = {
+    id: "addon.hostile",
+    name: "Hostile",
+    version: "1.0.0",
+    runtimeType: "agent-addon",
+    ...hostileFields,
+    ["__" + "proto__"]: { polluted: true },
+  };
+  const sensitiveValues = [
+    "developer@example.com",
+    "helpful assistant",
+    "/Users/someone",
+    syntheticToken,
+    "onmouseover",
+    "DEEPSEEK_API_KEY",
+    "polluted",
+    "__proto__",
+  ];
+  await withAddonsDir({ "hostile.json": JSON.stringify(manifest) }, async (root) => {
+    const { devPanelRoutes } = createDevExternalAgentRuntimesPanelService({ repoRoot: root });
+    const jsonRoute = devPanelRoutes.find((route) => route.path === "/dev/external-agent-runtimes");
+    const result = await jsonRoute.handler({}, {});
+    const entry = result.addons.find((addon) => addon.fileName === "hostile.json");
+
+    // Exactly the whitelisted card fields — unknown fields are omitted, not
+    // merely escaped.
+    assert.deepEqual(
+      Object.keys(entry).sort(),
+      ["fileName", "hasTrigger", "id", "name", "runtimeType", "serviceEntrypoint", "tools", "version"],
+    );
+
+    const serialized = JSON.stringify(result);
+    for (const leaked of sensitiveValues) {
+      assert.ok(!serialized.includes(leaked), `JSON payload must not contain ${leaked}`);
+    }
+
+    // The __proto__ fixture key polluted nothing.
+    assert.equal({}.polluted, undefined);
+
+    // The HTML path serves the same minimized payload.
+    const htmlRoute = devPanelRoutes.find((route) => route.path === "/dev/external-agent-runtimes/");
+    const html = (await htmlRoute.handler({}, {})).__html;
+    for (const leaked of sensitiveValues) {
+      assert.ok(!html.includes(leaked), `HTML must not contain ${leaked}`);
+    }
+  });
+});
+
+test("panel handlers are observational: no writes and no created directories", async () => {
+  const snapshotTree = async (dir) => {
+    const listing = [];
+    for (const rel of (await readdir(dir, { recursive: true })).sort()) {
+      const fullPath = path.join(dir, rel);
+      const info = await stat(fullPath);
+      listing.push([rel, info.isDirectory() ? "dir" : await readFile(fullPath, "utf8")]);
+    }
+    return listing;
+  };
+
+  await withAddonsDir(
+    { "addon.deepseek-harness.json": JSON.stringify(deepseekManifest) },
+    async (root) => {
+      const before = await snapshotTree(root);
+      const { devPanelRoutes } = createDevExternalAgentRuntimesPanelService({ repoRoot: root });
+      for (const route of devPanelRoutes) {
+        await route.handler({}, {});
+      }
+      assert.deepEqual(await snapshotTree(root), before, "handlers must not write, create, or modify any file");
+    },
+  );
+
+  // The missing-directory error path must not create examples/addons either.
+  const root = await mkdtemp(path.join(os.tmpdir(), "resonantos-dev-panel-ro-"));
+  try {
+    const { devPanelRoutes } = createDevExternalAgentRuntimesPanelService({ repoRoot: root });
+    for (const route of devPanelRoutes) {
+      await route.handler({}, {});
+    }
+    assert.deepEqual(await readdir(root), [], "the error path must not create directories");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
