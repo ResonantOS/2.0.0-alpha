@@ -35,7 +35,7 @@ function workflowRules(text, options) {
 test("workflow policy accepts the reviewed allowlist", () => {
   assert.deepEqual(workflowPolicy(workflowJob("    steps:\n      - run: echo safe")), { ok: true, violations: [] });
   assert.deepEqual(hygiene.WORKFLOW_ALLOWLIST, [
-    "agent-control-live.yml", "alpha-build.yml", "project-issue-sync.yml", "security.yml",
+    "agent-control-live.yml", "alpha-build.yml", "project-issue-sync.yml", "security-drift.yml", "security.yml",
   ]);
   assert.deepEqual(hygiene.WORKFLOW_ALLOWED_HOSTS, [
     "github.com", "api.github.com", "uploads.github.com", "objects.githubusercontent.com",
