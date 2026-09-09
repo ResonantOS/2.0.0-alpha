@@ -15,7 +15,7 @@ export const WORKFLOW_ALLOWLIST = Object.freeze([
 ]);
 export const WORKFLOW_ALLOWED_HOSTS = Object.freeze([
   "github.com", "api.github.com", "uploads.github.com", "objects.githubusercontent.com",
-  "raw.githubusercontent.com", "ghcr.io", "registry.npmjs.org",
+  "raw.githubusercontent.com", "ghcr.io", "registry.npmjs.org", "npm.pkg.github.com", "codecov.io",
 ]);
 
 const execFileAsync = promisify(execFile);
@@ -202,6 +202,12 @@ function workflowEntries(text) {
   return root.children;
 }
 
+// Matches ${{ secrets.X }}, ${{ secrets['X'] }}, ${{ secrets["X"] }}, toJSON(secrets), and a bare `secrets` context inside an expression.
+const SECRET_REFERENCE = /\bsecrets\s*(?:\.|\[)|\bsecrets\b(?=\s*[)}])/;
+function referencesSecret(text) {
+  return SECRET_REFERENCE.test(text);
+}
+
 function descendants(entries) {
   return entries.flatMap((entry) => [entry, ...descendants(entry.children)]);
 }
@@ -215,8 +221,12 @@ function hasUnfilteredPush(entries) {
   if (!on) return false;
   if (scalarValue(on.value) === "push" || /^\[.*\bpush\b.*\]$/.test(on.value)) return true;
   const push = on.children.find((entry) => entry.key === "push");
-  return Boolean(push && !push.children.some((entry) => /^(branches|paths)(-ignore)?$/.test(entry.key))
-    && !/\b(?:branches|paths)(?:-ignore)?\s*:/.test(push.value));
+  if (!push) return false;
+  // `push: [dev]` is the branches shorthand and counts as a filter; `branches-ignore`/`paths-ignore`
+  // still run on every other branch and do not.
+  if (/^\[.*\]$/.test(push.value.trim())) return false;
+  return !push.children.some((entry) => /^(branches|paths)$/.test(entry.key))
+    && !/\b(?:branches|paths)\s*:/.test(push.value);
 }
 
 function bindsProjectSync(job) {
@@ -235,7 +245,7 @@ function secretEnvironmentVariables(entries) {
       ...[...entry.value.matchAll(/(?:^\{|,)\s*([\w-]+):\s*([^,]*)/g)]
         .map(([, key, value]) => ({ key, value })),
     ])
-    .filter((entry) => /\bsecrets\./.test(entry.value))
+    .filter((entry) => referencesSecret(entry.value))
     .map((entry) => entry.key);
 }
 
@@ -289,7 +299,7 @@ export function evaluateWorkflowPolicy({ path, text, allowlist = WORKFLOW_ALLOWL
   for (const job of jobs) {
     const variables = [...workflowEnv, ...secretEnvironmentVariables(job.children)];
     const runs = descendants(job.children).filter((entry) => entry.key === "run");
-    if (runs.some(({ value }) => (/\bsecrets\./.test(value)
+    if (runs.some(({ value }) => (referencesSecret(value)
       || variables.some((variable) => referencesVariable(value, variable)))
       && hasUnapprovedDestination(value, allowedHosts))) {
       add("secret-egress", `Job ${quoteDiagnostic(job.key)} sends a secret toward an IP or a host outside WORKFLOW_ALLOWED_HOSTS; remove that destination.`);
@@ -298,7 +308,7 @@ export function evaluateWorkflowPolicy({ path, text, allowlist = WORKFLOW_ALLOWL
       add("secret-without-environment", `Job ${quoteDiagnostic(job.key)} references secrets.PROJECT_SYNC_TOKEN; declare environment: project-sync on that job.`);
     }
   }
-  if (/\bsecrets\./.test(text) && hasUnfilteredPush(entries)) {
+  if (referencesSecret(text) && hasUnfilteredPush(entries)) {
     add("unfiltered-push-with-secrets", "Filter the push trigger with branches or paths before referencing secrets.");
   }
   return { ok: violations.length === 0, violations };
