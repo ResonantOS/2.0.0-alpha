@@ -144,7 +144,7 @@ function createRoutes(root) {
   ];
 }
 
-test("twelve bridge GET routes require route-scoped capability tokens", async () => {
+test(`${protectedGetRoutes.length} bridge GET routes require route-scoped capability tokens`, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "resonantos-bridge-get-routes-"));
   const routes = createRoutes(root);
   const bridgeCapabilityTokens = {
