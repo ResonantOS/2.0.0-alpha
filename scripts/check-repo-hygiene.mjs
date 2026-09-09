@@ -229,6 +229,12 @@ function hasUnfilteredPush(entries) {
     && !/\b(?:branches|paths)\s*:/.test(push.value);
 }
 
+// Dotted, bracket (single or double quoted), and toJSON(secrets) forms all expose the project token.
+const PROJECT_SYNC_REFERENCE = /\bsecrets\s*(?:\.PROJECT_SYNC_TOKEN\b|\[\s*['"]PROJECT_SYNC_TOKEN['"]\s*\])|\btoJSON\(\s*secrets\s*\)/;
+function referencesProjectSyncToken(text) {
+  return PROJECT_SYNC_REFERENCE.test(text);
+}
+
 function bindsProjectSync(job) {
   return job.children.some((entry) => entry.key === "environment" && (
     scalarValue(entry.value) === "project-sync"
@@ -304,7 +310,7 @@ export function evaluateWorkflowPolicy({ path, text, allowlist = WORKFLOW_ALLOWL
       && hasUnapprovedDestination(value, allowedHosts))) {
       add("secret-egress", `Job ${quoteDiagnostic(job.key)} sends a secret toward an IP or a host outside WORKFLOW_ALLOWED_HOSTS; remove that destination.`);
     }
-    if (/\bsecrets\.PROJECT_SYNC_TOKEN\b/.test(job.text) && !bindsProjectSync(job)) {
+    if (referencesProjectSyncToken(job.text) && !bindsProjectSync(job)) {
       add("secret-without-environment", `Job ${quoteDiagnostic(job.key)} references secrets.PROJECT_SYNC_TOKEN; declare environment: project-sync on that job.`);
     }
   }
