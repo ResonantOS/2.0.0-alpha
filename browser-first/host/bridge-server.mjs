@@ -263,6 +263,16 @@ function writeHtml(response, status, html, contentType, extensionOrigin, request
     "Access-Control-Allow-Headers": `Content-Type, ${bridgeTokenHeaderName}, ${bridgeCapabilityHeaderName}, ${bridgeCapabilityBootstrapHeaderName}`,
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
     "Vary": "Origin",
+    // The dev panel is fully self-contained: one inline <style> and one inline
+    // <script> that only reads the server-injected __ADDONS_DATA__ and builds
+    // DOM nodes. Lock the document to exactly that so a manifest field that
+    // somehow reached markup could not load or execute anything else.
+    //   script-src 'unsafe-inline'  -> the single inline data/render script.
+    //   style-src 'unsafe-inline'   -> the single inline <style> block.
+    //   everything else 'none'      -> no external scripts, images, frames,
+    //                                  fetches, or navigation.
+    "Content-Security-Policy":
+      "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; font-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
   };
   if (allowOrigin) {
     headers["Access-Control-Allow-Origin"] = allowOrigin;

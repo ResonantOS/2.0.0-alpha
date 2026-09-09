@@ -114,12 +114,22 @@ function buildPanelPayload(enumerate) {
   };
 }
 
-// Embed `data` into the static template as an inert JSON literal. The data is
-// serialised with `</script>` neutralised (as `<\/script>`) so a crafted
-// manifest field can never break out of the <script> block into markup.
+// Embed `data` into the static template as an inert JSON literal, injected
+// into an executable <script> block. Three classes of character are
+// neutralised so a crafted manifest field can never escape the data context:
+//   - `<` is escaped so a literal `</script>` can never close the block into
+//     markup;
+//   - U+2028 and U+2029 are escaped because, although JSON treats them as
+//     ordinary string characters, a JavaScript parser reads them as line
+//     terminators — a raw one inside the literal would corrupt the source.
+// The escapes use the explicit \uXXXX regex form so the source never carries a
+// raw U+2028/U+2029 (which would itself act as a line terminator).
 function renderPanelHtml(data) {
   const template = loadPanelTemplate();
-  const json = JSON.stringify(data).replace(/</g, "\\u003c");
+  const json = JSON.stringify(data)
+    .replace(/</g, "\\u003c")
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
   return template.replace(INJECT_TOKEN, json);
 }
 
