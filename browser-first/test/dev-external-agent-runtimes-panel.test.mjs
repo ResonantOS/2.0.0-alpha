@@ -173,6 +173,26 @@ test("JSON route fails honestly on structurally invalid manifests without aborti
   );
 });
 
+test("JSON route tolerates nullish entries in capability and tool arrays", async () => {
+  // Partially-formed arrays (valid JSON, nullish members) must neither crash
+  // the listing nor leak into the card fields.
+  const ragged = {
+    id: "addon.ragged",
+    name: "Ragged",
+    requestedCapabilities: [null, { capability: "providers" }, {}],
+    tools: [null, { name: "ragged.tool" }, {}],
+  };
+  await withAddonsDir({ "ragged.json": JSON.stringify(ragged) }, async (root) => {
+    const { devPanelRoutes } = createDevExternalAgentRuntimesPanelService({ repoRoot: root });
+    const jsonRoute = devPanelRoutes.find((route) => route.path === "/dev/external-agent-runtimes");
+    const result = await jsonRoute.handler({}, {});
+    const entry = result.addons.find((addon) => addon.fileName === "ragged.json");
+    assert.equal(entry.error, undefined, "ragged arrays are valid manifests, not errors");
+    assert.deepEqual(entry.tools, ["ragged.tool"], "nullish tool entries are filtered");
+    assert.equal(entry.hasTrigger, false, "nullish capability entries grant nothing");
+  });
+});
+
 test("panel omits unknown and sensitive manifest fields (data minimization)", async () => {
   // Token-shaped value assembled at runtime from individually harmless
   // fragments so no committed line carries a scanner-matching credential
@@ -307,4 +327,39 @@ test("HTML route neutralises markup-breakout sequences in manifest fields", asyn
       assert.ok(!result.__html.includes("x</script><script>"), "injected payload must escape <");
     },
   );
+});
+
+test("panel module surface is read-only by construction (import pin)", async () => {
+  // The module's import list is the complete statement of its capabilities:
+  // no subprocess, no network, no environment, no credential/grants surface.
+  // Combined with the no-writes snapshot test above, this pins the panel as
+  // observational: if a future change needs any new capability, this fails first.
+  const source = await readFile(new URL("../host/dev-external-agent-runtimes-panel.mjs", import.meta.url), "utf8");
+  const imports = [...source.matchAll(/^import .* from "([^"]+)";$/gm)].map((match) => match[1]);
+  assert.deepEqual(imports.sort(), ["node:fs", "node:fs/promises", "node:path", "node:url"]);
+  assert.ok(!source.includes("process.env"), "the panel must not read the environment");
+  assert.ok(!source.includes("child_process"), "the panel must not spawn");
+});
+
+test("enumeration reads only <repoRoot>/examples/addons — sibling fixtures are invisible", async () => {
+  await withAddonsDir({ "real.json": JSON.stringify(memoryManifest) }, async (root) => {
+    // A decoy manifest tree NEXT TO the fixture root: a handler that read
+    // outside repoRoot (cwd, home dirs, absolute paths) could see it.
+    const sibling = await mkdtemp(path.join(os.tmpdir(), "resonantos-dev-panel-decoy-"));
+    try {
+      const decoyAddons = path.join(sibling, "examples", "addons");
+      await mkdir(decoyAddons, { recursive: true });
+      await writeFile(path.join(decoyAddons, "decoy.json"), JSON.stringify(deepseekManifest));
+      const { devPanelRoutes } = createDevExternalAgentRuntimesPanelService({ repoRoot: root });
+      const jsonRoute = devPanelRoutes.find((route) => route.path === "/dev/external-agent-runtimes");
+      const result = await jsonRoute.handler({}, {});
+      assert.deepEqual(
+        result.addons.map((addon) => addon.fileName),
+        ["real.json"],
+        "reads are confined to the supplied repository root",
+      );
+    } finally {
+      await rm(sibling, { recursive: true, force: true });
+    }
+  });
 });

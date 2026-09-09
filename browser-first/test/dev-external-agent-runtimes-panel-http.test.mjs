@@ -16,11 +16,16 @@
 //   8. A loopback / RFC1918 source address does not bypass authentication.
 //   9. A path suffix does not match the exact route keys (404).
 //  10. A disallowed origin receives no Access-Control-Allow-Origin header
-//      (never a wildcard `*`).
+//      (never a wildcard `*`); an allowed origin receives it on both routes.
 //  11. The HTML response contains no token or sensitive field.
-//  12. Malicious add-on fields cannot break out of the serialized data block.
+//  12. Malicious add-on fields cannot break out of the serialized data block,
+//      and U+2028/U+2029 round-trip through it unchanged.
 //  13. The routes are development-only: absent unless registered, and fail
 //      closed (404 default-deny) when not.
+//  14. A malformed capability token is denied (403).
+//  15. An expired (but correctly signed) capability token is denied (403).
+//  16. RFC1918 source addresses do not bypass authentication (request
+//      injection — no public bind required).
 //
 // All fixtures are in-process and deterministic: no external credentials, no
 // network services, ephemeral ports only.
@@ -31,7 +36,8 @@ import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { startBridgeServer } from "../host/bridge-server.mjs";
+import { mintCallerAttributedToken } from "../host/bridge-attributed-token.mjs";
+import { createBridgeRequestHandler, startBridgeServer } from "../host/bridge-server.mjs";
 import { createBridgeGrantsStore } from "../host/bridge-grants-store.mjs";
 import { createBridgeTokenKey } from "../host/bridge-token-key.mjs";
 import { createDevExternalAgentRuntimesPanelService } from "../host/dev-external-agent-runtimes-panel.mjs";
@@ -100,6 +106,7 @@ async function startPanelBridge({ routes } = {}) {
     server,
     repoRoot,
     grantsStore,
+    tokenKey,
     devToken,
     bridgeAudit,
     base: `http://127.0.0.1:${server.address().port}`,
@@ -117,6 +124,30 @@ async function get(ctx, path, headers = {}) {
 async function close(ctx) {
   await new Promise((resolve) => ctx.server.close(resolve));
   await rm(ctx.repoRoot, { recursive: true, force: true });
+}
+
+// Drive createBridgeRequestHandler directly with a fabricated socket address —
+// the only way to exercise non-loopback source addresses without binding a
+// public interface. The handler reads method/url/headers/socket.remoteAddress;
+// GET requests never touch the body stream. allowedCidrs is [] (no IP
+// allowlist configured), so any denial below is an auth decision, never an
+// address decision.
+function injectRequest(handler, { url, headers, remoteAddress }) {
+  const request = { method: "GET", url, headers, socket: { remoteAddress } };
+  return new Promise((resolve, reject) => {
+    const response = {
+      status: 0,
+      headers: {},
+      writeHead(status, responseHeaders) {
+        this.status = status;
+        this.headers = responseHeaders ?? {};
+      },
+      end(body) {
+        resolve({ status: this.status, headers: this.headers, text: String(body ?? "") });
+      },
+    };
+    Promise.resolve(handler(request, response)).catch(reject);
+  });
 }
 
 function withPanelRoutes(ctx) {
@@ -169,6 +200,56 @@ test("wrong capability is denied (403)", async () => {
     // caller.dev is caller-bound; the static token is not bound to it, so the
     // verifier path denies. (Also proves a wrong token value fails.)
     assert.equal(res.status, 403);
+  } finally {
+    await close(ctx);
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("malformed capability token is denied (403)", async () => {
+  const repoRoot = await makeRepoRoot();
+  const ctx = await startPanelBridge({
+    routes: createDevExternalAgentRuntimesPanelService({ repoRoot }).devPanelRoutes,
+  });
+  try {
+    // A garbage token value presented for a caller that DOES hold a grant:
+    // the live verifier must reject it (bad signature), never fall back to
+    // the caller's known-good snapshot entry.
+    const res = await get(ctx, JSON_PATH, {
+      [HEADER_BRIDGE]: BRIDGE_TOKEN,
+      [HEADER_CAPABILITY]: "not-a-minted-token",
+      [HEADER_CALLER]: "caller.dev",
+    });
+    assert.equal(res.status, 403);
+  } finally {
+    await close(ctx);
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("expired capability token is denied even though its HMAC checks out (403)", async () => {
+  const repoRoot = await makeRepoRoot();
+  const ctx = await startPanelBridge({
+    routes: createDevExternalAgentRuntimesPanelService({ repoRoot }).devPanelRoutes,
+  });
+  try {
+    // Mint a token for the same caller+capability with the bridge's own key
+    // but an expiresAt already in the past (now-injection — deterministic, no
+    // clock waiting). Signature and caller binding are valid; expiry alone
+    // must deny at the live verifier.
+    const expired = mintCallerAttributedToken({
+      callerId: "caller.dev",
+      capability: "addon-runtime-read",
+      tokenKey: ctx.tokenKey,
+      expiresInMs: 1_000,
+      now: Date.now() - 60_000,
+    });
+    const res = await get(ctx, JSON_PATH, {
+      [HEADER_BRIDGE]: BRIDGE_TOKEN,
+      [HEADER_CAPABILITY]: expired,
+      [HEADER_CALLER]: "caller.dev",
+    });
+    assert.equal(res.status, 403, "an expired grant must be denied by the live verifier");
   } finally {
     await close(ctx);
     await rm(repoRoot, { recursive: true, force: true });
@@ -303,6 +384,41 @@ test("loopback / RFC1918 source address does not bypass authentication", async (
   }
 });
 
+test("RFC1918 source addresses do not bypass authentication (request injection)", async () => {
+  const repoRoot = await makeRepoRoot();
+  try {
+    const tokenKey = createBridgeTokenKey();
+    const grantsStore = createBridgeGrantsStore({ tokenKey });
+    grantsStore.mintGrant("caller.dev", "addon-runtime-read");
+    const routes = createDevExternalAgentRuntimesPanelService({ repoRoot }).devPanelRoutes;
+    const handler = createBridgeRequestHandler({
+      bridgeToken: BRIDGE_TOKEN,
+      bridgeCapabilityTokens: { "addon-runtime-read": "panel-static-runtime-read-token" },
+      perCallerGrants: grantsStore.snapshot(),
+      tokenKey,
+      callerGrantVerifier: grantsStore.verifyCallerGrant.bind(grantsStore),
+      capabilityBootstrapToken: "panel-bootstrap-token",
+      routes,
+      extensionOrigin: "chrome-extension://panel-test",
+      allowedCidrs: [],
+    });
+    // 10/8, 172.16/12, 192.168/16 (and the IPv6-mapped form): the historical
+    // #331 bypass ranges. None may satisfy the bridge token or capability.
+    for (const remoteAddress of ["10.11.12.13", "172.16.254.1", "192.168.1.50", "::ffff:192.168.1.50"]) {
+      const noToken = await injectRequest(handler, { url: JSON_PATH, headers: {}, remoteAddress });
+      assert.equal(noToken.status, 401, `${remoteAddress} must not bypass the bridge token`);
+      const bridgeOnly = await injectRequest(handler, {
+        url: JSON_PATH,
+        headers: { [HEADER_BRIDGE]: BRIDGE_TOKEN },
+        remoteAddress,
+      });
+      assert.equal(bridgeOnly.status, 403, `${remoteAddress} must not bypass the capability token`);
+    }
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Exact-path matching: suffix / traversal / encoded variants rejected (case 9)
 // ---------------------------------------------------------------------------
@@ -361,6 +477,32 @@ test("disallowed origin receives no Access-Control-Allow-Origin (never a wildcar
     const acao = res.headers.get("access-control-allow-origin");
     assert.notEqual(acao, "*", "never emit a wildcard origin");
     assert.notEqual(acao, "https://attacker.example", "never echo a disallowed origin");
+  } finally {
+    await close(ctx);
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("allowed origin receives Access-Control-Allow-Origin on both panel routes", async () => {
+  const repoRoot = await makeRepoRoot();
+  const ctx = await startPanelBridge({
+    routes: createDevExternalAgentRuntimesPanelService({ repoRoot }).devPanelRoutes,
+  });
+  try {
+    const headers = {
+      [HEADER_BRIDGE]: BRIDGE_TOKEN,
+      [HEADER_CAPABILITY]: ctx.devToken,
+      [HEADER_CALLER]: "caller.dev",
+      Origin: "chrome-extension://panel-test",
+    };
+    // writeJson and writeHtml share pickAllowedOrigin: the configured
+    // extension origin is echoed back on both the JSON and the HTML route.
+    const jsonRes = await get(ctx, JSON_PATH, headers);
+    assert.equal(jsonRes.status, 200);
+    assert.equal(jsonRes.headers.get("access-control-allow-origin"), "chrome-extension://panel-test");
+    const htmlRes = await get(ctx, HTML_PATH, headers);
+    assert.equal(htmlRes.status, 200);
+    assert.equal(htmlRes.headers.get("access-control-allow-origin"), "chrome-extension://panel-test");
   } finally {
     await close(ctx);
     await rm(repoRoot, { recursive: true, force: true });
@@ -431,6 +573,9 @@ test("malicious add-on fields cannot break out of the serialized data block", as
     const evil = parsed.addons.find((addon) => addon.fileName === "evil.json");
     assert.ok(evil, "the evil manifest must be enumerated");
     assert.match(evil.id, /evil/, "the manifest id is carried through as data");
+    // U+2028/U+2029 are legal JSON string characters inside an inert
+    // application/json block: they must round-trip byte-for-byte as data.
+    assert.equal(evil.name, "evil\u2028name\u2029", "U+2028/U+2029 must round-trip through the data block unchanged");
   } finally {
     await close(ctx);
     await rm(repoRoot, { recursive: true, force: true });
