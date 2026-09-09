@@ -264,7 +264,7 @@ function writeHtml(response, status, html, contentType, extensionOrigin, request
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
     "Vary": "Origin",
     // The dev panel is fully self-contained: one inline <style> and one inline
-    // <script> that only reads the server-injected __ADDONS_DATA__ and builds
+    // <script> that only reads the server-injected __EXTERNAL_AGENT_RUNTIMES_DATA__ and builds
     // DOM nodes. Lock the document to exactly that so a manifest field that
     // somehow reached markup could not load or execute anything else.
     //   script-src 'unsafe-inline'  -> the single inline data/render script.
