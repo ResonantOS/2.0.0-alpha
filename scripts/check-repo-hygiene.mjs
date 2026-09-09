@@ -11,7 +11,7 @@ import { isIP } from "node:net";
 // Adding a workflow is a deliberate reviewed change: update this allowlist,
 // its tests, and docs/release/ALPHA_DISTRIBUTION.md together.
 export const WORKFLOW_ALLOWLIST = Object.freeze([
-  "agent-control-live.yml", "alpha-build.yml", "project-issue-sync.yml", "security.yml",
+  "agent-control-live.yml", "alpha-build.yml", "project-issue-sync.yml", "security-drift.yml", "security.yml",
 ]);
 export const WORKFLOW_ALLOWED_HOSTS = Object.freeze([
   "github.com", "api.github.com", "uploads.github.com", "objects.githubusercontent.com",

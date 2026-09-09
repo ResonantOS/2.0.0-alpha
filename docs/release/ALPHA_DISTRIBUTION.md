@@ -97,7 +97,7 @@ workflow rules as part of `verify:alpha`:
 
 1. Every file under `.github/workflows/` must be listed in the exported
    `WORKFLOW_ALLOWLIST`: `agent-control-live.yml`, `alpha-build.yml`,
-   `project-issue-sync.yml`, and `security.yml`.
+   `project-issue-sync.yml`, `security-drift.yml`, and `security.yml`.
 2. A secret-bearing `run:` block must not send secrets to an IP literal or a
    host outside `WORKFLOW_ALLOWED_HOSTS`. The check also follows secret values
    assigned through `env:` and referenced by a run in the same job. GitHub
@@ -123,6 +123,39 @@ filenames in secret-bearing network commands. Review remains necessary.
 During token rotation, until a maintainer re-creates `PROJECT_SYNC_TOKEN` as a
 `project-sync` environment secret, the workflow's `HAS_PROJECT_SYNC_TOKEN` guard
 sees it as absent and synchronization no-ops. This is intended during rotation.
+
+### Periodic dev-branch drift check
+
+`security-drift.yml` runs every six hours and through `workflow_dispatch`, using
+only `GITHUB_TOKEN` with contents/actions read permissions. It runs
+`node scripts/default-branch-drift.mjs` without installing dependencies. The
+script reads `GITHUB_REPOSITORY` (default `ResonantOS/2.0.0-alpha`) and checks:
+
+- Seven days of `dev` commits for non-merge commits with no associated merged PR.
+- Current `.github/workflows/` paths on `dev` against `WORKFLOW_ALLOWLIST`.
+- `dev` runs concluded `action_required`, or queued/waiting for over one hour.
+  Run `updated_at` (falling back to `created_at`) approximates status age; GitHub
+  does not expose an exact transition timestamp in the run object.
+- Effective rules from `/repos/{owner}/{repo}/rules/branches/dev` for pull
+  requests, non-fast-forward updates, deletion, and required status checks
+  including `Build Chrome extension alpha`. A ruleset inventory entry with an
+  empty branch include list is not evidence that `dev` is protected.
+
+Findings or unavailable checks fail the job and name the affected checks in the
+log. HTTP errors (including 403/404), malformed responses, and pagination limits
+cannot produce an all-clear. Commit/rule/PR/run queries read up to ten pages of
+100 entries; a reached limit is reported as unavailable. The contents endpoint's
+1,000-entry limit is also treated as incomplete. PR association lookup may require
+`pull-requests: read`, which this workflow deliberately does not request; a denied
+lookup fails visibly. The commit window is a heuristic, not a push audit log,
+and existing workflow content changes are covered by the separate policy guard.
+
+GitHub schedules run only from the repository's default branch, so this workflow
+must be present there to become active. Scheduled notifications go to the user
+who last changed the cron syntax, subject to notification settings; owner email
+delivery is not guaranteed. See the
+[GitHub schedule documentation](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule).
+The workflow itself supplies the failed-job alert; no external message is sent.
 
 ## Secret And State Boundary
 
