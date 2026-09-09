@@ -146,10 +146,11 @@ test("HTML route serves the panel with server-injected data and no external fetc
 
       assert.equal(result.contentType, "text/html; charset=utf-8");
       assert.equal(typeof result.__html, "string");
-      // The manifests are injected server-side (no client-side fetch required).
+      // The manifests are injected server-side (no client-side fetch required)
+      // into an inert application/json data block.
       assert.match(result.__html, /addon\.deepseek-harness/);
-      assert.match(result.__html, /__ADDONS_DATA__/);
-      // The injected JSON must not be able to break out of the <script> block.
+      assert.match(result.__html, /<script type="application\/json" id="panel-data">/);
+      // The injection token is fully replaced (no leftover sentinel).
       assert.doesNotMatch(result.__html, /__EXTERNAL_AGENT_RUNTIMES_DATA__/);
     },
   );

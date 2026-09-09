@@ -26,26 +26,37 @@
   <div class="meta" id="meta"></div>
   <div id="root"></div>
 
-  <script>
-    // Server-injected by dev-external-agent-runtimes-panel.mjs; the token is
-    // replaced with an inert JSON literal at request time.
-    window.__ADDONS_DATA__ = __EXTERNAL_AGENT_RUNTIMES_DATA__;
+  <!-- Server-injected by dev-external-agent-runtimes-panel.mjs: the token is
+       replaced with an inert JSON literal at request time. type="application/json"
+       means the browser never executes this block — it is inert data read via
+       textContent + JSON.parse, so no JavaScript parsing of the payload occurs
+       and no executable-context escaping (U+2028/U+2029) is required. -->
+  <script type="application/json" id="panel-data">__EXTERNAL_AGENT_RUNTIMES_DATA__</script>
 
+  <script>
     (function () {
       var root = document.getElementById("root");
       var meta = document.getElementById("meta");
-      var data = window.__ADDONS_DATA__ || {};
-
-      function esc(value) {
-        return String(value == null ? "" : value).replace(/[<>&"]/g, function (c) {
-          return { "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c];
-        });
+      var data = {};
+      try {
+        data = JSON.parse(document.getElementById("panel-data").textContent) || {};
+      } catch (error) {
+        data = { error: "panel data failed to parse: " + (error && error.message ? error.message : String(error)) };
       }
 
+      // Build a label/value row with DOM APIs only — no innerHTML for untrusted
+      // values, so a manifest field can never inject markup.
       function row(label, value, className) {
         var div = document.createElement("div");
         div.className = "row";
-        div.innerHTML = '<span class="k">' + esc(label) + '</span><span class="v ' + (className || "") + '">' + esc(value) + "</span>";
+        var k = document.createElement("span");
+        k.className = "k";
+        k.textContent = label;
+        var v = document.createElement("span");
+        v.className = "v" + (className ? " " + className : "");
+        v.textContent = value == null ? "" : String(value);
+        div.appendChild(k);
+        div.appendChild(v);
         return div;
       }
 

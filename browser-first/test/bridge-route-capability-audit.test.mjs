@@ -155,7 +155,11 @@ async function withBridgeRoutes(callback) {
       addonDelegationRoutes: addon.addonDelegationRoutes,
       opencodeSessionRoutes: opencodeSession.opencodeSessionRoutes,
       extensionPrefsRoutes: prefs.extensionPrefsRoutes,
-      devPanelRoutes: devPanel.devPanelRoutes,
+      // Mirrors run-bridge-minimal: the launcher spreads `activeDevPanelRoutes`,
+      // which equals devPanelRoutes when the --dev-panel flag is on (the dev
+      // configuration this audit covers) and [] in production. The routes are
+      // still constructed here so their capability declarations are audited.
+      activeDevPanelRoutes: devPanel.devPanelRoutes,
     };
     const routes = Object.values(routeArrays).flat();
 

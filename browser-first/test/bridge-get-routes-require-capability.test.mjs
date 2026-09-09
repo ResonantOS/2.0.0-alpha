@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { createAddonDelegationHostService } from "../host/addon-delegation-host-service.mjs";
 import { createBrowserDiagnosticsHostService } from "../host/browser-diagnostics-host-service.mjs";
+import { createDevExternalAgentRuntimesPanelService } from "../host/dev-external-agent-runtimes-panel.mjs";
 import { createExtensionPrefsHostService } from "../host/extension-prefs-host-service.mjs";
 import { createMemoryHostService } from "../host/memory-host-service.mjs";
 import { createProviderHostService } from "../host/provider-host-service.mjs";
@@ -31,6 +32,8 @@ const protectedGetRoutes = [
   { route: "/memory/settings", capability: "memory-read", correctToken: memoryReadToken, wrongToken: bridgeDiagnosticsReadToken },
   { route: "/memory/wiki/health", capability: "memory-read", correctToken: memoryReadToken, wrongToken: bridgeDiagnosticsReadToken },
   { route: "/settings/extension-prefs", capability: "extension-prefs-read", correctToken: extensionPrefsReadToken, wrongToken: bridgeDiagnosticsReadToken },
+  { route: "/dev/external-agent-runtimes", capability: "addon-runtime-read", correctToken: addonRuntimeReadToken, wrongToken: bridgeDiagnosticsReadToken },
+  { route: "/dev/external-agent-runtimes/", capability: "addon-runtime-read", correctToken: addonRuntimeReadToken, wrongToken: bridgeDiagnosticsReadToken },
 ];
 
 const memoryHandlerNames = [
@@ -128,12 +131,16 @@ function createRoutes(root) {
     executeGoalRecord: async () => ({}),
   });
   const prefs = createExtensionPrefsHostService({ userRoot: () => root });
+  // The dev panel is constructed with the fixture repoRoot so its GET routes
+  // resolve and enumerate examples/addons under the temp dir.
+  const devPanel = createDevExternalAgentRuntimesPanelService({ repoRoot: root });
   return [
     ...diagnostics.browserDiagnosticsRoutes,
     ...provider.providerBridgeRoutes,
     ...memory.memoryBridgeRoutes,
     ...addon.addonDelegationRoutes,
     ...prefs.extensionPrefsRoutes,
+    ...devPanel.devPanelRoutes,
   ];
 }
 

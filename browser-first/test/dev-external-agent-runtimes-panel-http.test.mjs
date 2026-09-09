@@ -57,8 +57,8 @@ const GOOD_MANIFEST = {
 };
 const EVIL_MANIFEST = {
   id: "evil</script><script>window.__pwned = true</script>",
-  // Name carries a raw U+2028 line separator and U+2029 paragraph separator to
-  // prove they are escaped (they would otherwise corrupt the injected script).
+  // Name carries U+2028/U+2029 separators: legal JSON string characters that
+  // must survive the inert application/json block unchanged as data.
   name: "evil\u2028name\u2029",
   runtimeType: "agent-addon",
 };
@@ -419,16 +419,18 @@ test("malicious add-on fields cannot break out of the serialized data block", as
     const res = await get(ctx, HTML_PATH, headers);
     assert.equal(res.status, 200);
 
-    // The evil manifest's raw closing tag must never reach the client.
+    // The evil manifest's raw closing tag must never reach the client: the only
+    // escaping required for an inert application/json block is `<` -> <.
     assert.ok(!res.text.includes("evil</script>"), "raw </script> from a manifest must be escaped");
-    // No raw U+2028/U+2029 line separators survive into the script block.
-    assert.ok(!res.text.includes("\u2028"), "U+2028 must be escaped");
-    assert.ok(!res.text.includes("\u2029"), "U+2029 must be escaped");
-    // The injected literal must still be valid JavaScript (parses cleanly).
-    const m = res.text.match(/window\.__ADDONS_DATA__ = ([\s\S]*?);\n/);
-    assert.ok(m, "the injected data literal must be present");
-    assert.doesNotThrow(() => new Function(`var window={};window.__ADDONS_DATA__ = ${m[1]};`),
-      "the injected data block must parse as JavaScript");
+    // The data lives in an inert application/json block (never executed), so it
+    // must be present and parse as JSON — not as JavaScript. U+2028/U+2029 are
+    // legal JSON string characters here and need no escaping.
+    const m = res.text.match(/<script type="application\/json" id="panel-data">([\s\S]*?)<\/script>/);
+    assert.ok(m, "the inert application/json data block must be present");
+    const parsed = JSON.parse(m[1]);
+    const evil = parsed.addons.find((addon) => addon.fileName === "evil.json");
+    assert.ok(evil, "the evil manifest must be enumerated");
+    assert.match(evil.id, /evil/, "the manifest id is carried through as data");
   } finally {
     await close(ctx);
     await rm(repoRoot, { recursive: true, force: true });

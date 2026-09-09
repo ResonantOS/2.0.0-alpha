@@ -213,12 +213,20 @@ const { addonDelegationRoutes } = createAddonDelegationHostService(addonDelegati
   repoRoot,
 });
 
-// Dev-only external-agent-runtimes panel (manifest listing). Registered only
-// here — the minimal/development launcher — never by the production launcher.
+// Dev-only external-agent-runtimes panel (manifest listing). This launcher is
+// the documented production command (`npm run browser-first:bridge` — see
+// AGENTS.md, INSTALL.md, README.md), so it is NOT inherently development-only.
+// The panel routes are therefore gated behind an explicit opt-in flag:
+//   node browser-first/host/run-bridge-minimal.mjs --dev-panel
+// Without the flag the routes are absent and the dev path fails closed to the
+// bridge's default-deny 404 — production/release mode exposes nothing. The
+// flag is off by default and no environment variable enables it implicitly.
 // `repoRoot` is computed above and passed directly; the panel enumerates
 // examples/addons/*.json from it. Both routes keep the bridge's normal
 // bridge-token + capability enforcement.
+const devPanelEnabled = args.get("dev-panel") === "true";
 const { devPanelRoutes } = createDevExternalAgentRuntimesPanelService({ repoRoot });
+const activeDevPanelRoutes = devPanelEnabled ? devPanelRoutes : [];
 
 // Live OpenCode session: the bridge starts (reuses) `opencode serve` on an
 // ephemeral loopback port with a bridge-minted credential and proxies
@@ -404,7 +412,7 @@ const bridgeRoutes = [
   ...addonDelegationRoutes,
   ...opencodeSessionRoutes,
   ...extensionPrefsRoutes,
-  ...devPanelRoutes,
+  ...activeDevPanelRoutes,
 ];
 
 const bridgeToken = args.get("bridge-token") ?? process.env.RESONANTOS_BROWSER_FIRST_BRIDGE_TOKEN ?? createBridgeToken();
