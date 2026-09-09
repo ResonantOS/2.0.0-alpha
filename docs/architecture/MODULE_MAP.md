@@ -45,6 +45,7 @@ operations cross the bridge.
 | `addon-delegation-host-service.mjs` and `addon-delegation-service.mjs` | Optional add-on status, bounded local runtime control, delegation records, artifacts, and goals |
 | `browser-diagnostics-host-service.mjs` | Redacted system/workspace diagnostics and capability-gated report/download actions |
 | `extension-prefs-host-service.mjs` | External user-state persistence for extension preferences |
+| `dev-external-agent-runtimes-panel.mjs` and `browser-first/dev/external-agent-runtimes-panel.html` | Opt-in (`--dev-panel`) development-only panel enumerating `examples/addons/*.json`; JSON and HTML routes behind bridge authentication and `addon-runtime-read`; absent without the flag |
 | `browser-first-*-utils.mjs` and focused policy modules | Shared pure helpers and narrow host implementation details |
 
 The route registry is composed from named services. New privileged behavior

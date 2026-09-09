@@ -41,6 +41,53 @@ Keep the default loopback host for normal Alpha development. Network exposure
 changes the security boundary and requires explicit allowlists, threat review,
 and dedicated validation.
 
+## Dev-only external-agent-runtimes panel
+
+The bridge can serve an opt-in development panel that enumerates
+`examples/addons/*.json` and renders one status card per manifest, flagging
+manifests that request the external-agent-runtime trigger capabilities
+(`providers` + `agent-delegation`). It answers "what do the add-on manifests
+look like to the running bridge?" while working on the add-on SDK. It is not a
+user-facing or production surface: the routes exist only when the bridge is
+started with the explicit `--dev-panel` flag, and no environment variable
+enables them implicitly.
+
+```bash
+npm run browser-first:bridge -- --dev-panel
+```
+
+Without the flag the routes are absent and the `/dev/` path fails closed to
+the bridge's default-deny 404.
+
+Two routes are registered:
+
+- `GET /dev/external-agent-runtimes` returns the manifest listing as JSON.
+- `GET /dev/external-agent-runtimes/` serves the
+  [panel page](../dev/external-agent-runtimes-panel.html) with the same
+  listing injected as inert JSON data.
+
+Both routes keep the bridge's normal authentication: the generated bridge
+token plus a caller-bound `addon-runtime-read` capability token, sent as the
+`X-ResonantOS-Bridge-Token` and `X-ResonantOS-Bridge-Capability-Token`
+headers. Loopback or private-network source addresses do not bypass
+authentication, so direct unauthenticated browser navigation is not supported;
+use an HTTP client that sets the same headers the extension bridge client
+uses. Never place tokens in the URL or copy them into notes, issues, or pull
+requests.
+
+The panel is observational. It displays only whitelisted manifest fields —
+`id`, `name`, `version`, `runtimeType`, `service.entrypoint`, tool names, and
+the trigger-capability flag. Unknown or extension manifest fields (including
+credentials, prompts, and paths) never pass through, and the panel does not
+launch providers, mint grants, or write files.
+
+Ownership is recorded in
+[Module Ownership](../../docs/architecture/MODULE-OWNERSHIP.md). Behavior is
+pinned by
+[dev-external-agent-runtimes-panel.test.mjs](../test/dev-external-agent-runtimes-panel.test.mjs)
+and
+[dev-external-agent-runtimes-panel-http.test.mjs](../test/dev-external-agent-runtimes-panel-http.test.mjs).
+
 ## Security Contract
 
 - Every protected route requires the generated bridge token.
