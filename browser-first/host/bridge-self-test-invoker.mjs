@@ -9,6 +9,10 @@ export function createBridgeRouteSelfTestInvoker({
   bridgeCapabilityTokens = {},
   capabilityBootstrapToken,
   routes = [],
+  perCallerGrants,
+  tokenKey,
+  callerGrantVerifier,
+  auditSink,
 } = {}) {
   return async function invokeBridgeRouteForSelfTest({
     method = "POST",
@@ -33,6 +37,10 @@ export function createBridgeRouteSelfTestInvoker({
       bridgeCapabilityTokens,
       capabilityBootstrapToken,
       routes,
+      perCallerGrants,
+      tokenKey,
+      callerGrantVerifier,
+      auditSink,
     });
   };
 }

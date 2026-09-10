@@ -34,7 +34,11 @@
     "verify:alpha": "node scripts/verify-alpha.mjs",
     "pre-release:scan": "bash scripts/pre-release-scan.sh",
     "browser-first:audit-scope": "node scripts/browser-first-release-scope-audit.mjs",
-    "browser-first:audit-scope:staged": "node scripts/browser-first-release-scope-audit.mjs --staged --strict"
+    "browser-first:audit-scope:staged": "node scripts/browser-first-release-scope-audit.mjs --staged --strict",
+    "test:external-agent-runtime": "node --test browser-first/test/external-agent-runtime-dispatcher.test.mjs",
+    "test:phase35": "node --test browser-first/test/bridge-attributed-token.test.mjs browser-first/test/bridge-grants-store.test.mjs browser-first/test/bridge-audit-ledger.test.mjs browser-first/test/bridge-denied-audit.test.mjs browser-first/test/bridge-caller-attributed-integration.test.mjs",
+    "deepseek-harness:smoke": "npx tsx scripts/run-deepseek-smoke.mjs",
+    "cordis-stub:start": "node examples/fixtures/cordis-stub.mjs"
   },
   "engines": {
     "node": ">=22.13.0"

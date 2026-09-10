@@ -5,6 +5,7 @@ import { existsSync, realpathSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { createHash } from "node:crypto";
 import {
   createBridgeToken,
   getBridgeHost,
@@ -33,6 +34,9 @@ import {
 import { runBrowserFirstSelfTest } from "./browser-first-self-test-service.mjs";
 import { createAgentControlHostService } from "./agent-control-host-service.mjs";
 import { buildBridgeCapabilityTokens } from "./bridge-capability-tokens.mjs";
+import { createBridgeGrantsStore } from "./bridge-grants-store.mjs";
+import { createBridgeAuditLedger } from "./bridge-audit-ledger.mjs";
+import { createBridgeTokenKey } from "./bridge-token-key.mjs";
 import { createAddonDelegationHostService } from "./addon-delegation-host-service.mjs";
 import { createAddonDelegationService } from "./addon-delegation-service.mjs";
 import { createOpencodeHttpClient, ensureOpencodeServer } from "./opencode-client.mjs";
@@ -198,7 +202,15 @@ const addonDelegationService = createAddonDelegationService({
 });
 
 const { executeAddonsStatus } = addonDelegationService;
-const { addonDelegationRoutes } = createAddonDelegationHostService(addonDelegationService);
+const { addonDelegationRoutes } = createAddonDelegationHostService(addonDelegationService, {
+  // Dispatcher (ADR-040 §4) dependencies. The grants store and audit ledger
+  // are constructed below in the Phase 3.5 setup; resolve them lazily so the
+  // route registry can be built before those objects exist.
+  get grantsStore() { return minimalLauncherCallerGrants; },
+  get auditLedger() { return { record: (record) => bridgeAudit.sink(record) }; },
+  fetchImpl: globalThis.fetch,
+  repoRoot,
+});
 
 // Live OpenCode session: the bridge starts (reuses) `opencode serve` on an
 // ephemeral loopback port with a bridge-minted credential and proxies
@@ -392,11 +404,60 @@ const capabilityBootstrapToken = args.get("capability-bootstrap-token") ??
   createBridgeToken();
 const bridgeCapabilityTokens = buildBridgeCapabilityTokens({ args, mint: createBridgeToken });
 
+// Phase 3.5 (caller-attributed capability tokens). The minimal launcher
+// constructs an in-memory grants store and a JSONL audit ledger and passes
+// both to startBridgeServerWithFallback so that every successful capability-
+// scoped bridge request carries caller attribution through to the audit log.
+// Production launcher (resonantos-bridge-full.mjs) is not yet wired; that
+// lands in a follow-up commit.
+// Seed minimal-launcher demo callers for the bundled add-ons so any
+// immediate caller-attribution exercises against the minimal launcher
+// observe distinct audit records. Minting happens here so auditSink sees
+// only authorised requests, not mint events.
+const bridgeTokenKey = createBridgeTokenKey();
+// Phase 3.5 H3 allowlist: only known add-on callerIds may mint grants. The
+// list is hard-coded at the launcher level because it represents the set of
+// bundled add-ons this minimal launcher is willing to serve. The audit line
+// below records the allowlist at boot so a misconfigured launcher is
+// observable in the launcher log.
+const minimalLauncherCallerIds = ["hermes", "opencode", "resonant-context", "resonator"];
+const minimalLauncherCallerGrants = (() => {
+  const grants = createBridgeGrantsStore({
+    tokenKey: bridgeTokenKey,
+    callerIdAllowlist: minimalLauncherCallerIds,
+  });
+  grants.mintGrant("hermes", "provider-model-invoke");
+  grants.mintGrant("hermes", "agent-control-plan");
+  grants.mintGrant("opencode", "provider-model-invoke");
+  grants.mintGrant("resonant-context", "archive-read");
+  grants.mintGrant("resonator", "memory-source-manage");
+  return grants;
+})();
+const bridgeAuditFilePath = path.join(userRoot(), "BrowserFirst", "audit.jsonl");
+let bridgeAudit;
+try {
+  bridgeAudit = createBridgeAuditLedger({
+    filePath: bridgeAuditFilePath,
+    onError: (error) => console.error("[bridge-audit-ledger] write failed:", error?.message ?? error),
+  });
+} catch (error) {
+  // Fail-fast (H3): a misconfigured audit ledger must not allow the bridge
+  // to start. Otherwise the launcher silently loses its only observability
+  // surface for caller-attributed requests.
+  console.error("[run-bridge-minimal] failed to initialise audit ledger:", error?.message ?? error);
+  console.error("[run-bridge-minimal] filePath:", bridgeAuditFilePath);
+  process.exit(1);
+}
+
 const invokeBridgeRouteForSelfTest = createBridgeRouteSelfTestInvoker({
   bridgeToken,
   bridgeCapabilityTokens,
   capabilityBootstrapToken,
   routes: bridgeRoutes,
+  perCallerGrants: minimalLauncherCallerGrants.snapshot(),
+  tokenKey: bridgeTokenKey,
+  callerGrantVerifier: minimalLauncherCallerGrants.verifyCallerGrant.bind(minimalLauncherCallerGrants),
+  auditSink: bridgeAudit.sink,
 });
 
 const selfTestHandled = await runBrowserFirstSelfTest({
@@ -431,11 +492,14 @@ const bridgeInfo = await startBridgeServerWithFallback({
   bridgeToken,
   bridgeCapabilityTokens,
   capabilityBootstrapToken,
+  perCallerGrants: minimalLauncherCallerGrants.snapshot(),
+  tokenKey: bridgeTokenKey,
+  callerGrantVerifier: minimalLauncherCallerGrants.verifyCallerGrant.bind(minimalLauncherCallerGrants),
+  auditSink: bridgeAudit.sink,
   extensionOrigin: resonantExtensionOrigin,
   routes: bridgeRoutes,
   host: getBridgeHost(),
 });
-
 const activeBridgePort = bridgeInfo.actualPort;
 const bridgePublicUrl = getBridgePublicUrl(activeBridgePort);
 bridgePublicUrlHolder.value = bridgePublicUrl;
@@ -446,7 +510,23 @@ const bridgeConfigPath = await writeBridgeConfig({
   capabilityBootstrapToken,
   publicUrl: bridgePublicUrl,
 });
+// H3 startup log: caller count and grant count are observable at boot so a
+// misconfigured launcher doesn't silently ship with no add-ons authorised. We
+// also emit a SHA-256 fingerprint of the tokenKey (first 8 hex chars) so two
+// bridge processes can be told apart without leaking the key.
+const tokenKeyFingerprint = createHash("sha256")
+  .update(bridgeTokenKey)
+  .digest("hex")
+  .slice(0, 8);
 
+console.log(JSON.stringify({
+  event: "browser.first.caller_grants_ready",
+  callerCount: minimalLauncherCallerGrants.listCallers().length,
+  grantCount: minimalLauncherCallerGrants.listGrants().length,
+  callerIds: minimalLauncherCallerGrants.listCallers(),
+  tokenKeyFingerprint,
+  auditLedgerPath: bridgeAuditFilePath,
+}, null, 2));
 console.log(JSON.stringify({
   event: "browser.first.bridge_started",
   requestedPort: bridgeInfo.requestedPort,

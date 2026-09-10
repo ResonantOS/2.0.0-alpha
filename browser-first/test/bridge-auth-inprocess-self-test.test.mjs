@@ -3,6 +3,8 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import test from "node:test";
 
+import { createBridgeGrantsStore } from "../host/bridge-grants-store.mjs";
+import { createBridgeTokenKey } from "../host/bridge-token-key.mjs";
 import { createBridgeRouteSelfTestInvoker } from "../host/bridge-self-test-invoker.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -74,4 +76,42 @@ test("browser-first bridge auth passes in-process deterministic smoke test", asy
   assert.equal(result.wrongTokenStatus, 401);
   assert.equal(result.bridgeTokenOnlyStatus, 403);
   assert.equal(result.authorizedStatus, 200);
+});
+
+test("self-test invoker threads per-caller grant and audit config into the evaluator", async () => {
+  const bridgeToken = "invoker-thread-token";
+  const capabilityToken = "invoker-capability-token";
+  const tokenKey = createBridgeTokenKey();
+  const grants = createBridgeGrantsStore({ tokenKey });
+  const records = [];
+
+  const invokeBridgeRouteForSelfTest = createBridgeRouteSelfTestInvoker({
+    bridgeToken,
+    bridgeCapabilityTokens: { "bridge-diagnostics-read": capabilityToken },
+    capabilityBootstrapToken: "invoker-bootstrap-token",
+    routes: [
+      {
+        method: "POST",
+        path: "/invoker-threaded",
+        requiredCapability: "bridge-diagnostics-read",
+        handler: async () => ({ ok: true }),
+      },
+    ],
+    perCallerGrants: grants.snapshot(),
+    tokenKey,
+    callerGrantVerifier: grants.verifyCallerGrant.bind(grants),
+    auditSink: (record) => records.push(record),
+  });
+
+  const result = await invokeBridgeRouteForSelfTest({
+    method: "POST",
+    routePath: "/invoker-threaded",
+    body: {},
+    capabilityToken,
+  });
+
+  assert.equal(result.status, 200);
+  assert.equal(records.length, 1, "the reconciled audit sink must receive the authorized request");
+  assert.equal(records[0].reason, "authorized");
+  assert.equal(records[0].callerId, "__extension__", "self-test carries no caller-id, so attribution must be the safe fallback");
 });

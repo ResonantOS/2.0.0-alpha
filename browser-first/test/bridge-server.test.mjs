@@ -171,6 +171,183 @@ test("bridge refuses undeclared routes by default while preserving declared capa
   assert.equal(bootstrapOnly.status, 200);
   assert.equal(bootstrapOnly.payload.bootstrapped, true);
 });
+// Kernel of M0 Test B (Local Files): two distinct callers, overlapping but
+// distinct grants on the same capability, must be observably distinguishable
+// to the bridge — both at the route handler and in the audit log.
+test("bridge distinguishes two callers with overlapping grants (M0 Test B kernel)", async () => {
+  const bridgeToken = "general-test-token";
+  const alphaToken = "alpha-credential-token";
+  const betaToken = "beta-credential-token";
+  const routes = [
+    {
+      method: "POST",
+      path: "/providers/credentials",
+      requiredCapability: "provider-credential-write",
+      handler: async () => ({ saved: true }),
+    },
+  ];
+  const perCallerGrants = {
+    "alpha-caller": { "provider-credential-write": alphaToken },
+    "beta-caller": { "provider-credential-write": betaToken },
+  };
+  const auditRecords = [];
+  const auditSink = (record) => { auditRecords.push(record); };
+
+  // Beta caller requests write — they have the capability, but the audit log
+  // must record their caller identity, not just the capability.
+  const betaRequest = await evaluateBridgeRequestForSelfTest({
+    method: "POST",
+    url: "/providers/credentials",
+    headers: {
+      "X-ResonantOS-Bridge-Token": bridgeToken,
+      "X-ResonantOS-Bridge-Capability-Token": betaToken,
+      "X-ResonantOS-Bridge-Caller-Id": "beta-caller",
+    },
+    body: { providerId: "shared-minimax" },
+    bridgeToken,
+    bridgeCapabilityTokens: {},
+    perCallerGrants,
+    auditSink,
+    routes,
+  });
+  assert.equal(betaRequest.status, 200, "beta-caller has grant, must succeed");
+
+  // Alpha caller requests write — different grant, different token.
+  const alphaRequest = await evaluateBridgeRequestForSelfTest({
+    method: "POST",
+    url: "/providers/credentials",
+    headers: {
+      "X-ResonantOS-Bridge-Token": bridgeToken,
+      "X-ResonantOS-Bridge-Capability-Token": alphaToken,
+      "X-ResonantOS-Bridge-Caller-Id": "alpha-caller",
+    },
+    body: { providerId: "shared-minimax" },
+    bridgeToken,
+    bridgeCapabilityTokens: {},
+    perCallerGrants,
+    auditSink,
+    routes,
+  });
+  assert.equal(alphaRequest.status, 200, "alpha-caller has grant, must succeed");
+
+  // A wrong-but-same-shape token for a caller with no grant must be rejected
+  // — this is the kernel of M0 Test B's "denied unauthorized action".
+  const unattributedRequest = await evaluateBridgeRequestForSelfTest({
+    method: "POST",
+    url: "/providers/credentials",
+    headers: {
+      "X-ResonantOS-Bridge-Token": bridgeToken,
+      "X-ResonantOS-Bridge-Capability-Token": "rogue-token",
+    },
+    body: { providerId: "shared-minimax" },
+    bridgeToken,
+    bridgeCapabilityTokens: {},
+    perCallerGrants,
+    auditSink,
+    routes,
+  });
+  assert.equal(unattributedRequest.status, 403, "rogue token must be rejected");
+
+  // Audit log must carry distinct callerId for each authorised request.
+  const successful = auditRecords.filter((record) => record.status === 200);
+  assert.equal(successful.length, 2, "two successful requests recorded");
+  const callerIds = new Set(successful.map((record) => record.callerId));
+  assert.equal(callerIds.size, 2, "callerIds must be distinguishable in audit");
+  assert.ok(callerIds.has("alpha-caller"));
+  assert.ok(callerIds.has("beta-caller"));
+});
+
+// Hook-up A: the wired request handler (createBridgeRequestHandler) honours
+// perCallerGrants and auditSink when supplied, and rejects/forwards correctly
+// when they're absent. Production stays dormant until run-bridge-minimal (or
+// any future launcher) passes these — see hook-up B.
+test("createBridgeRequestHandler threads perCallerGrants and auditSink end-to-end", async () => {
+  const { createBridgeRequestHandler } = await import("../host/bridge-server.mjs");
+  const bridgeToken = "wired-bridge-token";
+  const perCallerGrants = {
+    "alpha-caller": { "provider-credential-write": "alpha-cred-token" },
+    "beta-caller": { "provider-credential-write": "beta-cred-token" },
+  };
+  const auditRecords = [];
+  const auditSink = (record) => { auditRecords.push(record); };
+  const routes = [
+    {
+      method: "GET",
+      path: "/providers/credentials/probe",
+      requiredCapability: "provider-credential-write",
+      handler: async () => ({ probed: true }),
+    },
+  ];
+  const handler = createBridgeRequestHandler({
+    bridgeToken,
+    bridgeCapabilityTokens: {},
+    perCallerGrants,
+    auditSink,
+    extensionOrigin: "chrome-extension://test",
+    routes,
+  });
+  function makeRequest(headers, body) {
+    return {
+    method: "GET",
+    url: "/providers/credentials/probe",
+    headers,
+    };
+  }
+
+  function makeResponse() {
+    const headers = {};
+    const response = {
+      statusCode: 0,
+      body: null,
+      _headers: headers,
+      writeHead(status, headerObj) {
+        response.statusCode = status;
+        Object.assign(headers, headerObj);
+      },
+      setHeader(name, value) { headers[name.toLowerCase()] = value; },
+      getHeader(name) { return headers[name.toLowerCase()]; },
+      end(payload) {
+        response.body = payload ? JSON.parse(payload) : null;
+      },
+    };
+    return response;
+  }
+
+  // alpha-caller with its token — must succeed.
+  const alphaResponse = makeResponse();
+  await handler(makeRequest({
+    "X-ResonantOS-Bridge-Token": bridgeToken,
+    "X-ResonantOS-Bridge-Capability-Token": "alpha-cred-token",
+    "X-ResonantOS-Bridge-Caller-Id": "alpha-caller",
+  }), alphaResponse);
+  assert.equal(alphaResponse.statusCode, 200, "alpha-caller request must 200");
+  assert.equal(alphaResponse.body.probed, true);
+
+  // beta-caller with its token — must succeed and record distinct caller.
+  const betaResponse = makeResponse();
+  await handler(makeRequest({
+    "X-ResonantOS-Bridge-Token": bridgeToken,
+    "X-ResonantOS-Bridge-Capability-Token": "beta-cred-token",
+    "X-ResonantOS-Bridge-Caller-Id": "beta-caller",
+  }), betaResponse);
+  assert.equal(betaResponse.statusCode, 200);
+
+  // Wrong token, valid caller header — must be rejected.
+  const wrongResponse = makeResponse();
+  await handler(makeRequest({
+    "X-ResonantOS-Bridge-Token": bridgeToken,
+    "X-ResonantOS-Bridge-Capability-Token": "rogue-token",
+    "X-ResonantOS-Bridge-Caller-Id": "alpha-caller",
+  }), wrongResponse);
+  assert.equal(wrongResponse.statusCode, 403);
+
+  const successes = auditRecords.filter((record) => record.status === 200);
+  assert.equal(successes.length, 2);
+  const callerIds = new Set(successes.map((record) => record.callerId));
+  assert.equal(callerIds.size, 2, "audit must record distinct callerIds");
+  assert.ok(callerIds.has("alpha-caller"));
+  assert.ok(callerIds.has("beta-caller"));
+});
 
 test("bridge client sends scoped capability headers without localhost binding", async () => {
   const bridgeToken = "general-test-token";
@@ -727,4 +904,127 @@ test("bridge auth self-test summary only reports ok when default-deny held", () 
   assert.equal(denyRegressed.ok, false, "a bridge-token-only 200 means an undeclared or unguarded route was served; the self-test must fail");
   const tokenRegressed = summarizeBridgeAuthSelfTest({ unauthorizedStatus: 200, wrongTokenStatus: 401, missingCapabilityStatus: 403, authorizedStatus: 200 });
   assert.equal(tokenRegressed.ok, false);
+});
+
+test("startBridgeServerWithFallback starts with an omitted dashboard proxy handler and keeps default-deny", async () => {
+  const { startBridgeServerWithFallback } = await import("../host/bridge-server.mjs");
+  const bridgeToken = "fallback-start-token";
+  const capabilityToken = "fallback-cap-token";
+  const result = await startBridgeServerWithFallback({
+    port: 0,
+    bridgeToken,
+    bridgeCapabilityTokens: { "bridge-diagnostics-read": capabilityToken },
+    extensionOrigin: "chrome-extension://test",
+    routes: [{
+      method: "GET",
+      path: "/status",
+      requiredCapability: "bridge-diagnostics-read",
+      handler: async () => ({ bridge: "fallback-ok" }),
+    }],
+  });
+  const base = `http://127.0.0.1:${result.actualPort}`;
+  try {
+    assert.ok(result.actualPort > 0, "omitting dashboardProxyHandler must not crash bridge startup");
+    const unauthorized = await fetch(`${base}/status`);
+    assert.equal(unauthorized.status, 401, "omitting the dashboard handler must not open an unauthenticated route");
+    const tokenOnly = await fetch(`${base}/status`, {
+      headers: { "X-ResonantOS-Bridge-Token": bridgeToken },
+    });
+    assert.equal(tokenOnly.status, 403, "a bridge token without the required capability must still be refused");
+    const authorized = await fetch(`${base}/status`, {
+      headers: {
+        "X-ResonantOS-Bridge-Token": bridgeToken,
+        "X-ResonantOS-Bridge-Capability-Token": capabilityToken,
+      },
+    });
+    assert.equal(authorized.status, 200, "a valid bridge token plus capability must authorize");
+  } finally {
+    await new Promise((resolve) => result.httpServer.close(resolve));
+  }
+});
+
+test("startBridgeServerWithFallback honors a supplied dashboard proxy handler", async () => {
+  const { startBridgeServerWithFallback } = await import("../host/bridge-server.mjs");
+  const result = await startBridgeServerWithFallback({
+    port: 0,
+    bridgeToken: "fallback-dashboard-token",
+    extensionOrigin: "chrome-extension://test",
+    dashboardProxyHandler: (request, response) => {
+      response.writeHead(200, { "content-type": "text/plain" });
+      response.end("supplied-dashboard-handler");
+    },
+    routes: [],
+  });
+  try {
+    const response = await fetch(`http://127.0.0.1:${result.actualPort}/hermes-dashboard/`);
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), "supplied-dashboard-handler", "the supplied dashboard handler must be wired through startBridgeServerWithFallback");
+  } finally {
+    await new Promise((resolve) => result.httpServer.close(resolve));
+  }
+});
+
+test("raw caller-id header for a known caller cannot be paired with a foreign caller's token", async () => {
+  const bridgeToken = "spoof-auth-token";
+  const perCallerGrants = {
+    "alpha-caller": { "provider-credential-write": "alpha-grant-token" },
+    "beta-caller": { "provider-credential-write": "beta-grant-token" },
+  };
+  const result = await evaluateBridgeRequestForSelfTest({
+    method: "POST",
+    url: "/providers/credentials",
+    headers: {
+      "X-ResonantOS-Bridge-Token": bridgeToken,
+      "X-ResonantOS-Bridge-Capability-Token": "beta-grant-token",
+      "X-ResonantOS-Bridge-Caller-Id": "alpha-caller",
+    },
+    body: { providerId: "shared-minimax" },
+    bridgeToken,
+    bridgeCapabilityTokens: {},
+    perCallerGrants,
+    routes: [
+      {
+        method: "POST",
+        path: "/providers/credentials",
+        requiredCapability: "provider-credential-write",
+        handler: async () => ({ saved: true }),
+      },
+    ],
+  });
+  assert.equal(result.status, 403, "a caller-id header must not re-bind a foreign token to another caller");
+});
+
+test("raw caller-id header for an unknown caller cannot spoof audit attribution", async () => {
+  const bridgeToken = "spoof-audit-token";
+  const staticToken = "spoof-static-token";
+  const perCallerGrants = {
+    "alpha-caller": { "provider-credential-write": "alpha-grant-token" },
+  };
+  const records = [];
+  const result = await evaluateBridgeRequestForSelfTest({
+    method: "POST",
+    url: "/providers/credentials",
+    headers: {
+      "X-ResonantOS-Bridge-Token": bridgeToken,
+      "X-ResonantOS-Bridge-Capability-Token": staticToken,
+      "X-ResonantOS-Bridge-Caller-Id": "rogue-caller",
+    },
+    body: { providerId: "shared-minimax" },
+    bridgeToken,
+    bridgeCapabilityTokens: { "provider-credential-write": staticToken },
+    perCallerGrants,
+    auditSink: (record) => records.push(record),
+    routes: [
+      {
+        method: "POST",
+        path: "/providers/credentials",
+        requiredCapability: "provider-credential-write",
+        handler: async () => ({ saved: true }),
+      },
+    ],
+  });
+  assert.equal(result.status, 200, "a valid static capability token must authorize");
+  assert.equal(records.length, 1);
+  assert.equal(records[0].reason, "authorized");
+  assert.equal(records[0].callerId, "__extension__", "an unverified caller-id header must not be written to the audit ledger");
 });

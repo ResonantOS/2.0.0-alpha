@@ -1,4 +1,23 @@
-export function createAddonDelegationHostService(handlers = {}) {
+// Intent citation: docs/architecture/ADR-040-provider-fabric-boundary-external-agent-runtimes.md#4-wire-format
+//
+// Add-on delegation host service: bridge-side route registry.
+//
+// This module returns a flat list of `addonDelegationRoutes` consumed by
+// `bridge-server.mjs`. Each route binds an HTTP method + path + a
+// required capability to a handler function the caller supplies via
+// `createAddonDelegationHostService(handlers)`.
+//
+// The newest route, `POST /external-agent-runtime/delegate`, is the
+// bridge-side surface for ADR-040 §4 wire-format dispatch. It expects
+// the request to include a per-caller grant in Phase 3.5's
+// `X-ResonantOS-Bridge-Caller-Id` header (handled by `bridge-server.mjs`
+// itself); the handler reads `callerId` from the request context and
+// passes it to `dispatchExternalAgentRuntime` along with the audit
+// ledger.
+
+import { dispatchExternalAgentRuntime } from "./external-agent-runtime-dispatcher.mjs";
+
+export function createAddonDelegationHostService(handlers = {}, deps = {}) {
   function required(name) {
     if (typeof handlers[name] !== "function") {
       throw new Error(`Add-on delegation host service missing handler: ${name}`);
@@ -181,6 +200,47 @@ export function createAddonDelegationHostService(handlers = {}) {
         path: "/goals",
         requiredCapability: "addon-record-write",
         handler: required("executeGoalRecord"),
+      },
+      // ADR-040 §4 wire-format dispatch (Phase 3.5-mediated). Caller
+      // MUST send X-ResonantOS-Bridge-Caller-Id (handled by
+      // bridge-server.mjs); the per-caller grant store is queried by
+      // `dispatchExternalAgentRuntime`. Audit is recorded to whatever
+      // ledger the host wires in.
+      {
+        method: "POST",
+        path: "/external-agent-runtime/delegate",
+        requiredCapability: "agent-delegation",
+        handler: async (payload, request) => {
+          const addonId = payload?.addonId;
+          const toolName = payload?.tool;
+          const toolPayload = payload?.payload ?? {};
+          if (typeof addonId !== "string" || typeof toolName !== "string") {
+            return { dispatched: false, reason: "malformed-request", detail: "addonId and tool are required" };
+          }
+          // Verified caller identity is attached to the request context by
+          // bridge-server.mjs (derived from the caller-bound token), never
+          // from the raw X-ResonantOS-Bridge-Caller-Id header. A static-token
+          // request carries no verified caller (fallback __extension__) and
+          // must fail closed here rather than relying on an incidental grant
+          // miss.
+          if (!request?.callerId || request.callerId === "__extension__") {
+            return { dispatched: false, reason: "caller-unverified", detail: "verified caller identity required for delegation" };
+          }
+          const result = await dispatchExternalAgentRuntime({
+            addonId,
+            toolName,
+            payload: toolPayload,
+            callerId: request.callerId,
+            perCallerGrants: deps.grantsStore,
+            auditLedger: deps.auditLedger,
+            fetchImpl: deps.fetchImpl,
+            repoRoot: deps.repoRoot,
+          });
+          if (result.outcome === "deny") {
+            return { dispatched: false, reason: result.reason, detail: result.detail };
+          }
+          return { dispatched: true, response: result.response };
+        },
       },
     ],
   };

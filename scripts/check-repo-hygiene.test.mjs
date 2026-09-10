@@ -481,6 +481,20 @@ test("classifyContent rejects random-looking provider values ending in env-crede
   );
 });
 
+test("classifyContent rejects the F1 fixture value when reassembled as a committed literal", () => {
+  // Reassembles the addon-sdk-testing F1 credential fixture's runtime
+  // value from its harmless fragments. The assembled literal must still
+  // be rejected by the scanner if it were ever committed.
+  const f1LeakedToken = ["sk", "test", "1234567890abcdef"].join("-");
+  assert.equal(
+    classifyContent(
+      "packages/addon-sdk-testing/src/failure-modes/f1-credential-exfiltration.ts",
+      `OPENAI_API_KEY=${f1LeakedToken}\n`,
+    )?.rule,
+    "credential-openai",
+  );
+});
+
 test("classifyContent detects stateless GitHub App installation tokens", () => {
   const header = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9";
   const payload = "eyJpc3MiOiJmaXh0dXJlIiwiaWF0IjoxMjM0NTY3ODkwfQ";
