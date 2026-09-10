@@ -14,7 +14,9 @@ export type Capability =
   | "browser-control"
   | "agent-delegation"
   | "notifications"
-  | "device-integration";
+  | "device-integration"
+  | "channel.send"
+  | "channel.account-write";
 
 export type CapabilityScope = "none" | "self" | "workspace" | "shared" | "system" | "intake-only";
 export type RevocationBehavior = "hard-stop" | "degrade" | "hide-surface";

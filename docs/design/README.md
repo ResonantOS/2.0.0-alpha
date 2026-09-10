@@ -4,6 +4,16 @@ Community-contributed design reference for ResonantOS. Nothing here is
 imported by the runtime; these are the visual contracts and source material
 for anyone building panels, add-ons, or app-shell UI.
 
+## Resonant Extension Framework V0.1
+
+The framework package lived here during design; on ADR-055 acceptance
+the proposal moved to [`docs/architecture/ADR-055-resonant-extension-framework.md`](../architecture/ADR-055-resonant-extension-framework.md)
+and the specifications moved to
+[`docs/addons/resonant-extension-framework/`](../addons/resonant-extension-framework/README.md).
+See that folder for the canonical list of framework specs, conflict
+documents, and resolution records.
+
+
 ## ROSI — Resonant OS Interface design system
 
 For implemented Settings density behavior, see

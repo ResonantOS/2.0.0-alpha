@@ -72,10 +72,17 @@ review, promotion, or trusted-memory writes.
 ## Change An Add-On
 
 Read [ADR-006: Add-On Runtime SDK](architecture/ADR-006-addon-runtime-sdk.md),
+[ADR-018: Add-on SDK V0](architecture/ADR-018-addon-sdk-v0.md),
+[ADR-055: Resonant Extension Framework](architecture/ADR-055-resonant-extension-framework.md)
+(extends ADR-006/018 toward public/third-party add-ons), and
+[ADR-056: Provider Fabric Boundary for External Agent Runtimes](architecture/ADR-056-provider-fabric-boundary-external-agent-runtimes.md)
+(boundary for third-party agent runtimes like DeepSeek Harness or Agent Zero),
 [ADR-023: Add-On Repository And Registry](architecture/ADR-023-addon-repository-registry-model.md),
 [Add-On Lifecycle Uninstall Design](addons/addon-lifecycle-uninstall-design.md),
-and [Module Ownership](architecture/MODULE-OWNERSHIP.md). For the separate
-controlled Chromium package, use its
+and [Module Ownership](architecture/MODULE-OWNERSHIP.md). The Resonant
+Extension Framework package lives at
+[Framework package README](addons/resonant-extension-framework/README.md).
+For the separate controlled Chromium package, use its
 [component README](../addons/resonant-browser-host/README.md).
 
 ## Change Documentation
@@ -113,3 +120,4 @@ the exact commands and live Chrome checks performed.
 Use the [ADR Index](architecture/README.md). An ADR's decision status and its
 applicability to the current Alpha are separate facts; historical and deferred
 records do not redefine the runtime boundary.
+
