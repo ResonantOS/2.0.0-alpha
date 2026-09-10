@@ -70,10 +70,23 @@ test("workflow paths use the shared allowlist and flag unknown filenames", () =>
   assert.deepEqual(findUnknownWorkflows(allowed), []);
 });
 
-test("action_required runs are flagged regardless of their age", () => {
+test("action_required runs are flagged regardless of their age when no window is given", () => {
   const blocked = { id: 1, status: "completed", conclusion: "action_required" };
   assert.deepEqual(findStalledRuns([blocked, { id: 2, status: "completed", conclusion: "success" }],
     { now, thresholdMs }), [blocked]);
+});
+
+test("a window drops action_required and queued runs older than maxAgeMs (no indefinite alerts)", () => {
+  const maxAgeMs = 7 * 24 * 60 * 60 * 1000;
+  const iso = (msAgo) => new Date(now - msAgo).toISOString();
+  const runs = [
+    { id: 1, status: "completed", conclusion: "action_required", updated_at: iso(2 * 60 * 60 * 1000) },      // 2h: flagged
+    { id: 2, status: "completed", conclusion: "action_required", updated_at: iso(30 * 24 * 60 * 60 * 1000) }, // 30d: dropped
+    { id: 3, status: "queued", updated_at: iso(3 * 60 * 60 * 1000) },                                          // 3h: flagged
+    { id: 4, status: "queued", updated_at: iso(8 * 24 * 60 * 60 * 1000) },                                     // 8d: dropped
+    { id: 5, status: "completed", conclusion: "action_required", created_at: iso(6 * 24 * 60 * 60 * 1000) }, // 6d via created_at: flagged
+  ];
+  assert.deepEqual(findStalledRuns(runs, { now, thresholdMs, maxAgeMs }).map((r) => r.id), [1, 3, 5]);
 });
 
 test("queued and waiting runs must exceed the injected age threshold", () => {

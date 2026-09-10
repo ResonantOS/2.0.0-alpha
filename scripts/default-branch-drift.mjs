@@ -18,10 +18,15 @@ export function findUnknownWorkflows(paths, allowlist = WORKFLOW_ALLOWLIST) {
 
 // updated_at is GitHub's available approximation of time in the current status;
 // the REST run object does not expose the exact status-transition timestamp.
-export function findStalledRuns(runs, { now, thresholdMs }) {
-  return runs.filter((run) => run.conclusion === "action_required"
-    || (["queued", "waiting"].includes(run.status)
-      && now - Date.parse(run.updated_at ?? run.created_at) > thresholdMs));
+// maxAgeMs bounds the window: a run stuck for longer than that is treated as
+// historical noise, not live drift, so a single abandoned run cannot alert forever.
+export function findStalledRuns(runs, { now, thresholdMs, maxAgeMs }) {
+  return runs.filter((run) => {
+    const age = now - Date.parse(run.updated_at ?? run.created_at);
+    if (Number.isFinite(maxAgeMs) && !(age <= maxAgeMs)) return false;
+    return run.conclusion === "action_required"
+      || (["queued", "waiting"].includes(run.status) && age > thresholdMs);
+  });
 }
 
 export function checkBranchProtection(rules) {
@@ -149,13 +154,16 @@ export async function runDrift({ env = process.env, fetchImpl = globalThis.fetch
     (item) => typeof item.path === "string", { paginated: false });
   if (workflows) findings.unknownWorkflows = findUnknownWorkflows(workflows.map((item) => item.path));
 
+  // Same seven-day window as the commit check: bounds both the API query and the filter.
+  const STALLED_WINDOW_MS = 7 * 24 * HOUR_MS;
+  const createdFilter = encodeURIComponent(`>=${new Date(now - STALLED_WINDOW_MS).toISOString().slice(0, 10)}`);
   const stalled = new Map();
   for (const status of ["action_required", "queued", "waiting"]) {
-    const runs = await list(`/actions/runs?branch=dev&status=${status}`, `runs: ${status}`,
+    const runs = await list(`/actions/runs?branch=dev&status=${status}&created=${createdFilter}`, `runs: ${status}`,
       (item) => Number.isInteger(item.id) && typeof item.status === "string"
         && (item.conclusion === "action_required" || Number.isFinite(Date.parse(item.updated_at ?? item.created_at))),
       { runs: true });
-    if (runs) for (const run of findStalledRuns(runs, { now, thresholdMs: HOUR_MS })) stalled.set(run.id, run);
+    if (runs) for (const run of findStalledRuns(runs, { now, thresholdMs: HOUR_MS, maxAgeMs: STALLED_WINDOW_MS })) stalled.set(run.id, run);
   }
   findings.stalledRuns = [...stalled.values()];
 
