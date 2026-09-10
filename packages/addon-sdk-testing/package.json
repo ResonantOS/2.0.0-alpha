@@ -1,0 +1,34 @@
+{
+  "name": "@resonantos/addon-sdk-testing",
+  "version": "0.1.0",
+  "description": "Resonant Extension Framework (REF) negative-test harness for external agent runtime manifests (ADR-040 §7). Provides in-process mock host, routing-decision store, audit capture, and runnable F1–F10 failure-mode cases.",
+  "license": "MIT",
+  "type": "module",
+  "private": true,
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./mock-host": "./src/mock-host.ts",
+    "./routing-store": "./src/routing-store.ts",
+    "./audit-capture": "./src/audit-capture.ts",
+    "./manifest-fixtures": "./src/manifest-fixtures.ts",
+    "./failure-modes": "./src/failure-modes/index.ts",
+    "./outcome": "./src/outcome.ts"
+  },
+  "files": [
+    "src/"
+  ],
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "keywords": [
+    "resonantos",
+    "add-on",
+    "sdk",
+    "ref",
+    "adr-040",
+    "negative-tests",
+    "external-agent-runtime"
+  ],
+  "intent": "Companion package to @resonantos/addon-sdk. Translates ADR-040 §7 (Failure Modes F1–F10) into executable negative tests so any external-agent-runtime manifest can be validated against the provider-fabric boundary before install. ADR-040 §7 specifies this package as the canonical home: 'Each F-number becomes a test case in packages/addon-sdk-testing/ (B4 deliverable).'"
+}

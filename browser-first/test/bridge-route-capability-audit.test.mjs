@@ -8,10 +8,12 @@ import { createAddonDelegationHostService } from "../host/addon-delegation-host-
 import { createAgentControlHostService } from "../host/agent-control-host-service.mjs";
 import { BRIDGE_CAPABILITIES } from "../host/bridge-capability-tokens.mjs";
 import { createBrowserDiagnosticsHostService } from "../host/browser-diagnostics-host-service.mjs";
+import { createDevExternalAgentRuntimesPanelService } from "../host/dev-external-agent-runtimes-panel.mjs";
 import { createExtensionPrefsHostService } from "../host/extension-prefs-host-service.mjs";
 import { createMemoryHostService } from "../host/memory-host-service.mjs";
 import { createOpencodeSessionHostService } from "../host/opencode-session-host-service.mjs";
 import { createProviderHostService } from "../host/provider-host-service.mjs";
+import { parseArgs } from "../host/browser-first-host-utils.mjs";
 import { capabilityForBridgeRoute } from "../resonantos-side-panel-extension/src/lib/bridge-client.js";
 
 const memoryHandlers = [
@@ -129,6 +131,7 @@ async function withBridgeRoutes(callback) {
     });
     const memory = createMemoryHostService(handlers(memoryHandlers));
     const addon = createAddonDelegationHostService(handlers(addonHandlers));
+    const devPanel = createDevExternalAgentRuntimesPanelService({ repoRoot: root });
     const opencodeSession = createOpencodeSessionHostService(handlers(opencodeSessionHandlers));
     const prefs = createExtensionPrefsHostService({ userRoot: () => root });
     const diagnostics = createBrowserDiagnosticsHostService({
@@ -157,6 +160,11 @@ async function withBridgeRoutes(callback) {
       addonDelegationRoutes: addon.addonDelegationRoutes,
       opencodeSessionRoutes: opencodeSession.opencodeSessionRoutes,
       extensionPrefsRoutes: prefs.extensionPrefsRoutes,
+      // Mirrors run-bridge-minimal: the launcher spreads `activeDevPanelRoutes`,
+      // which equals devPanelRoutes when the --dev-panel flag is on (the dev
+      // configuration this audit covers) and [] in production. The routes are
+      // still constructed here so their capability declarations are audited.
+      activeDevPanelRoutes: devPanel.devPanelRoutes,
     };
     const routes = Object.values(routeArrays).flat();
 
@@ -209,6 +217,32 @@ test("every route capability exists in the launcher catalog", async () => {
       );
     }
   });
+});
+
+test("dev panel routes are registered only behind the explicit --dev-panel flag", async () => {
+  const source = await readFile(
+    new URL("../host/run-bridge-minimal.mjs", import.meta.url),
+    "utf8",
+  );
+  // The gate is exactly the dev-panel launch arg compared to "true" — no
+  // environment variable may enable the panel implicitly.
+  const gateLine = source.split("\n").find((line) => line.includes("devPanelEnabled ="));
+  assert.ok(gateLine, "run-bridge-minimal must compute devPanelEnabled");
+  assert.match(gateLine, /args\.get\("dev-panel"\) === "true"/);
+  assert.ok(!gateLine.includes("process.env"), "the panel must not be enabled via environment");
+  // Disabled yields an empty array (no base route changes); enabled yields
+  // exactly devPanelRoutes (whose two-route shape the service test pins).
+  const selectLine = source.split("\n").find((line) => line.includes("activeDevPanelRoutes ="));
+  assert.ok(selectLine, "run-bridge-minimal must select activeDevPanelRoutes");
+  assert.match(selectLine, /devPanelEnabled \? devPanelRoutes : \[\]/);
+
+  // Executable proof of the flag semantics the gate relies on (parseArgs):
+  // bare --dev-panel and --dev-panel=true enable; =false and absent do not.
+  const gate = (argv) => parseArgs(argv).get("dev-panel") === "true";
+  assert.equal(gate(["--dev-panel"]), true, "bare --dev-panel enables");
+  assert.equal(gate(["--dev-panel=true"]), true, "--dev-panel=true enables");
+  assert.equal(gate(["--dev-panel=false"]), false, "--dev-panel=false disables");
+  assert.equal(gate([]), false, "absent flag disables (default off)");
 });
 
 test("audit covers every route array composed by run-bridge-minimal", async () => {

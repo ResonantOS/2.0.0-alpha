@@ -118,6 +118,9 @@ const BRIDGE_ROUTE_CAPABILITIES = Object.freeze({
   "POST /addons/user-data/list": "addon-record-read",
   "POST /addons/user-data/delete": "addon-record-write",
   "POST /goals": "addon-record-write",
+  "POST /external-agent-runtime/delegate": "agent-delegation",
+  "GET /dev/external-agent-runtimes": "addon-runtime-read",
+  "GET /dev/external-agent-runtimes/": "addon-runtime-read",
   "GET /settings/extension-prefs": "extension-prefs-read",
   "POST /settings/extension-prefs": "extension-prefs-write",
 });

@@ -72,6 +72,7 @@ test("add-on delegation host service owns add-on, delegation, draft, and goal ro
     "POST /addons/user-data/list",
     "POST /addons/user-data/delete",
     "POST /goals",
+    "POST /external-agent-runtime/delegate",
   ]);
   assert.equal(routes.get("POST /addons/execution-settings").requiredCapability, "addon-execution-settings-write");
   assert.equal(routes.get("POST /hermes/dashboard/status").requiredCapability, "addon-runtime-read");
@@ -99,6 +100,7 @@ test("add-on delegation host service owns add-on, delegation, draft, and goal ro
   assert.equal(routes.get("POST /addons/user-data/list").requiredCapability, "addon-record-read");
   assert.equal(routes.get("POST /addons/user-data/delete").requiredCapability, "addon-record-write");
   assert.equal(routes.get("POST /goals").requiredCapability, "addon-record-write");
+  assert.equal(routes.get("POST /external-agent-runtime/delegate").requiredCapability, "agent-delegation");
 });
 
 test("add-on delegation host service fails fast when a handler is missing", () => {

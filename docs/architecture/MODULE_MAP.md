@@ -45,6 +45,7 @@ operations cross the bridge.
 | `addon-delegation-host-service.mjs` and `addon-delegation-service.mjs` | Optional add-on status, bounded local runtime control, delegation records, artifacts, and goals |
 | `browser-diagnostics-host-service.mjs` | Redacted system/workspace diagnostics and capability-gated report/download actions |
 | `extension-prefs-host-service.mjs` | External user-state persistence for extension preferences |
+| `dev-external-agent-runtimes-panel.mjs` and `browser-first/dev/external-agent-runtimes-panel.html` | Opt-in (`--dev-panel`) development-only panel enumerating `examples/addons/*.json`; JSON and HTML routes behind bridge authentication and `addon-runtime-read`; absent without the flag |
 | `browser-first-*-utils.mjs` and focused policy modules | Shared pure helpers and narrow host implementation details |
 
 The route registry is composed from named services. New privileged behavior
@@ -74,6 +75,7 @@ future product work. They are not additional required Alpha processes.
 | `src/App.tsx` | React composition shell for the broader source tree | Not an Alpha entrypoint |
 | `public/addons/` | Bundled add-on manifests and catalog indexes | Read by add-on tooling and optional service discovery |
 | `addons/resonant-browser-host/` | Separate browser-host add-on package and tests | Optional/supporting; not a required Alpha host |
+| [`packages/addon-sdk-testing/`](../../packages/addon-sdk-testing/README.md) | In-process mock host + ADR-040 §7 F1–F10 negative-test harness for external-agent-runtime manifests | Optional test infrastructure; not a required Alpha host |
 | `examples/` | MCP and service examples | Optional, never required Alpha runtime |
 | `scripts/` | Build, test, health, security, docs, and release validation | Development and verification only |
 
