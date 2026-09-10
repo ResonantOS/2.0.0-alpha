@@ -257,6 +257,20 @@ test("classifyPath allows ordinary repository files", () => {
   assert.equal(classifyPath("docs/output-guide.md", fileStat()), null);
 });
 
+test("classifyContent rejects the F1 fixture value when reassembled as a committed literal", () => {
+  // Reassembles the addon-sdk-testing F1 credential fixture's runtime
+  // value from its harmless fragments. The assembled literal must still
+  // be rejected by the scanner if it were ever committed.
+  const f1LeakedToken = ["sk", "test", "1234567890abcdef"].join("-");
+  assert.equal(
+    classifyContent(
+      "packages/addon-sdk-testing/src/failure-modes/f1-credential-exfiltration.ts",
+      `OPENAI_API_KEY=${f1LeakedToken}\n`,
+    )?.rule,
+    "credential-openai",
+  );
+});
+
 test("classifyPath rejects generated, local-state, archive, and environment paths", () => {
   const rejectedPaths = [
     "output/report.json",
