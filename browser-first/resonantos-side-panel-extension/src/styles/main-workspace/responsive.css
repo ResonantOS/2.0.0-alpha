@@ -36,6 +36,10 @@
 }
 
 @media (max-width: 640px) {
+  .settings-bridge-target-form {
+    flex-direction: column;
+  }
+
   .settings-subnav {
     grid-template-columns: 1fr;
   }

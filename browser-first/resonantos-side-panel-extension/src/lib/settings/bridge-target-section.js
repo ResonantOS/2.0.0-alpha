@@ -237,7 +237,7 @@ export function renderBridgeTargetSection(container, { bridgeRequest, onBridgeCo
   formHint.textContent =
     "Set a different bridge URL, bridge token, and capability-bootstrap token to point this browser at a different host. Leave token fields blank only when the generated config still targets that bridge.";
   const form = document.createElement("form");
-  form.className = "settings-provider-form";
+  form.className = "settings-provider-form settings-bridge-target-form";
   form.addEventListener("submit", (event) => event.preventDefault());
   const urlField = buildField({
     id: "bridge-url",
