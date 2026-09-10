@@ -12,7 +12,7 @@
 //     the local value's `updatedAt` timestamp with the bridge's. Whichever
 //     is newer wins. If bridge wins, write it back to local storage so the
 //     rest of the extension picks it up on its next render.
-//   - On chrome.storage.onChanged, if one of the synced keys changed, POST
+//   - On chrome.storage.local.onChanged, if one of the synced keys changed, POST
 //     the merged document back to the bridge (debounced 800ms).
 //
 // This is intentionally additive: it never deletes local keys the user
@@ -55,33 +55,26 @@ function shouldTakeRemote(remote, local) {
 }
 
 async function readLocalValues(storage, keys) {
-  if (!storage?.get) return {};
-  try {
-    const result = await storage.get(keys);
-    // Normalize: chrome.storage.get returns `{}` for any keys that are
-    // absent. Collapse that to a real undefined for each key so callers
-    // can tell "not set locally" from "explicitly set to a value".
-    const out = {};
-    for (const key of keys) {
-      if (result && Object.prototype.hasOwnProperty.call(result, key)) {
-        out[key] = result[key];
-      } else {
-        out[key] = undefined;
-      }
+  if (typeof storage?.get !== "function") throw new Error("Local preference storage is unavailable.");
+  const result = await storage.get(keys);
+  if (!isPlainObject(result)) throw new Error("Local preferences could not be read safely.");
+  // Normalize: chrome.storage.get returns `{}` for any keys that are
+  // absent. Collapse that to a real undefined for each key so callers
+  // can tell "not set locally" from "explicitly set to a value".
+  const out = {};
+  for (const key of keys) {
+    if (result && Object.prototype.hasOwnProperty.call(result, key)) {
+      out[key] = result[key];
+    } else {
+      out[key] = undefined;
     }
-    return out;
-  } catch {
-    return {};
   }
+  return out;
 }
 
-async function writeLocalValue(storage, key, value) {
-  if (!storage?.set) return;
-  try {
-    await storage.set({ [key]: value });
-  } catch {
-    /* ignore — quota, locked storage, etc. */
-  }
+async function writeLocalValues(storage, values) {
+  if (typeof storage?.set !== "function") throw new Error("Local preference storage is unavailable.");
+  await storage.set(values);
 }
 
 async function fetchRemotePrefs(getBridge) {
@@ -147,15 +140,24 @@ export function createPrefsSync({ bridgeRequest, getBridgeRequest, storage, sync
   };
 
   let pushTimer = null;
-  let pushInflight = false;
-  let pushQueued = false;
+  let operations = Promise.resolve();
+  let pullRequired = false;
+  let disposed = false;
   let listener = null;
+
+  // Pulls and pushes must not publish each other's incomplete snapshots.
+  function enqueue(operation) {
+    const next = operations.then(operation);
+    operations = next.catch(() => undefined);
+    return next;
+  }
 
   function nowMs() {
     return Date.now();
   }
 
   function schedulePush() {
+    if (disposed) return;
     state.pending = true;
     if (pushTimer) return;
     pushTimer = setTimeout(() => {
@@ -164,14 +166,20 @@ export function createPrefsSync({ bridgeRequest, getBridgeRequest, storage, sync
     }, PUSH_DEBOUNCE_MS);
   }
 
-  async function flush() {
-    if (pushInflight) {
-      pushQueued = true;
-      return;
-    }
-    pushInflight = true;
+  function flush() {
+    if (pushTimer) clearTimeout(pushTimer);
+    pushTimer = null;
+    return enqueue(flushLocal);
+  }
+
+  async function flushLocal() {
+    if (disposed) return;
+    if (pushTimer) clearTimeout(pushTimer);
+    pushTimer = null;
+    state.pushing = true;
     state.pending = false;
     try {
+      if (pullRequired) throw new Error("Pull from bridge again before pushing preferences; the previous pull could not be applied safely.");
       const local = await readLocalValues(storage, syncedKeys);
       const prefs = { ...local, _meta: { pushedAt: nowMs(), version: 1 } };
       const result = await pushPrefs(resolveBridgeRequest, prefs);
@@ -181,47 +189,63 @@ export function createPrefsSync({ bridgeRequest, getBridgeRequest, storage, sync
       } else {
         state.lastError = result.error;
       }
+    } catch (error) {
+      state.lastError = error?.message ?? String(error);
     } finally {
-      pushInflight = false;
-      if (pushQueued) {
-        pushQueued = false;
-        void flush();
-      } else if (state.pending) {
-        schedulePush();
-      }
+      state.pushing = false;
     }
   }
 
-  async function hydrate() {
-    const remote = await fetchRemotePrefs(resolveBridgeRequest);
-    state.lastPullAt = nowMs();
-    if (!remote.ok) {
-      state.lastError = remote.error;
-      return { ok: false, reason: remote.error };
-    }
-    state.lastSource = remote.source;
-    const local = await readLocalValues(storage, syncedKeys);
-    let wroteAny = false;
-    for (const key of syncedKeys) {
-      const remoteValue = remote.prefs?.[key];
-      const localValue = local?.[key];
-      if (shouldTakeRemote(remoteValue, localValue)) {
-        await writeLocalValue(storage, key, remoteValue);
-        wroteAny = true;
+  function hydrate() {
+    return enqueue(hydrateLocal);
+  }
+
+  async function hydrateLocal() {
+    if (disposed) return { ok: false, reason: "sync-stopped" };
+    try {
+      const remote = await fetchRemotePrefs(resolveBridgeRequest);
+      if (!remote.ok) {
+        state.lastError = remote.error;
+        return { ok: false, reason: remote.error };
       }
+      const local = await readLocalValues(storage, syncedKeys);
+      const updates = {};
+      for (const key of syncedKeys) {
+        const remoteValue = remote.prefs?.[key];
+        const localValue = local?.[key];
+        if (shouldTakeRemote(remoteValue, localValue)) {
+          updates[key] = remoteValue;
+        }
+      }
+      const wroteAny = Object.keys(updates).length > 0;
+      if (wroteAny) {
+        // A rejected write may have partially applied. A new pull must reconcile
+        // local state before either a queued or manual push is allowed.
+        pullRequired = true;
+        await writeLocalValues(storage, updates);
+      }
+      pullRequired = false;
+      state.lastPullAt = nowMs();
+      state.lastSource = remote.source;
+      state.lastError = null;
+      if (wroteAny) {
+        schedulePush();
+      }
+      return { ok: true, source: remote.source, wroteAny };
+    } catch (error) {
+      state.lastError = `${error?.message ?? String(error)}${pullRequired ? " Pull from bridge again before pushing preferences." : ""}`;
+      if (pushTimer) clearTimeout(pushTimer);
+      pushTimer = null;
+      state.pending = false;
+      return { ok: false, reason: state.lastError };
     }
-    // If we have nothing locally yet, push the (empty) local doc up so the
-    // bridge learns about this machine's existence.
-    if (wroteAny || !local || Object.keys(local).length === 0) {
-      schedulePush();
-    }
-    return { ok: true, source: remote.source, wroteAny };
   }
 
   function install() {
     if (!storage?.onChanged?.addListener) return () => {};
-    listener = (changes, area) => {
-      if (area !== "local") return;
+    // StorageArea.onChanged supplies only changes; the global storage event
+    // supplies areaName as well. This listener belongs to the local area.
+    listener = (changes) => {
       for (const key of Object.keys(changes ?? {})) {
         if (syncedKeys.includes(key)) {
           schedulePush();
@@ -239,6 +263,8 @@ export function createPrefsSync({ bridgeRequest, getBridgeRequest, storage, sync
   }
 
   function teardown() {
+    disposed = true;
+    state.pending = false;
     if (pushTimer) {
       clearTimeout(pushTimer);
       pushTimer = null;

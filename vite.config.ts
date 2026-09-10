@@ -1,5 +1,6 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
+import { DEV_SERVER_FS_DENY } from "./src/dev-server-policy";
 
 export default defineConfig({
   plugins: [react()],
@@ -31,6 +32,10 @@ export default defineConfig({
     host: "127.0.0.1",
     port: 1430,
     strictPort: true,
+    fs: {
+      strict: true,
+      deny: DEV_SERVER_FS_DENY,
+    },
     watch: {
       ignored: [
         "**/dist/**",

@@ -26,6 +26,7 @@ jobs:
   sync:
     name: Sync Project 2 release fields and issue labels
     runs-on: ubuntu-latest
+    environment: project-sync
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4

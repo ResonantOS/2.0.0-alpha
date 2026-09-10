@@ -5,6 +5,25 @@ import { renderOverviewSection } from "../resonantos-side-panel-extension/src/li
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
+for (const [error, expected] of [
+  [Object.assign(new Error("Rejected"), { bridgeStatus: 401 }), /authorization.*Diagnostics/i],
+  [Object.assign(new Error("Rejected"), { bridgeStatus: 403 }), /authorization.*Diagnostics/i],
+  [new Error("Route requires browser-status capability"), /authorization.*Diagnostics/i],
+  [new Error("Failed to fetch"), /unreachable.*Bridge Target.*Diagnostics/i],
+  [new Error("Unexpected response"), /health check failed.*Diagnostics/i]
+]) {
+  test(`overview identifies the failed status request: ${error.bridgeStatus ?? error.message}`, async (t) => {
+    const ui = setup(t, async (route) => {
+      if (route === "/status") throw error;
+      return { providers: [] };
+    });
+    await tick();
+    assert.equal(ui.bridge().querySelector("strong").textContent, "Unavailable");
+    assert.match(ui.bridge().textContent, expected);
+    assert.equal(ui.bridge().dataset.tone, "warning");
+  });
+}
+
 function setup(t, bridgeRequest) {
   const dom = new JSDOM("<main></main>");
   globalThis.document = dom.window.document;
