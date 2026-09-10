@@ -14,6 +14,7 @@ const REQUIRED_PATH_GLOBS = [
   "browser-first/test/live-harness.test.mjs",
   "browser-first/test/live-sdk-lane.mjs",
   "browser-first/test/live-sdk-lane.test.mjs",
+  "browser-first/test/settings-shapes-live.mjs",
   "browser-first/resonantos-side-panel-extension/src/**",
   "browser-first/resonantos-side-panel-extension/manifest.json",
   ".github/workflows/agent-control-live.yml",
@@ -76,4 +77,40 @@ test("live SDK workflow job installs pinned OpenCode and uploads evidence (#350)
   assert.match(reject.if, /steps\.live-sdk-self-tests\.outcome != 'success'/, "the reject step must also fail the job on a self-test failure");
   assert.ok(reject, "live-sdk job must reject uncertified runs");
   assert.match(reject.if, /steps\.live-sdk-certification\.outcome != 'success'/);
+});
+
+// #404 review: the settings-shapes check must never be able to skip the
+// certification run and its evidence upload — mirror of the live-sdk
+// self-test convention, plus path-filter and step pinning.
+test("agent-control job pins the settings-shapes check without skipping certification (#404)", async () => {
+  const workflow = parse(await readFile(WORKFLOW, "utf8"));
+  const job = workflow.jobs?.["agent-control-live"];
+  assert.ok(job, "workflow must include an agent-control-live job");
+
+  const shapes = job.steps.find((step) => /Check rendered Settings component shapes/i.test(step.name ?? ""));
+  assert.ok(shapes, "agent-control job must run the rendered settings-shapes check");
+  assert.equal(shapes.id, "settings-shapes");
+  assert.equal(
+    shapes["continue-on-error"],
+    true,
+    "a shapes failure must not skip the certification run and its evidence upload",
+  );
+  assert.equal(shapes.env?.CI, "true");
+  assert.ok(shapes.env?.RESONANTOS_LIVE_CHROME_PATH, "shapes check needs the setup-chrome path");
+  assert.ok(shapes.env?.RESONANTOS_SETTINGS_ARTIFACT_DIR, "shapes check must declare its artifact dir");
+  assert.match(shapes.run, /test:browser-first:settings-shapes/);
+
+  const certification = job.steps.find((step) => step.name === "Run live Agent Control certification");
+  assert.ok(certification, "agent-control job must keep its certification run");
+  assert.equal(certification["continue-on-error"], true, "certification outcome must be surfaced, not skipped");
+  assert.equal(certification.if, undefined, "certification must not be conditioned on the shapes outcome");
+
+  const reject = job.steps.find((step) => step.name === "Reject uncertified run");
+  assert.ok(reject, "agent-control job must reject uncertified runs");
+  assert.match(reject.if, /steps\.certification\.outcome != 'success'/);
+  assert.match(
+    reject.if,
+    /steps\.settings-shapes\.outcome != 'success'/,
+    "the reject step must also fail the job on a shapes failure",
+  );
 });

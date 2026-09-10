@@ -76,6 +76,11 @@ jobs:
           install-dependencies: true
 
       - name: Check rendered Settings component shapes
+        id: settings-shapes
+        # A shapes failure must not skip the certification run and its
+        # evidence upload (the live-sdk self-test convention): fail soft
+        # here, surface both outcomes in the reject step below.
+        continue-on-error: true
         env:
           CI: "true"
           RESONANTOS_LIVE_CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
@@ -103,7 +108,7 @@ jobs:
           retention-days: 14
 
       - name: Reject uncertified run
-        if: always() && steps.certification.outcome != 'success'
+        if: always() && (steps.certification.outcome != 'success' || steps.settings-shapes.outcome != 'success')
         run: exit 1
 
   live-sdk:
