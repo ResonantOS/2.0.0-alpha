@@ -74,6 +74,7 @@ future product work. They are not additional required Alpha processes.
 | `src/App.tsx` | React composition shell for the broader source tree | Not an Alpha entrypoint |
 | `public/addons/` | Bundled add-on manifests and catalog indexes | Read by add-on tooling and optional service discovery |
 | `addons/resonant-browser-host/` | Separate browser-host add-on package and tests | Optional/supporting; not a required Alpha host |
+| [`packages/addon-sdk-testing/`](../../packages/addon-sdk-testing/README.md) | In-process mock host + ADR-040 §7 F1–F10 negative-test harness for external-agent-runtime manifests | Optional test infrastructure; not a required Alpha host |
 | `examples/` | MCP and service examples | Optional, never required Alpha runtime |
 | `scripts/` | Build, test, health, security, docs, and release validation | Development and verification only |
 
