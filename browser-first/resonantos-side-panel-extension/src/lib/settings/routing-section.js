@@ -96,7 +96,32 @@ function routingCard({ strategy, models, bridgeRequest, getBridgeRequest, status
   const save = document.createElement("button");
   save.type = "submit";
   save.textContent = "Save Strategy";
-  form.append(primary, fallback, cost, hardStop, save);
+  const refresh = document.createElement("button");
+  refresh.type = "button";
+  refresh.textContent = "Refresh routing status";
+  refresh.setAttribute("aria-label", `Refresh ${strategy.label} routing status`);
+  refresh.hidden = true;
+  let needsRefresh = false;
+  const refreshSavedStrategy = async (retry = false) => {
+    refresh.disabled = true;
+    try {
+      const summary = await reload();
+      needsRefresh = false;
+      refresh.hidden = true;
+      setStatus(statusNode, `${retry ? "Routing strategies refreshed." : `${strategy.label} routing strategy saved.`} ${summary}`, "success");
+    } catch (error) {
+      refresh.hidden = false;
+      setStatus(statusNode, `${strategy.label} routing strategy saved, but refresh failed: ${safeErrorMessage(error)}. Refresh routing status to confirm the current routes.`, "warning");
+    } finally {
+      refresh.disabled = false;
+      save.disabled = needsRefresh;
+    }
+  };
+  refresh.addEventListener("click", async () => {
+    if (!needsRefresh || refresh.disabled) return;
+    await refreshSavedStrategy(true);
+  });
+  form.append(primary, fallback, cost, hardStop, save, refresh);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (save.disabled) return;
@@ -114,12 +139,12 @@ function routingCard({ strategy, models, bridgeRequest, getBridgeRequest, status
           hardStop: checkbox.checked
         }
       });
-      await reload();
-      setStatus(statusNode, `${strategy.label} routing strategy saved.`, "success");
+      needsRefresh = true;
+      await refreshSavedStrategy();
     } catch (error) {
       setStatus(statusNode, `Save failed: ${safeErrorMessage(error)}`, "error");
     } finally {
-      save.disabled = false;
+      save.disabled = needsRefresh;
     }
   });
 
@@ -164,17 +189,31 @@ export function renderRoutingSection(container, { bridgeRequest, getBridgeReques
     if (savedStrategyId === null) {
       grid.replaceChildren(...strategies.map(renderCard));
     } else {
-      // Refresh only the saved strategy; other cards may contain unsaved user edits.
       const saved = strategies.find((strategy) => strategy.id === savedStrategyId);
       if (!saved) throw new Error("Saved strategy is missing from the refreshed routing response.");
-      const card = [...grid.children].find((node) => node.dataset.strategyId === savedStrategyId);
-      card?.replaceWith(renderCard(saved));
+      for (const strategy of strategies) {
+        const card = [...grid.children].find((node) => node.dataset.strategyId === strategy.id);
+        const refreshed = renderCard(strategy);
+        if (!card) {
+          grid.append(refreshed);
+        } else if (strategy.id === savedStrategyId) {
+          card.replaceWith(refreshed);
+        } else {
+          // Keep draft controls mounted, but reconcile all host-derived health details.
+          card.dataset.state = strategy.routeState;
+          for (const selector of [".settings-provider-heading", ".settings-route-chain", ".settings-model-list"]) {
+            card.querySelector(selector).replaceWith(refreshed.querySelector(selector));
+          }
+        }
+      }
     }
     const routable = strategies.filter((strategy) => strategy.routeState === "routable").length;
-    setStatus(statusNode, strategies.length
+    const summary = strategies.length
       ? `${routable}/${strategies.length} routing strategies currently have at least one available route.`
-      : "No routing strategies are registered.",
+      : "No routing strategies are registered.";
+    setStatus(statusNode, summary,
       strategies.length && routable === strategies.length ? "success" : "warning");
+    return summary;
   };
 
   void load().catch((error) => {
