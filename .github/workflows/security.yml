@@ -62,3 +62,24 @@ jobs:
         run: node --test scripts/security-pipeline/checks/committed-private-key-material.test.mjs
       - name: Run committed private key material check
         run: node scripts/security-pipeline/run-check.mjs --config .github/security-pipeline/checks.yml --check committed-private-key-material
+
+  repo-hygiene:
+    name: "repository hygiene: workflow allowlist (gating)"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        # pin: full 40-char commit SHA per sha-pin-policy.md.
+        # NOTE: verify this SHA at the commit gate before merge.
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Setup Node.js
+        # pin: full 40-char commit SHA per sha-pin-policy.md.
+        # NOTE: verify this SHA at the commit gate before merge.
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version-file: .nvmrc
+      - name: Test repository hygiene guard
+        run: node --test scripts/check-repo-hygiene.test.mjs
+      - name: Run repository hygiene guard
+        run: npm run -s repo:hygiene
