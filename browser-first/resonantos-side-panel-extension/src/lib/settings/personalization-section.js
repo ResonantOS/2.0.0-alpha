@@ -141,11 +141,22 @@ export function renderPersonalizationSection(container, { bridgeRequest, getBrid
   save.type = "submit";
   save.className = "settings-primary-action";
   save.textContent = "Save Identity";
+  save.disabled = true;
   const resetPrompt = document.createElement("button");
   resetPrompt.type = "button";
   resetPrompt.textContent = "Reset Prompt";
-  actions.append(save, resetPrompt);
+  const retryLoad = document.createElement("button");
+  retryLoad.type = "button";
+  retryLoad.textContent = "Retry loading identity";
+  retryLoad.hidden = true;
+  actions.append(save, resetPrompt, retryLoad);
   form.append(grid, actions);
+
+  const inputs = [displayName, subtitle, email, augmentorName, systemPrompt, resetPrompt];
+  const setEditingDisabled = (disabled) => inputs.forEach((input) => { input.disabled = disabled; });
+  setEditingDisabled(true);
+  let loaded = false;
+  let loading = false;
 
   const memoryPanel = document.createElement("section");
   memoryPanel.className = "settings-personalization-panel";
@@ -210,14 +221,31 @@ export function renderPersonalizationSection(container, { bridgeRequest, getBrid
   );
 
   const hydrate = async () => {
-    const settings = await readPersonalizationSettings(storage, storageKeys);
-    displayName.value = settings.profile.displayName;
-    subtitle.value = settings.profile.subtitle;
-    email.value = settings.profile.email;
-    augmentorName.value = settings.augmentor.displayName;
-    systemPrompt.value = settings.augmentor.systemPrompt;
-    setStatus(status, "Identity settings loaded.", "success");
+    if (loading || loaded) return;
+    loading = true;
+    retryLoad.disabled = true;
+    setStatus(status, "Loading identity settings...");
+    try {
+      const settings = await readPersonalizationSettings(storage, storageKeys, { strict: true });
+      displayName.value = settings.profile.displayName;
+      subtitle.value = settings.profile.subtitle;
+      email.value = settings.profile.email;
+      augmentorName.value = settings.augmentor.displayName;
+      systemPrompt.value = settings.augmentor.systemPrompt;
+      loaded = true;
+      setEditingDisabled(false);
+      save.disabled = false;
+      retryLoad.hidden = true;
+      setStatus(status, "Identity settings loaded.", "success");
+    } catch (error) {
+      retryLoad.hidden = false;
+      setStatus(status, `Identity settings unavailable: ${safeErrorMessage(error)}. Retry loading before editing.`, "error");
+    } finally {
+      loading = false;
+      retryLoad.disabled = false;
+    }
   };
+  retryLoad.addEventListener("click", () => void hydrate());
 
   const hydrateMemory = async () => {
     if (!bridgeRequest) {
@@ -286,6 +314,7 @@ export function renderPersonalizationSection(container, { bridgeRequest, getBrid
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (!loaded || save.disabled) return;
     save.disabled = true;
     setStatus(status, "Saving identity settings...");
     try {
@@ -309,9 +338,7 @@ export function renderPersonalizationSection(container, { bridgeRequest, getBrid
     }
   });
 
-  void hydrate().catch((error) => {
-    setStatus(status, `Identity settings unavailable: ${safeErrorMessage(error)}`, "error");
-  });
+  void hydrate();
   void hydrateMemory();
   void hydratePlugins();
 }

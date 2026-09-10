@@ -138,8 +138,9 @@ export function providerAccountForm(provider = {}) {
 
 export function openProviderAccountModal({ bridgeRequest, getBridgeRequest, statusNode, reload }) {
   const bridge = () => (typeof getBridgeRequest === "function" ? getBridgeRequest() : bridgeRequest);
-  const overlay = document.createElement("div");
+  const overlay = document.createElement("dialog");
   overlay.className = "settings-provider-modal";
+  overlay.setAttribute("aria-label", "Add provider account");
   const panel = document.createElement("section");
   panel.className = "settings-provider-modal-panel";
   const heading = document.createElement("div");
@@ -177,10 +178,16 @@ export function openProviderAccountModal({ bridgeRequest, getBridgeRequest, stat
   panel.append(heading, form, modalStatus);
   overlay.append(panel);
   document.body.append(overlay);
-  close.addEventListener("click", () => overlay.remove());
+  // Native modal lifecycle owns focus containment, Escape and invoker restoration.
+  overlay.addEventListener("close", () => overlay.remove(), { once: true });
+  const dismiss = () => {
+    if (overlay.open) overlay.close();
+  };
+  close.addEventListener("click", dismiss);
   overlay.addEventListener("click", (event) => {
-    if (event.target === overlay) overlay.remove();
+    if (event.target === overlay) dismiss();
   });
+  overlay.showModal();
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     save.disabled = true;
@@ -194,7 +201,7 @@ export function openProviderAccountModal({ bridgeRequest, getBridgeRequest, stat
         body: providerAccountPayload(form),
       });
       // Success: close the dialog, then surface confirmation on the settings page.
-      overlay.remove();
+      dismiss();
       setStatus(statusNode, "Provider account saved.", "success");
       await reload();
     } catch (error) {

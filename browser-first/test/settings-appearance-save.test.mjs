@@ -44,7 +44,8 @@ test("failed appearance save preserves applied preferences and allows retry with
   assert.equal(ui.status.dataset.tone, "error");
   assert.match(ui.status.textContent, /could not be saved/i);
   assert.equal(ui.status.getAttribute("role"), "status");
-  assert.equal(ui.status.previousElementSibling, ui.save);
+  assert.equal(ui.status.closest("form"), ui.form);
+  assert.equal(ui.status.parentElement, ui.save.parentElement);
   assert.equal(ui.save.disabled, false);
   for (const [name, value] of Object.entries(changed)) assert.equal(ui.form.elements[name].value, value);
   fail = false;

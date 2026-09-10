@@ -6,6 +6,17 @@ import { lstat, open, readdir, realpath } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import { isIP } from "node:net";
+
+// Adding a workflow is a deliberate reviewed change: update this allowlist,
+// its tests, and docs/release/ALPHA_DISTRIBUTION.md together.
+export const WORKFLOW_ALLOWLIST = Object.freeze([
+  "agent-control-live.yml", "alpha-build.yml", "project-issue-sync.yml", "security-drift.yml", "security.yml",
+]);
+export const WORKFLOW_ALLOWED_HOSTS = Object.freeze([
+  "github.com", "api.github.com", "uploads.github.com", "objects.githubusercontent.com",
+  "raw.githubusercontent.com", "ghcr.io", "registry.npmjs.org", "npm.pkg.github.com", "codecov.io",
+]);
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_MAX_FILE_SIZE = 10 * 1024 * 1024;
@@ -152,6 +163,209 @@ function isAllowlisted(path, allowlist) {
 
 function violation(path, rule, message) {
   return { path: normalizePath(path), rule, message };
+}
+
+// This is an indentation-based policy reader, not a YAML validator or shell
+// interpreter. It handles block mappings and run scalars (including | and >),
+// but does not expand YAML anchors/merges, general flow mappings, expressions,
+// shell substitutions, or encoded/computed destinations. Env tracing is
+// conservative within one job, without modeling step order or shadowing.
+function workflowEntries(text) {
+  const lines = text.split(/\r?\n/);
+  const root = { indent: -1, children: [] };
+  const stack = [root];
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = lines[index].match(/^(\s*)(-\s+)?(?:"([\w-]+)"|'([\w-]+)'|([\w-]+)):\s*(.*)$/);
+    if (!match) continue;
+    const indent = match[1].length + (match[2]?.length ?? 0);
+    while (stack.length > 1 && stack.at(-1).indent >= indent) stack.pop();
+    let end = index + 1;
+    while (end < lines.length && (!lines[end].trim() || /^\s*#/.test(lines[end])
+      || lines[end].match(/^\s*/)[0].length > indent)) end += 1;
+    const entry = {
+      key: match[3] ?? match[4] ?? match[5],
+      // Preserve shell quotes and hashes in run text; they are not YAML keys.
+      value: (match[3] ?? match[4] ?? match[5]) === "run"
+        ? match[6] : match[6].replace(/\s+#.*$/, "").trim(),
+      text: lines.slice(index, end).join("\n"),
+      children: [],
+      indent,
+    };
+    stack.at(-1).children.push(entry);
+    if (/^[|>][\d+-]*(?:\s|$)/.test(entry.value)) {
+      entry.value = lines.slice(index + 1, end).join("\n");
+      index = end - 1;
+    } else {
+      stack.push(entry);
+    }
+  }
+  return root.children;
+}
+
+// Matches ${{ secrets.X }}, ${{ secrets['X'] }}, ${{ secrets["X"] }}, toJSON(secrets), and a bare `secrets` context inside an expression.
+const SECRET_REFERENCE = /\bsecrets\s*(?:\.|\[)|\bsecrets\b(?=\s*[)}])/;
+function referencesSecret(text) {
+  return SECRET_REFERENCE.test(text);
+}
+
+function descendants(entries) {
+  return entries.flatMap((entry) => [entry, ...descendants(entry.children)]);
+}
+
+function scalarValue(value) {
+  return value.replace(/^(['"])(.*)\1$/, "$2");
+}
+
+function hasUnfilteredPush(entries) {
+  const on = entries.find((entry) => entry.key === "on");
+  if (!on) return false;
+  if (scalarValue(on.value) === "push" || /^\[.*\bpush\b.*\]$/.test(on.value)) return true;
+  const push = on.children.find((entry) => entry.key === "push");
+  if (!push) return false;
+  // `push: [dev]` is the branches shorthand and counts as a filter; `branches-ignore`/`paths-ignore`
+  // still run on every other branch and do not.
+  if (/^\[.*\]$/.test(push.value.trim())) return false;
+  return !push.children.some((entry) => /^(branches|paths)$/.test(entry.key))
+    && !/\b(?:branches|paths)\s*:/.test(push.value);
+}
+
+// Dotted, bracket (single or double quoted), and toJSON(secrets) forms all expose the project token.
+const PROJECT_SYNC_REFERENCE = /\bsecrets\s*(?:\.PROJECT_SYNC_TOKEN\b|\[\s*['"]PROJECT_SYNC_TOKEN['"]\s*\])|\btoJSON\(\s*secrets\s*\)/;
+function referencesProjectSyncToken(text) {
+  return PROJECT_SYNC_REFERENCE.test(text);
+}
+
+function bindsProjectSync(job) {
+  return job.children.some((entry) => entry.key === "environment" && (
+    scalarValue(entry.value) === "project-sync"
+    || entry.children.some((child) => child.key === "name" && scalarValue(child.value) === "project-sync")
+    || /^\{\s*name:\s*['"]?project-sync['"]?\s*[,}]/.test(entry.value)
+  ));
+}
+
+function secretEnvironmentVariables(entries) {
+  return descendants(entries).filter((entry) => entry.key === "env")
+    .flatMap((entry) => [
+      ...entry.children,
+      // Simple inline env maps only; expressions are inspected, never evaluated.
+      ...[...entry.value.matchAll(/(?:^\{|,)\s*([\w-]+):\s*([^,]*)/g)]
+        .map(([, key, value]) => ({ key, value })),
+    ])
+    .filter((entry) => referencesSecret(entry.value))
+    .map((entry) => entry.key);
+}
+
+function referencesVariable(text, variable) {
+  // Env keys are restricted to word characters/hyphens by workflowEntries.
+  return new RegExp(`(?:\\$(?:env:)?${variable}\\b|\\$\\{${variable}\\}|%${variable}%|\\benv\\.${variable}\\b)`).test(text);
+}
+
+function hasUnapprovedDestination(run, allowedHosts) {
+  const approved = new Set([...allowedHosts].map((host) => host.toLowerCase()));
+  const forbiddenHost = (host) => {
+    const normalized = host.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+    return isIP(normalized) !== 0 || !approved.has(normalized);
+  };
+  const urls = [...run.matchAll(/https?:\/\/[^\s'"`<>]+/gi)];
+  for (const [url] of urls) {
+    try {
+      if (forbiddenHost(new URL(url).hostname)) return true;
+    } catch {
+      // An unresolved destination in a secret-bearing run cannot be approved.
+      return true;
+    }
+  }
+  if (!/\b(?:curl|wget|nc|ncat|socat|Invoke-WebRequest)\b|\bfetch\s*\(/i.test(run)) return false;
+  // Best effort for URL-less tools such as nc/socat and curl host arguments.
+  // Remove URLs and Actions context references before looking for dotted hosts;
+  // this can conservatively flag dotted filenames in a secret-bearing command.
+  const bare = run.replace(/https?:\/\/[^\s'"`<>]+/gi, "")
+    .replace(/\b(?:secrets|env)\.[\w-]+/g, "");
+  // nc/ncat accept single-label destinations as well as dotted DNS names.
+  for (const [, host] of bare.matchAll(/\b(?:nc|ncat)\s+(?:-\S+\s+)*['"]?([\w.-]+)['"]?\s+\d+\b/gi)) {
+    if (forbiddenHost(host)) return true;
+  }
+  for (const [, host, tcpHost] of bare.matchAll(/\b(?:curl|wget|Invoke-WebRequest)\s+['"]?([a-z][\w-]*)(?=['"\s/:]|$)|\bTCP(?:4|6)?:([\w.-]+):\d+/gi)) {
+    if (forbiddenHost(host ?? tcpHost)) return true;
+  }
+  return [...bare.matchAll(/\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9-]+\b/gi)]
+    .some(([host]) => forbiddenHost(host));
+}
+
+export function evaluateWorkflowPolicy({ path, text, allowlist = WORKFLOW_ALLOWLIST, allowedHosts = WORKFLOW_ALLOWED_HOSTS }) {
+  const violations = [];
+  const add = (rule, message) => violations.push(violation(path, rule, message));
+  const workflowName = normalizePath(path).replace(/^\.github\/workflows\//, "");
+  if (![...allowlist].includes(workflowName)) {
+    add("workflow-not-allowlisted", "Review this workflow deliberately and update WORKFLOW_ALLOWLIST before adding it.");
+  }
+  const entries = workflowEntries(text);
+  const jobs = entries.find((entry) => entry.key === "jobs")?.children ?? [];
+  const workflowEnv = secretEnvironmentVariables(entries.filter((entry) => entry.key === "env"));
+  for (const job of jobs) {
+    const variables = [...workflowEnv, ...secretEnvironmentVariables(job.children)];
+    const runs = descendants(job.children).filter((entry) => entry.key === "run");
+    if (runs.some(({ value }) => (referencesSecret(value)
+      || variables.some((variable) => referencesVariable(value, variable)))
+      && hasUnapprovedDestination(value, allowedHosts))) {
+      add("secret-egress", `Job ${quoteDiagnostic(job.key)} sends a secret toward an IP or a host outside WORKFLOW_ALLOWED_HOSTS; remove that destination.`);
+    }
+    if (referencesProjectSyncToken(job.text) && !bindsProjectSync(job)) {
+      add("secret-without-environment", `Job ${quoteDiagnostic(job.key)} references secrets.PROJECT_SYNC_TOKEN; declare environment: project-sync on that job.`);
+    }
+  }
+  if (referencesSecret(text) && hasUnfilteredPush(entries)) {
+    add("unfiltered-push-with-secrets", "Filter the push trigger with branches or paths before referencing secrets.");
+  }
+  return { ok: violations.length === 0, violations };
+}
+
+export async function scanWorkflowPolicies(root, options = {}) {
+  const repositoryRealPath = await realpath(resolve(root));
+  const violations = [];
+  // Walk separately from Git inventory so ignored/untracked additions are also
+  // checked. Never descend through a symlink or read beyond the existing cap.
+  async function visit(path) {
+    const absolutePath = join(repositoryRealPath, path);
+    let stat;
+    try {
+      stat = await lstat(absolutePath);
+    } catch (error) {
+      if (error?.code === "ENOENT") return;
+      throw error;
+    }
+    if (stat.isSymbolicLink()) {
+      violations.push(classifyPath(path, stat, options));
+    } else if (stat.isDirectory()) {
+      for (const entry of (await readdir(absolutePath)).sort()) await visit(`${path}/${entry}`);
+    } else {
+      const result = evaluateWorkflowPolicy({ path, text: "", ...options });
+      violations.push(...result.violations);
+      if (!/\.ya?ml$/i.test(path)) return;
+      const inspection = await inspectContentNoFollow(repositoryRealPath, absolutePath, path, stat, options);
+      if (inspection.violation) {
+        violations.push(inspection.violation);
+      } else if (inspection.content !== null) {
+        const text = decodeText(inspection.content);
+        if (text === null || stat.size > contentScanLimit(options)) {
+          violations.push(violation(path, "workflow-unreadable", "Workflow policy requires complete UTF-8 text within the content scan limit."));
+        } else {
+          violations.push(...evaluateWorkflowPolicy({ path, text, ...options }).violations
+            .filter((entry) => entry.rule !== "workflow-not-allowlisted"));
+        }
+      }
+    }
+  }
+  // Inspect .github itself before visiting its child, preserving no-follow.
+  try {
+    const githubStat = await lstat(join(repositoryRealPath, ".github"));
+    if (githubStat.isSymbolicLink()) return [classifyPath(".github", githubStat, options)];
+  } catch (error) {
+    if (error?.code === "ENOENT") return [];
+    throw error;
+  }
+  await visit(".github/workflows");
+  return violations;
 }
 
 function isBrowserProfileRootName(segment) {
@@ -688,6 +902,12 @@ export async function scanRepository(root, options = {}) {
     }
   }
 
+  const workflowViolations = await scanWorkflowPolicies(absoluteRoot, options);
+  for (const entry of workflowViolations) {
+    if (!violations.some((existing) => existing.path === entry.path && existing.rule === entry.rule)) {
+      violations.push(entry);
+    }
+  }
   return violations;
 }
 

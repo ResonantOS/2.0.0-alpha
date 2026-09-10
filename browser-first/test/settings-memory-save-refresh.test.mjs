@@ -42,6 +42,8 @@ test("successful write followed by failed refresh reports saved and retries read
   assert.equal(ui.path.value, "");
   assert.equal(ui.save.disabled, false);
   assert.equal(ui.retry().hidden, false);
+  assert.equal(ui.retry().getAttribute("aria-label"), "Refresh Memory settings");
+  assert.equal(ui.root.querySelector(`#${ui.retry().getAttribute("aria-describedby")}`), ui.status);
   ui.retry().click();
   await tick();
   assert.equal(ui.retry().hidden, false);
@@ -51,15 +53,17 @@ test("successful write followed by failed refresh reports saved and retries read
   await tick();
   assert.equal(writes, 1);
   assert.equal(ui.retry().hidden, true);
-  assert.equal(ui.status.textContent, "Memory settings saved.");
+  assert.equal(ui.status.textContent, "Memory settings refreshed.");
 });
 
-test("rejected write retains source input and permits save retry", async (t) => {
+test("rejected write retains source input and retry distinguishes a saved write from failed refresh", async (t) => {
   let writes = 0;
   let reads = 0;
   const ui = await setup(t, async (_route, options) => {
     if (options.method === "POST") { if (++writes === 1) throw Error("write unavailable"); return { ok: true }; }
-    reads++; return empty;
+    reads++;
+    if (writes === 2) throw Error("refresh unavailable after retry");
+    return empty;
   });
   ui.submit(); await tick();
   assert.match(ui.status.textContent, /Save failed: write unavailable/);
@@ -68,7 +72,11 @@ test("rejected write retains source input and permits save retry", async (t) => 
   assert.equal(ui.save.disabled, false);
   ui.submit(); await tick();
   assert.equal(writes, 2);
-  assert.equal(ui.status.textContent, "Memory settings saved.");
+  assert.equal(ui.path.value, "");
+  assert.equal(ui.status.dataset.tone, "warning");
+  assert.match(ui.status.textContent, /saved.*refresh unavailable after retry/);
+  assert.doesNotMatch(ui.status.textContent, /Save failed/);
+  assert.equal(ui.retry().hidden, false);
 });
 
 test("pending save ignores duplicate submits", async (t) => {

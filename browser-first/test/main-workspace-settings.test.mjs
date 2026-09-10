@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { JSDOM } from "jsdom";
+import { installDialogLifecycle } from "./dialog-dom-fixture.mjs";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -37,6 +38,7 @@ function setupDom() {
   const dom = new JSDOM("<!doctype html><main id=\"root\"></main>", { url: "https://resonantos.local/" });
   dom.window.confirm = () => true;
   dom.window.prompt = () => "";
+  installDialogLifecycle(dom.window);
   globalThis.window = dom.window;
   globalThis.document = dom.window.document;
   globalThis.HTMLElement = dom.window.HTMLElement;

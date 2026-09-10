@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { JSDOM } from "jsdom";
+import { installDialogLifecycle } from "./dialog-dom-fixture.mjs";
 
 import { openProviderAccountModal } from "../resonantos-side-panel-extension/src/lib/settings/providers-section.js";
 
@@ -12,6 +13,7 @@ import { openProviderAccountModal } from "../resonantos-side-panel-extension/src
 function setupDom() {
   const dom = new JSDOM("<!doctype html><main id=\"root\"></main>", { url: "https://resonantos.local/" });
   globalThis.window = dom.window;
+  installDialogLifecycle(dom.window);
   globalThis.document = dom.window.document;
   globalThis.Event = dom.window.Event;
   globalThis.FormData = dom.window.FormData;
