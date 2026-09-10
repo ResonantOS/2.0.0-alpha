@@ -1,0 +1,13 @@
+# INERT FIXTURE ‚Äî proves the hygiene gate blocks a non-allowlisted workflow file.
+# It can never execute: workflow_dispatch only, and the single job is disabled with if: false.
+# No secrets, no network, no third-party actions. Opened as a ready PR, observed blocked, then closed and deleted.
+name: hygiene-gate-fixture
+on:
+  workflow_dispatch:
+permissions: {}
+jobs:
+  inert:
+    if: false
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "this job is disabled and this file is a test fixture"
