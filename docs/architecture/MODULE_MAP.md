@@ -69,6 +69,7 @@ future product work. They are not additional required Alpha processes.
 | --- | --- | --- |
 | `src/core/` | Shared contracts, provider/memory policies, state helpers, delegation shapes, and pure domain logic | Supporting source and tests; not a separate runtime process |
 | `src/sdk/addons/` | Add-on manifest, capability, protocol, and validation contracts | Governs bundled and sideloaded add-on metadata |
+| [`packages/addon-sdk-testing/`](../../packages/addon-sdk-testing/README.md) | Negative-test harness for ADR-056 §7 failure modes F1–F10 (mock host, routing store, audit capture) | Development/test support; not shipped |
 | `src/sdk/resonant-context/` | Resonant Context contracts and SDK surface | Optional integration support |
 | `src/modules/*/` | React domain workspaces and controllers from the broader product codebase | Feature reservoir/supporting source; not the MV3 Alpha UI unless explicitly imported by the extension |
 | `src/App.tsx` | React composition shell for the broader source tree | Not an Alpha entrypoint |
