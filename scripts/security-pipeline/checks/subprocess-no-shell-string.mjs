@@ -32,7 +32,10 @@
 // Scope: in a git checkout the scan enumerates git-tracked and visible
 // untracked files (git ls-files --cached --others --exclude-standard), so
 // gitignored scratch and nested worktrees are never scanned; outside a git
-// checkout it walks the tree skipping node_modules/.git/dist/coverage.
+// checkout it walks the tree skipping dot-directories, node_modules, dist,
+// and coverage. Blind spot: a git invocation that fails mid-scan (including
+// a >32 MiB ls-files overflow, unreachable at this repo's size) falls back
+// to the plain walk, which does enter unignored scratch.
 //
 // Verdict mapping: clean -> pass, violation(s) -> fail, no sources -> skipped.
 
@@ -98,11 +101,13 @@ const CALL_PATTERN =
   /(?<![.\w$])(execFileSync|execFile|execSync|exec|spawnSync|spawn)\s*\(|(?<=\.)(execFileSync|execFile|execSync|spawnSync|spawn)\s*\(/g;
 const STRING_API_NAMES = new Set(["exec", "execSync"]);
 const SPAWN_FAMILY_NAMES = new Set(["spawn", "spawnSync", "execFile", "execFileSync"]);
-// R2 match: an options-object `shell:` whose value is anything except false
-// (including string values like "bash"), or the shorthand `{ shell }` form of
-// a variable that is not provably false.
+// R2 match: an options-object `shell:` whose value is anything except the
+// bare boolean false, or the shorthand `{ shell }` form of a variable that is
+// not provably false. On masked text only the bare `false` token can appear —
+// string contents are blanked — so every string-valued shell: (including
+// shell: "false", which is a truthy executable spec, not the boolean) flags.
 const SHELL_OPTION_PATTERN =
-  /(?:^|[{,(\s])(?:shell\s*:\s*(?!"false"|'false'|false\b)(?:"[^"]*"|'[^']*'|true\b|[^,})\s][^,})]*)|shell\s*(?=[},]))/;
+  /(?:^|[{,(\s])(?:shell\s*:\s*(?!false\b)(?:"[^"]*"|'[^']*'|true\b|[^,})\s][^,})]*)|shell\s*(?=[},]))/;
 
 function isSourceFile(fileName) {
   return SOURCE_EXTENSIONS.has(path.extname(fileName));
@@ -114,12 +119,15 @@ function isSourceFile(fileName) {
 // matching.
 //
 // Regex-literal handling is positional (not a JS parser): a `/` that follows
-// one of `( , = : ? ; ! [ { & |` or the keyword `return` (or the start of the
-// file) opens a regex literal whose body, character classes, and flags are
-// masked. A `/` after an identifier, `)`, `]`, or a digit stays division.
-// Single- and double-quote state resets at newline (non-template strings
-// cannot span lines), so a quote inside a regex or a truncated string can
-// only invert masking until the end of its line, never the rest of the file.
+// one of `( , = : ? ; ! [ { & | >` (the `>` covers arrow-body regexes) or a
+// keyword like `return` (or the start of the file) opens a regex literal
+// whose body, character classes, and flags are masked. A `/` after an
+// identifier, `)`, `]`, or a digit stays division. Single- and double-quote
+// state resets at newline (non-template strings cannot span lines), so a
+// quote inside a regex or a truncated string can only invert masking until
+// the end of its line, never the rest of the file. prevCode/prevWord are
+// deliberately stale across comment/string/regex spans — the last code
+// context before a literal is the relevant one for the next `/`.
 export function maskCode(text) {
   const out = text.split("");
   let quote = null;
@@ -199,11 +207,15 @@ export function maskCode(text) {
 
 // Positions after which a `/` unambiguously starts a regex literal (review
 // 2026-09-08: quotes inside regex literals used to open phantom strings and
-// invert masking for the rest of the file, hiding real violations).
-const REGEX_CONTEXT_CHARS = new Set(["(", ",", "=", ":", "?", ";", "!", "[", "{", "&", "|"]);
+// invert masking for the rest of the file, hiding real violations). `>` covers
+// arrow-body regexes (`(x) => /re/.test(x)`), this codebase's most common
+// regex position; division can never follow `>` directly because its left
+// operand (identifier, digit, `)`, `]`) is the immediately preceding char.
+const REGEX_CONTEXT_CHARS = new Set(["(", ",", "=", ":", "?", ";", "!", "[", "{", "&", "|", ">"]);
+const REGEX_CONTEXT_WORDS = new Set(["return", "case", "typeof", "in", "of", "new", "void", "delete", "await", "yield"]);
 
 function regexStartContext(prevCode, prevWord) {
-  return prevCode === "" || REGEX_CONTEXT_CHARS.has(prevCode) || prevWord === "return";
+  return prevCode === "" || REGEX_CONTEXT_CHARS.has(prevCode) || REGEX_CONTEXT_WORDS.has(prevWord);
 }
 
 // Tracked-sources enumeration (review 2026-09-08, the #365 pattern from
@@ -238,7 +250,7 @@ export async function listSourceFiles(rootDir, current = rootDir) {
   const files = [];
   for (const entry of entries) {
     if (entry.isDirectory()) {
-      if (SKIPPED_DIRECTORIES.has(entry.name)) continue;
+      if (SKIPPED_DIRECTORIES.has(entry.name) || entry.name.startsWith(".")) continue;
       files.push(...await listSourceFiles(rootDir, path.join(current, entry.name)));
     } else if (entry.isFile() && isSourceFile(entry.name)) {
       files.push(path.relative(rootDir, path.join(current, entry.name)));

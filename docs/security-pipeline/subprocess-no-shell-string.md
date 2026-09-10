@@ -17,9 +17,10 @@ before the check so a broken adapter fails before a silent pass.
   because member `exec` is overwhelmingly `RegExp.prototype.exec` or a domain
   method.
 - `shell-true-option`: spawn-family calls (`spawn`, `spawnSync`, `execFile`,
-  `execFileSync`) with a `shell:` option whose value is anything except
-  `false` — string values such as `shell: "bash"` and the shorthand
-  `{ shell }` form both flag.
+  `execFileSync`) with a `shell:` option whose value is anything except the
+  bare boolean `false` — string values such as `shell: "bash"` (and
+  `shell: "false"`, which names an executable, not the boolean) and the
+  shorthand `{ shell }` form all flag.
 - `template-command-arg`: spawn-family calls whose command argument is a
   template literal (dynamic command construction).
 - `unparseable-call-span`: a matched call whose span cannot be parsed within
@@ -33,11 +34,13 @@ The sanctioned pattern is argv form: `spawn(file, [args], { shell: false })`.
 String, template, comment, and regex-literal contents are masked before
 matching, so call-shaped text inside literals never flags. Quote state resets
 at newline for non-template strings, and regex literals are recognized
-positionally (after `( , = : ? ; ! [ { & |`, `return`, or start of file), so a
-quote inside `/["'()/` cannot open a phantom string and invert masking for the
-rest of the file. A `/` after an identifier, digit, `)`, or `]` stays division.
-This is a heuristic, not a JS parser — ambiguous constructs are rare in
-practice and err toward flagging.
+positionally (after `( , = : ? ; ! [ { & | >` — the `>` covers arrow-body
+regexes — or the keywords `return case typeof in of new void delete await
+yield`, or start of file), so a quote inside
+`/["'()]/` cannot open a phantom string and invert masking for the rest of the
+file. A `/` after an identifier, digit, `)`, or `]` stays division. This is a
+heuristic, not a JS parser — ambiguous constructs are rare in practice and err
+toward flagging.
 
 ## Scope
 
@@ -46,8 +49,9 @@ In a git checkout the check enumerates `git ls-files --cached --others
 exactly tracked files plus visible untracked work: gitignored scratch and
 nested agent worktrees never reach the scan, and the local gate matches a
 clean checkout. Dot-directories are excluded on both enumeration paths.
-Outside a git checkout it walks the tree, skipping `node_modules`, `.git`,
-`dist`, and `coverage`.
+Outside a git checkout it walks the tree with the same exclusions. A git
+failure mid-scan (including a >32 MiB `ls-files` overflow, unreachable at this
+repo's size) falls back to the plain walk — noted as a blind spot.
 
 ## Allowlisting
 

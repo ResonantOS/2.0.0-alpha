@@ -205,6 +205,68 @@ test("division after identifiers, digits, and parens stays code", () => {
   assert.match(masked, /\(a \+ b\) \/ c/);
 });
 
+// Arrow-body regexes are this codebase's most common regex position, and one
+// tracked file has an apostrophe inside one — the combination that used to
+// walk the phantom-string path (code review finding, 2026-09-10).
+test("arrow-body regex with an apostrophe does not invert masking", () => {
+  const masked = maskCode('const keep = msgs.filter((m) => /\\b(ok|don\'t)\\b/i.test(m));\n');
+  // the regex body is masked; no quote state survives the line
+  assert.doesNotMatch(masked, /don/);
+
+  const findings = scanSource(
+    "fixture.mjs",
+    [
+      'const keep = msgs.filter((m) => /\\b(ok|don\'t)\\b/i.test(m));',
+      'spawnSync(userCmd, { shell: true });',
+    ].join("\n")
+  );
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].rule, "shell-true-option");
+  assert.equal(findings[0].line, 2);
+});
+
+test("arrow-body regex followed by a violation on the same line still flags", () => {
+  const findings = scanSource(
+    "fixture.mjs",
+    'const bad = (s) => /don\'t/.test(s) || spawnSync(cmd, { shell: true });\n'
+  );
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].rule, "shell-true-option");
+});
+
+test("division after a greater-than comparison stays code", () => {
+  const masked = maskCode("const half = a > b ? total / 2 : total / count;\n");
+  assert.match(masked, /total \/ 2/);
+  assert.match(masked, /total \/ count/);
+});
+
+// The newline quote reset is one of the maintainer's explicit asks; pin it
+// directly, including the backtick exception.
+test("unterminated quote resets at newline; backtick templates span lines", () => {
+  const masked = maskCode("const s = it's;\nexec(real);\nconst t = `a\nb`;\nexec(next);\n");
+  // line 2's exec( survives as code despite the apostrophe on line 1
+  assert.match(masked.slice(0, masked.indexOf("\n", masked.indexOf("exec(real)"))), /exec\(real\)/);
+  // the template body across lines 3-4 is masked, the call after it is code
+  const afterTemplate = masked.slice(masked.indexOf("`"));
+  assert.match(afterTemplate, /exec\(next\)/);
+  assert.doesNotMatch(masked, /`a\nb`/);
+});
+
+// R2 headline claims, previously untested: string-valued shell: flags, and
+// shell: "false" is a truthy executable spec (not the boolean exemption).
+test("string-valued shell options flag, including shell: \"false\"", () => {
+  const bashFindings = scanSource("fixture.mjs", 'spawn(cmd, args, { shell: "bash" });\n');
+  assert.equal(bashFindings.length, 1);
+  assert.equal(bashFindings[0].rule, "shell-true-option");
+
+  const falseStringFindings = scanSource("fixture.mjs", 'spawn(cmd, args, { shell: "false" });\n');
+  assert.equal(falseStringFindings.length, 1);
+  assert.equal(falseStringFindings[0].rule, "shell-true-option");
+
+  const bareFalse = scanSource("fixture.mjs", "spawn(cmd, args, { shell: false });\n");
+  assert.deepEqual(bareFalse, []);
+});
+
 // Review 2026-09-08 hardening: member calls (cp.spawnSync, child_process
 // .execSync) were never scanned because the lookbehind excluded every
 // member call; only `.exec(` keeps the carve-out.
