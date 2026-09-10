@@ -18,6 +18,7 @@ const canonicalRootFiles = new Set([
   "CODE_OF_CONDUCT.md",
   "CONTRIBUTING.md",
   "INSTALL.md",
+  "llms.txt",
   "SUPPORT.md",
 ]);
 

@@ -361,6 +361,16 @@ test("classify includes the add-on SDK package family and tsconfig in the browse
   assert.notEqual(classify("packages/some-unrelated-tool/index.ts", "added").bucket, "include");
 });
 
+test("the machine-readable repo map for AI assistants is an approved canonical root file", () => {
+  const classify = requireExport("classify");
+
+  assert.deepEqual(
+    classify("llms.txt", "added"),
+    { bucket: "include", reason: "canonical browser-first governance or release documentation" },
+    "llms.txt must be in release scope so strict audits do not reject the repo map",
+  );
+});
+
 test("security-pipeline documentation is approved release documentation", () => {
   const classify = requireExport("classify");
 
