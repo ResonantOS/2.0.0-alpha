@@ -145,6 +145,29 @@ Residuals:
 - The Hermes dashboard server and OpenCode server are not confined.
 - Cross-platform isolation is a separate ADR.
 
+## Web-mode shell transport (#374)
+
+The shell transport (`src/core/web-transport.ts`) requests only
+`provider-diagnostics-read` and `provider-model-invoke` from
+`POST /api/capability-tokens`, using the bridge token and capability-bootstrap
+token in `globalThis.__RESONANTOS_BRIDGE_CONFIG__`. It memoizes the scoped tokens,
+shares an in-flight bootstrap between concurrent calls, and attaches the token
+required by each route. Failed bootstraps are not cached.
+
+A capability-missing 403 triggers exactly one re-bootstrap and route retry.
+This recovers from capability-token rotation while the bridge and bootstrap
+tokens remain valid. After a full bridge restart, the caller must refresh
+`globalThis.__RESONANTOS_BRIDGE_CONFIG__` from the regenerated config; the
+transport reads it on every call and a changed URL or either credential triggers
+a fresh bootstrap. Other 403s and 401s do not trigger retries. Tokens never appear
+in transport-generated error messages.
+
+Nothing delivers `__RESONANTOS_BRIDGE_CONFIG__` to a browser page yet. Browser
+use also requires the operator's CORS opt-in at the bridge through
+`RESONANTOS_BRIDGE_ALLOWED_ORIGINS`. Config delivery and browser-origin setup
+are tracked in #429, together with the dev-server exposure warning: while
+`npm run dev` runs, the generated config file is served to local processes.
+
 ## Live SDK lane
 
 `npm run test:browser-first:live-sdk` proves the browser-first bridge and SDK-facing add-on routes work together in an isolated live run: capability bootstrap covers the extension allowlist, OpenCode serve uses a credentialed ephemeral loopback port, execution settings gate local CLI execution, public add-on manifests remain structurally valid, and the Settings Overview cards call capability-mapped bridge routes without 403s.
