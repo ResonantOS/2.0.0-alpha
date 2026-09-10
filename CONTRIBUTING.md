@@ -74,6 +74,12 @@ worker's changes.
   `.github/security-pipeline/checks.yml` under the check's `allowlist` with a
   `reason`. See
   [committed private key material](docs/security-pipeline/committed-private-key-material.md).
+- Execute child processes as argv arrays (`spawn(file, [args], { shell: false })`),
+  never command strings or `shell: true` — the gating `subprocess-no-shell-string`
+  check flags `exec()`/`execSync()`, any non-false `shell:` option (string values and
+  the `{ shell }` shorthand included), template-literal commands, and unparseable call
+  spans. Known-safe sites need a data-flow rationale in the adapter's `ALLOWLIST`. See
+  [subprocess no shell-string](docs/security-pipeline/subprocess-no-shell-string.md).
 - Do not claim runtime support, status, or release scope that is absent from
   code, tests, [current status](docs/STATUS.md), and Project 2.
 

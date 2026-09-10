@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import {
   findCallSpanEnd,
   firstArgumentText,
+  maskCode,
   run,
   scanSource,
 } from "./subprocess-no-shell-string.mjs";
@@ -165,4 +167,143 @@ test("unbalanced call span is skipped without throwing", () => {
   const text = "spawn(process.execPath, files)";
   assert.equal(findCallSpanEnd(text, 5), text.length - 1);
   assert.equal(firstArgumentText(text, 5, text.length - 1), "process.execPath");
+});
+
+// Review 2026-09-08 hardening: a quote inside a regex literal used to open a
+// phantom string and invert masking for the rest of the file, hiding real
+// violations that followed.
+test("quote characters inside regex literals do not invert masking", () => {
+  const masked = maskCode('const parts = text.split(/["\'();\\n]/);\n');
+  // the regex body must be masked (spaces), the split( call must stay code
+  assert.match(masked, /split\(\s+\)/);
+  assert.doesNotMatch(masked, /\["\'/);
+
+  const findings = scanSource(
+    "fixture.mjs",
+    [
+      'const parts = text.split(/["\'();\\n]/);',
+      'const child = spawnSync(userInput, { shell: true });',
+    ].join("\n")
+  );
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].rule, "shell-true-option");
+  assert.equal(findings[0].line, 2);
+});
+
+test("regex literals after return and in argument positions are masked", () => {
+  const masked = maskCode(
+    ['return /["\\\\]/.test(line);', 'wrap(/["x]/, value);', 'const map = { key: /[\'y]/ };'].join("\n")
+  );
+  // no quote state may survive any of the three regex literals
+  assert.equal(masked.match(/"/g), null);
+  assert.equal(masked.match(/'/g), null);
+});
+
+test("division after identifiers, digits, and parens stays code", () => {
+  const masked = maskCode("const rate = total / count / 2;\nconst w = (a + b) / c;\n");
+  assert.match(masked, /total \/ count \/ 2/);
+  assert.match(masked, /\(a \+ b\) \/ c/);
+});
+
+// Review 2026-09-08 hardening: member calls (cp.spawnSync, child_process
+// .execSync) were never scanned because the lookbehind excluded every
+// member call; only `.exec(` keeps the carve-out.
+test("member spawn-family calls are scanned", () => {
+  const findings = scanSource(
+    "fixture.mjs",
+    [
+      'import cp from "node:child_process";',
+      "cp.spawnSync(userInput, { shell: true });",
+      'child_process.execSync("ls -la " + dir);',
+      "cp.spawn(argv[0], argv.slice(1), { stdio: 'ignore' });",
+    ].join("\n")
+  );
+  assert.equal(findings.length, 2);
+  assert.equal(findings[0].rule, "shell-true-option");
+  assert.equal(findings[0].line, 2);
+  assert.equal(findings[1].rule, "exec-string-api");
+  assert.equal(findings[1].line, 3);
+});
+
+test("member .exec( keeps the RegExp carve-out", () => {
+  const findings = scanSource(
+    "fixture.mjs",
+    [
+      "const m = /^#\\s+(.+)$/m.exec(content);",
+      "const other = registry.exec(record);",
+    ].join("\n")
+  );
+  assert.deepEqual(findings, []);
+});
+
+// Review 2026-09-08 hardening: the shorthand `{ shell }` options form was
+// not matched by the shell: pattern.
+test("shorthand { shell } option flags", () => {
+  const findings = scanSource(
+    "fixture.mjs",
+    ["const shell = true;", "spawn(command, args, { shell });"].join("\n")
+  );
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].rule, "shell-true-option");
+});
+
+test("unrelated shorthand identifiers do not flag", () => {
+  const findings = scanSource(
+    "fixture.mjs",
+    'spawn(command, args, { cwd, env: pick(["PATH"]) });\n'
+  );
+  assert.deepEqual(findings, []);
+});
+
+// Review 2026-09-08 hardening: an over-long call span was skipped silently;
+// now it surfaces as a finding instead of hiding a possible shell: true.
+test("call spans beyond MAX_CALL_SPAN_CHARS report as unparseable", () => {
+  const padding = "x".repeat(9000);
+  const findings = scanSource(
+    "fixture.mjs",
+    `spawn("cmd", { padding: "${padding}" });\n`
+  );
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].rule, "unparseable-call-span");
+});
+
+// Review 2026-09-08 hardening (#365 pattern): enumeration must use
+// git-tracked + visible untracked files, never a plain filesystem walk, so
+// gitignored scratch never reaches the scan.
+test("listSourceFiles excludes gitignored scratch but keeps visible untracked work", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "spnssh-gitvisible-"));
+  const git = (args) =>
+    execFileSync("git", ["-C", root, ...args], { stdio: ["ignore", "pipe", "ignore"] });
+  try {
+    git(["init", "--quiet"]);
+    git(["config", "user.email", "test@example.invalid"]);
+    git(["config", "user.name", "Subprocess Check Test"]);
+    await mkdir(path.join(root, "scripts"), { recursive: true });
+    await writeFile(path.join(root, ".gitignore"), "scratch-rig/\n");
+    await writeFile(
+      path.join(root, "scripts", "tracked.mjs"),
+      'import { spawn } from "node:child_process";\nspawn(argv[0], argv.slice(1));\n'
+    );
+    await writeFile(
+      path.join(root, "scripts", "untracked-visible.mjs"),
+      'spawn(command, args, { shell: true });\n'
+    );
+    await mkdir(path.join(root, "scratch-rig"), { recursive: true });
+    await writeFile(
+      path.join(root, "scratch-rig", "live.mjs"),
+      'execSync("ls");\n'
+    );
+    git(["add", ".gitignore", "scripts/tracked.mjs"]);
+    git(["commit", "--quiet", "-m", "base"]);
+
+    const result = await run({ check: {}, repoRoot: root });
+    assert.equal(result.status, "fail");
+    assert.equal(result.evidence.length, 1);
+    assert.equal(result.evidence[0].path, "scripts/untracked-visible.mjs");
+    assert.equal(result.evidence[0].rule, "shell-true-option");
+    // gitignored scratch-rig/live.mjs must not appear anywhere in evidence
+    assert.ok(!result.evidence.some((item) => item.path.includes("scratch-rig")));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
