@@ -12,7 +12,7 @@
 //     the local value's `updatedAt` timestamp with the bridge's. Whichever
 //     is newer wins. If bridge wins, write it back to local storage so the
 //     rest of the extension picks it up on its next render.
-//   - On chrome.storage.onChanged, if one of the synced keys changed, POST
+//   - On chrome.storage.local.onChanged, if one of the synced keys changed, POST
 //     the merged document back to the bridge (debounced 800ms).
 //
 // This is intentionally additive: it never deletes local keys the user
@@ -243,8 +243,9 @@ export function createPrefsSync({ bridgeRequest, getBridgeRequest, storage, sync
 
   function install() {
     if (!storage?.onChanged?.addListener) return () => {};
-    listener = (changes, area) => {
-      if (area !== "local") return;
+    // StorageArea.onChanged supplies only changes; the global storage event
+    // supplies areaName as well. This listener belongs to the local area.
+    listener = (changes) => {
       for (const key of Object.keys(changes ?? {})) {
         if (syncedKeys.includes(key)) {
           schedulePush();
