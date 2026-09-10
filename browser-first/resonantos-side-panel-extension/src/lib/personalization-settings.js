@@ -35,10 +35,21 @@ export function normalizeAugmentorConfig(value = {}) {
   };
 }
 
-export async function readPersonalizationSettings(storage, storageKeys = {}) {
+export async function readPersonalizationSettings(storage, storageKeys = {}, { strict = false } = {}) {
   const profileKey = storageKeys.userProfile ?? "augmentorUserProfile";
   const configKey = storageKeys.augmentorConfig ?? "augmentorConfig";
-  const result = await storage?.get?.([profileKey, configKey]).catch(() => ({}));
+  let result;
+  try {
+    if (typeof storage?.get !== "function") throw new Error("Identity storage is unavailable.");
+    result = await storage.get([profileKey, configKey]);
+    if (!result || typeof result !== "object" || Array.isArray(result)) {
+      throw new Error("Identity settings could not be read safely.");
+    }
+  } catch (error) {
+    // Read-only chat hydration may use defaults; an editable form must not.
+    if (strict) throw error;
+    result = {};
+  }
   return {
     augmentor: normalizeAugmentorConfig(result?.[configKey]),
     profile: normalizeUserProfile(result?.[profileKey]),
@@ -52,10 +63,10 @@ export async function writePersonalizationSettings(storage, storageKeys = {}, { 
     [profileKey]: normalizeUserProfile(profile),
     [configKey]: normalizeAugmentorConfig(augmentor),
   };
-  await storage?.set?.(next);
+  if (typeof storage?.set !== "function") throw new Error("Identity storage is unavailable.");
+  await storage.set(next);
   return {
     augmentor: next[configKey],
     profile: next[profileKey],
   };
 }
-
