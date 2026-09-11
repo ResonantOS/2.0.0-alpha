@@ -9,7 +9,7 @@ import {
   isUnauthorizedBridgeError,
   resolveBridgeConfig,
 } from "../resonantos-side-panel-extension/src/lib/bridge-client.js";
-import { constantTimeEqual, evaluateBridgeRequestForSelfTest, startBridgeServer, summarizeBridgeAuthSelfTest } from "../host/bridge-server.mjs";
+import { getBridgeAllowedOrigins, constantTimeEqual, evaluateBridgeRequestForSelfTest, startBridgeServer, summarizeBridgeAuthSelfTest } from "../host/bridge-server.mjs";
 
 test("constant-time token comparison preserves exact-match and length checks", () => {
   assert.equal(constantTimeEqual("capability-token", "capability-token"), true);
@@ -727,4 +727,16 @@ test("bridge auth self-test summary only reports ok when default-deny held", () 
   assert.equal(denyRegressed.ok, false, "a bridge-token-only 200 means an undeclared or unguarded route was served; the self-test must fail");
   const tokenRegressed = summarizeBridgeAuthSelfTest({ unauthorizedStatus: 200, wrongTokenStatus: 401, missingCapabilityStatus: 403, authorizedStatus: 200 });
   assert.equal(tokenRegressed.ok, false);
+});
+
+// C1: synchronous and serialized so no other case observes a changed environment.
+test("bridge CORS defaults to no allowed origins", { concurrency: false }, () => {
+  const previous = process.env.RESONANTOS_BRIDGE_ALLOWED_ORIGINS;
+  try {
+    delete process.env.RESONANTOS_BRIDGE_ALLOWED_ORIGINS;
+    assert.deepEqual(getBridgeAllowedOrigins(), []);
+  } finally {
+    if (previous === undefined) delete process.env.RESONANTOS_BRIDGE_ALLOWED_ORIGINS;
+    else process.env.RESONANTOS_BRIDGE_ALLOWED_ORIGINS = previous;
+  }
 });

@@ -62,6 +62,7 @@ required Alpha processes.
 | `addons/resonant-browser-host/` | Optional browser-host add-on package | Not the required Alpha bridge or browser runtime |
 | `examples/` | Optional examples | Never required for Alpha startup |
 | `scripts/` | Repository validation and development tooling | Not shipped runtime authority |
+| `scripts/vite-dev-bridge-config.mjs` | Opt-in, authenticated development-page config delivery | May read bridge-generated config at request time and write only authorized HTTP responses and in-memory nonce state; must not own bridge auth, capabilities, CORS defaults, provider credentials, extension state, or production artifacts |
 
 If two domains need the same data shape or pure helper, place it in
 `src/core/` or the established SDK layer. Shared placement does not transfer

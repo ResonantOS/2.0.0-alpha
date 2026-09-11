@@ -77,6 +77,7 @@ future product work. They are not additional required Alpha processes.
 | `addons/resonant-browser-host/` | Separate browser-host add-on package and tests | Optional/supporting; not a required Alpha host |
 | `examples/` | MCP and service examples | Optional, never required Alpha runtime |
 | `scripts/` | Build, test, health, security, docs, and release validation | Development and verification only |
+| `scripts/vite-dev-bridge-config.mjs` | Opt-in, authenticated development-page config delivery; may read bridge-generated config at request time and write only authorized HTTP responses and in-memory nonce state | Development tooling only; must not own bridge auth, capabilities, CORS defaults, provider credentials, extension state, or production artifacts |
 
 ## Domain Ownership In Shared Source
 

@@ -14,6 +14,7 @@
     "test:living-archive-memory-service": "node --test examples/living-archive-memory-service.test.mjs",
     "test:browser-host": "node --test addons/resonant-browser-host/test/*.test.mjs",
     "test:browser-first": "node scripts/run-browser-first-extension-tests.mjs",
+    "test:dev-bridge-config": "node --test --test-concurrency=1 scripts/vite-dev-bridge-config.test.mjs scripts/dev-bridge-config.integration.test.mjs",
     "test:browser-first:live": "node browser-first/test/agent-control-live.mjs",
     "test:browser-first:settings-shapes": "node browser-first/test/settings-shapes-live.mjs",
     "test:browser-first:live-sdk": "node browser-first/test/live-sdk-lane.mjs",
