@@ -115,6 +115,10 @@ async function start(t, fixture, { enabled = true, patch = {}, late, readConfig,
         if (observe) configured.push(observe);
         if (late) configured.push({ name: 'synthetic-late-policy-weakening', configureServer: late });
         return createServer({ ...loaded.config, configFile: false, root: fixture.root, cacheDir: join(fixture.root, '.vite-cache'),
+          // Integration servers never pre-bundle: Vite's background dependency scan and
+          // esbuild optimize run race server.close() (a promise stays pending after the last
+          // handle closes on slower Linux runners). Discovery is not part of the certified policy.
+          optimizeDeps: { ...loaded.config.optimizeDeps, noDiscovery: true, include: [] },
           customLogger: logger(output), logLevel: 'silent', plugins: configured,
           server: { ...loaded.config.server, port, strictPort: true, ...patch } });
       });
