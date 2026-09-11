@@ -36,6 +36,8 @@ import { readFile } from "node:fs/promises";
 import { resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
+import { lookup as dnsLookup } from "node:dns/promises";
+import undici from "undici";
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 // browser-first/host/external-agent-runtime-dispatcher.mjs -> repo root is
@@ -55,6 +57,61 @@ const ADDON_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}(?:\.[a-z0-9][a-z0-9-]{0,63})*
 // of `http://[::1]:3080` is the literal string "[::1]"); we accept both
 // spellings so callers can use either.
 export const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "[::1]", "localhost"]);
+
+/**
+ * Build an undici `Agent` whose outbound sockets bind to a loopback
+ * address. The dispatcher uses this for every fetch it issues; a caller
+ * that supplies a custom `fetchImpl` is responsible for its own bind.
+ *
+ * The bind itself is defense-in-depth, not the only loopback guarantee:
+ * the hostname check (`LOOPBACK_HOSTS`) and the DNS resolution check
+ * (`assertHostnameLoopback`) are the primary guards. The bind adds a
+ * socket-level anchor on 127.0.0.1 so the kernel cannot pick an
+ * external interface for the outbound connection.
+ *
+ * `fetch` is exposed as a property of the returned object for direct
+ * use as `fetchImpl` in `postToCordis`.
+ */
+let _sharedLoopbackDispatcher = null;
+
+/**
+ * Get (or lazily create) a process-wide undici dispatcher bound to
+ * 127.0.0.1. The dispatcher is shared across every `postToCordis` call
+ * so we don't accumulate connection pools; close it on process exit.
+ */
+export function getSharedLoopbackDispatcher({ localAddress = "127.0.0.1", family = 4 } = {}) {
+  if (_sharedLoopbackDispatcher === null) {
+    _sharedLoopbackDispatcher = new undici.Agent({
+      connect: { localAddress, family },
+      bodyTimeout: 30_000,
+      headersTimeout: 30_000,
+      pipelining: 1,
+    });
+  }
+  return _sharedLoopbackDispatcher;
+}
+
+/**
+ * Build an undici `Agent` whose outbound sockets bind to a loopback
+ * address. The dispatcher uses this for every fetch it issues; a caller
+ * that supplies a custom `fetchImpl` is responsible for its own bind.
+ *
+ * The bind itself is defense-in-depth, not the only loopback guarantee:
+ * the hostname check (`LOOPBACK_HOSTS`) and the DNS resolution check
+ * (`assertHostnameLoopback`) are the primary guards. The bind adds a
+ * socket-level anchor on 127.0.0.1 so the kernel cannot pick an
+ * external interface for the outbound connection.
+ *
+ * `fetch` is exposed as a property of the returned object for direct
+ * use as `fetchImpl` in `postToCordis`.
+ */
+export function createLoopbackBoundFetch({ localAddress = "127.0.0.1", family = 4 } = {}) {
+  return {
+    dispatcher: getSharedLoopbackDispatcher({ localAddress, family }),
+    fetch: undici.fetch,
+    localAddress,
+  };
+}
 
 // Field names treated as credential-shaped at any depth during audit
 // redaction. Match is case-insensitive, substring against the lowercased
@@ -209,6 +266,71 @@ export function buildChatCompletionsRequest({ model, messages, options } = {}) {
  *
  * Returns `{ ok: true, url }` or `{ ok: false, reason, detail }`.
  */
+/**
+ * Test whether an IP literal is in a loopback range. IPv4: 127.0.0.0/8
+ * (RFC 1123). IPv6: ::1/128 (RFC 4291). Anything else (private RFC 1918,
+ * link-local, public) is rejected.
+ */
+export function isLoopbackAddress(ip) {
+  if (typeof ip !== "string") return false;
+  if (ip === "127.0.0.1" || ip === "::1") return true;
+  if (ip.startsWith("127.")) {
+    // 127.0.0.0/8 — any 127.x.y.z is loopback.
+    const octets = ip.split(".");
+    if (octets.length !== 4) return false;
+    return octets.every((o) => /^(0|[0-9]{1,3})$/.test(o) && Number(o) >= 0 && Number(o) <= 255);
+  }
+  return false;
+}
+
+/**
+ * Resolve a hostname to its addresses. If every returned address is a
+ * loopback literal, the name is safe to use. Otherwise the host is
+ * treated as non-loopback.
+ */
+async function assertHostnameLoopback(hostname) {
+  // IP literals (no DNS needed): IPv4 and bracketed/bracketless IPv6.
+  const bracketed = hostname.startsWith("[") && hostname.endsWith("]");
+  const candidate = bracketed ? hostname.slice(1, -1) : hostname;
+  if (isLoopbackAddress(candidate)) return { ok: true };
+  // Anything that LOOKS like an IP literal but isn't loopback is rejected
+  // without a DNS lookup. Avoids the resolver's tendency to be permissive
+  // about malformed inputs.
+  const looksLikeIpv4 = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(candidate);
+  const looksLikeIpv6 = candidate.includes(":");
+  if (looksLikeIpv4 || looksLikeIpv6) {
+    return { ok: false, reason: "entrypoint-not-allowed", detail: `host ${hostname} is not a loopback address` };
+  }
+  // Hostname: resolve and verify every returned address is loopback.
+  let addresses;
+  try {
+    const result = await dnsLookup(hostname, { all: true });
+    addresses = result.map((r) => r.address);
+  } catch (err) {
+    return { ok: false, reason: "entrypoint-not-allowed", detail: `DNS lookup of ${hostname} failed: ${String(err && err.message || err)}` };
+  }
+  if (addresses.length === 0) {
+    return { ok: false, reason: "entrypoint-not-allowed", detail: `DNS lookup of ${hostname} returned no addresses` };
+  }
+  for (const addr of addresses) {
+    if (!isLoopbackAddress(addr)) {
+      return { ok: false, reason: "entrypoint-not-allowed", detail: `host ${hostname} resolves to ${addr}, which is not a loopback address` };
+    }
+  }
+  return { ok: true };
+}
+
+/**
+ * Assert that an entrypoint URL is loopback-only. The dispatcher will
+ * never POST to a non-loopback host — that closes the SSRF path where
+ * a malicious manifest could point `service.entrypoint` at an external
+ * host and have the bridge do the egress on its behalf.
+ *
+ * Returns `{ ok: true, url }` synchronously, OR `{ ok: false, reason,
+ * detail }` for static failures. To also enforce loopback DNS for
+ * non-IP hostnames (`localhost`, custom names), call the async
+ * `assertLoopbackEntrypointResolved` below.
+ */
 export function assertLoopbackEntrypoint(entrypoint) {
   if (typeof entrypoint !== "string" || entrypoint.length === 0) {
     return { ok: false, reason: "entrypoint-invalid", detail: "service.entrypoint is not a non-empty string" };
@@ -239,6 +361,42 @@ export function assertLoopbackEntrypoint(entrypoint) {
   // the path in the query string.
   if (url.search !== "" || url.hash !== "") {
     return { ok: false, reason: "entrypoint-not-allowed", detail: "query string and fragment are not allowed in service.entrypoint (dispatcher appends a fixed path)" };
+  }
+  return { ok: true, url };
+}
+
+/**
+ * Async loopback assertion. Same as `assertLoopbackEntrypoint` plus a
+ * DNS-resolution check: if the hostname is a name (not an IP literal),
+ * every resolved address MUST be in 127.0.0.0/8 or ::1/128. This closes
+ * the gap where `/etc/hosts` or a malicious DNS resolver could redirect
+ * `localhost` to an external IP.
+ *
+ * `expectedPort`: when provided, the URL's port MUST equal this value
+ * (the manifest-declared port). Any other port — even a loopback one —
+ * is rejected: the bridge, the OpenCode server, the Hermes dashboard
+ * and any other local service must not be reachable through a
+ * different addon's entrypoint.
+ */
+export async function assertLoopbackEntrypointResolved(entrypoint, { expectedPort } = {}) {
+  const staticCheck = assertLoopbackEntrypoint(entrypoint);
+  if (!staticCheck.ok) return staticCheck;
+  const { url } = staticCheck;
+  // Strip IPv6 brackets if present (hostname has them for the URL; we
+  // want the bare literal for the IP classifier).
+  const hostname = url.hostname.startsWith("[") && url.hostname.endsWith("]")
+    ? url.hostname.slice(1, -1)
+    : url.hostname;
+  const dnsCheck = await assertHostnameLoopback(hostname);
+  if (!dnsCheck.ok) return dnsCheck;
+  if (expectedPort !== undefined && expectedPort !== null) {
+    if (url.port !== String(expectedPort)) {
+      return {
+        ok: false,
+        reason: "port-mismatch",
+        detail: `entrypoint port ${url.port || "(default)"} does not match the manifest-declared port ${expectedPort}`,
+      };
+    }
   }
   return { ok: true, url };
 }
@@ -294,8 +452,82 @@ export function redactRequestForLog(value, depth = 0) {
  * `fetch` is used directly (Node 18+). Caller passes an `AbortSignal`
  * if they want timeout.
  */
-export async function postToCordis({ entrypoint, request, signal, fetchImpl = globalThis.fetch }) {
-  const loopback = assertLoopbackEntrypoint(entrypoint);
+/**
+ * Drain an SSE response body. Parses each `event:` / `data:` block as a
+ * single SSE event. The stream is fully consumed on every path; if the
+ * caller stops reading, the underlying reader is cancelled so the
+ * socket is released and the upstream connection is closed.
+ *
+ * `textDecoder` is exposed for tests; production callers leave it unset.
+ */
+export async function consumeSseStream(response, { maxBytes = 8 * 1024 * 1024, textDecoder = new TextDecoder("utf-8") } = {}) {
+  if (!response || !response.body) {
+    return { events: [], raw: "", truncated: false, closed: true };
+  }
+  const reader = response.body.getReader();
+  const events = [];
+  let raw = "";
+  let buffer = "";
+  let truncated = false;
+  let currentEvent = null;
+  let currentData = [];
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      const chunk = textDecoder.decode(value, { stream: true });
+      raw += chunk;
+      if (raw.length > maxBytes) {
+        truncated = true;
+        break;
+      }
+      buffer += chunk;
+      // SSE messages are separated by a blank line (`\n\n`). Split on
+      // either \r\n\r\n or \n\n; the buffer is split line-by-line
+      // and re-buffered when a message isn't complete yet.
+      let boundary = buffer.indexOf("\n\n");
+      while (boundary !== -1) {
+        const block = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        // A single block can contain multiple lines (event:, data:, id:, retry:).
+        let eventName;
+        const dataLines = [];
+        for (const line of block.split("\n")) {
+          if (line.startsWith("event:")) eventName = line.slice(6).trim();
+          else if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
+          // ignore other fields (id:, retry:, comments starting with `:`)
+        }
+        if (eventName !== undefined || dataLines.length > 0) {
+          events.push({ event: eventName, data: dataLines.join("\n"), raw: block });
+        }
+        boundary = buffer.indexOf("\n\n");
+      }
+    }
+  } finally {
+    // Always cancel the reader so the upstream socket is closed. Even on
+    // a normal end-of-stream we issue cancel() to release the connection
+    // back to the pool — fetch() does not release a streaming body until
+    // the reader is explicitly closed or the response is fully drained.
+    try { await reader.cancel(); } catch { /* already closed */ }
+  }
+  return { events, raw, truncated, closed: true };
+}
+
+export async function postToCordis({
+  entrypoint,
+  request,
+  signal,
+  fetchImpl,
+  declaredPort,
+  consumeSse = consumeSseStream,
+  loopbackBind = true,
+}) {
+  // Static + DNS loopback assertion. The static check rejects malformed
+  // URLs, non-loopback hosts, port 0, userinfo, query and fragment. The
+  // DNS check rejects name-based hosts that resolve to a non-loopback
+  // address. `declaredPort` is the manifest-declared port; when supplied
+  // the entrypoint's port must match it exactly.
+  const loopback = await assertLoopbackEntrypointResolved(entrypoint, { expectedPort: declaredPort });
   if (!loopback.ok) {
     return { ok: false, status: 0, body: null, reason: loopback.reason, detail: loopback.detail };
   }
@@ -307,7 +539,7 @@ export async function postToCordis({ entrypoint, request, signal, fetchImpl = gl
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Accept: "application/json",
+      Accept: request?.stream === true ? "text/event-stream" : "application/json",
     },
     body: JSON.stringify(request),
     // A loopback service answering 3xx must not be allowed to redirect
@@ -316,18 +548,70 @@ export async function postToCordis({ entrypoint, request, signal, fetchImpl = gl
     redirect: "error",
   };
   if (signal) init.signal = signal;
-  try {
-    const response = await fetchImpl(url, init);
-    let body = null;
-    try {
-      body = await response.json();
-    } catch {
-      body = null;
+  // Build the outbound fetch. When `loopbackBind` is true (default), the
+  // dispatcher uses an undici Agent whose sockets bind to 127.0.0.1 —
+  // the loopback interface — so the kernel cannot pick an external
+  // interface for the outbound connection. A caller can opt out by
+  // passing `loopbackBind: false`, or supply a custom `fetchImpl` (in
+  // which case the caller is responsible for its own bind).
+  let activeFetch = fetchImpl;
+  let dispatcherToClose = null;
+  if (activeFetch === undefined) {
+    if (loopbackBind) {
+      // Reuse a module-level dispatcher so we don't spawn a new
+      // undici Agent (and its keep-alive connection pool) on every
+      // call. The dispatcher is closed when the process exits; for
+      // tests, callers can pass `loopbackBind: false` or supply a
+      // custom `fetchImpl` to avoid sharing state.
+      dispatcherToClose = getSharedLoopbackDispatcher();
+      activeFetch = (u, i) => undici.fetch(u, { ...i, dispatcher: dispatcherToClose });
+    } else {
+      activeFetch = globalThis.fetch;
     }
-    return { ok: response.ok, status: response.status, body };
+  }
+  let response;
+  try {
+    response = await activeFetch(url, init);
   } catch (error) {
     return { ok: false, status: 0, body: null, error: String(error) };
   }
+  const isSse = request?.stream === true
+    || (typeof response.headers?.get === "function"
+        && (response.headers.get("content-type") ?? "").toLowerCase().includes("text/event-stream"));
+  if (isSse) {
+    // Drain the SSE stream fully. `consumeSseStream` cancels the reader
+    // in a `finally` block so the socket is closed on every path — normal
+    // end, truncation, or upstream error. We never call `response.json()`
+    // on a streaming response: doing so would return `{ outcome: "allow",
+    // response: null }` (the body is not JSON-serialised while streaming)
+    // and leave the socket open.
+    try {
+      const sse = await consumeSse(response);
+      return {
+        ok: response.ok,
+        status: response.status,
+        body: null,
+        stream: true,
+        events: sse.events,
+        sseRaw: sse.raw,
+        sseTruncated: sse.truncated,
+        sseClosed: sse.closed,
+      };
+    } catch (error) {
+      // Even on parse failure, the stream was drained (see consumeSseStream's
+      // finally block). Return a deny-shaped result so the bridge can record
+      // the upstream as errored.
+      return { ok: false, status: response.status, body: null, stream: true, events: [], sseClosed: true, error: String(error) };
+    }
+  }
+  // Non-streaming: JSON response, body read once.
+  let body = null;
+  try {
+    body = await response.json();
+  } catch {
+    body = null;
+  }
+  return { ok: response.ok, status: response.status, body };
 }
 
 /**
@@ -379,16 +663,28 @@ export async function dispatchExternalAgentRuntime({
     };
   }
   const entrypoint = manifest.service?.entrypoint;
-  const entrypointCheck = assertLoopbackEntrypoint(entrypoint);
-  if (!entrypointCheck.ok) {
-    return {
-      outcome: "deny",
-      reason: entrypointCheck.reason,
-      detail: `addon ${addonId}: ${entrypointCheck.detail}`,
-    };
+  // Extract the manifest-declared port so the dispatcher can refuse any
+  // entrypoint that targets a different loopback port. The bridge, the
+  // OpenCode server, the Hermes dashboard and any other local service
+  // must not be reachable through a different addon's entrypoint.
+  let declaredPort;
+  if (typeof entrypoint === "string" && entrypoint.length > 0) {
+    try {
+      const tmp = new URL(entrypoint);
+      declaredPort = tmp.port || (tmp.protocol === "https:" ? "443" : "80");
+    } catch { /* invalid entrypoint — postToCordis will reject it */ }
   }
   const request = buildChatCompletionsRequest(payload ?? {});
-  const response = await postToCordis({ entrypoint, request, fetchImpl });
+  const response = await postToCordis({ entrypoint, request, fetchImpl, declaredPort });
+  // Surface entrypoint-level deny reasons (loopback assertion, port
+  // mismatch, DNS check) WITHOUT writing to the audit ledger: the
+  // dispatcher never made an upstream call, so there is nothing to
+  // audit. The caller still receives a structured deny with the
+  // specific reason (entrypoint-invalid, entrypoint-not-allowed,
+  // port-mismatch).
+  if (response.reason && response.status === 0) {
+    return { outcome: "deny", reason: response.reason, detail: response.detail };
+  }
   const redactedRequest = redactRequestForLog(request);
   if (auditLedger?.record) {
     auditLedger.record({
