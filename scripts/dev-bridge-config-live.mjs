@@ -236,8 +236,14 @@ export async function main() {
         session = await browserSession(key); await navigate(session);
         const result = await diagnostics(session); await delay(500);
         const entries = [...session.records.values()];
-        const preflight = entries.filter(entry => entry.method === 'OPTIONS' && entry.url === `${value.bridgeUrl}/api/capability-tokens`);
-        requireProof(preflight.some(entry => entry.status >= 200 && entry.status < 300 && header(entry.responseHeaders, 'access-control-allow-origin') !== ORIGIN));
+        // Playwright does not surface CORS preflight OPTIONS requests to page listeners, so the
+        // server-side evidence is taken directly: the bridge's preflight answer for the page origin
+        // must not grant it (ACAO absent or not equal to the page origin), and the browser-side
+        // fetch below must have been rejected as a CORS failure with nothing sent on the wire.
+        const preflight = await fetch(new URL('/api/capability-tokens', bridge), { method: 'OPTIONS', headers: {
+          Origin: ORIGIN, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'content-type,x-resonantos-bridge-token,x-resonantos-capability-bootstrap-token' },
+          signal: AbortSignal.timeout(10000), redirect: 'error' });
+        requireProof(preflight.status < 500 && (preflight.headers.get('access-control-allow-origin') ?? '') !== ORIGIN);
         requireProof(result.rejected && result.networkError && entries.some(entry => entry.corsFailure));
         requireProof(!entries.some(entry => entry.wireSent && ((entry.method === 'POST' && entry.url === `${value.bridgeUrl}/api/capability-tokens`) || (entry.method === 'GET' && entry.url === `${value.bridgeUrl}/providers/status`))));
         requireProof(session.violations.length === 0 && !session.errors.some(message => /preamble/i.test(message)));
