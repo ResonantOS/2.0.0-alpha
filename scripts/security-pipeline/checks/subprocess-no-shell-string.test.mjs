@@ -125,6 +125,8 @@ test("allowlisted constant-argv site passes (ensure-dev-server shape)", async ()
       [
         "const child = spawn(\"npm\", [\"run\", \"dev\"], {",
         "  cwd: process.cwd(),",
+        "  stdio: \"ignore\",",
+        "  detached: true,",
         "  shell: true,",
         "});",
         "",
@@ -157,6 +159,83 @@ test("edited allowlisted site re-flags", async () => {
     assert.equal(result.status, "fail");
     assert.equal(result.evidence.length, 1);
     assert.equal(result.evidence[0].rule, "shell-true-option");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// Review 2026-09-11 blockers: the safe shell value must be EXACTLY false,
+// quoted keys must flag, and aliased/module-bound call sites must scan.
+test("shell: false || true flags (exactly-false requirement)", () => {
+  const findings = scanSource("fixture.mjs", "spawn(cmd, args, { shell: false || true });\n");
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].rule, "shell-true-option");
+});
+
+test("bare shell: false stays safe at value and object end", () => {
+  assert.deepEqual(scanSource("fixture.mjs", "spawn(cmd, args, { shell: false });\n"), []);
+  assert.deepEqual(scanSource("fixture.mjs", "spawn(cmd, args, { shell: false, cwd });\n"), []);
+});
+
+test("quoted shell keys flag when truthy and pass when exactly false", () => {
+  const truthy = scanSource("fixture.mjs", 'spawn(cmd, args, { "shell": true });\n');
+  assert.equal(truthy.length, 1);
+  assert.equal(truthy[0].rule, "shell-true-option");
+  assert.deepEqual(scanSource("fixture.mjs", "spawn(cmd, args, { 'shell': false });\n"), []);
+});
+
+test("injected alias of spawn scans under spawn semantics", () => {
+  const flagged = scanSource(
+    "fixture.mjs",
+    'import { spawn as spawnImpl } from "node:child_process";\nspawnImpl(userCmd, { shell: true });\n'
+  );
+  assert.equal(flagged.length, 1);
+  assert.equal(flagged[0].rule, "shell-true-option");
+
+  const clean = scanSource(
+    "fixture.mjs",
+    'const spawnImpl = spawn;\nspawnImpl(command, args, { stdio: ["ignore"] });\n'
+  );
+  assert.deepEqual(clean, []);
+});
+
+test("renamed exec import scans as the string API", () => {
+  const findings = scanSource(
+    "fixture.mjs",
+    'import { exec as runShell } from "node:child_process";\nrunShell(command);\n'
+  );
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].rule, "exec-string-api");
+});
+
+test("member .exec( flags on a tracked child_process receiver only", () => {
+  const tracked = scanSource(
+    "fixture.mjs",
+    'const cp = require("node:child_process");\ncp.exec(command);\n'
+  );
+  assert.equal(tracked.length, 1);
+  assert.equal(tracked[0].rule, "exec-string-api");
+
+  assert.deepEqual(scanSource("fixture.mjs", 'const m = /^#(.+)$/m;\nm.exec(content);\n'), []);
+});
+
+test("registry surfaces scope the scan and registry allowlist exempts paths", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "spnssh-registry-"));
+  try {
+    await mkdir(path.join(root, "scripts"), { recursive: true });
+    await mkdir(path.join(root, "browser-first"), { recursive: true });
+    await writeFile(path.join(root, "scripts", "a.mjs"), "execSync('ls');\n");
+    await writeFile(path.join(root, "browser-first", "b.mjs"), "execSync('ls');\n");
+    const scoped = await run({ check: { surfaces: ["browser-first"] }, repoRoot: root });
+    assert.equal(scoped.status, "fail");
+    assert.deepEqual(scoped.evidence.map((item) => item.path), ["browser-first/b.mjs"]);
+
+    const exempt = await run({
+      check: { allowlist: [{ path: "browser-first/b.mjs", reason: "documented fixture" }] },
+      repoRoot: root,
+    });
+    assert.equal(exempt.status, "fail");
+    assert.deepEqual(exempt.evidence.map((item) => item.path), ["scripts/a.mjs"]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

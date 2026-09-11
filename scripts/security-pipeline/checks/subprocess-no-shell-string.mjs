@@ -27,7 +27,14 @@
 // maskCode), so a quote inside /.../ does not open a phantom string; a quote
 // state opened by other malformed input resets at the next newline. The
 // shorthand { shell } flags even when the variable is false — allowlist it
-// with a reason if the data flow is provably safe.
+// with a reason if the data flow is provably safe. A template literal's
+// backtick state legitimately spans lines, so an unterminated-looking
+// template can mask later lines until its closing backtick (no instance in
+// this repo). Spread overrides after a literal `shell: false` (e.g.
+// { shell: false, ...options }) can re-enable the shell invisibly — spread
+// values are not resolved. Provenance tracking is textual: an import-shaped
+// string literal could register a phantom alias (over-matching direction;
+// allowlist relief applies).
 //
 // Scope: in a git checkout the scan enumerates git-tracked and visible
 // untracked files (git ls-files --cached --others --exclude-standard), so
@@ -87,27 +94,102 @@ const ALLOWLIST = [
   {
     file: "scripts/ensure-dev-server.mjs",
     rule: "shell-true-option",
-    snippet: `const child = spawn("npm", ["run", "dev"], {`,
+    snippet: `const child = spawn("npm", ["run", "dev"], {
+  cwd: process.cwd(),
+  stdio: "ignore",
+  detached: true,
+  shell: true,
+});`,
     reason: "constant argv (\"npm\", [\"run\", \"dev\"]); no untrusted content; known follow-up of PR #333",
   },
 ];
 
-// Two alternatives (review 2026-09-08): bare calls of any name, plus member
-// calls such as cp.spawnSync(...) or child_process.execSync(...) — only
-// `.exec(` stays excluded, because member exec is overwhelmingly
-// RegExp.prototype.exec or a domain method, not the child_process string API.
-// Longest names first within each group so execFileSync is not matched as exec.
-const CALL_PATTERN =
-  /(?<![.\w$])(execFileSync|execFile|execSync|exec|spawnSync|spawn)\s*\(|(?<=\.)(execFileSync|execFile|execSync|spawnSync|spawn)\s*\(/g;
+// Three alternatives (review 2026-09-11): bare calls of any name — including
+// per-file ALIAS names, injected into the alternation by buildCallPattern,
+// because `spawnImpl = spawn` call sites are otherwise invisible; member
+// calls such as cp.spawnSync(...); and receiver-qualified member calls with
+// the receiver captured, so `.exec(` flags only when the receiver is a known
+// child_process binding (member exec is overwhelmingly RegExp.prototype.exec
+// or a domain method otherwise). Longest names first within each group so
+// execFileSync is not matched as exec.
+const CALL_NAMES = ["execFileSync", "execFile", "execSync", "exec", "spawnSync", "spawn"];
+
+function buildCallPattern(extraNames = []) {
+  const bareNames = [...new Set([...extraNames, ...CALL_NAMES])];
+  const memberNames = CALL_NAMES.filter((name) => name !== "exec");
+  return new RegExp(
+    `(?<![.\\w$])(${bareNames.join("|")})\\s*\\(` +
+      `|(?<=\\.)(${memberNames.join("|")})\\s*\\(` +
+      `|([A-Za-z_$][\\w$]*)\\.(${CALL_NAMES.join("|")})\\s*\\(`,
+    "g",
+  );
+}
 const STRING_API_NAMES = new Set(["exec", "execSync"]);
 const SPAWN_FAMILY_NAMES = new Set(["spawn", "spawnSync", "execFile", "execFileSync"]);
 // R2 match: an options-object `shell:` whose value is anything except the
-// bare boolean false, or the shorthand `{ shell }` form of a variable that is
-// not provably false. On masked text only the bare `false` token can appear —
-// string contents are blanked — so every string-valued shell: (including
-// shell: "false", which is a truthy executable spec, not the boolean) flags.
+// bare boolean false — EXACTLY false, terminated by `,` or `}` (review
+// 2026-09-11: `shell: false || true` used to pass as a prefix match) — or the
+// shorthand `{ shell }` form of a variable that is not provably false. On
+// masked text only bare tokens can appear — string contents are blanked — so
+// every string-valued shell: (including shell: "false", which is a truthy
+// executable spec, not the boolean) flags. Quoted keys ("shell": true) are
+// invisible on masked text (the key blanks with its string) and are detected
+// on the raw span by QUOTED_SHELL_KEY below.
 const SHELL_OPTION_PATTERN =
-  /(?:^|[{,(\s])(?:shell\s*:\s*(?!false\b)(?:"[^"]*"|'[^']*'|true\b|[^,})\s][^,})]*)|shell\s*(?=[},]))/;
+  /(?:^|[{,(\s])(?:shell\s*:\s*(?!\s*false\s*[,}])(?:"[^"]*"|'[^']*'|true\b|[^,})\s][^,})]*)|shell\s*(?=[},]))/;
+const QUOTED_SHELL_KEY = /["']shell["']\s*:\s*(?!\s*false\s*[,}])/;
+
+// Provenance tracking (review 2026-09-11 blocker 2): this repo aliases the
+// child_process APIs (`spawnImpl = spawn`, bridge-tls.mjs) and binds the
+// module itself (`require("node:child_process")`), and those call sites were
+// invisible to the bare/member patterns. Collected from RAW source (module
+// names live inside strings, which masking blanks):
+//   aliases:  import { exec as runIt } / const { spawn: s } = require(...) /
+//             const spawnImpl = spawn           -> bare calls of the alias match
+//   receivers: import cp from / import * as cp / const cp = require(...)
+//             -> member calls receiver.exec(...) flag
+// Known limit: provenance is textual — a string literal containing an
+// import-shaped text could register a phantom alias (over-matching,
+// allowlist relief applies).
+const CHILD_PROCESS_API_NAMES = [...STRING_API_NAMES, ...SPAWN_FAMILY_NAMES].join("|");
+const PROVENANCE_PATTERNS = [
+  // import { a, b as c } from "node:child_process"
+  [/import\s*\{([^}]+)\}\s*from\s*["']node:child_process["']/g, "names"],
+  // const { a, b as c } = require("node:child_process")
+  [/const\s*\{([^}]+)\}\s*=\s*require\(\s*["']node:child_process["']\s*\)/g, "names"],
+  // const x = spawn  (bare alias of a tracked API)
+  [new RegExp(`(?:const|let|var)\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*(${CHILD_PROCESS_API_NAMES})\\b`, "g"), "alias"],
+  // import cp from / import * as cp from / const cp = require(...)
+  [/import\s+([A-Za-z_$][\w$]*)\s+from\s*["']node:child_process["']/g, "receiver"],
+  [/import\s*\*\s*as\s+([A-Za-z_$][\w$]*)\s+from\s*["']node:child_process["']/g, "receiver"],
+  [/const\s+([A-Za-z_$][\w$]*)\s*=\s*require\(\s*["']node:child_process["']\s*\)/g, "receiver"],
+];
+
+function collectProvenance(rawSource) {
+  const aliases = new Map();
+  const receivers = new Set();
+  for (const [pattern, kind] of PROVENANCE_PATTERNS) {
+    pattern.lastIndex = 0;
+    let match;
+    while ((match = pattern.exec(rawSource)) !== null) {
+      if (kind === "names") {
+        for (const piece of match[1].split(",")) {
+          const binding = piece.trim().split(/\s+as\s+/);
+          const original = binding[0]?.trim();
+          const bound = (binding[1] ?? binding[0])?.trim();
+          if (original && bound && CHILD_PROCESS_API_NAMES.includes(original)) {
+            aliases.set(bound, original);
+          }
+        }
+      } else if (kind === "alias") {
+        aliases.set(match[1], match[2]);
+      } else {
+        receivers.add(match[1]);
+      }
+    }
+  }
+  return { aliases, receivers };
+}
 
 function isSourceFile(fileName) {
   return SOURCE_EXTENSIONS.has(path.extname(fileName));
@@ -308,25 +390,42 @@ export function firstArgumentText(text, openParenIndex, closeParenIndex) {
 export function scanSource(fileName, source) {
   const masked = maskCode(source);
   const lines = source.split("\n");
+  const { aliases, receivers } = collectProvenance(source);
   const findings = [];
-  CALL_PATTERN.lastIndex = 0;
+  const callPattern = buildCallPattern([...aliases.keys()]);
   let match;
-  while ((match = CALL_PATTERN.exec(masked)) !== null) {
-    const name = match[1] ?? match[2];
+  while ((match = callPattern.exec(masked)) !== null) {
+    const bareName = match[1];
+    const memberName = match[2] ?? match[4];
+    const receiver = match[3];
+    let name = bareName ?? memberName;
+    if (bareName) {
+      name = aliases.get(bareName) ?? bareName;
+    } else if (memberName === "exec" && !receivers.has(receiver)) {
+      // Member .exec( flags only on a tracked child_process receiver;
+      // RegExp.prototype.exec and domain .exec methods stay exempt.
+      continue;
+    }
     const openParenIndex = match.index + match[0].length - 1;
     const closeParenIndex = findCallSpanEnd(masked, openParenIndex);
+    const lineNumber = masked.slice(0, match.index).split("\n").length;
     if (closeParenIndex === -1) {
       // Review 2026-09-08: a call span past MAX_CALL_SPAN_CHARS used to be
       // skipped silently, so a huge inline options object could hide a
       // `shell: true`. Unparseable spans surface as findings instead.
-      const lineNumber = masked.slice(0, match.index).split("\n").length;
       const snippet = (lines[lineNumber - 1] ?? "").trim();
       findings.push({ file: fileName, line: lineNumber, rule: "unparseable-call-span", snippet });
       continue;
     }
     const span = masked.slice(openParenIndex, closeParenIndex + 1);
-    const lineNumber = masked.slice(0, match.index).split("\n").length;
-    const snippet = (lines[lineNumber - 1] ?? "").trim();
+    // Review 2026-09-11: fingerprint the whole call (multi-line included), so
+    // an allowlisted site re-flags when ANY of its later lines is edited, not
+    // just the opening one.
+    const spanLines = source.slice(
+      source.lastIndexOf("\n", match.index) + 1,
+      source.indexOf("\n", closeParenIndex) === -1 ? source.length : source.indexOf("\n", closeParenIndex),
+    ).trim();
+    const snippet = spanLines;
 
     if (STRING_API_NAMES.has(name)) {
       findings.push({ file: fileName, line: lineNumber, rule: "exec-string-api", snippet });
@@ -334,7 +433,7 @@ export function scanSource(fileName, source) {
     }
     if (!SPAWN_FAMILY_NAMES.has(name)) continue;
 
-    if (SHELL_OPTION_PATTERN.test(span)) {
+    if (SHELL_OPTION_PATTERN.test(span) || QUOTED_SHELL_KEY.test(source.slice(match.index, closeParenIndex + 1))) {
       findings.push({ file: fileName, line: lineNumber, rule: "shell-true-option", snippet });
       continue;
     }
@@ -355,7 +454,16 @@ function allowlisted(finding) {
 }
 
 export async function run({ check, repoRoot }) {
-  const files = await listSourceFiles(repoRoot);
+  const registrySurfaces = Array.isArray(check?.surfaces) ? check.surfaces : null;
+  const registryAllowlist = Array.isArray(check?.allowlist) ? check.allowlist : [];
+  let files = await listSourceFiles(repoRoot);
+  if (registrySurfaces) {
+    // Registry `surfaces` scopes the scan (the convention the other checks
+    // follow — review 2026-09-11 minor): a surface is a repo-relative prefix.
+    files = files.filter((file) =>
+      registrySurfaces.some((surface) => surface === "." || file === surface || file.startsWith(`${surface}/`)),
+    );
+  }
   if (files.length === 0) {
     return {
       status: "skipped",
@@ -370,6 +478,13 @@ export async function run({ check, repoRoot }) {
     const source = await readFile(path.join(repoRoot, file), "utf8");
     for (const finding of scanSource(file, source)) {
       if (allowlisted(finding)) {
+        allowlistedCount += 1;
+        continue;
+      }
+      // Registry allowlist (checks.yml `allowlist: [{path, reason}]`) — the
+      // exception convention the other checks use; internal ALLOWLIST entries
+      // stay the primary, fingerprinted mechanism.
+      if (registryAllowlist.some((entry) => entry.path === finding.file && entry.reason)) {
         allowlistedCount += 1;
         continue;
       }

@@ -18,9 +18,15 @@ before the check so a broken adapter fails before a silent pass.
   method.
 - `shell-true-option`: spawn-family calls (`spawn`, `spawnSync`, `execFile`,
   `execFileSync`) with a `shell:` option whose value is anything except the
-  bare boolean `false` — string values such as `shell: "bash"` (and
-  `shell: "false"`, which names an executable, not the boolean) and the
-  shorthand `{ shell }` form all flag.
+  bare boolean `false` — exactly `false` terminated by `,` or `}`; `shell:
+  false || true` flags, string values such as `shell: "bash"` (and
+  `shell: "false"`, which names an executable, not the boolean), quoted keys
+  (`"shell": true`), and the shorthand `{ shell }` form all flag.
+- Aliased and module-bound calls are tracked: `const spawnImpl = spawn`,
+  `import { exec as runIt }`, and `const cp = require("node:child_process")`
+  all register, so `spawnImpl(...)`, `runIt(...)`, and `cp.exec(...)`
+  scan under their original semantics; member `.exec(` flags only on a
+  tracked child_process receiver (RegExp `exec` stays exempt).
 - `template-command-arg`: spawn-family calls whose command argument is a
   template literal (dynamic command construction).
 - `unparseable-call-span`: a matched call whose span cannot be parsed within
@@ -40,7 +46,12 @@ yield`, or start of file), so a quote inside
 `/["'()]/` cannot open a phantom string and invert masking for the rest of the
 file. A `/` after an identifier, digit, `)`, or `]` stays division. This is a
 heuristic, not a JS parser — ambiguous constructs are rare in practice and err
-toward flagging.
+toward flagging. Documented limits: an unterminated-looking template literal
+masks until its closing backtick (templates legitimately span lines; no
+instance in this repo), spread values are not resolved (so
+`{ shell: false, ...options }` can re-enable the shell invisibly), and
+provenance tracking is textual, so an import-shaped string literal could
+register a phantom alias in the over-matching direction.
 
 ## Scope
 
