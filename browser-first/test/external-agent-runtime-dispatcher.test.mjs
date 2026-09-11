@@ -23,9 +23,10 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve as resolvePath } from "node:path";
+import http from "node:http";
 
 import {
   dispatchExternalAgentRuntime,
@@ -36,6 +37,8 @@ import {
   validateAddonId,
   assertLoopbackEntrypoint,
   redactRequestForLog,
+  postToCordis,
+  DEFAULT_REPO_ROOT,
 } from "../host/external-agent-runtime-dispatcher.mjs";
 import { startCordisStub } from "./_cordis-stub-loader.mjs";
 
@@ -382,12 +385,91 @@ test("dispatchExternalAgentRuntime: deny path (caller missing agent-delegation)"
     perCallerGrants: grants,
     auditLedger: ledger,
     repoRoot,
+    // The `run_task` tool requires human approval; supply an opaque
+    // token so the dispatcher proceeds to the capability check.
+    approval: "approval-token-1",
   });
 
   assert.equal(result.outcome, "deny");
   assert.equal(result.reason, "capability-denied");
   assert.match(result.detail, /agent-delegation/);
   assert.equal(ledger.entries.length, 0);
+});
+
+test("dispatchExternalAgentRuntime: deny path (tool requires human approval, no approval token)", async (t) => {
+  const stub = await startCordisStub();
+  t.after(() => stub.close());
+  const repoRoot = setupManifestFixture(t, stub.entrypoint);
+
+  const ledger = makeAuditLedger();
+  const grants = makeGrantStore({
+    callerId: "caller.test",
+    grantedCapabilities: ["network", "providers", "agent-delegation"],
+  });
+
+  const result = await dispatchExternalAgentRuntime({
+    addonId: "addon.deepseek-harness",
+    toolName: "deepseek_harness.run_task",
+    payload: {},
+    callerId: "caller.test",
+    perCallerGrants: grants,
+    auditLedger: ledger,
+    repoRoot,
+    // No approval token — the dispatcher must deny with
+    // `approval-required` BEFORE any network egress.
+  });
+
+  assert.equal(result.outcome, "deny");
+  assert.equal(result.reason, "approval-required");
+  assert.match(result.detail, /human approval/);
+  // No audit entry: nothing was dispatched.
+  assert.equal(ledger.entries.length, 0);
+  // No network call: stub was never hit.
+  assert.equal(stub.requestCount, 0);
+});
+
+test("dispatchExternalAgentRuntime: deny path (tool declares no requiredCapabilities)", async (t) => {
+  const stub = await startCordisStub();
+  t.after(() => stub.close());
+  // Override the manifest: the `run_task` tool has empty
+  // requiredCapabilities and no approval gate. The dispatcher must
+  // fail closed — `capability-undetermined` — rather than let any
+  // caller through.
+  const repoRoot = setupManifestFixture(t, stub.entrypoint, {
+    tools: [
+      {
+        name: "deepseek_harness.run_task",
+        description: "run",
+        requiredCapabilities: [],
+        inputSchema: {},
+        outputSchema: {},
+        audit: { logRequest: true, logResult: true, artifactTypes: ["summary"] },
+        requiresHumanApproval: false,
+      },
+    ],
+  });
+
+  const ledger = makeAuditLedger();
+  const grants = makeGrantStore({
+    callerId: "caller.test",
+    grantedCapabilities: ["network", "providers", "agent-delegation"],
+  });
+
+  const result = await dispatchExternalAgentRuntime({
+    addonId: "addon.deepseek-harness",
+    toolName: "deepseek_harness.run_task",
+    payload: {},
+    callerId: "caller.test",
+    perCallerGrants: grants,
+    auditLedger: ledger,
+    repoRoot,
+  });
+
+  assert.equal(result.outcome, "deny");
+  assert.equal(result.reason, "capability-undetermined");
+  assert.match(result.detail, /no requiredCapabilities/);
+  assert.equal(ledger.entries.length, 0);
+  assert.equal(stub.requestCount, 0);
 });
 
 test("dispatchExternalAgentRuntime: deny path (unknown-tool)", async (t) => {
@@ -557,4 +639,164 @@ test("dispatchExternalAgentRuntime: allow-path audit entry has the request body 
   assert.equal(recorded.messages[1].content, "hi");
   const serialized = JSON.stringify(recorded);
   assert.equal(serialized.includes("sk-leaked"), false, "leaked token must not appear in the audit entry");
+});
+
+
+// ---------------------------------------------------------------------------
+// Tom's 2026-09-10 closeout-review gaps (#444 blockers + majors)
+// ---------------------------------------------------------------------------
+
+test("DEFAULT_REPO_ROOT: resolves inside the actual repo, not above it", () => {
+  // The dispatcher file is at `browser-first/host/external-agent-runtime-dispatcher.mjs`.
+  // From that file's directory, the repo root is two levels up.
+  // The previous default used three `..` which resolves to the *parent* of
+  // the repo. Verify the constant points at a directory whose parent has a
+  // `browser-first/` sibling (i.e. we're inside the repo, not above it).
+  const parent = resolvePath(DEFAULT_REPO_ROOT, "..");
+  // If we are one level above the repo, the parent's parent has a `browser-first/`
+  // child. If we are at the repo root, the parent has `browser-first/`.
+  const candidates = [
+    resolvePath(parent, "browser-first"),
+    resolvePath(parent, "..", "browser-first"),
+  ];
+  let ok = false;
+  for (const candidate of candidates) {
+    try {
+      const stat = statSync ? statSync(candidate) : null;
+      if (stat && stat.isDirectory()) { ok = true; break; }
+    } catch {}
+  }
+  // Simpler invariant: the constant must end with `/2.0.0-alpha` (this
+  // repo's root) or be the resolved realpath of `process.cwd()`.
+  assert.ok(
+    ok || DEFAULT_REPO_ROOT.endsWith("/2.0.0-alpha"),
+    `DEFAULT_REPO_ROOT (${DEFAULT_REPO_ROOT}) is not inside the repo`,
+  );
+});
+
+test("assertLoopbackEntrypoint: rejects userinfo (http://user:pass@host)", () => {
+  for (const bad of ["http://u:p@127.0.0.1:3080", "http://attacker@example.com@127.0.0.1:3080"]) {
+    const result = assertLoopbackEntrypoint(bad);
+    assert.equal(result.ok, false, `expected ${bad} to be rejected`);
+    assert.equal(result.reason, "entrypoint-not-allowed");
+    assert.match(result.detail, /userinfo/);
+  }
+});
+
+test("assertLoopbackEntrypoint: rejects query and fragment", () => {
+  for (const bad of ["http://127.0.0.1:3080?evil=1", "http://127.0.0.1:3080#frag", "http://127.0.0.1:3080/?evil=1#frag"]) {
+    const result = assertLoopbackEntrypoint(bad);
+    assert.equal(result.ok, false, `expected ${bad} to be rejected`);
+    assert.equal(result.reason, "entrypoint-not-allowed");
+    assert.match(result.detail, /query string and fragment/);
+  }
+});
+
+test("postToCordis: follows `redirect: error` — a 3xx answer does not reach the redirect target", async (t) => {
+  // Stub a redirecting service: any POST to /api/v1/chat/completions
+  // answers 307 with Location: http://example.com/... — but the dispatcher
+  // must error before following it.
+  const server = http.createServer((req, res) => {
+    if (req.method === "POST" && req.url === "/api/v1/chat/completions") {
+      res.writeHead(307, { Location: "http://example.com/api/v1/chat/completions" });
+      res.end();
+      return;
+    }
+    res.writeHead(404).end();
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  t.after(() => new Promise((r) => server.close(() => r())));
+  const port = server.address().port;
+  const entrypoint = `http://127.0.0.1:${port}`;
+  const result = await postToCordis({
+    entrypoint,
+    request: { model: "deepseek-chat", messages: [{ role: "user", content: "hi" }] },
+  });
+  assert.equal(result.ok, false, "dispatcher must not follow a redirect");
+  // `fetch` with `redirect: "error"` throws an AbortError-like error;
+  // the dispatcher maps it to `upstream-unreachable` (status 0).
+  assert.equal(result.status, 0);
+});
+
+test("redactRequestForLog: walks into null-prototype objects (Object.create(null))", () => {
+  const credentials = Object.create(null);
+  credentials.apiKey = "leaked-null-proto";
+  credentials.password = "leaked-password";
+  const payload = { headers: credentials, model: "deepseek-chat" };
+  const out = redactRequestForLog(payload);
+  // The previous implementation skipped null-prototype objects entirely;
+  // the leaked tokens survived into the audit entry.
+  assert.equal(out.headers.apiKey, "[REDACTED]");
+  assert.equal(out.headers.password, "[REDACTED]");
+  assert.equal(out.model, "deepseek-chat");
+  assert.equal(JSON.stringify(out).includes("leaked-null-proto"), false);
+});
+
+test("checkToolGrants: fails closed when requiredCapabilities is missing or empty", () => {
+  // A tool without an explicit capability list cannot be safely dispatched;
+  // the dispatcher must deny rather than admit any caller.
+  for (const tool of [{}, { requiredCapabilities: undefined }, { requiredCapabilities: null }, { requiredCapabilities: [] }]) {
+    const result = checkToolGrants({ tool, perCallerGrants: undefined, callerId: "caller.test" });
+    assert.equal(result.ok, false, `expected deny for tool ${JSON.stringify(tool)}`);
+    assert.equal(result.reason, "capability-undetermined");
+  }
+});
+
+test("checkToolGrants: enforces tool.requiresHumanApproval", () => {
+  const tool = { requiredCapabilities: ["network"], requiresHumanApproval: true };
+  const grants = makeGrantStore({ callerId: "caller.test", grantedCapabilities: ["network"] });
+  // No approval token — deny.
+  const noApproval = checkToolGrants({ tool, perCallerGrants: grants, callerId: "caller.test" });
+  assert.equal(noApproval.ok, false);
+  assert.equal(noApproval.reason, "approval-required");
+  // Empty-string approval is treated as missing.
+  const emptyApproval = checkToolGrants({ tool, perCallerGrants: grants, callerId: "caller.test", approval: "" });
+  assert.equal(emptyApproval.ok, false);
+  assert.equal(emptyApproval.reason, "approval-required");
+  // A non-empty token satisfies the gate; capability check then passes.
+  const granted = checkToolGrants({ tool, perCallerGrants: grants, callerId: "caller.test", approval: "approval-token-1" });
+  assert.equal(granted.ok, true);
+});
+
+test("dispatchExternalAgentRuntime: fetch is never called on a deny path (audit + stub requestCount are 0)", async (t) => {
+  const stub = await startCordisStub();
+  t.after(() => stub.close());
+  const repoRoot = setupManifestFixture(t, stub.entrypoint);
+
+  const ledger = makeAuditLedger();
+  const grants = makeGrantStore({
+    callerId: "caller.test",
+    grantedCapabilities: ["network", "providers", "agent-delegation"],
+  });
+
+  // Deny path #1: missing approval token.
+  const noApproval = await dispatchExternalAgentRuntime({
+    addonId: "addon.deepseek-harness",
+    toolName: "deepseek_harness.run_task",
+    payload: {},
+    callerId: "caller.test",
+    perCallerGrants: grants,
+    auditLedger: ledger,
+    repoRoot,
+  });
+  assert.equal(noApproval.outcome, "deny");
+  assert.equal(noApproval.reason, "approval-required");
+  assert.equal(stub.requestCount, 0);
+  assert.equal(ledger.entries.length, 0);
+
+  // Deny path #2: addon id invalid — the dispatcher must not even
+  // touch the network or write to the audit ledger.
+  const badId = await dispatchExternalAgentRuntime({
+    addonId: "../etc/passwd",
+    toolName: "deepseek_harness.run_task",
+    payload: {},
+    callerId: "caller.test",
+    perCallerGrants: grants,
+    auditLedger: ledger,
+    repoRoot,
+  });
+  assert.equal(badId.outcome, "deny");
+  assert.equal(badId.reason, "addon-id-invalid");
+  assert.equal(stub.requestCount, 0);
+  assert.equal(ledger.entries.length, 0);
 });

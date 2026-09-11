@@ -39,9 +39,10 @@ import { dirname } from "node:path";
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 // browser-first/host/external-agent-runtime-dispatcher.mjs -> repo root is
-// three levels up. Manifests are looked up first in `examples/addons/` then
+// two levels up (`browser-first/host` -> `browser-first` -> repo root).
+// Manifests are looked up first in `examples/addons/` then
 // `public/addons/`.
-export const DEFAULT_REPO_ROOT = resolvePath(moduleDir, "..", "..", "..");
+export const DEFAULT_REPO_ROOT = resolvePath(moduleDir, "..", "..");
 
 // Strict addon id pattern: dot-separated lowercase segments, each 1-64
 // characters of `[a-z0-9-]`, leading char of each segment is alphanumeric.
@@ -134,10 +135,25 @@ export function findTool(manifest, toolName) {
  * every covering grant is treated as non-expiring (the bridge is the
  * source of truth for grant TTL).
  */
-export function checkToolGrants({ tool, perCallerGrants, callerId, now = () => Date.now() }) {
+export function checkToolGrants({ tool, perCallerGrants, callerId, now = () => Date.now(), approval } = {}) {
   const required = tool?.requiredCapabilities ?? [];
+  // Fail closed when the tool does not declare its required capabilities.
+  // The original `if (required.length === 0) return ok:true` short-circuit
+  // let any caller dispatch a tool that has no policy authority attached.
+  // The bridge is the source of truth for capability grants; a manifest
+  // that omits `requiredCapabilities` cannot be safely invoked.
+  if (!Array.isArray(required) || required.length === 0) {
+    return { ok: false, missing: [], reason: "capability-undetermined" };
+  }
+  // Enforce human-approval gate when the tool declares
+  // `requiresHumanApproval: true`. The caller must present a non-empty
+  // `approval` token supplied by the host's approval surface.
+  if (tool.requiresHumanApproval === true) {
+    if (typeof approval !== "string" || approval.length === 0) {
+      return { ok: false, missing: [], reason: "approval-required" };
+    }
+  }
   const missing = [];
-  if (required.length === 0) return { ok: true, missing };
   const bucket = perCallerGrants?.get ? perCallerGrants.get(callerId) : undefined;
   const caps = bucket?.capabilities;
   const expiresAt = bucket?.expiresAt;
@@ -154,7 +170,8 @@ export function checkToolGrants({ tool, perCallerGrants, callerId, now = () => D
     }
     if (!granted) missing.push(capability);
   }
-  return { ok: missing.length === 0, missing };
+  if (missing.length > 0) return { ok: false, missing, reason: "capability-denied" };
+  return { ok: true, missing: [] };
 }
 
 /**
@@ -211,6 +228,18 @@ export function assertLoopbackEntrypoint(entrypoint) {
   if (url.port === "0") {
     return { ok: false, reason: "entrypoint-not-allowed", detail: "port 0 is not allowed (would resolve to a kernel-chosen port)" };
   }
+  // Reject userinfo (`http://u:p@host`) — the raw entrypoint could otherwise
+  // smuggle credentials into the URL handed to fetch, and the audit ledger
+  // would record them in the `entrypoint` field.
+  if (url.username !== "" || url.password !== "") {
+    return { ok: false, reason: "entrypoint-not-allowed", detail: "userinfo (user:password@host) is not allowed in service.entrypoint" };
+  }
+  // Reject query and fragment: the dispatcher appends `/api/v1/chat/completions`
+  // to the URL, and an entrypoint like `http://host?x=y` would otherwise put
+  // the path in the query string.
+  if (url.search !== "" || url.hash !== "") {
+    return { ok: false, reason: "entrypoint-not-allowed", detail: "query string and fragment are not allowed in service.entrypoint (dispatcher appends a fixed path)" };
+  }
   return { ok: true, url };
 }
 
@@ -229,8 +258,13 @@ export function redactRequestForLog(value, depth = 0) {
     return value.map((v) => redactRequestForLog(v, depth + 1));
   }
   if (typeof value === "object") {
-    if (Object.getPrototypeOf(value) !== Object.prototype) return value;
-    const out = {};
+    // Walk into plain objects AND null-prototype objects (e.g.
+    // `Object.create(null)`). The previous check returned any non-Object-
+    // prototype value untouched, which left null-prototype credential
+    // carriers unredacted.
+    const proto = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) return value;
+    const out = proto === null ? Object.create(null) : {};
     for (const key of Object.keys(value)) {
       const lower = key.toLowerCase();
       const child = value[key];
@@ -265,7 +299,10 @@ export async function postToCordis({ entrypoint, request, signal, fetchImpl = gl
   if (!loopback.ok) {
     return { ok: false, status: 0, body: null, reason: loopback.reason, detail: loopback.detail };
   }
-  const url = `${loopback.url.href.replace(/\/$/, "")}/api/v1/chat/completions`;
+  // Build the URL from `origin` (scheme + host + port). The previous
+  // implementation appended the path to `href`, which put the path into
+  // the query string for entrypoints like `http://host?x=y`.
+  const url = `${loopback.url.origin}/api/v1/chat/completions`;
   const init = {
     method: "POST",
     headers: {
@@ -273,6 +310,10 @@ export async function postToCordis({ entrypoint, request, signal, fetchImpl = gl
       Accept: "application/json",
     },
     body: JSON.stringify(request),
+    // A loopback service answering 3xx must not be allowed to redirect
+    // the POST to another host. The dispatcher's contract is loopback-only;
+    // a redirect is by definition an attempt to leave that boundary.
+    redirect: "error",
   };
   if (signal) init.signal = signal;
   try {
@@ -309,6 +350,7 @@ export async function dispatchExternalAgentRuntime({
   auditLedger,
   fetchImpl,
   repoRoot,
+  approval,
 }) {
   const lookup = await findAddonManifest(addonId, { repoRoot });
   if (!lookup.ok) {
@@ -323,12 +365,17 @@ export async function dispatchExternalAgentRuntime({
       detail: `tool ${toolName} not declared in addon ${addonId}`,
     };
   }
-  const grant = checkToolGrants({ tool, perCallerGrants, callerId });
+  const grant = checkToolGrants({ tool, perCallerGrants, callerId, approval });
   if (!grant.ok) {
+    const detail = grant.reason === "approval-required"
+      ? `tool ${toolName} requires human approval; no approval token supplied`
+      : grant.reason === "capability-undetermined"
+        ? `tool ${toolName} declares no requiredCapabilities; cannot be dispatched without explicit policy`
+        : `caller ${callerId} missing per-caller grants for: ${grant.missing.join(", ")}`;
     return {
       outcome: "deny",
-      reason: "capability-denied",
-      detail: `caller ${callerId} missing per-caller grants for: ${grant.missing.join(", ")}`,
+      reason: grant.reason ?? "capability-denied",
+      detail,
     };
   }
   const entrypoint = manifest.service?.entrypoint;

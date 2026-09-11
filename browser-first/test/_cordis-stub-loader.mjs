@@ -8,7 +8,9 @@
 import http from "node:http";
 
 export async function startCordisStub({ dir, port = 0, host = "127.0.0.1" } = {}) {
+  let requestCount = 0;
   const server = http.createServer(async (req, res) => {
+    requestCount += 1;
     const url = new URL(req.url ?? "/", `http://${host}:${port}`);
     if (req.method === "GET" && url.pathname === "/health") {
       const payload = JSON.stringify({
@@ -73,6 +75,8 @@ export async function startCordisStub({ dir, port = 0, host = "127.0.0.1" } = {}
     port: actualPort,
     host,
     get entrypoint() { return `http://${host}:${actualPort}`; },
+    get requestCount() { return requestCount; },
+    resetRequestCount() { requestCount = 0; },
     async close() {
       await new Promise((r) => server.close(() => r()));
     },
