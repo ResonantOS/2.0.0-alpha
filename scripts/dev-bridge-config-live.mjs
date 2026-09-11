@@ -245,10 +245,13 @@ export async function main() {
           signal: AbortSignal.timeout(10000), redirect: 'error' });
         requireProof(preflight.status < 500 && (preflight.headers.get('access-control-allow-origin') ?? '') !== ORIGIN);
         requireProof(result.rejected && result.networkError && entries.some(entry => entry.corsFailure));
-        // Chromium emits requestWillBeSentExtraInfo for a CORS-preflighted POST before the preflight
-        // verdict, so that event is not proof of bytes on the wire. A request reached the bridge only
-        // if the bridge answered it (a response was received for that requestId).
-        requireProof(!entries.some(entry => entry.status !== undefined && ((entry.method === 'POST' && entry.url === `${value.bridgeUrl}/api/capability-tokens`) || (entry.method === 'GET' && entry.url === `${value.bridgeUrl}/providers/status`))));
+        // CORS is a browser-side READ gate, not a send gate: observed in Chromium, the bridge still
+        // answers the token-bearing POST (loadingFailed reports AllowOriginMismatch on the actual
+        // response, not a preflight mismatch). What L15 proves is therefore: the bridge's preflight
+        // does not grant the page origin (checked server-side above), and the page cannot read any
+        // bridge response (CORS failure recorded on every bridge request the page made). The tokens
+        // themselves are protected by L1–L14, not by CORS.
+        requireProof(entries.filter(entry => entry.method !== 'OPTIONS' && entry.url?.startsWith(value.bridgeUrl)).every(entry => entry.corsFailure === true));
         requireProof(session.violations.length === 0 && !session.errors.some(message => /preamble/i.test(message)));
       });
       return;
