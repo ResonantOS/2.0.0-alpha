@@ -173,6 +173,12 @@ test('parser rejects unsafe shapes and destinations', async t => {
   for (const field of ['bridgeToken', 'capabilityBootstrapToken']) for (const invalid of ['', 'x'.repeat(513), 'a b', 'a\nb', 'a\0b', 'a\x7fb', 'é', 1]) {
     assert.equal(parseGeneratedBridgeConfig(writer({ ...value, [field]: invalid })) === null, true);
   }
+  // URL parsing alone accepts arrays and strips whitespace/control characters.
+  // These must fail the string/ASCII/length gate before URL normalization.
+  for (const bridgeUrl of [[value.bridgeUrl], ` ${value.bridgeUrl}`, `${value.bridgeUrl}\n`,
+    'http://127.0.0.1:' + '0'.repeat(500) + '49153']) {
+    assert.equal(parseGeneratedBridgeConfig(writer({ ...value, bridgeUrl })) === null, true, 'bridgeUrl requires a bounded printable string');
+  }
   for (const bridgeUrl of ['ftp://127.0.0.1', 'http://user:pass@127.0.0.1', 'http://127.0.0.1/path', 'http://127.0.0.1?x=1', 'http://127.0.0.1/#x']) {
     assert.equal(parseGeneratedBridgeConfig(writer({ ...value, bridgeUrl })) === null, true);
   }
@@ -205,11 +211,14 @@ test('authorized requests read fresh config', async t => {
 test('unavailable config starts main without credentials', async t => {
   const root = await tempRoot(t), path = join(root, RELATIVE);
   const h = await harness(t, { root, readConfig: path => readGeneratedBridgeConfig(path) });
-  for (const source of [null, '{malformed}', 'globalThis.__RESONANTOS_BRIDGE_CONFIG__ = Object.freeze(', writer(config())]) {
-    if (source === null) await rm(path, { force: true }); else { await writeFile(path, source, { mode: 0o600 }); if (source.startsWith('globalThis') && source.endsWith(');')) await chmod(path, 0o644); }
+  const missingUrl = config(); delete missingUrl.bridgeUrl;
+  const missingUrlSource = writer(missingUrl);
+  for (const source of [null, '{malformed}', 'globalThis.__RESONANTOS_BRIDGE_CONFIG__ = Object.freeze(', missingUrlSource, writer(config())]) {
+    if (source === null) await rm(path, { force: true }); else { await writeFile(path, source, { mode: 0o600 }); if (source !== missingUrlSource && source.startsWith('globalThis') && source.endsWith(');')) await chmod(path, 0o644); }
     const route = routeFrom((await h.page()).body), response = await h.module(route);
     assert.equal(response.status, 200); assert.equal(response.body, renderBridgeModule(null));
     assert.match(response.body, /^delete globalThis\.__RESONANTOS_BRIDGE_CONFIG__;/);
+    safe(response.body, Object.values(missingUrl));
     assert.equal((await h.module(route)).status, 403);
   }
 });
@@ -236,12 +245,34 @@ test('reader rejects unsafe files and bounds reads', async t => {
   for (const mode of [0o640, 0o604, 0o644]) { await chmod(path, mode); assert.equal((await readGeneratedBridgeConfig(root, { openFile: trackedOpen })) === null, true); }
   await chmod(path, 0o600); await writeFile(path, 'x'.repeat(16 * 1024 + 1));
   assert.equal((await readGeneratedBridgeConfig(root, { openFile: trackedOpen })) === null, true);
-  await rm(path); await mkdir(path); assert.equal((await readGeneratedBridgeConfig(root, { openFile: trackedOpen })) === null, true);
+  // Private permissions ensure the regular-file guard is the only metadata
+  // rejection; a default 0755 directory would also fail the permission guard.
+  await rm(path); await mkdir(path, { mode: 0o700 }); assert.equal((await readGeneratedBridgeConfig(root, { openFile: trackedOpen })) === null, true);
   await rm(path, { recursive: true }); const target = join(root, 'synthetic-source'); await writeFile(target, source, { mode: 0o600 }); await symlink(target, path);
   assert.equal((await readGeneratedBridgeConfig(root, { openFile: trackedOpen })) === null, true);
   assert.equal(opened, closed, 'all opened descriptors closed');
   assert.equal(dataReads, validReads, 'unsafe metadata rejected before reading bytes');
   await rm(path); await writeFile(path, source, { mode: 0o600 });
+  // Model growth after fstat using a real descriptor and valid padded source.
+  // Invalid filler would hide removal of the post-read bound in the parser.
+  let growthClosed = 0, growthBytes = 0;
+  const growingOpen = async (...args) => {
+    const handle = await open(...args);
+    return new Proxy(handle, { get(target, prop) {
+      if (prop === 'stat') return async () => { const stats = await target.stat(); stats.size = 16 * 1024; return stats; };
+      if (prop === 'read') return async (...args) => { const result = await target.read(...args); growthBytes += result.bytesRead; return result; };
+      if (prop === 'close') return async () => { growthClosed++; await target.close(); };
+      const value = Reflect.get(target, prop, target); return typeof value === 'function' ? value.bind(target) : value;
+    } });
+  };
+  await writeFile(path, source.padEnd(16 * 1024, ' '));
+  assert.equal((await readGeneratedBridgeConfig(root, { openFile: growingOpen })) !== null, true, 'exact read bound accepts valid source');
+  growthBytes = 0;
+  await writeFile(path, source.padEnd(16 * 1024 + 1, ' '));
+  assert.equal((await readGeneratedBridgeConfig(root, { openFile: growingOpen })) === null, true, 'growth beyond read bound is rejected');
+  assert.equal(growthBytes, 16 * 1024 + 1, 'one overflow byte observed');
+  assert.equal(growthClosed, 2, 'boundary and overflow descriptors closed');
+  await writeFile(path, source);
   let failureClosed = false;
   const failingOpen = async (...args) => { const handle = await open(...args); return { stat: async () => { throw Error(token()); }, close: async () => { failureClosed = true; await handle.close(); } }; };
   assert.equal((await readGeneratedBridgeConfig(root, { openFile: failingOpen })) === null, true); assert.equal(failureClosed, true);
@@ -289,8 +320,11 @@ test('nonces expire and are single-use per server', async t => {
   const pending = new Promise(resolve => { release = resolve; });
   const h = await harness(t, { readConfig: async () => { entered(); await pending; return config(); } });
   const route = routeFrom((await h.page()).body);
-  const winner = h.module(route); await reading;
-  try { const loser = await h.module(route); assert.equal(loser.status, 403); assert.equal(h.reads(), 1); }
+  const winner = h.module(route);
+  try {
+    assert.equal(await Promise.race([reading.then(() => true), winner.then(() => false)]), true, 'authorized winner reaches config read');
+    const loser = await h.module(route); assert.equal(loser.status, 403); assert.equal(h.reads(), 1);
+  }
   finally { release(); }
   assert.equal((await winner).status, 200);
 });
@@ -437,6 +471,27 @@ test('nonce state is bounded and cleared', async t => {
 });
 test('Basic parser rejects ambiguous credentials', async t => {
   const h = await harness(t), route = routeFrom((await h.page()).body);
+  // An oversized canonical credential also fails the later password check.
+  // Observe decoding to prove the size guard rejects it before that work.
+  const oversized = Buffer.from(`dev:${h.key.repeat(8)}`).toString('base64');
+  assert.equal(`Basic ${oversized}`.length > 256, true);
+  let oversizedDecodes = 0;
+  const originalFrom = Buffer.from;
+  const fromMock = t.mock.method(Buffer, 'from', function (value, ...args) {
+    if (value === oversized && args[0] === 'base64') oversizedDecodes++;
+    return Reflect.apply(originalFrom, this, [value, ...args]);
+  });
+  try {
+    const authorization = `Basic ${oversized}`;
+    const page = await h.request('/', { headers: { authorization } });
+    assert.equal(page.status, 401); assert.equal(page.body, 'Authentication required.\n');
+    assert.equal(page.headers.get('www-authenticate'), CHALLENGE);
+    const response = await h.request(route, { headers: { ...META, authorization } });
+    assert.equal(response.status, 403); assert.equal(response.body, 'Forbidden.\n');
+    assert.equal(response.headers.has('www-authenticate'), false);
+    assert.equal(h.reads(), 0); assert.equal(h.issues(), 1);
+    assert.equal(oversizedDecodes, 0, 'oversized Authorization rejected before Base64 decoding');
+  } finally { fromMock.mock.restore(); }
   const encoded = Buffer.from(`dev:${h.key}`).toString('base64');
   const bad = [`Basic ${encoded}\n`, `Basic ${encoded.replace(/=+$/, '')}!`, `Basic ${encoded.slice(0, 8)} ${encoded.slice(8)}`,
     `Basic ${Buffer.from(`other:${h.key}`).toString('base64')}`, `Basic ${Buffer.from(`dev:${h.key.slice(1)}`).toString('base64')}`,
