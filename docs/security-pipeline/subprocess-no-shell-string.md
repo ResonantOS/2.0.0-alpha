@@ -13,9 +13,10 @@ before the check so a broken adapter fails before a silent pass.
 
 - `exec-string-api`: `exec()` / `execSync()` calls — the command string is
   shell-interpreted by design. Bare and member calls both match
-  (`execSync(...)`, `child_process.execSync(...)`); only `.exec(` is excluded,
-  because member `exec` is overwhelmingly `RegExp.prototype.exec` or a domain
-  method.
+  (`execSync(...)`, `child_process.execSync(...)`); member `.exec(` flags when
+  its receiver is a tracked child_process binding (a `require`d or imported
+  module object) and stays exempt otherwise — member `exec` is overwhelmingly
+  `RegExp.prototype.exec` or a domain method.
 - `shell-true-option`: spawn-family calls (`spawn`, `spawnSync`, `execFile`,
   `execFileSync`) with a `shell:` option whose value is anything except the
   bare boolean `false` — exactly `false` terminated by `,` or `}`; `shell:
@@ -66,8 +67,10 @@ repo's size) falls back to the plain walk — noted as a blind spot.
 
 ## Allowlisting
 
-Each entry pins file, rule, and the exact trimmed source line, so moved or
-edited code re-flags and forces a fresh look. Entries live in the adapter's
+Each entry pins file, rule, and the exact trimmed text of the whole call
+(multi-line calls included), so moved or edited code re-flags — including
+edits to later lines of a multi-line call — and forces a fresh look. Entries
+live in the adapter's
 `ALLOWLIST` in
 [subprocess-no-shell-string.mjs](../../scripts/security-pipeline/checks/subprocess-no-shell-string.mjs)
 and must carry the data-flow rationale for why the site is safe (for example:

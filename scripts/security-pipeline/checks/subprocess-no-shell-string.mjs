@@ -137,7 +137,23 @@ const SPAWN_FAMILY_NAMES = new Set(["spawn", "spawnSync", "execFile", "execFileS
 // on the raw span by QUOTED_SHELL_KEY below.
 const SHELL_OPTION_PATTERN =
   /(?:^|[{,(\s])(?:shell\s*:\s*(?!\s*false\s*[,}])(?:"[^"]*"|'[^']*'|true\b|[^,})\s][^,})]*)|shell\s*(?=[},]))/;
-const QUOTED_SHELL_KEY = /["']shell["']\s*:\s*(?!\s*false\s*[,}])/;
+// Quoted-key detection runs in two stages so string ARGUMENTS cannot fake a
+// key (review 2026-09-11 minor b): match the key SHAPE on masked text —
+// string interiors are blanked there, so `spawn("printf", ['{"shell": true}'],
+// { shell: false })` shows no key shape — then verify the raw text at the
+// same offset (masking preserves length) actually names "shell".
+const QUOTED_KEY_SHAPE = /[{,]\s*\[?\s*("[^"\n]*"|'[^'\n]*'|`[^`\n]*`)\s*\]?\s*:\s*(?!\s*false\s*[,}])/g;
+
+function quotedShellKey(maskedSpan, rawSpan) {
+  QUOTED_KEY_SHAPE.lastIndex = 0;
+  let match;
+  while ((match = QUOTED_KEY_SHAPE.exec(maskedSpan)) !== null) {
+    const keyStart = match.index + match[0].indexOf(match[1].charAt(0));
+    const rawKey = rawSpan.slice(keyStart, keyStart + match[1].length);
+    if (rawKey === "\"shell\"" || rawKey === "'shell'" || rawKey === "`shell`") return true;
+  }
+  return false;
+}
 
 // Provenance tracking (review 2026-09-11 blocker 2): this repo aliases the
 // child_process APIs (`spawnImpl = spawn`, bridge-tls.mjs) and binds the
@@ -151,41 +167,116 @@ const QUOTED_SHELL_KEY = /["']shell["']\s*:\s*(?!\s*false\s*[,}])/;
 // Known limit: provenance is textual — a string literal containing an
 // import-shaped text could register a phantom alias (over-matching,
 // allowlist relief applies).
-const CHILD_PROCESS_API_NAMES = [...STRING_API_NAMES, ...SPAWN_FAMILY_NAMES].join("|");
-const PROVENANCE_PATTERNS = [
-  // import { a, b as c } from "node:child_process"
-  [/import\s*\{([^}]+)\}\s*from\s*["']node:child_process["']/g, "names"],
-  // const { a, b as c } = require("node:child_process")
-  [/const\s*\{([^}]+)\}\s*=\s*require\(\s*["']node:child_process["']\s*\)/g, "names"],
-  // const x = spawn  (bare alias of a tracked API)
-  [new RegExp(`(?:const|let|var)\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*(${CHILD_PROCESS_API_NAMES})\\b`, "g"), "alias"],
-  // import cp from / import * as cp from / const cp = require(...)
-  [/import\s+([A-Za-z_$][\w$]*)\s+from\s*["']node:child_process["']/g, "receiver"],
-  [/import\s*\*\s*as\s+([A-Za-z_$][\w$]*)\s+from\s*["']node:child_process["']/g, "receiver"],
-  [/const\s+([A-Za-z_$][\w$]*)\s*=\s*require\(\s*["']node:child_process["']\s*\)/g, "receiver"],
+const CHILD_PROCESS_API_NAMES = [...STRING_API_NAMES, ...SPAWN_FAMILY_NAMES];
+// Import/require patterns reference the module name inside a string, so they
+// run on RAW source; first-wins registration means a later phantom match (a
+// doc-text import inside a string literal) can never overwrite a real import
+// binding (review 2026-09-11: a comment-shaped alias used to overwrite one).
+// Provenance patterns run on the FULL MASK (comments, strings, and regex
+// literals blanked — the mask is the one lexer that gets all three right, a
+// lesson this file taught itself twice). Module specifiers are strings, so
+// they blank too: each pattern captures the blanked string as a placeholder
+// and the raw text at the same offset (masking preserves length) must name
+// child_process — comment text, doc strings, and this file's own pattern
+// literals all fail that check and register nothing.
+const MODULE_SPEC_PATTERNS = new Set([
+  '"node:child_process"', "'node:child_process'",
+  '"child_process"', "'child_process'",
+]);
+const PROVENANCE_MASKED_PATTERNS = [
+  [/import\s*\{([^}]+)\}\s*from\s*("[^"\n]*"|'[^'\n]*')/g, "names", 2],
+  [/const\s*\{([^}]+)\}\s*=\s*require\(\s*("[^"\n]*"|'[^'\n]*')\s*\)/g, "names", 2],
+  [/const\s*\{([^}]+)\}\s*=\s*await\s+import\(\s*("[^"\n]*"|'[^'\n]*')\s*\)/g, "names", 2],
+  [/import\s+([A-Za-z_$][\w$]*)\s*,\s*\{([^}]+)\}\s*from\s*("[^"\n]*"|'[^'\n]*')/g, "mixed", 3],
+  [/import\s+([A-Za-z_$][\w$]*)\s+from\s*("[^"\n]*"|'[^'\n]*')/g, "receiver", 2],
+  [/import\s*\*\s*as\s+([A-Za-z_$][\w$]*)\s+from\s*("[^"\n]*"|'[^'\n]*')/g, "receiver", 2],
+  [/const\s+([A-Za-z_$][\w$]*)\s*=\s*require\(\s*("[^"\n]*"|'[^'\n]*')\s*\)/g, "receiver", 2],
 ];
 
-function collectProvenance(rawSource) {
+// Bare bindings (name = identifier) run on the MASKED text: comments are
+// blanked there, so a comment cannot register or overwrite anything, and the
+// pattern covers const/let/var assignments AND parameter defaults /
+// destructured parameters — the bridge-tls.mjs shape (review 2026-09-11
+// blocker). Identifier-to-identifier bindings form a graph resolved below,
+// so alias chains (const a = spawn; const b = a;) reach the original API.
+// Last-wins per name: a later rebinding to an API must register (comorbidity
+// probe: `let s = argv; s = spawn; s(cmd, { shell: true })` was a false
+// negative under first-wins).
+const BARE_BINDING_PATTERN = /([A-Za-z_$][\w$]*)\s*=\s*([A-Za-z_$][\w$]*)/g;
+
+function rawSpecifierIsModule(maskedText, rawText, match, specGroupIndex) {
+  const group = match[specGroupIndex];
+  const offset = match.index + match[0].indexOf(group);
+  return MODULE_SPEC_PATTERNS.has(rawText.slice(offset, offset + group.length));
+}
+
+function parseBraceBindings(clause, aliases, receivers = null) {
+  for (const piece of clause.split(",")) {
+    // "exec", "spawn as s", "spawn: s" — rename via `as` (import) or
+    // `:` (destructuring).
+    const binding = piece.trim().split(/\s+(?:as)\s+|\s*:\s*/);
+    const original = binding[0]?.trim();
+    const bound = (binding[1] ?? binding[0])?.trim();
+    if (original === "default" && receivers && /^[A-Za-z_$][\w$]*$/.test(bound ?? "")) {
+      receivers.add(bound);
+      continue;
+    }
+    if (
+      original && bound &&
+      /^[A-Za-z_$][\w$]*$/.test(bound) &&
+      CHILD_PROCESS_API_NAMES.includes(original) && !aliases.has(bound)
+    ) {
+      aliases.set(bound, original);
+    }
+  }
+}
+
+function collectProvenance(rawSource, maskedSource) {
   const aliases = new Map();
   const receivers = new Set();
-  for (const [pattern, kind] of PROVENANCE_PATTERNS) {
+  for (const [pattern, kind, specGroup] of PROVENANCE_MASKED_PATTERNS) {
     pattern.lastIndex = 0;
     let match;
-    while ((match = pattern.exec(rawSource)) !== null) {
+    while ((match = pattern.exec(maskedSource)) !== null) {
+      if (!rawSpecifierIsModule(maskedSource, rawSource, match, specGroup)) continue;
       if (kind === "names") {
-        for (const piece of match[1].split(",")) {
-          const binding = piece.trim().split(/\s+as\s+/);
-          const original = binding[0]?.trim();
-          const bound = (binding[1] ?? binding[0])?.trim();
-          if (original && bound && CHILD_PROCESS_API_NAMES.includes(original)) {
-            aliases.set(bound, original);
-          }
-        }
-      } else if (kind === "alias") {
-        aliases.set(match[1], match[2]);
+        parseBraceBindings(match[1], aliases);
+      } else if (kind === "mixed") {
+        receivers.add(match[1]);
+        parseBraceBindings(match[2], aliases);
       } else {
         receivers.add(match[1]);
       }
+    }
+  }
+  BARE_BINDING_PATTERN.lastIndex = 0;
+  const bindings = new Map();
+  let match;
+  while ((match = BARE_BINDING_PATTERN.exec(maskedSource)) !== null) {
+    // Last-wins: a later rebinding to an API must register even when the name
+    // was first bound to something safe (comorbidity probe 2026-09-11:
+    // `let s = argv; s = spawn; s(cmd, { shell: true })` was a false negative
+    // under first-wins). Over-match direction for rebind-away-from-API.
+    if (match[1] !== match[2]) {
+      bindings.set(match[1], match[2]);
+    }
+  }
+  // Resolve binding chains: a name aliases the child_process API its binding
+  // graph reaches (alias-of-alias included); cycles and dead ends register
+  // nothing.
+  for (const bound of bindings.keys()) {
+    let target = bindings.get(bound);
+    const seen = new Set([bound]);
+    while (target && !seen.has(target)) {
+      seen.add(target);
+      if (CHILD_PROCESS_API_NAMES.includes(target) && !aliases.has(bound)) {
+        // First-wins vs import-derived bindings: a property assignment like
+        // `adapters.exec = execFileSync` parses as a bare binding and must
+        // not overwrite what a real import registered (pre-push review F1).
+        aliases.set(bound, target);
+        break;
+      }
+      target = bindings.get(target);
     }
   }
   return { aliases, receivers };
@@ -218,6 +309,7 @@ export function maskCode(text) {
   let regex = false;
   let regexClass = false;
   let prevCode = "";
+  let prevPrevCode = "";
   let prevWord = "";
   for (let index = 0; index < text.length; index += 1) {
     const ch = text[index];
@@ -267,7 +359,7 @@ export function maskCode(text) {
     }
     if (ch === "/" && next === "/") { out[index] = " "; out[index + 1] = " "; lineComment = true; index += 1; continue; }
     if (ch === "/" && next === "*") { out[index] = " "; out[index + 1] = " "; blockComment = true; index += 1; continue; }
-    if (ch === "/" && regexStartContext(prevCode, prevWord)) {
+    if (ch === "/" && regexStartContext(prevCode, prevWord, prevPrevCode)) {
       regex = true;
       out[index] = " ";
       continue;
@@ -279,7 +371,14 @@ export function maskCode(text) {
       continue;
     }
     if (/\S/.test(ch)) {
-      prevCode = ch;
+      if (!(ch === "+" || ch === "-") || prevCode !== ch) {
+        // collapse ++/-- to a single context char so the operand-position
+        // guard in regexStartContext sees them as one token
+        prevPrevCode = prevCode;
+        prevCode = ch;
+      } else {
+        prevPrevCode = prevCode;
+      }
       if (/[A-Za-z0-9_$]/.test(ch)) prevWord += ch;
       else prevWord = "";
     }
@@ -293,11 +392,17 @@ export function maskCode(text) {
 // arrow-body regexes (`(x) => /re/.test(x)`), this codebase's most common
 // regex position; division can never follow `>` directly because its left
 // operand (identifier, digit, `)`, `]`) is the immediately preceding char.
-const REGEX_CONTEXT_CHARS = new Set(["(", ",", "=", ":", "?", ";", "!", "[", "{", "&", "|", ">"]);
+const REGEX_CONTEXT_CHARS = new Set(["(", ",", "=", ":", "?", ";", "!", "[", "{", "&", "|", ">", "*", "%", "~", "^", "<", "+", "-"]);
 const REGEX_CONTEXT_WORDS = new Set(["return", "case", "typeof", "in", "of", "new", "void", "delete", "await", "yield"]);
 
-function regexStartContext(prevCode, prevWord) {
-  return prevCode === "" || REGEX_CONTEXT_CHARS.has(prevCode) || REGEX_CONTEXT_WORDS.has(prevWord);
+function regexStartContext(prevCode, prevWord, prevPrevCode = "") {
+  if (prevCode === "" || REGEX_CONTEXT_CHARS.has(prevCode) || REGEX_CONTEXT_WORDS.has(prevWord)) {
+    // `+`/`-` only count as operand positions when not part of ++/--
+    // (pre-push review F3: `a++ / 2` is division, `a + /re/` is a regex).
+    if (prevCode === "+" || prevCode === "-") return prevPrevCode !== prevCode;
+    return true;
+  }
+  return false;
 }
 
 // Tracked-sources enumeration (review 2026-09-08, the #365 pattern from
@@ -390,7 +495,7 @@ export function firstArgumentText(text, openParenIndex, closeParenIndex) {
 export function scanSource(fileName, source) {
   const masked = maskCode(source);
   const lines = source.split("\n");
-  const { aliases, receivers } = collectProvenance(source);
+  const { aliases, receivers } = collectProvenance(source, masked);
   const findings = [];
   const callPattern = buildCallPattern([...aliases.keys()]);
   let match;
@@ -424,7 +529,7 @@ export function scanSource(fileName, source) {
     const spanLines = source.slice(
       source.lastIndexOf("\n", match.index) + 1,
       source.indexOf("\n", closeParenIndex) === -1 ? source.length : source.indexOf("\n", closeParenIndex),
-    ).trim();
+    ).trim().replace(/\r\n/g, "\n");
     const snippet = spanLines;
 
     if (STRING_API_NAMES.has(name)) {
@@ -433,7 +538,7 @@ export function scanSource(fileName, source) {
     }
     if (!SPAWN_FAMILY_NAMES.has(name)) continue;
 
-    if (SHELL_OPTION_PATTERN.test(span) || QUOTED_SHELL_KEY.test(source.slice(match.index, closeParenIndex + 1))) {
+    if (SHELL_OPTION_PATTERN.test(span) || quotedShellKey(span, source.slice(openParenIndex, closeParenIndex + 1))) {
       findings.push({ file: fileName, line: lineNumber, rule: "shell-true-option", snippet });
       continue;
     }
@@ -459,12 +564,25 @@ export async function run({ check, repoRoot }) {
   let files = await listSourceFiles(repoRoot);
   if (registrySurfaces) {
     // Registry `surfaces` scopes the scan (the convention the other checks
-    // follow — review 2026-09-11 minor): a surface is a repo-relative prefix.
+    // follow — review 2026-09-11 minor): a surface is a repo-relative prefix;
+    // trailing slashes are normalized so "scripts/" does not become "scripts//".
     files = files.filter((file) =>
-      registrySurfaces.some((surface) => surface === "." || file === surface || file.startsWith(`${surface}/`)),
+      registrySurfaces.some((surface) => {
+        const prefix = surface === "." ? "" : surface.replace(/^\.\//, "").replace(/\/+$/, "");
+        return prefix === "" || file === prefix || file.startsWith(`${prefix}/`);
+      }),
     );
   }
   if (files.length === 0) {
+    if (registrySurfaces) {
+      // A configured surface that scopes to zero files is a config typo that
+      // would silently disarm the gate (pre-push review F7) — fail loudly.
+      return {
+        status: "fail",
+        summary: `subprocess-no-shell-string: registry surfaces ${JSON.stringify(registrySurfaces)} matched no source files; fix the paths.`,
+        evidence: [],
+      };
+    }
     return {
       status: "skipped",
       summary: "subprocess-no-shell-string: no JS/TS sources found; nothing to scan.",

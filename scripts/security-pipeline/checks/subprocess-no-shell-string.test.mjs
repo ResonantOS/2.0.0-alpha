@@ -230,6 +230,11 @@ test("registry surfaces scope the scan and registry allowlist exempts paths", as
     assert.equal(scoped.status, "fail");
     assert.deepEqual(scoped.evidence.map((item) => item.path), ["browser-first/b.mjs"]);
 
+    // trailing slashes must not turn the prefix into "scripts//"
+    const slashScoped = await run({ check: { surfaces: ["scripts/"] }, repoRoot: root });
+    assert.equal(slashScoped.status, "fail");
+    assert.deepEqual(slashScoped.evidence.map((item) => item.path), ["scripts/a.mjs"]);
+
     const exempt = await run({
       check: { allowlist: [{ path: "browser-first/b.mjs", reason: "documented fixture" }] },
       repoRoot: root,
@@ -239,6 +244,89 @@ test("registry surfaces scope the scan and registry allowlist exempts paths", as
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+// Review 2026-09-11 round 3: the cited alias sites are parameter defaults,
+// not const declarations.
+test("parameter-default alias of spawn scans (bridge-tls shape)", () => {
+  const findings = scanSource(
+    "fixture.mjs",
+    [
+      'import { spawn } from "node:child_process";',
+      "async function run(cmd, args, opts = {}, spawnImpl = spawn) {",
+      "  const child = spawnImpl(cmd, { shell: true });",
+      "}",
+    ].join("\n")
+  );
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].rule, "shell-true-option");
+});
+
+// Review 2026-09-11 round 3 major: a comment must not be able to overwrite a
+// real import mapping and flip the scan to a false negative.
+test("comment-shaped alias cannot overwrite an import binding", () => {
+  const findings = scanSource(
+    "fixture.mjs",
+    [
+      'import { exec } from "node:child_process";',
+      "// const exec = spawn;",
+      "exec(command);",
+    ].join("\n")
+  );
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].rule, "exec-string-api");
+});
+
+// Review 2026-09-11 round 3 minor b: string ARGUMENTS must not fake a quoted
+// shell key.
+test("quoted shell-like text inside a string argument does not flag", () => {
+  const findings = scanSource(
+    "fixture.mjs",
+    'spawn("printf", [\'{"shell": true}\'], { shell: false });\n'
+  );
+  assert.deepEqual(findings, []);
+});
+
+// Review 2026-09-11 round 3 minor a: destructuring renames use `:`, not `as`.
+test("colon-rename destructured require registers the alias", () => {
+  const findings = scanSource(
+    "fixture.mjs",
+    [
+      'const { spawn: s } = require("node:child_process");',
+      "s(userCmd, { shell: true });",
+    ].join("\n")
+  );
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].rule, "shell-true-option");
+});
+
+// Same hostile classes, self-found before submission: alias chains and
+// template-literal keys.
+test("alias-of-alias chains resolve to the original API", () => {
+  const findings = scanSource(
+    "fixture.mjs",
+    'import { spawn } from "node:child_process";\nconst a = spawn;\nconst b = a;\nb(cmd, { shell: true });\n'
+  );
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].rule, "shell-true-option");
+});
+
+test("template-literal shell key flags", () => {
+  const findings = scanSource("fixture.mjs", "spawn(cmd, args, { `shell`: true });\n");
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].rule, "shell-true-option");
+});
+
+// Comorbidity sweep 2026-09-11 (predicted from the first-wins mechanism,
+// confirmed by probe): rebinding a name to a child_process API later in the
+// file must register.
+test("late rebinding to spawn scans", () => {
+  const findings = scanSource(
+    "fixture.mjs",
+    "let s = argv;\ns = spawn;\ns(cmd, { shell: true });\n"
+  );
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].rule, "shell-true-option");
 });
 
 test("unbalanced call span is skipped without throwing", () => {
@@ -444,6 +532,100 @@ test("listSourceFiles excludes gitignored scratch but keeps visible untracked wo
     assert.equal(result.evidence[0].rule, "shell-true-option");
     // gitignored scratch-rig/live.mjs must not appear anywhere in evidence
     assert.ok(!result.evidence.some((item) => item.path.includes("scratch-rig")));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// Pre-push adversarial review round (2026-09-11) — every finding pinned.
+test("property assignment cannot overwrite an import binding (F1)", () => {
+  const findings = scanSource(
+    "fixture.mjs",
+    [
+      'import { exec, execFileSync } from "node:child_process";',
+      "const adapters = {};",
+      "adapters.exec = execFileSync;",
+      "exec(userInput);",
+    ].join("\n")
+  );
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].rule, "exec-string-api");
+});
+
+test("unprefixed child_process registers renamed imports and receivers (F2)", () => {
+  const renamed = scanSource(
+    "fixture.mjs",
+    'import { exec as run } from "child_process";\nrun(userInput);\n'
+  );
+  assert.equal(renamed.length, 1);
+  assert.equal(renamed[0].rule, "exec-string-api");
+
+  const receiver = scanSource(
+    "fixture.mjs",
+    'const cp = require("child_process");\ncp.exec(userInput);\n'
+  );
+  assert.equal(receiver.length, 1);
+  assert.equal(receiver[0].rule, "exec-string-api");
+});
+
+test("quote-bearing regex after an operator does not hide a same-line violation (F3)", () => {
+  const findings = scanSource(
+    "fixture.mjs",
+    'const parts = a + /["\']/g.test(s); spawn(cmd, { shell: true });\n'
+  );
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].rule, "shell-true-option");
+
+  // ++/-- stay division contexts
+  assert.deepEqual(
+    scanSource("fixture.mjs", "i++; const r = total / count; spawn(f, a);\n"),
+    []
+  );
+});
+
+test("computed quoted key flags (F4)", () => {
+  const findings = scanSource("fixture.mjs", 'spawn(cmd, args, { ["shell"]: true });\n');
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].rule, "shell-true-option");
+});
+
+test("mixed default+named import and await import() renames register (F6)", () => {
+  const mixed = scanSource(
+    "fixture.mjs",
+    'import cp, { exec } from "node:child_process";\ncp.exec(cmd);\n'
+  );
+  assert.equal(mixed.length, 1);
+  assert.equal(mixed[0].rule, "exec-string-api");
+
+  const dynamic = scanSource(
+    "fixture.mjs",
+    'const { exec: run } = await import("node:child_process");\nrun(cmd);\n'
+  );
+  assert.equal(dynamic.length, 1);
+  assert.equal(dynamic[0].rule, "exec-string-api");
+});
+
+test("comment-shaped provenance registers nothing (self-scan catch)", () => {
+  assert.deepEqual(
+    scanSource(
+      "fixture.mjs",
+      '// const { exec: run } = await import("child_process");\nrun(cmd, args);\n'
+    ),
+    []
+  );
+});
+
+test("surfaces scoped to zero files fails loudly; leading ./ is stripped (F7)", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "spnssh-zero-"));
+  try {
+    await mkdir(path.join(root, "scripts"), { recursive: true });
+    await writeFile(path.join(root, "scripts", "a.mjs"), "spawn(f, a);\n");
+    const typo = await run({ check: { surfaces: ["./docs"] }, repoRoot: root });
+    assert.equal(typo.status, "fail");
+    assert.match(typo.summary, /matched no source files/);
+
+    const stripped = await run({ check: { surfaces: ["./scripts"] }, repoRoot: root });
+    assert.equal(stripped.status, "pass");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
