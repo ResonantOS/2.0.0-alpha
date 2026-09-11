@@ -134,3 +134,14 @@ criteria, and the release evidence — are tracked in
 Future work belongs in the [roadmap](./ROADMAP.md), and the actual reviewer
 delivery path is documented in
 [Alpha Distribution](./release/ALPHA_DISTRIBUTION.md).
+
+## Development Surface
+
+Issue [#429](https://github.com/ResonantOS/2.0.0-alpha/issues/429) part 2
+provides opt-in, authenticated bridge-config delivery to the React shell at
+http://127.0.0.1:1430. Delivery is disabled by default, requires a separate
+developer page key, and requires the bridge operator's exact-origin CORS
+opt-in. Generated bridge credentials remain denied through Vite filesystem
+routes and are excluded from builds. This is development tooling, not a new
+Alpha runtime component. See
+[Opt-in React shell development](../browser-first/README.md#opt-in-react-shell-development).

@@ -162,11 +162,16 @@ transport reads it on every call and a changed URL or either credential triggers
 a fresh bootstrap. Other 403s and 401s do not trigger retries. Tokens never appear
 in transport-generated error messages.
 
-Nothing delivers `__RESONANTOS_BRIDGE_CONFIG__` to a browser page yet. Browser
-use also requires the operator's CORS opt-in at the bridge through
-`RESONANTOS_BRIDGE_ALLOWED_ORIGINS`. Config delivery and browser-origin setup
-are tracked in #429, together with the dev-server exposure warning: while
-`npm run dev` runs, the generated config file is served to local processes.
+The optional Vite React development page receives `__RESONANTOS_BRIDGE_CONFIG__`
+only when `RESONANTOS_DEV_BRIDGE_CONFIG=1` and the operator authenticates with
+the independent `RESONANTOS_DEV_BRIDGE_PAGE_KEY` through HTTP Basic. Delivery
+uses a same-origin, request-generated module with a single-use nonce. Browser
+access also requires the bridge operator to set
+`RESONANTOS_BRIDGE_ALLOWED_ORIGINS=http://127.0.0.1:1430`. Since #429 part 1,
+the generated config file is NOT served through Vite filesystem routes; part 2
+preserves those denials. See
+[Opt-in React shell development](../browser-first/README.md#opt-in-react-shell-development)
+for setup and disable steps.
 
 ## Live SDK lane
 

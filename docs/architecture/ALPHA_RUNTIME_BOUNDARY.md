@@ -141,6 +141,14 @@ scripts can supply shared contracts, manifests, optional services, tests, or
 future product work. Their presence does not add a third required Alpha runtime
 component.
 
+The optional Vite React development page may receive generated bridge
+credentials only through the explicitly enabled, authenticated development
+delivery path documented in
+[browser-first/README.md](../../browser-first/README.md#opt-in-react-shell-development).
+The bridge retains all authentication and capability checks; the operator must
+separately allow the exact development origin. This is not an additional
+shipped Alpha component.
+
 ## Change Rules
 
 - Extension or bridge changes must preserve bridge-token and route-capability
