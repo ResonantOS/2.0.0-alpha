@@ -245,7 +245,10 @@ export async function main() {
           signal: AbortSignal.timeout(10000), redirect: 'error' });
         requireProof(preflight.status < 500 && (preflight.headers.get('access-control-allow-origin') ?? '') !== ORIGIN);
         requireProof(result.rejected && result.networkError && entries.some(entry => entry.corsFailure));
-        requireProof(!entries.some(entry => entry.wireSent && ((entry.method === 'POST' && entry.url === `${value.bridgeUrl}/api/capability-tokens`) || (entry.method === 'GET' && entry.url === `${value.bridgeUrl}/providers/status`))));
+        // Chromium emits requestWillBeSentExtraInfo for a CORS-preflighted POST before the preflight
+        // verdict, so that event is not proof of bytes on the wire. A request reached the bridge only
+        // if the bridge answered it (a response was received for that requestId).
+        requireProof(!entries.some(entry => entry.status !== undefined && ((entry.method === 'POST' && entry.url === `${value.bridgeUrl}/api/capability-tokens`) || (entry.method === 'GET' && entry.url === `${value.bridgeUrl}/providers/status`))));
         requireProof(session.violations.length === 0 && !session.errors.some(message => /preamble/i.test(message)));
       });
       return;
