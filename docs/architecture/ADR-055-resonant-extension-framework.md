@@ -32,7 +32,10 @@ are defined, validated, tested, reviewed, signed, distributed, installed,
 granted capabilities, executed, updated, disabled, and removed. The
 existing `src/sdk/addons/` contracts remain the starting point; the
 framework packages and hardens those boundaries into a stable
-developer-facing contract.
+developer-facing contract. As of PR #441 (merged 2026-09-11) the
+source moved to `packages/addon-sdk/src/sdk/addons/`; the in-tree
+`src/sdk/addons/*.ts` re-export shims preserve backwards compatibility
+for in-flight imports.
 
 An add-on that wants to operate inside ResonantOS must:
 
@@ -119,8 +122,10 @@ ADR-023 / ADR-024 (registry / commerce — deferred per C10)
 
 ADR-006 establishes the Add-on Runtime & SDK with manifest validation,
 provenance, capabilities, and host mediation. ADR-018 establishes the
-binding internal standard at `src/sdk/addons/`. ADR-055 extends both
-toward a public, third-party-capable contract.
+binding internal standard at `src/sdk/addons/` (source moved to
+`packages/addon-sdk/src/sdk/addons/` by PR #441; `src/sdk/addons/*.ts`
+remain as re-export shims). ADR-055 extends both toward a public,
+third-party-capable contract.
 
 Future public/third-party work should extend the existing Add-on SDK
 decisions rather than introduce an unrelated extension framework that
@@ -146,19 +151,27 @@ VALID != VERIFIED != APPROVED != GRANTED
 `ADDON_CERTIFICATION_AND_SIGNING_V0.1.md` documents the rule in full. REF
 inherits it unchanged.
 
-REF's three trust tiers map onto the existing `AddOnProvenanceTier` enum
-(`bundled-core | curated-signed | enterprise-signed | sideloaded-unverified`)
-per `RESOLUTIONS_V0.1.md` C1 (option a — Map only). The mapping table:
+REF proposes three trust tiers. They are **proposed** in this ADR and
+do **not** correspond one-to-one to any single existing enum. The runtime
+carries `AddOnProvenanceTier` (`bundled-core | curated-signed |
+enterprise-signed | sideloaded-unverified` —
+`src/core/contracts.ts:113`) and `AddOnVerificationState`
+(`unverified | verified`, on `provenance.verificationState`) and
+`AddOnReviewState` (`unreviewed | reviewed | approved`). REF's proposed
+tiers are a *display/governance overlay*, not an extension of the
+runtime enum. The intended mapping (proposed per
+`RESOLUTIONS_V0.1.md` C1, option a — Map only):
 
-| REF tier | Existing enums |
+| REF tier (proposed) | Runtime enums (read-only, not equivalent) |
 |---|---|
-| Developer / Sideloaded | `sideloaded-unverified` + `unverified` + `unreviewed` |
-| Verified | `curated-signed` + `verified` + `reviewed` |
-| Resonant Approved | `curated-signed` + `verified` + `approved`, bound to per-`(addonId, version)` approval record |
+| Developer / Sideloaded | `provenance.tier = "sideloaded-unverified"` + `verificationState = "unverified"` + `reviewState = "unreviewed"` |
+| Verified | `provenance.tier = "curated-signed"` + `verificationState = "verified"` + `reviewState = "reviewed"` |
+| Resonant Approved | `provenance.tier = "curated-signed"` + `verificationState = "verified"` + `reviewState = "approved"`, bound to per-`(addonId, version)` approval record |
 
-`bundled-core` is first-party (trust-by-bundling, not signature). `enterprise-signed`
-is a future value with no V0.1 work. Per-version approval is mandatory — the
-package digest and manifest digest both bind to the approval record.
+`bundled-core` is first-party (trust-by-bundling, not signature).
+`enterprise-signed` is a future value with no V0.1 work. Per-version
+approval is mandatory — the package digest and manifest digest both
+bind to the approval record.
 
 ### User policy for personal / self-built add-ons
 
@@ -179,15 +192,18 @@ tier. Approval is never a substitute for runtime authorization.
 
 ## 5. Capability Model
 
-Three vocabularies coexist today:
-
-1. **Manifest capabilities** (13 coarse + 2 V0.1 additions; see
-   §12.1): `filesystem`, `archive-read`, `archive-intake-write`,
-   `chat-interface`, `memory-provider`, `providers`, `shell`, `network`,
-   `ui-embedding`, `browser-control`, `agent-delegation`,
-   `notifications`, `device-integration`, plus `channel.send` and
-   `channel.account-write` per the §12 commitment.
-2. **Bridge route capabilities** (23, fine-grained): the per-route
+1. **Manifest capabilities** (13, the
+   `ADDON_CAPABILITIES` enum at `packages/addon-sdk/src/sdk/addons/contracts.ts:62-75`
+(the original `src/sdk/addons/contracts.ts` now re-exports from
+`packages/addon-sdk/` after PR #441)):
+   `filesystem`, `archive-read`, `archive-intake-write`,
+   `chat-interface`, `memory-provider`, `providers`, `shell`,
+   `network`, `ui-embedding`, `browser-control`, `agent-delegation`,
+   `notifications`, `device-integration`. The §12 commitment to add
+   `channel.send` and `channel.account-write` alongside the existing
+   `notifications` is **proposed** in this ADR — they are not yet in
+   the `ADDON_CAPABILITIES` enum on `dev` (verified 2026-09-11).
+2. **Bridge route capabilities** (26, fine-grained): the per-route
    capability-token set at `browser-first/host/bridge-capability-tokens.mjs`.
    A consistency test locks this list to the extension-side allowlist.
 3. **Browser-first add-on capabilities** (informal): a second, untyped
@@ -196,7 +212,8 @@ Three vocabularies coexist today:
 
 `RESOLUTIONS_V0.1.md` C5 (option a) ships a single mapping table owned
 by the SDK package. The mapping is a versioned data file inside the
-public SDK (`packages/addon-sdk/`). Validation warns when a requested
+public SDK (`packages/addon-sdk/` — relocated from `src/sdk/addons/` by
+PR #441, merged 2026-09-11). Validation warns when a requested
 manifest capability maps to nothing; the bridge authorises at route
 granularity using the same data.
 
@@ -226,7 +243,7 @@ vocabularies coexist"; `RESOLUTIONS_V0.1.md` C5.
 
 The manifest is the developer-facing source of truth. V0.1 retains the
 existing `AddOnManifest` shape from `RESONANT_ADDON_SDK_SPEC_V0.1.md`
-and `src/sdk/addons/contracts.ts`:
+and `packages/addon-sdk/src/sdk/addons/contracts.ts` (post-PR #441):
 
 ```json
 {
@@ -241,22 +258,37 @@ and `src/sdk/addons/contracts.ts`:
   "sdkVersion": "^0.1.0",
   "surfaces": [],
   "requestedCapabilities": [],
-  "providerRequirements": [],
-  "archiveIntegration": {},
-  "health": {},
-  "installHooks": {},
+  "providerRequirements": {
+    "sharedProfiles": [],
+    "supportsPrivateCredentials": false,
+    "preferredRuntimeKinds": []
+  },
+  "archiveIntegration": {
+    "readScopes": [],
+    "intakeWriteScopes": [],
+    "canRequestIngest": false,
+    "canWriteKnowledgePages": false
+  },
+  "health": {
+    "strategy": "host-command",
+    "command": "noop"
+  },
+  "installHooks": { "onInstall": "noop", "onEnable": "noop" },
   "compatibility": {
-    "resonantOS": ">=2.0.0-alpha <3.0.0",
-    "sdk": "^0.1.0"
+    "shellVersion": "^0.1.0",
+    "platforms": ["macOS", "linux"]
   }
 }
 ```
 
 The package format is `.rpkg` (per `ADDON_PACKAGE_AND_MANIFEST_SPEC_V0.1.md`).
 A package may be a deterministic ZIP container internally; the file
-extension and packaging conventions are `.rpkg`. The
-`scripts/check-repo-hygiene.mjs` archive-zip rule is amended to add
-`.rpkg` to the allowlist (see §12.1, C6).
+extension and packaging conventions are `.rpkg`. This ADR proposes a
+corresponding amendment to `scripts/check-repo-hygiene.mjs` to add
+`.rpkg` to the archive-zip allowlist (see §12.1, C6) — the amendment
+is **not yet present** in the script on `dev` (verified 2026-09-11).
+The security pipeline would validate `.rpkg` packages separately;
+the hygiene rule is not the security boundary.
 
 ```text
 example-notes-1.0.0.rpkg
@@ -583,16 +615,14 @@ The section is structured as: V0.1 commitments first (these become
 implementation gates once the prose is filled in), then cross-references
 to source documents, then the deferrals that survive V0.1.
 
-### 12.1 V0.1 commitments
-> **Re-classified 2026-08-31 (§15.2):** C6, C7, C8, C10, C11 below are beta.2
-> distribution deferrals, not V0.1 commitments. See §15.2 for the mapping.
-
 - **C6 container format** — **V0.1:** `.rpkg` is the official package
-  format per `ADDON_PACKAGE_AND_MANIFEST_SPEC_V0.1.md`. The
-  `scripts/check-repo-hygiene.mjs` archive-zip rule is amended to add
-  `.rpkg` to the allowlist (one-line change). Test fixtures live under
-  `tests/fixtures/`. The security pipeline validates `.rpkg` packages
-  separately; the hygiene rule is not the security boundary.
+  format. The ADR proposes amending
+  `scripts/check-repo-hygiene.mjs` to add `.rpkg` to the allowlist
+  (a one-line change); the amendment is **not yet present** on `dev`
+  (verified 2026-09-11). Test fixtures would live under
+  `tests/fixtures/`. The security pipeline would validate `.rpkg`
+  packages separately; the hygiene rule is not the security
+  boundary.
 - **C7 compatibility evaluation** — install + launch; fold into Phase 1.
 - **C8 sideload enablement** — **V0.1:** enable + harden; security-pipeline
   review is its own gate before Tier 1 (Developer/Sideloaded) add-ons
@@ -696,34 +726,25 @@ See also:
   add-on) is **yet to be determined**. Deferred to a follow-on ADR,
   candidate **ADR-057**.
 
-- **Communication-channel capability refinement** — **V0.1:** add
-  `channel.send` and `channel.account-write` as new manifest
-  capabilities alongside the existing `notifications.send`.
-  `channel.receive` and `channel.account-read` are deferred to V1.
-  `notifications.send` remains for V0.1 backward-compat. The SDK
-  spec records the migration in
-  `RESONANT_ADDON_SDK_SPEC_V0.1.md` Capability Model section. The C5
-  mapping table picks up the new entries in the same file.
-
-- **Post-V0.1 sandbox surface** — deferred. M0 Test A (Hello Resonant
-  with a UI surface) was deferred past V0.1 by `RESOLUTIONS_V0.1.md` C4.
-  The "what defines V0.1 done" exit criteria are: Phase 3.5 hardening
-  landed; M0 Test B (Local Files) and M0 Test C (Local AI) green; the
-  capability-mapping table operational; signing + registry metadata in
-  place per Phase 6/8. Only then is Test A reopened.
+- **Communication-channel capability refinement** — **proposed.**
+  The ADR proposes adding `channel.send` and `channel.account-write`
+  as new manifest capabilities alongside the existing
+  `notifications` capability (note: the runtime capability is
+  `notifications`, not `notifications.send`). `channel.receive` and
+  `channel.account-read` are deferred to V1. The SDK spec records
+  the migration in `RESONANT_ADDON_SDK_SPEC_V0.1.md` Capability Model
+  section once the proposal is accepted; the C5 mapping table picks
+  up the new entries in the same file.
 
 ### 12.2 Cross-references
 
-Every commitment above is grounded in source documents:
-
 | Decision | Source |
 |---|---|
-| §4 Trust Model mapping table | `RESOLUTIONS_V0.1.md` C1 + `PROPOSAL-resonant-extension-framework.md` Trust Tiers |
+| `channel.send` / `channel.account-write` proposed (not yet in `ADDON_CAPABILITIES`) | §5 Capability Model; `RESOLUTIONS_V0.1.md` C5 (proposed) |
 | `personal-local` display-only stance | `ADDON_PERSONAL_PLUGIN_GOVERNANCE.md` + user policy |
-| `channel.send` / `channel.account-write` V0.1 additions | `packages/addon-sdk/README.md` Capability additions |
 | `channel.receive` / `channel.account-read` V1 deferral | §5 Capability Model |
 | Public SDK external boundary inventory | Phase 0 deliverable; `IMPLEMENTATION_ROADMAP_V0.1.md` Phase 0 |
-| C6 `.rpkg` stays official | `ADDON_PACKAGE_AND_MANIFEST_SPEC_V0.1.md` + `check-repo-hygiene.mjs` amend |
+| C6 `.rpkg` proposed (allowlist amend not yet present in `check-repo-hygiene.mjs` on `dev`, verified 2026-09-11) | `ADDON_PACKAGE_AND_MANIFEST_SPEC_V0.1.md`; hygiene amend pending |
 | C8 sideload enablement | `RESOLUTIONS_V0.1.md` C8 + Phase 3.5 hardening notes |
 | C9 naming (`releaseTrustTier`, `capabilityRiskClass`) | `RESOLUTIONS_V0.1.md` C9 |
 | C10 registry metadata format | `RESOLUTIONS_V0.1.md` C10 + ADR-023/024 |
@@ -880,12 +901,22 @@ Source: `PROPOSAL-resonant-extension-framework.md` Consequences;
 ## 15. Maintainer Disposition Reconciliation (2026-08-31; verified against upstream `dev` 2026-09-10)
 
 This section records ADR-055 against the upstream maintainer's actual
-release-scope dispositions. It is not a review of REF — the maintainer has
-not reviewed this ADR or PR #327. These dispositions are *maintainer
-precedents that constrain how REF should be proposed*: scope/timing
-decisions captured in the upstream issue record (#109, #180, #215, #137),
-each drafted via Claude Code as noted in the issue comments. They are read
-from the upstream issue comment record on 2026-08-31.
+release-scope dispositions. **Review history (verified 2026-09-11).**
+The maintainer posted review comments on PR #327 on 2026-09-08
+(static-readout of the original PR, covering design and enforcement,
+not just release timing) and on 2026-09-10 (the closeout that
+drove the split into two PRs — ADR-only first, then the 17 REF
+documents). The 2026-09-10 closeout also captured per-PR blockers
+on `#327`–`#331` (see `fork-cleanup/PR_BLOCKERS_SUMMARY.md`); the
+substantive findings are addressed in the corresponding resubmitted
+PRs (`#440`, `#441`). The "~8/10 / not design" assessment referenced
+in earlier revisions of this section came from an external AI review,
+not from the maintainer, and has been removed from this version. These
+dispositions are *maintainer precedents that constrain how REF should
+be proposed*: scope/timing decisions captured in the upstream issue
+record (#109, #180, #215, #137), each drafted via Claude Code as noted
+in the issue comments. They are read from the upstream issue comment
+record on 2026-08-31.
 
 Issue states re-verified against the live record on 2026-09-10: #109 OPEN,
 #137 OPEN, #180 OPEN (task 1 landed in `dev`), #215 CLOSED. §15.1 now
@@ -938,17 +969,26 @@ boundary.
 
 ADR-055 already defers the marketplace and distribution machinery (§14,
 §12.3); this section pins those deferrals to the maintainer's beta.2
-boundary rather than to ADR-023/024 alone. Tom's #180 finding — disable
-retains every granted capability and a single re-enable restores full grants
-with no re-consent prompt (`src/modules/addons/controller.ts:58-89`) — is
-being addressed upstream in tasks. Task 1 landed in `dev`: the `uninstalled`
-installation state with tombstone rebase and fresh-grant snapshot semantics,
-with reinstall rebuilding fresh grants from the manifest (design note
-`docs/addons/addon-lifecycle-uninstall-design.md`). #180 remains OPEN;
-complete grant cleanup on disable/uninstall and residue reconciliation are
-still beta.2 gates and are **not** resolved by V0.1. The distinction
-to preserve is `disable ≠ uninstall ≠ re-authorize` — now a first-class
-contract in §16.
+boundary rather than to ADR-023/024 alone. **Verified 2026-09-11:**
+`uninstallAddon` on `dev` already clears grants, private-provider links
+and configuration (`src/modules/addons/controller.ts:182-240`) and the
+host already exposes running-work/uninstall-audit/user-data routes.
+The original disable-vs-retain-grants concern from Tom's earlier #180
+review (disable retaining every granted capability; a single re-enable
+restoring full grants with no re-consent) is no longer the gap: the
+remaining `disable` semantics are the residue and reconciliation items
+called out below, not the basic grant-clear-on-uninstall path. Tom's
+#180 finding — disable retains every granted capability and a single
+re-enable restores full grants with no re-consent prompt
+(`src/modules/addons/controller.ts:58-89`) — is being addressed upstream
+in tasks. Task 1 landed in `dev`: the `uninstalled` installation
+state with tombstone rebase and fresh-grant snapshot semantics, with
+reinstall rebuilding fresh grants from the manifest (design note
+`docs/addons/addon-lifecycle-uninstall-design.md`). #180 remains
+OPEN; complete grant cleanup on `disable` (not `uninstall`) and
+residue reconciliation are still beta.2 gates and are **not** resolved
+by V0.1. The distinction to preserve is `disable ≠ uninstall ≠
+re-authorize` — now a first-class contract in §16.
 
 ### 15.3 Still requiring maintainer decision
 

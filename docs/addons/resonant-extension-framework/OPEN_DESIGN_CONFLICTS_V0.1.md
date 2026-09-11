@@ -562,7 +562,7 @@ Phase 3.5 gates Tests B and C; Test A drops out of V0.1 entirely (see C4). Keepi
 
 ### Deferred (no decision needed today)
 
-- **C6** container format: chosen git-tarball-with-deterministic-permissions unless the security pipeline vetoes; defer until Phase 2 starts.
+- **C6** container format: chosen git-tarball-with-deterministic-permissions unless the security pipeline vetoes; defer until Phase 2 starts. *(Superseded by ADR-055 §12.1 C6 which proposes `.rpkg` — a deterministic ZIP container internally. The git-tarball proposal remains in the C6 conflict record for historical reference; the proposal that lands with the maintainer's review is the one named in ADR-055.)*
 - **C7** compatibility evaluation: install + launch (option b); small, fold into Phase 1.
 - **C8** sideload enablement: option (a), enabled + hardened; security-pipeline review is its own gate before any Tier 1 exists.
 - **C9** naming: option (a) — rename in REF only (`releaseTrustTier`, `capabilityRiskClass`); leave `agents[].trustTier` alone.

@@ -76,26 +76,36 @@ Host returns model response (and streamed tokens) to runtime
 Runtime sees the response; never the credential
 ```
 
-The "routed model handle" is the wire contract:
+The "routed model handle" is the **proposed** wire contract. None of
+the following fields exist on `ProviderRoutingDecision`
+(`src/core/contracts.ts:911-921`) on `dev` (verified 2026-09-11):
+`routingDecisionId` (the handle), `expiresAt`, explicit revocation,
+and named failure responses (`routing-decision-revoked`,
+`routing-decision-expired`). They are **proposed** in this ADR. The
+runtime contract as it exists today is `authTier: AuthTier =
+"supported" | "experimental" | "unavailable"`.
 
 ```json
 {
-  "routingDecisionId": "rd-2026-08-24-001",
   "providerProfileId": "resonant-deepseek-v4-pro",
   "runtimeNodeId": "rn-local-user-mac",
+  "executionAdapterId": "deepseek-v4-pro-direct",
   "model": "deepseek-v4-pro",
-  "authTier": "subscription",
-  "costPosture": "paid-api",
-  "fallbackChain": ["rn-emergency-local", "rn-degraded-bypass"],
-  "expiresAt": "2026-08-24T01:00:00Z"
+  "authTier": "experimental",
+  "usingFallback": false,
+  "resolutionReason": "matched-shared-profile",
+  "fallbackPolicyId": "experimental-deepseek-delegated-reasoning"
 }
 ```
 
-The runtime uses the `routingDecisionId` to make subsequent calls (streaming, follow-ups, cancellation). The host resolves the ID back to a stored decision; the credential never appears on the wire. Decisions expire (default: 5 minutes; configurable in the host); the runtime must request a fresh decision if its current one expires.
-
-**What the runtime sees:** opaque IDs and the model name. **What the runtime never sees:** the API key, OAuth token, base URL secret, or any provider-internal auth material.
-
-This mirrors the Phase 3.5 caller-attributed capability token design (ADR-055 §8): an opaque, scoped, expiring handle that the host can revoke at any time. Revoking a routing decision mid-task causes the runtime's next model call to fail with `routing-decision-revoked`; the runtime is expected to surface this to its calling agent and request a new decision.
+This shape is what `ProviderRoutingDecision` carries today. The
+proposed additions for an opaque, scoped, expiring, revocable handle
+(sibling to the Phase 3.5 caller-attributed capability token design in
+ADR-055 §8) are **not yet implemented**: no `routingDecisionId`, no
+`expiresAt`, no explicit revoke path, no `routing-decision-revoked` /
+`routing-decision-expired` failure codes. This ADR proposes them; their
+land-side implementation is tracked separately and is not a V0.1
+gate.
 
 ## 5. Model Routing
 
@@ -169,9 +179,9 @@ The boundary must be testable. These failure modes are the negative tests for an
 
 **F7 — Approval skip.** A runtime invokes a `run_task`-style tool marked `requiresHumanApproval: true` without the user having approved. Expected: host blocks until approval; if approval denied, runtime receives `approval-denied` and must abort the task.
 
-**F8 — Stale routing decision.** A runtime uses a `routingDecisionId` whose `expiresAt` has passed. Expected: host rejects; returns `routing-decision-expired`; runtime requests a new decision.
+**F8 — Stale routing decision (proposed).** A runtime uses a `routingDecisionId` whose `expiresAt` has passed. Expected: host rejects; returns `routing-decision-expired`; runtime requests a new decision. The handle and the failure code are not yet implemented on `dev`.
 
-**F9 — Revoked routing decision.** A runtime uses a `routingDecisionId` after the host revoked it (e.g., user disabled the runtime). Expected: same as F8 with reason `routing-decision-revoked`.
+**F9 — Revoked routing decision (proposed).** A runtime uses a `routingDecisionId` after the host revoked it (e.g., user disabled the runtime). Expected: same as F8 with reason `routing-decision-revoked`. The handle and the failure code are not yet implemented on `dev`.
 
 **F10 — Experimental route attempt without declaration.** A runtime requests an experimental route without `allowExperimentalAuth: true`. Expected: rejected with `experimental-route-not-declared`.
 
@@ -181,7 +191,9 @@ Each F-number becomes a test case in `packages/addon-sdk-testing/` (B4 deliverab
 
 **With ADR-005 (Provider Fabric & Routing).** Unchanged. This ADR adds an explicit boundary for the external-agent-runtime case; ADR-005 remains authoritative for provider routing in all other cases.
 
-**With ADR-015 (Delegation Fabric).** Tightened. ADR-015 established that add-on agents are delegation targets; this ADR adds the credential and provider-selection constraints that make that policy enforceable for external agent runtimes. The Delegation Packet's `providerPolicy` field (newly formalized in this ADR) is the runtime's input to the routing request.
+**With ADR-015 (Delegation Fabric).** Tightened. ADR-015 established that add-on agents are delegation targets; this ADR adds the credential and provider-selection constraints that make that policy enforceable for external agent runtimes. The Delegation Packet's `providerPolicy` field
+(`src/core/contracts.ts:1982` on `dev`, verified 2026-09-11 — already
+present upstream) is the runtime's input to the routing request.
 
 **With ADR-055 (REF).** Compatible. ADR-055 §7 Runtime Boundary and §8 Phase 3.5 caller-attributed tokens are the mechanism this ADR relies on. The Phase 3.5 hardened bridge is what prevents the runtime from directly invoking privileged routes. The C2 / option (a) "per-caller grant store" decision (ADR-055 §8) is what gives the runtime a `callerId` distinguishable from first-party subsystems.
 

@@ -22,8 +22,7 @@ This package contains a proposed architecture and implementation specification f
 - [`MAINTAINER_ALIGNMENT_ROADMAP.md`](MAINTAINER_ALIGNMENT_ROADMAP.md) — status/sequencing roadmap tracking the maintainer-alignment work (done vs remaining)
 
 The framework's V0.1 SDK contracts live today at
-[`src/sdk/addons/`](../../../src/sdk/addons/); the `packages/addon-sdk/`
-public boundary (ADR-055 §12.1 C12) is proposed as its own follow-up PR.
+`packages/addon-sdk/src/` — the V0.1 public boundary (ADR-055 §12.1 C12), landed in `dev` via PR #441 (merged 2026-09-11). The `src/sdk/addons/*.ts` files are re-export shims pointing at this location; `src/sdk/addons/contracts.ts:62-75` resolves to the same `ADDON_CAPABILITIES` enum as `packages/addon-sdk/src/contracts.ts:62-75`.
 
 ## Staging
 

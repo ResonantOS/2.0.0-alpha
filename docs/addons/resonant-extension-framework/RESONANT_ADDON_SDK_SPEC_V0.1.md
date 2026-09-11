@@ -348,8 +348,8 @@ Each add-on must declare supported ranges:
 ```json
 {
   "compatibility": {
-    "resonantOS": ">=2.0.0-alpha <3.0.0",
-    "sdk": "^0.1.0"
+    "shellVersion": "^0.1.0",
+    "platforms": ["macOS", "linux"]
   }
 }
 ```

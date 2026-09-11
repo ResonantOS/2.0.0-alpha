@@ -61,13 +61,25 @@ A package must be:
   "sdkVersion": "^0.1.0",
   "surfaces": [],
   "requestedCapabilities": [],
-  "providerRequirements": [],
-  "archiveIntegration": {},
-  "health": {},
-  "installHooks": {},
+  "providerRequirements": {
+    "sharedProfiles": [],
+    "supportsPrivateCredentials": false,
+    "preferredRuntimeKinds": []
+  },
+  "archiveIntegration": {
+    "readScopes": [],
+    "intakeWriteScopes": [],
+    "canRequestIngest": false,
+    "canWriteKnowledgePages": false
+  },
+  "health": {
+    "strategy": "host-command",
+    "command": "noop"
+  },
+  "installHooks": { "onInstall": "noop", "onEnable": "noop" },
   "compatibility": {
-    "resonantOS": ">=2.0.0-alpha <3.0.0",
-    "sdk": "^0.1.0"
+    "shellVersion": "^0.1.0",
+    "platforms": ["macOS", "linux"]
   }
 }
 ```
