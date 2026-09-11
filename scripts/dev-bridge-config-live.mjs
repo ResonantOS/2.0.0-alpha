@@ -239,11 +239,12 @@ export async function main() {
         // Playwright does not surface CORS preflight OPTIONS requests to page listeners, so the
         // server-side evidence is taken directly: the bridge's preflight answer for the page origin
         // must not grant it (ACAO absent or not equal to the page origin), and the browser-side
-        // fetch below must have been rejected as a CORS failure with nothing sent on the wire.
+        // fetch below must have been rejected as a CORS failure (CORS is a read gate; see the note before the final assertion).
         const preflight = await fetch(new URL('/api/capability-tokens', bridge), { method: 'OPTIONS', headers: {
           Origin: ORIGIN, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'content-type,x-resonantos-bridge-token,x-resonantos-capability-bootstrap-token' },
           signal: AbortSignal.timeout(10000), redirect: 'error' });
-        requireProof(preflight.status < 500 && (preflight.headers.get('access-control-allow-origin') ?? '') !== ORIGIN);
+        const preflightAcao = preflight.headers.get('access-control-allow-origin') ?? '';
+        requireProof(preflight.status < 500 && preflightAcao !== ORIGIN && preflightAcao !== '*');
         requireProof(result.rejected && result.networkError && entries.some(entry => entry.corsFailure));
         // CORS is a browser-side READ gate, not a send gate: observed in Chromium, the bridge still
         // answers the token-bearing POST (loadingFailed reports AllowOriginMismatch on the actual
@@ -251,7 +252,8 @@ export async function main() {
         // does not grant the page origin (checked server-side above), and the page cannot read any
         // bridge response (CORS failure recorded on every bridge request the page made). The tokens
         // themselves are protected by L1–L14, not by CORS.
-        requireProof(entries.filter(entry => entry.method !== 'OPTIONS' && entry.url?.startsWith(value.bridgeUrl)).every(entry => entry.corsFailure === true));
+        const bridgeCalls = entries.filter(entry => entry.method !== 'OPTIONS' && entry.url?.startsWith(value.bridgeUrl));
+        requireProof(bridgeCalls.length > 0 && bridgeCalls.every(entry => entry.corsFailure === true));
         requireProof(session.violations.length === 0 && !session.errors.some(message => /preamble/i.test(message)));
       });
       return;
