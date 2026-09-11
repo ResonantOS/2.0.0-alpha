@@ -25,9 +25,13 @@ const routeFrom = body => { const route = body.match(/src="(\/__resonantos_dev_b
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function reservePort() {
   const reservation = createNetServer();
-  await new Promise((resolve, reject) => { reservation.once('error', reject); reservation.listen(0, '127.0.0.1', resolve); });
-  const port = reservation.address().port;
-  await new Promise((resolve, reject) => reservation.close(error => error ? reject(error) : resolve()));
+  let port;
+  try {
+    await new Promise((resolve, reject) => { reservation.once('error', reject); reservation.listen(0, '127.0.0.1', resolve); });
+    port = reservation.address().port;
+  } finally {
+    if (reservation.listening) await new Promise((resolve, reject) => reservation.close(error => error ? reject(error) : resolve()));
+  }
   // No production-port probes, even if the kernel were to allocate it.
   if (port === 1430) return reservePort();
   return port;
@@ -38,12 +42,17 @@ function cleanEnv(root) {
   return env;
 }
 async function isolated(t) {
-  const root = await mkdtemp(join(tmpdir(), 'resonantos-dev-integration-')); await chmod(root, 0o700);
+  const root = await mkdtemp(join(tmpdir(), 'resonantos-dev-integration-'));
   const resources = [];
   t.after(async () => {
-    try { for (const close of resources.reverse()) await close(); }
-    finally { await rm(root, { recursive: true, force: true }); }
+    let failed = false;
+    for (const close of resources.reverse()) {
+      try { await close(); } catch { failed = true; }
+    }
+    try { await rm(root, { recursive: true, force: true }); } catch { failed = true; }
+    assert.equal(failed, false, 'integration resource cleanup succeeds');
   });
+  await chmod(root, 0o700);
   for (const path of ['src', 'packages', 'public', 'index.html', 'vite.config.ts', 'tsconfig.json', 'package.json',
     'scripts/vite-dev-bridge-config.mjs', 'scripts/vite-dev-bridge-config.d.mts']) {
     await mkdir(dirname(join(root, path)), { recursive: true });
@@ -85,11 +94,19 @@ async function start(t, fixture, { enabled = true, patch = {}, late, readConfig,
           const hook = replacement.configureServer;
           replacement.configureServer = function (server) {
             lifecycle.configured++;
+            lifecycle.watcher = server.watcher;
             server.httpServer?.once('listening', () => lifecycle.listening++);
             return (typeof hook === 'function' ? hook : hook.handler).call(this, server);
           };
         }
-        const configured = plugins.map(plugin => plugin.name === replacement.name ? replacement : plugin);
+        // Vite allocates watchers before configureServer, but does not return
+        // the server if a policy hook throws. Retain it before any such hook so
+        // both startup refusal and test failure can close all Vite resources.
+        const capture = { name: 'synthetic-server-cleanup', enforce: 'pre', configureServer: { order: 'pre', handler(created) {
+          server = created;
+          fixture.resources.push(() => created.close());
+        } } };
+        const configured = [capture, ...plugins.map(plugin => plugin.name === replacement.name ? replacement : plugin)];
         if (observe) configured.push(observe);
         if (late) configured.push({ name: 'synthetic-late-policy-weakening', configureServer: late });
         return createServer({ ...loaded.config, configFile: false, root: fixture.root, cacheDir: join(fixture.root, '.vite-cache'),
@@ -97,7 +114,6 @@ async function start(t, fixture, { enabled = true, patch = {}, late, readConfig,
           server: { ...loaded.config.server, port, strictPort: true, ...patch } });
       });
       await server.listen();
-      fixture.resources.push(() => server.close());
       const authorization = `Basic ${Buffer.from(`dev:${fixture.key}`).toString('base64')}`;
       const origin = `http://127.0.0.1:${port}`;
       const request = (path, options) => requestAt(port, path, options);
@@ -111,28 +127,65 @@ async function start(t, fixture, { enabled = true, patch = {}, late, readConfig,
     }
   }
 }
-function requestAt(port, path, { headers = {}, method = 'GET' } = {}) {
+async function requestAt(port, path, { headers = {}, method = 'GET' } = {}) {
   assert.notEqual(port, 1430, 'integration never contacts production port');
-  return new Promise((resolve, reject) => {
-    const req = httpRequest({ hostname: '127.0.0.1', port, path, method, headers, agent: false }, res => {
-      let body = ''; res.setEncoding('utf8');
-      res.on('data', chunk => { body += chunk; if (body.length > 8 * 1024 * 1024) req.destroy(Error('bounded response exceeded')); });
-      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body }));
+  let req;
+  try {
+    return await new Promise((resolve, reject) => {
+      req = httpRequest({ hostname: '127.0.0.1', port, path, method, headers, agent: false }, res => {
+        let body = ''; res.setEncoding('utf8');
+        res.on('data', chunk => { body += chunk; if (body.length > 8 * 1024 * 1024) req.destroy(Error('bounded response exceeded')); });
+        res.on('error', reject);
+        res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body }));
+      });
+      req.setTimeout(10000, () => req.destroy(Error('HTTP timeout'))); req.on('error', reject); req.end();
     });
-    req.setTimeout(10000, () => req.destroy(Error('HTTP timeout'))); req.on('error', reject); req.end();
-  });
+  } finally { req?.destroy(); }
 }
-function runChild(program, args, { root, env, input, signal, timeout = 180000 }) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(program, args, { cwd: root, env, shell: false, signal, stdio: ['pipe', 'pipe', 'pipe'] });
-    let stdout = '', stderr = '', timedOut = false;
-    const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, timeout);
-    child.stdout.on('data', chunk => { stdout += chunk; if (stdout.length > 16 * 1024 * 1024) child.kill('SIGKILL'); });
-    child.stderr.on('data', chunk => { stderr += chunk; if (stderr.length > 16 * 1024 * 1024) child.kill('SIGKILL'); });
-    child.once('error', error => { clearTimeout(timer); reject(error); });
-    child.once('close', code => { clearTimeout(timer); resolve({ code, stdout, stderr, timedOut }); });
-    child.stdin.on('error', () => {}); child.stdin.end(input ?? '');
+async function runChild(program, args, { root, env, input, signal, timeout = 180000 }) {
+  signal?.throwIfAborted();
+  // npm launches build grandchildren. On POSIX, cancellation must terminate
+  // their private process group as well, or inherited pipes can stay open.
+  const grouped = process.platform !== 'win32';
+  const child = spawn(program, args, { cwd: root, env, shell: false, detached: grouped, stdio: ['pipe', 'pipe', 'pipe'] });
+  const stop = () => {
+    if (grouped && child.pid) {
+      try { process.kill(-child.pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') child.kill('SIGKILL'); }
+    } else { child.kill('SIGKILL'); }
+  };
+  let stdout = '', stderr = '', timedOut = false, finished = false, failure;
+  const closed = new Promise(resolve => {
+    child.once('error', error => { failure = error; stop(); });
+    child.once('close', code => { finished = true; resolve(code); });
   });
+  const timer = setTimeout(() => { timedOut = true; stop(); }, timeout);
+  child.stdout.on('data', chunk => { stdout += chunk; if (stdout.length > 16 * 1024 * 1024) stop(); });
+  child.stderr.on('data', chunk => { stderr += chunk; if (stderr.length > 16 * 1024 * 1024) stop(); });
+  child.stdin.on('error', () => {});
+  signal?.addEventListener('abort', stop, { once: true });
+  try {
+    child.stdin.end(input ?? '');
+    if (signal?.aborted) stop();
+    const code = await closed;
+    signal?.throwIfAborted();
+    if (failure) throw failure;
+    return { code, stdout, stderr, timedOut };
+  } finally {
+    if (!finished) { stop(); await closed; }
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', stop);
+    child.stdin.destroy(); child.stdout.destroy(); child.stderr.destroy();
+  }
+}
+async function watcherWrite(watcher, event, path, write) {
+  let timer, onEvent;
+  const observed = new Promise((resolve, reject) => {
+    onEvent = changed => { if (changed === path) resolve(); };
+    watcher.on(event, onEvent);
+    timer = setTimeout(() => reject(Error('watcher barrier timeout')), 10000);
+  });
+  try { await Promise.all([observed, Promise.resolve().then(write)]); }
+  finally { clearTimeout(timer); watcher.off(event, onEvent); }
 }
 async function filesBelow(root) {
   const files = [];
@@ -174,6 +227,7 @@ integration('I2', 'real startup refuses unsafe resolved policy', async t => {
     try { accepted = await start(t, fixture, { enabled, ...variant, lifecycle, readConfig: async () => { reads++; return fixture.value; } }); } catch (error) { failure = error; }
     assert.equal(lifecycle.configured, 1, 'real delivery configure hook reached');
     assert.equal(lifecycle.listening, 0, 'unsafe server never listened');
+    assert.equal(lifecycle.watcher?.closed, true, 'refused startup closes its watcher');
     assert.equal(failure instanceof Error && failure.message === expectedMessage, true, 'policy refusal, not setup/import failure');
     if (accepted) await accepted.server.close();
     assert.equal(accepted === undefined, true, 'unsafe startup rejected before listening'); assert.equal(reads, 0);
@@ -232,9 +286,11 @@ integration('I6', 'opted-in vite build and preview contain no delivered secrets'
     const port = await reservePort(); let server;
     try {
       const previewEnv = Object.fromEntries(Object.entries(env).filter(([name]) => name.startsWith('RESONANTOS_DEV_BRIDGE_')));
-      server = await sanitizedEnvironment(() => preview({ root: fixture.root, configFile: join(fixture.root, 'vite.config.ts'), configLoader: 'runner', logLevel: 'silent', preview: { host: '127.0.0.1', port, strictPort: true } }), previewEnv);
+      server = await sanitizedEnvironment(() => preview({ root: fixture.root, configFile: join(fixture.root, 'vite.config.ts'), configLoader: 'runner', logLevel: 'silent',
+        plugins: [{ name: 'synthetic-preview-cleanup', enforce: 'pre', configurePreviewServer: { order: 'pre', handler(created) { server = created; } } }],
+        preview: { host: '127.0.0.1', port, strictPort: true } }), previewEnv);
       for (const path of ['/', ROUTE, `/${RELATIVE}`]) { const response = await requestAt(port, path); noMaterial(response.body, material); assert.equal(response.headers['www-authenticate'], undefined); }
-    } finally { if (server) await new Promise(resolve => server.httpServer.close(resolve)); }
+    } finally { if (server) await server.close(); }
     await rm(join(fixture.root, 'dist'), { recursive: true, force: true });
   }
 });
@@ -246,23 +302,13 @@ integration('I7', 'HMR and error channels never carry credential material', asyn
   const page = await h.page(), route = routeFrom(page.body); assert.equal((await h.module(route)).status, 200);
   await h.request('/src/main.tsx');
   const barrier = join(fixture.root, 'src/dev-bridge-hmr-probe.ts');
-  const added = new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { h.server.watcher.off('add', onAdd); reject(Error('watcher registration timeout')); }, 10000);
-    function onAdd(path) { if (path === barrier) { clearTimeout(timer); h.server.watcher.off('add', onAdd); resolve(); } }
-    h.server.watcher.on('add', onAdd);
-  });
-  await writeFile(barrier, 'export const marker = 1;\n'); await added;
+  await watcherWrite(h.server.watcher, 'add', barrier, () => writeFile(barrier, 'export const marker = 1;\n'));
   await h.request('/src/dev-bridge-hmr-probe.ts');
   const events = []; h.server.watcher.on('all', (event, path) => events.push([event, path]));
   const next = fakeConfig();
   await writeFile(join(fixture.root, RELATIVE), writer(next), { mode: 0o600 });
   await writeFile(join(fixture.root, 'ResonantOS_User/probe'), 'rotated harmless user-state probe\n');
-  const barrierSeen = new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { h.server.watcher.off('change', onChange); reject(Error('watcher barrier timeout')); }, 10000);
-    function onChange(path) { if (path === barrier) { clearTimeout(timer); h.server.watcher.off('change', onChange); resolve(); } }
-    h.server.watcher.on('change', onChange);
-  });
-  await writeFile(barrier, 'export const marker = 2;\n'); await barrierSeen; await delay(150);
+  await watcherWrite(h.server.watcher, 'change', barrier, () => writeFile(barrier, 'export const marker = 2;\n')); await delay(150);
   assert.equal(events.some(([, path]) => path.endsWith('bridge-config.generated.js') || path.includes('ResonantOS_User')), false);
   const material = [PREFIX, route.split('=')[1], fixture.key, h.authorization, fixture.value.bridgeToken, fixture.value.capabilityBootstrapToken, next.bridgeToken, next.capabilityBootstrapToken];
   noMaterial(JSON.stringify(messages), [...material, 'bridgeToken', 'capabilityBootstrapToken']); noMaterial(JSON.stringify(h.output), material);
