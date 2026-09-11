@@ -1,7 +1,7 @@
 {
   "name": "@resonantos/addon-sdk-testing",
   "version": "0.1.0",
-  "description": "Resonant Extension Framework (REF) negative-test harness for external agent runtime manifests (ADR-056 §7). Provides in-process mock host, routing-decision store, audit capture, and runnable F1–F10 failure-mode cases.",
+  "description": "Resonant Extension Framework (REF) negative-test harness for external agent runtime manifests (ADR-056 \u00a77). Provides in-process mock host, routing-decision store, audit capture, and runnable F1\u2013F10 failure-mode cases.",
   "license": "MIT",
   "type": "module",
   "private": true,
@@ -30,5 +30,9 @@
     "negative-tests",
     "external-agent-runtime"
   ],
-  "intent": "Companion package to @resonantos/addon-sdk. Translates ADR-056 §7 (Failure Modes F1–F10) into executable negative tests so any external-agent-runtime manifest can be validated against the provider-fabric boundary before install. ADR-056 §7 specifies this package as the canonical home: 'Each F-number becomes a test case in packages/addon-sdk-testing/ (B4 deliverable).'"
+  "intent": "Companion package to @resonantos/addon-sdk. Translates ADR-056 \u00a77 (Failure Modes F1\u2013F10) into executable negative tests so any external-agent-runtime manifest can be validated against the provider-fabric boundary before install. ADR-056 \u00a77 specifies this package as the canonical home: 'Each F-number becomes a test case in packages/addon-sdk-testing/ (B4 deliverable).'",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  }
 }

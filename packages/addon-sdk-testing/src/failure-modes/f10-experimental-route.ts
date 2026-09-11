@@ -36,6 +36,7 @@ export function runF10ExperimentalRoute(
     callerId: manifest.callerId,
     routingDecisionId: decision.routingDecisionId,
     experimental: true,
+    manifest,
   });
 
   if (result.ok) {

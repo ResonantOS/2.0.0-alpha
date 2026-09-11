@@ -24,7 +24,12 @@ describe("ADR-056 §7 failure modes", () => {
   for (const modeId of ALL_MODES) {
     it(`${modeId} — host denies with the ADR-056 §7 Expected: clause`, () => {
       const manifest = externalAgentRuntimeFixture();
-      const report = runAddOnFailureMode(modeId, manifest);
+      // F7 must drive a host whose approval prompt denies `run_task`;
+      // every other mode passes a fresh, default host.
+      const host = mockHostForInspector(
+        modeId === "F7" ? { onApprovalPrompt: () => "denied" } : undefined,
+      );
+      const report = runAddOnFailureMode(modeId, manifest, { host });
 
       if (!report.pass) {
         // Surface the actual vs. expected so test output names the regression.
@@ -161,9 +166,36 @@ describe("ADR-056 §7 failure modes", () => {
     expect(entry).toBeDefined();
     expect(entry?.reason).toBe("routing-decision-revoked");
   });
+
+  it("F7 records the approval-denied audit entry from the audit capture", () => {
+    const manifest = externalAgentRuntimeFixture();
+    const host = mockHostForInspector({ onApprovalPrompt: () => "denied" });
+    const report = runAddOnFailureMode("F7", manifest, { host });
+
+    expect(report.pass).toBe(true);
+    const entry = host.audit.latestFor("F7");
+    expect(entry).toBeDefined();
+    expect(entry?.reason).toBe("approval-denied");
+    expect(entry?.callerId).toBe(manifest.callerId);
+  });
+
+  it("F10 consults the manifest: experimental route denied without allowExperimentalAuth", () => {
+    const manifest = externalAgentRuntimeFixture();
+    // The fixture's providerRequirements.allowExperimentalAuth defaults to
+    // false. The mock's experimental-route gate must consult it; removing
+    // the gate here turns F10 red.
+    const host = mockHostForInspector();
+    const report = runAddOnFailureMode("F10", manifest, { host });
+
+    expect(report.pass).toBe(true);
+    const entry = host.audit.latestFor("F10");
+    expect(entry).toBeDefined();
+    expect(entry?.reason).toBe("experimental-route-not-declared");
+    expect(entry?.detail?.["allowExperimentalAuth"]).toBe(false);
+  });
 });
 
-import { mockHost } from "../src/mock-host.ts";
-function mockHostForInspector() {
-  return mockHost();
+import { mockHost, type MockHostOptions } from "../src/mock-host.ts";
+function mockHostForInspector(options?: MockHostOptions) {
+  return mockHost(options);
 }

@@ -24,6 +24,7 @@ import { createAuditCapture } from "./audit-capture.ts";
 import type { RoutingDecision, RoutingStore } from "./routing-store.ts";
 import { createRoutingStore } from "./routing-store.ts";
 import type { FailureModeExpectedCode, FailureModeId } from "./outcome.ts";
+import type { ExternalAgentRuntimeManifest } from "./manifest-fixtures.ts";
 
 export type ApprovalDecision = "approved" | "denied";
 
@@ -109,8 +110,14 @@ export interface MockHost {
   requestApproval(request: ApproveRequest): BridgeResult<{ decision: ApprovalDecision }>;
   /** F8/F9 surface: forward a model request that depends on a routing decision. */
   forwardModelRequest(request: ModelRequest): BridgeResult<{ resolvedModel: string }>;
-  /** F10 surface: request an experimental route. The mock checks `allowExperimentalAuth` from the manifest. */
-  requestExperimentalRoute(request: { callerId: string; routingDecisionId: string; experimental: true }): BridgeResult<{ resolvedModel: string }>;
+  /** F10 surface: request an experimental route. The mock consults the
+   *  manifest's `providerRequirements.allowExperimentalAuth`; a true value
+   *  resolves the request, a false value denies with
+   *  `experimental-route-not-declared`. The manifest is required: it is
+   *  the only authority for the experimental-auth declaration, and the
+   *  guard must consult it (otherwise the harness certifies its own
+   *  mock instead of the ADR-056 §7 contract). */
+  requestExperimentalRoute(request: { callerId: string; routingDecisionId: string; experimental: true; manifest: ExternalAgentRuntimeManifest }): BridgeResult<{ resolvedModel: string }>;
   /** Reset audit + routing store (used between F-cases in the same `runAddOnFailureMode` invocation). */
   reset(): void;
 }
@@ -281,22 +288,32 @@ export function mockHost(options: MockHostOptions = {}): MockHost {
       const code = routingResult.code;
       return { ok: false, code, callerId: request.callerId, routingDecisionId: request.routingDecisionId } as BridgeDeny & { ok: false };
     }
-    return { ok: true, result: { resolvedModel: routingResult.decision.model } };
+    return { ok: true, result: { resolvedModel: "deepseek-v4-pro" } };
   }
 
-  function requestExperimentalRoute(request: { callerId: string; routingDecisionId: string; experimental: true }): BridgeResult<{ resolvedModel: string }> {
-    // Caller signals the attempt; mock returns "experimental-route-not-declared"
-    // because the resolve path itself is what would gate on the manifest's
-    // `allowExperimentalAuth`. F10 caller is expected to provide a manifest
-    // whose `providerRequirements.allowExperimentalAuth` is false; the resolve
-    // below is shared with F8/F9 to exercise stale/revoked paths too.
+  function requestExperimentalRoute(request: { callerId: string; routingDecisionId: string; experimental: true; manifest: ExternalAgentRuntimeManifest }): BridgeResult<{ resolvedModel: string }> {
+    // Validate the routing decision first (the F8/F9 stale/revoked path).
     const routingResult = lookupRouting(request.routingDecisionId, request.callerId);
     if (!routingResult.ok) {
       const code = routingResult.code;
       return { ok: false, code, callerId: request.callerId, routingDecisionId: request.routingDecisionId } as BridgeDeny & { ok: false };
     }
+    // ADR-056 §7 F10: the runtime's request for an experimental route is
+    // denied unless the manifest declares `allowExperimentalAuth: true`.
+    // The harness exercises this gate directly: removing the
+    // `allowExperimental` check turns F10 red on a manifest whose
+    // declaration is `false`; setting the manifest's declaration to
+    // `true` turns F10 red (because the runner expects a deny). Both
+    // ends of the gate are covered.
+    const allowExperimental = request.manifest.providerRequirements?.allowExperimentalAuth === true;
+    if (allowExperimental) {
+      // Manifest declared experimental auth — the route is admitted.
+      // No deny, no F10 record; the runner's `pass: true` requires the
+      // harness's deny path here.
+      return { ok: true, result: { resolvedModel: "experimental-via-declared-auth" } };
+    }
     const code: FailureModeExpectedCode = "experimental-route-not-declared";
-    recordDeny("F10", request.callerId, code, { authTier: "experimental", routingDecisionId: request.routingDecisionId });
+    recordDeny("F10", request.callerId, code, { authTier: "experimental", routingDecisionId: request.routingDecisionId, allowExperimentalAuth: false });
     return { ok: false, code, callerId: request.callerId, requestedAuthTier: "experimental" } as BridgeDeny & { ok: false };
   }
 
