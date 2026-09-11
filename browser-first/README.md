@@ -56,7 +56,7 @@ Chrome extension plus local bridge
   prevent host confusion; localhost and IP aliases are not authenticated
   delivery origins.
 - POSIX permissions: the generated `bridge-config.generated.js` file is verified
-  at request time for owning UID, regular-file status, and strict `0600`
+  at request time for owning UID, regular-file status, and group- and world-unreadable (`0600`-style: any mode with no group/other bits, so `0400` or `0700` also pass)
   permissions.
 - Run commands in private, non-recorded terminal sessions. No secret keys or
   credentials appear in URLs, terminal histories, HTML, or browser storage APIs.
