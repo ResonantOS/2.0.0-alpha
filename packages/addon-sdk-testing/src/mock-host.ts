@@ -74,6 +74,12 @@ export interface WorkspaceAccessRequest {
   requestedPath: string;
   /** Workspace root the runtime was scoped to by the runtime grant set. */
   workspaceRoot: string;
+  /**
+   * Optional manifest. When set, the host enforces `revocationBehavior`
+   * for any `shell` grant after a workspace-escape deny — ADR-056 §7 F3.
+   * Drivers that exercise the hard-stop path must supply the manifest.
+   */
+  manifest?: AddOnManifest;
 }
 
 export interface ArtifactReturnRequest {
@@ -125,6 +131,12 @@ export interface MockHost {
 export function mockHost(options: MockHostOptions = {}): MockHost {
   const audit = createAuditCapture();
   const routing = createRoutingStore(options.now);
+  // Capabilities revoked by the host in response to deny conditions.
+  // ADR-056 §7 F3: a `shell` grant is revoked when workspace-escape is
+  // denied and `revocationBehavior` is `hard-stop`. The host enforces
+  // the revocation on every subsequent capability-bearing surface
+  // (e.g. `invokeTool` for the `shell` tool name).
+  const revokedCapabilities = new Set<Capability>();
   const onApproval = options.onApprovalPrompt ?? (() => "approved");
   const ttlMs = options.routingDecisionTtlMs ?? 5 * 60 * 1000;
 
@@ -230,6 +242,26 @@ export function mockHost(options: MockHostOptions = {}): MockHost {
         resolvedPath: resolved,
         workspaceRoot: root,
       });
+      // ADR-056 §7 F3 hard-stop: when the manifest declares a
+      // `revocationBehavior: "hard-stop"` for the `shell` capability,
+      // the host revokes the `shell` grant on workspace-escape.
+      // Subsequent `invokeTool` calls that use the `shell` tool name
+      // (i.e. the surface backed by that capability) are denied.
+      if (request.manifest) {
+        const shellGrant = request.manifest.requestedCapabilities.find(
+          (g) => g.capability === "shell",
+        );
+        if (shellGrant?.revocationBehavior === "hard-stop") {
+          revokedCapabilities.add("shell");
+          // Distinct reason so the F3 audit-trail test can still
+          // assert that every entry tagged "workspace-escape" was
+          // for the path rejection (and not the hard-stop).
+          recordDeny("F3", request.callerId, "capability-revoked", {
+            revokedCapability: "shell",
+            revocationBehavior: "hard-stop",
+          });
+        }
+      }
       return { ok: false, code, callerId: request.callerId, requestedPath: requested, workspaceRoot: root } as BridgeDeny & { ok: false };
     }
     return { ok: true, result: { resolvedPath: resolved } };
@@ -249,6 +281,17 @@ export function mockHost(options: MockHostOptions = {}): MockHost {
   }
 
   function invokeTool(request: ToolCallRequest, declaredTools: readonly string[]): BridgeResult<{ toolName: string }> {
+    // ADR-056 §7 F3 hard-stop: a tool backed by a revoked capability is
+    // denied even when declared. The tool name matches the capability
+    // for the host's pre-FABRIC surfaces (`shell`, `filesystem`, etc.).
+    if (revokedCapabilities.has(request.toolName as Capability)) {
+      const code: FailureModeExpectedCode = "capability-denied";
+      recordDeny("F3", request.callerId, code, {
+        toolName: request.toolName,
+        reason: "capability-revoked",
+      });
+      return { ok: false, code, callerId: request.callerId, required: request.toolName as Capability, current: [] } as BridgeDeny & { ok: false };
+    }
     if (!declaredTools.includes(request.toolName)) {
       const code: FailureModeExpectedCode = "unknown-tool";
       recordDeny("F5", request.callerId, code, {

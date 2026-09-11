@@ -20,6 +20,7 @@ export function runF3WorkspaceEscape(
     callerId: manifest.callerId,
     requestedPath: "/etc/passwd",
     workspaceRoot,
+    manifest,
   });
 
   if (result.ok) {
@@ -32,10 +33,29 @@ export function runF3WorkspaceEscape(
     callerId: manifest.callerId,
     requestedPath: `${workspaceRoot}/../outside`,
     workspaceRoot,
+    manifest,
   });
   if (traversal.ok) {
     return { modeId: "F3", actual: { code: "no-deny", auditReason: "no-deny" } };
   }
-  const code = traversal.code === "workspace-escape" ? result.code : traversal.code;
-  return { modeId: "F3", actual: { code, auditReason: code } };
+
+  // ADR-056 §7 F3 hard-stop: after a workspace-escape, the `shell`
+  // capability is revoked when the manifest declared
+  // `revocationBehavior: "hard-stop"`. The driver asserts the
+  // revocation by issuing a follow-up `invokeTool` for the `shell`
+  // tool — that call must be denied. If the host did not revoke, the
+  // call returns ok and F3 reports `no-deny`.
+  const shellGrant = manifest.requestedCapabilities.find((g) => g.capability === "shell");
+  if (shellGrant?.revocationBehavior === "hard-stop") {
+    const followUp = host.invokeTool(
+      { callerId: manifest.callerId, toolName: "shell", payload: { command: "cat /etc/passwd" } },
+      ["shell", "filesystem.read", "filesystem.write"],
+    );
+    if (followUp.ok) {
+      return { modeId: "F3", actual: { code: "no-deny", auditReason: "no-deny" } };
+    }
+    return { modeId: "F3", actual: { code: traversal.code, auditReason: traversal.code } };
+  }
+
+  return { modeId: "F3", actual: { code: traversal.code, auditReason: traversal.code } };
 }

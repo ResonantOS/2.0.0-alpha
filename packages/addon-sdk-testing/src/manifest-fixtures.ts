@@ -105,6 +105,11 @@ const MOCK_EXTERNAL_AGENT_CAPABILITY_GRANTS: CapabilityGrant[] = [
   { capability: "archive-read", granted: false, scope: "workspace", revocationBehavior: "degrade" },
   { capability: "archive-intake-write", granted: false, scope: "intake-only", revocationBehavior: "degrade" },
   { capability: "notifications", granted: false, scope: "self", revocationBehavior: "degrade" },
+  // ADR-056 §7 F3: the runtime uses `shell` to escape the workspace.
+  // The grant carries `revocationBehavior: "hard-stop"` so the host
+  // revokes the capability on workspace-escape and a follow-up
+  // `invokeTool` for the `shell` tool is denied.
+  { capability: "shell", granted: false, scope: "workspace", revocationBehavior: "hard-stop" },
 ];
 
 const FIXTURE_ID = "addon.testing.external-agent-runtime";

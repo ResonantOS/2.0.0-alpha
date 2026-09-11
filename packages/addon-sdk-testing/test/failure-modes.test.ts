@@ -138,7 +138,10 @@ describe("ADR-056 §7 failure modes", () => {
     expect(report.pass).toBe(true);
     // The F3 driver now probes both an absolute outside path and a `..`
     // traversal; assert over every F3 record, not just the latest.
-    const entries = host.audit.snapshot().filter((e) => e.modeId === "F3");
+    // After the F3 hard-stop landed, F3 also records a revocation
+    // entry (reason `capability-revoked`) and a follow-up
+    // capability-denied entry. Filter for the path-rejection reason.
+    const entries = host.audit.snapshot().filter((e) => e.modeId === "F3" && e.reason === "workspace-escape");
     expect(entries.length).toBeGreaterThan(0);
     expect(entries.every((e) => e.reason === "workspace-escape")).toBe(true);
     const paths = entries.map((e) => e.detail?.["requestedPath"]);
@@ -165,6 +168,38 @@ describe("ADR-056 §7 failure modes", () => {
     const entry = host.audit.latestFor("F9");
     expect(entry).toBeDefined();
     expect(entry?.reason).toBe("routing-decision-revoked");
+  });
+
+  it("F3 hard-stop revokes the shell capability on workspace-escape", () => {
+    const manifest = externalAgentRuntimeFixture();
+    const host = mockHostForInspector();
+    const report = runAddOnFailureMode("F3", manifest, { host });
+
+    expect(report.pass).toBe(true);
+
+    // The driver probes accessWorkspace twice (an absolute outside
+    // path and a `..` traversal). For each deny, the host records a
+    // `capability-revoked` entry that tags the shell capability.
+    const revocations = host.audit
+      .snapshot()
+      .filter((e) => e.modeId === "F3" && e.reason === "capability-revoked");
+    expect(revocations.length).toBeGreaterThan(0);
+    for (const entry of revocations) {
+      expect(entry.detail?.["revokedCapability"]).toBe("shell");
+      expect(entry.detail?.["revocationBehavior"]).toBe("hard-stop");
+    }
+
+    // The follow-up `invokeTool("shell")` must be denied with
+    // `capability-denied` (the host's pre-FABRIC surface). If the
+    // revocation gate is removed from the mock, this assertion fails.
+    const toolResult = host.invokeTool(
+      { callerId: manifest.callerId, toolName: "shell", payload: { command: "cat /etc/passwd" } },
+      ["shell", "filesystem.read"],
+    );
+    expect(toolResult.ok).toBe(false);
+    if (!toolResult.ok) {
+      expect(toolResult.code).toBe("capability-denied");
+    }
   });
 
   it("F7 records the approval-denied audit entry from the audit capture", () => {
