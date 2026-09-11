@@ -729,7 +729,7 @@ function pageFetchBlocked(req) {
   if (site.duplicate || dest.duplicate) {
     return true;
   }
-  if (site.value === "cross-site") {
+  if (site.value !== undefined && site.value !== "same-origin" && site.value !== "none") {
     return true;
   }
   if (dest.value === "iframe" || dest.value === "frame" || dest.value === "embed" || dest.value === "object") {
@@ -827,7 +827,10 @@ export function devBridgeConfigPlugin(deps) {
   return {
     name: "resonantos-dev-bridge-config",
     enforce: "pre",
-    apply: (_config, env) => env.command === 'serve' && !env.isPreview && env.mode !== 'test' /* vitest boots an internal Vite server; the delivery plugin and its fail-closed policy belong to the real dev server only */,
+    apply: (_config, env) => env.command === 'serve' && !env.isPreview
+      // Narrow vitest carve-out: vitest boots an internal Vite server in mode 'test' with process.env.VITEST === 'true';
+      // a plain `vite --mode test` dev server (no VITEST) still gets the fail-closed policy and delivery gates.
+      && !(env.mode === 'test' && (deps?.env ?? (() => process.env))().VITEST === 'true'),
     configureServer(server) {
       assertDevServerPolicy(server.config, expectedPort);
       const env = (deps?.env ?? (() => process.env))();

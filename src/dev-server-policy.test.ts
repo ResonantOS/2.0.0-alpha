@@ -32,7 +32,7 @@ describe("dev server filesystem policy", () => {
 
 // P1–P8: use the resolved Vite policy, without starting a listener.
 import { resolveConfig } from "vite";
-import { assertDevServerPolicy, EXPECTED_DEV_SERVER_FS_DENY, type DevServerPolicyInput } from "../scripts/vite-dev-bridge-config.mjs";
+import { assertDevServerPolicy, devBridgeConfigPlugin, EXPECTED_DEV_SERVER_FS_DENY, type DevServerPolicyInput } from "../scripts/vite-dev-bridge-config.mjs";
 
 const sensitiveIgnores = ["**/bridge-config.generated.js", "**/ResonantOS_User/**"];
 const policy = (): DevServerPolicyInput => ({
@@ -94,14 +94,27 @@ describe.sequential("authenticated development policy", () => {
     try {
       process.env[name] = "attacker.test"; delete process.env.RESONANTOS_DEV_BRIDGE_CONFIG;
       const config = await resolveConfig({ configFile: "vite.config.ts" }, "serve");
-      expect(() => assertDevServerPolicy(config, 1430)).toThrow();
+      const effectiveHosts = Array.isArray(config.server.allowedHosts) ? config.server.allowedHosts : [];
+      expect(effectiveHosts).toContain("attacker.test");
+      expect(() => assertDevServerPolicy(config, 1430)).toThrow("Unsafe development server policy.");
+      // Vite appends the environment host to server.allowedHosts. Isolate those
+      // effective additions so that the separate additional-host guard is tested.
+      const additionsOnly = { ...config, server: { ...config.server, allowedHosts: ["127.0.0.1"] },
+        additionalAllowedHosts: [...effectiveHosts] };
+      expect(() => assertDevServerPolicy(additionsOnly, 1430)).toThrow("Unsafe development server policy.");
+      const plugin = devBridgeConfigPlugin({ env: () => ({ RESONANTOS_DEV_BRIDGE_CONFIG: "0" }) });
+      const hook = plugin.configureServer!;
+      // Policy must run at entry, before a server with an unsafe policy can
+      // install middleware, even when the plugin's injected environment is off.
+      expect(() => Reflect.apply(typeof hook === "function" ? hook : hook.handler, plugin,
+        [{ config: additionsOnly }])).toThrow("Unsafe development server policy.");
     } finally { restoreEnv(name, previous); restoreEnv("RESONANTOS_DEV_BRIDGE_CONFIG", enabled); }
   });
   it("startup rejects implicit origins and HMR host overrides", async () => {
     const config = await resolveConfig({ configFile: "vite.config.ts" }, "serve");
     expect(() => assertDevServerPolicy(config, 1430)).not.toThrow();
-    for (const additionalAllowedHosts of [undefined, true, "127.0.0.1", ["attacker.test"]]) {
-      expect(() => assertDevServerPolicy({ ...policy(), additionalAllowedHosts }, 1430)).toThrow();
+    for (const additionalAllowedHosts of [undefined, null, true, "", "127.0.0.1", ["attacker.test"], ["127.0.0.1", "attacker.test"]]) {
+      expect(() => assertDevServerPolicy({ ...policy(), additionalAllowedHosts }, 1430)).toThrow("Unsafe development server policy.");
     }
     for (const additionalAllowedHosts of [[], ["127.0.0.1"], ["127.0.0.1", "127.0.0.1"]]) {
       expect(() => assertDevServerPolicy({ ...policy(), additionalAllowedHosts }, 1430)).not.toThrow();

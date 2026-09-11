@@ -298,23 +298,50 @@ test('reserved endpoint rejects method and URL aliases', async t => {
 });
 test('host origin and fetch metadata cannot bypass auth', async t => {
   const h = await harness(t), route = routeFrom((await h.page()).body);
-  const variants = [{ host: 'attacker.test' }, { host: `127.0.0.2:${PORT}` }, { host: 'attacker.test', 'x-forwarded-host': HOST, forwarded: `host=${HOST}` },
+  const variants = [{ host: 'attacker.test' }, { host: `127.0.0.2:${PORT}` }, { host: `localhost:${PORT}` }, { host: 'attacker.test', 'x-forwarded-host': HOST, forwarded: `host=${HOST}` },
     { origin: 'null' }, { origin: 'http://attacker.test' }, { 'sec-fetch-site': undefined }, { 'sec-fetch-site': 'cross-site' },
     { 'sec-fetch-mode': undefined }, { 'sec-fetch-mode': 'no-cors' }, { 'sec-fetch-dest': undefined }, { 'sec-fetch-dest': 'worker' }, { 'sec-fetch-dest': 'serviceworker' }];
   for (const patch of variants) assert.equal((await h.request(route, { headers: { ...META, authorization: h.authorization, ...patch } })).status, 403);
   assert.equal((await h.request(route, { headers: { ...META, authorization: h.authorization }, rawHeaders: ['Host', HOST, 'Host', HOST, 'Authorization', h.authorization, ...Object.entries(META).flat()] })).status, 403);
-  for (const patch of [{ host: 'attacker.test' }, { origin: 'null' }, { 'sec-fetch-site': 'cross-site' }, { 'sec-fetch-dest': 'iframe' }]) assert.equal((await h.request('/', { headers: { authorization: h.authorization, ...patch } })).status, 403);
+  for (const patch of [{ host: 'attacker.test' }, { host: `localhost:${PORT}` }, { origin: 'null' }, { 'sec-fetch-site': 'cross-site' }, { 'sec-fetch-dest': 'iframe' }]) assert.equal((await h.request('/', { headers: { authorization: h.authorization, ...patch } })).status, 403);
   assert.equal(h.reads(), 0); assert.equal((await h.request(route, { headers: { ...META, authorization: h.authorization, origin: `http://${HOST}`, 'x-forwarded-host': 'attacker.test', forwarded: 'host=attacker.test' } })).status, 200);
+});
+test('page fetch metadata accepts only same-origin none or absent site', async t => {
+  const value = config(), h = await harness(t, { value });
+  for (const path of ['/', '/index.html']) {
+    for (const site of ['same-site', 'cross-site']) for (const authorization of [undefined, h.authorization]) {
+      const response = await h.request(path, { headers: { 'sec-fetch-site': site, ...(authorization ? { authorization } : {}) } });
+      assert.equal(response.status, 403); assert.equal(response.body, 'Forbidden.\n');
+      assert.equal(response.headers.has('www-authenticate'), false); assert.equal(response.next, false);
+      safe(response.body, [...Object.values(value), h.key, h.authorization]);
+    }
+  }
+  assert.equal(h.issues(), 0); assert.equal(h.cspIssues(), 0); assert.equal(h.transforms.length, 0); assert.equal(h.reads(), 0);
+  for (const path of ['/', '/index.html']) for (const site of ['same-origin', 'none', undefined]) {
+    const response = await h.request(path, { headers: { authorization: h.authorization, ...(site === undefined ? {} : { 'sec-fetch-site': site }) } });
+    assert.equal(response.status, 200); routeFrom(response.body);
+    safe(response.body, [...Object.values(value), h.key, h.authorization]);
+  }
+  assert.equal(h.issues(), 6); assert.equal(h.reads(), 0);
 });
 test('page responses have independent late-inserted gates', async t => {
   const moduleNonces = [nonce(), nonce()], cspNonces = [nonce(), nonce()], value = config(); let m = 0, c = 0;
   const h = await harness(t, { value, random: () => moduleNonces[m++], createCspNonce: () => cspNonces[c++] });
   const pages = await Promise.all([h.page(), h.page()]);
   assert.equal(new Set(pages.map(page => routeFrom(page.body))).size, 2);
-  for (let i = 0; i < pages.length; i++) {
-    assert.equal(pages[i].body.includes(moduleNonces[i]), true); assert.equal(pages[i].body.includes(`nonce="${cspNonces[i]}"`), true);
-    safe(pages[i].body, [...Object.values(value), h.key, h.authorization]);
+  const seenModules = new Set(), seenCsp = new Set();
+  for (const page of pages) {
+    assert.equal(page.status, 200);
+    const ownModule = new URL(routeFrom(page.body), `http://${HOST}`).searchParams.get('nonce');
+    const scripts = nodes(page.body).filter(node => node.tagName === 'script');
+    const ownCsp = attr(scripts[0], 'nonce');
+    assert.equal(moduleNonces.includes(ownModule), true); assert.equal(cspNonces.includes(ownCsp), true);
+    assert.equal(scripts.every(node => attr(node, 'nonce') === ownCsp), true);
+    assert.equal(page.body.includes(`'nonce-${ownCsp}'`), true);
+    safe(page.body, [...moduleNonces.filter(n => n !== ownModule), ...cspNonces.filter(n => n !== ownCsp), ...Object.values(value), h.key, h.authorization]);
+    seenModules.add(ownModule); seenCsp.add(ownCsp);
   }
+  assert.deepEqual(seenModules, new Set(moduleNonces)); assert.deepEqual(seenCsp, new Set(cspNonces));
   for (const args of h.transforms) { assert.equal(args[0], '/index.html'); assert.equal(args[2], '/'); safe(JSON.stringify(args), [...moduleNonces, ...cspNonces, ...Object.values(value), h.key, PREFIX]); }
   assert.equal(h.transforms.length, 2); assert.equal(h.issues(), 2); assert.equal(h.cspIssues(), 2); assert.equal(h.reads(), 0);
 });
@@ -367,7 +394,9 @@ test('errors and logging contain no sensitive values', async t => {
     assert.equal((await broken.module(`${ROUTE}?nonce=${moduleNonce}`)).status, 403);
     const reader = await harness(t, { key, readConfig: async () => { throw Error(material.join(' ')); } });
     const failed = await reader.module(routeFrom((await reader.page()).body)); safe(failed.body, material);
-    assert.equal([200, 500].includes(failed.status), true);
+    assert.equal(failed.status, 200);
+    assert.equal(failed.body, "delete globalThis.__RESONANTOS_BRIDGE_CONFIG__;\nawait import('/src/main.tsx');\n");
+    assert.equal(reader.reads(), 1);
     assert.equal(reader.errors.length + broken.errors.length, 0); assert.equal(reader.logs.length + broken.logs.length, 0); assert.equal(captured.length, 0);
   } finally { for (const name of Object.keys(originals)) console[name] = originals[name]; }
 });
@@ -417,10 +446,13 @@ test('Basic parser rejects ambiguous credentials', async t => {
   assert.equal(h.reads(), 0); assert.equal(h.issues(), 1); assert.equal((await h.module(route)).status, 200); assert.equal(h.reads(), 1);
 });
 
-test('plugin does not apply under vitest (Vite mode test) — the policy assertion must never break the unit runner', () => {
-  const plugin = devBridgeConfigPlugin();
-  assert.equal(plugin.apply({}, { command: 'serve', mode: 'test', isPreview: false }), false);
-  assert.equal(plugin.apply({}, { command: 'serve', mode: 'development', isPreview: false }), true);
-  assert.equal(plugin.apply({}, { command: 'build', mode: 'production', isPreview: false }), false);
-  assert.equal(plugin.apply({}, { command: 'serve', mode: 'development', isPreview: true }), false);
+test('plugin skips only under vitest (mode test + VITEST=true); a plain vite --mode test server keeps the policy', () => {
+  const under = devBridgeConfigPlugin({ env: () => ({ VITEST: 'true' }) });
+  const plain = devBridgeConfigPlugin({ env: () => ({}) });
+  assert.equal(under.apply({}, { command: 'serve', mode: 'test', isPreview: false }), false);
+  assert.equal(plain.apply({}, { command: 'serve', mode: 'test', isPreview: false }), true);
+  assert.equal(plain.apply({}, { command: 'serve', mode: 'development', isPreview: false }), true);
+  assert.equal(under.apply({}, { command: 'serve', mode: 'development', isPreview: false }), true);
+  assert.equal(plain.apply({}, { command: 'build', mode: 'production', isPreview: false }), false);
+  assert.equal(plain.apply({}, { command: 'serve', mode: 'development', isPreview: true }), false);
 });

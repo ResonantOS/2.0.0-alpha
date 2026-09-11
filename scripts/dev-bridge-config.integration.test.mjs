@@ -320,7 +320,7 @@ integration('I7', 'HMR and error channels never carry credential material', asyn
 });
 integration('I8', 'actual HTTP guard rejects cross-origin and malformed traffic', async t => {
   const fixture = await isolated(t), h = await start(t, fixture), route = routeFrom((await h.page()).body);
-  for (const path of ['/', route]) for (const patch of [{ Host: `127.0.0.2:${h.port}` }, { Host: 'attacker.test' }, { Origin: 'null' }, { Origin: 'http://attacker.test' }]) {
+  for (const path of ['/', route]) for (const patch of [{ Host: `127.0.0.2:${h.port}` }, { Host: `localhost:${h.port}` }, { Host: 'attacker.test' }, { Origin: 'null' }, { Origin: 'http://attacker.test' }]) {
     const response = await h.request(path, { headers: { ...META, Authorization: h.authorization, ...patch } });
     assert.equal(response.status, 403); assert.equal(response.body, 'Forbidden.\n'); assert.equal(response.headers['access-control-allow-origin'], undefined); noMaterial(response.body, Object.values(fixture.value));
   }
