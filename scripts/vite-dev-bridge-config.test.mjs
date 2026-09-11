@@ -118,8 +118,16 @@ function headersSafe(response, page = false) {
 
 test('opt-out never reads or injects', async t => {
   for (const value of [undefined, '', '0', 'false', 'true']) {
-    const h = await harness(t, { env: value === undefined ? {} : { RESONANTOS_DEV_BRIDGE_CONFIG: value } });
-    assert.equal((await h.page()).next, true);
+    let h;
+    try { h = await harness(t, { env: value === undefined ? {} : { RESONANTOS_DEV_BRIDGE_CONFIG: value } }); }
+    catch (error) {
+      // A missing-key refusal is a behavioral regression in off mode. Keep
+      // unrelated filesystem/import errors distinct from an assertion kill.
+      if (error.message !== 'Development page key is invalid.') throw error;
+    }
+    assert.equal(h !== undefined, true, 'off mode starts successfully without a page key');
+    const page = await h.request('/');
+    assert.equal(page.next, true); assert.equal(page.headers.has('www-authenticate'), false);
     for (const method of ['GET', 'HEAD', 'POST', 'OPTIONS']) for (const suffix of ['', '?nonce=x', '?raw', '/other']) {
       const response = await h.request(ROUTE + suffix, { method, headers: { host: 'attacker.test', origin: 'null' } });
       assert.equal(response.status, 404); assert.equal(response.body, 'Not found.\n');

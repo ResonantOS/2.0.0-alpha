@@ -45,12 +45,17 @@ async function isolated(t) {
   const root = await mkdtemp(join(tmpdir(), 'resonantos-dev-integration-'));
   const resources = [];
   t.after(async () => {
-    let failed = false;
+    const failures = [];
     for (const close of resources.reverse()) {
-      try { await close(); } catch { failed = true; }
+      try { await close(); } catch { failures.push('server-close'); }
     }
-    try { await rm(root, { recursive: true, force: true }); } catch { failed = true; }
-    assert.equal(failed, false, 'integration resource cleanup succeeds');
+    // Vite's optimizer can finish a filesystem operation while its cancelled
+    // scan unwinds. Node's bounded recursive-rm retry handles ENOTEMPTY/EBUSY
+    // without hiding a persistent cleanup failure or touching shared caches.
+    try { await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
+    catch (error) { failures.push(['ENOTEMPTY', 'EBUSY', 'EPERM', 'EACCES'].includes(error.code) ? `fixture-remove:${error.code}` : 'fixture-remove'); }
+    // A cleanup error is infrastructure, never a mutation assertion kill.
+    if (failures.length) throw Error(`integration cleanup failed: ${failures.join(',')}`);
   });
   await chmod(root, 0o700);
   for (const path of ['src', 'packages', 'public', 'index.html', 'vite.config.ts', 'tsconfig.json', 'package.json',
@@ -206,14 +211,30 @@ function integration(id, name, fn) {
   });
 }
 integration('I1', 'real default server preserves part-one denials', async t => {
-  const fixture = await isolated(t), h = await start(t, fixture, { enabled: false });
-  for (const headers of [{}, { Host: `localhost:${h.port}` }]) { const page = await h.request('/', { headers }); assert.equal(page.status, 200); assert.equal(page.body.includes(PREFIX), false); noMaterial(page.body, Object.values(fixture.value)); }
+  const fixture = await isolated(t);
+  // These files must exist: a missing file can fall through Vite's deny check.
+  assert.equal((await readFile(join(fixture.root, RELATIVE), 'utf8')) === writer(fixture.value), true);
+  assert.equal((await readFile(join(fixture.root, 'ResonantOS_User/probe'), 'utf8')).length > 0, true);
+  let h, reads = 0;
+  const lifecycle = { configured: 0, listening: 0 };
+  try { h = await start(t, fixture, { enabled: false, lifecycle, readConfig: async root => { reads++; return readGeneratedBridgeConfig(root); } }); }
+  catch (error) {
+    // A canonical deny deletion is refused before listen; that is a specific
+    // failure of the valid off-mode startup contract, not an opaque I1 error.
+    // Binding/import/setup errors still propagate as infrastructure failures.
+    if (!['Development page key is invalid.', 'Unsafe development server policy.'].includes(error.message)) throw error;
+  }
+  assert.equal(reads, 0);
+  assert.equal(h !== undefined, true, 'valid off-mode server starts without a page key');
+  assert.equal(lifecycle.configured, 1); assert.equal(lifecycle.listening, 1);
+  for (const headers of [{}, { Host: `localhost:${h.port}` }]) { const page = await h.request('/', { headers }); assert.equal(page.status, 200); assert.equal(page.headers['www-authenticate'], undefined); assert.equal(page.body.includes(PREFIX), false); noMaterial(page.body, Object.values(fixture.value)); }
   const missing = await h.request(ROUTE); assert.equal(missing.status, 404); assert.equal(missing.body, 'Not found.\n');
+  assert.equal(missing.headers['www-authenticate'], undefined);
   assert.equal((await h.request('/src/main.tsx')).status, 200);
   for (const path of [`/${RELATIVE}`, `/@fs/${join(fixture.root, RELATIVE)}`, '/ResonantOS_User/probe', `/@fs/${join(fixture.root, 'ResonantOS_User/probe')}`]) {
     const response = await h.request(path); assert.equal(response.status, 403); noMaterial(response.body, Object.values(fixture.value));
   }
-  assert.equal(h.reads(), 0);
+  assert.equal(h.reads(), 0); assert.equal(reads, 0);
 });
 integration('I2', 'real startup refuses unsafe resolved policy', async t => {
   const fixture = await isolated(t);

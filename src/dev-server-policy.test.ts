@@ -47,7 +47,7 @@ const restoreEnv = (name: string, value: string | undefined) => {
 
 describe.sequential("authenticated development policy", () => {
   it("resolved Vite config wires the delivery plugin and strict policy", async () => {
-    const config = await resolveConfig({ configFile: "vite.config.ts" }, "serve");
+    const config = await resolveConfig({ configFile: "vite.config.ts", configLoader: "runner" }, "serve");
     expect(config.plugins.some(p => p.name === "resonantos-dev-bridge-config")).toBe(true);
     expect(config.server.host).toBe("127.0.0.1");
     expect(config.server.allowedHosts).toEqual(["127.0.0.1"]);
@@ -93,7 +93,7 @@ describe.sequential("authenticated development policy", () => {
     const previous = process.env[name], enabled = process.env.RESONANTOS_DEV_BRIDGE_CONFIG;
     try {
       process.env[name] = "attacker.test"; delete process.env.RESONANTOS_DEV_BRIDGE_CONFIG;
-      const config = await resolveConfig({ configFile: "vite.config.ts" }, "serve");
+      const config = await resolveConfig({ configFile: "vite.config.ts", configLoader: "runner" }, "serve");
       const effectiveHosts = Array.isArray(config.server.allowedHosts) ? config.server.allowedHosts : [];
       expect(effectiveHosts).toContain("attacker.test");
       expect(() => assertDevServerPolicy(config, 1430)).toThrow("Unsafe development server policy.");
@@ -111,7 +111,7 @@ describe.sequential("authenticated development policy", () => {
     } finally { restoreEnv(name, previous); restoreEnv("RESONANTOS_DEV_BRIDGE_CONFIG", enabled); }
   });
   it("startup rejects implicit origins and HMR host overrides", async () => {
-    const config = await resolveConfig({ configFile: "vite.config.ts" }, "serve");
+    const config = await resolveConfig({ configFile: "vite.config.ts", configLoader: "runner" }, "serve");
     expect(() => assertDevServerPolicy(config, 1430)).not.toThrow();
     for (const additionalAllowedHosts of [undefined, null, true, "", "127.0.0.1", ["attacker.test"], ["127.0.0.1", "attacker.test"]]) {
       expect(() => assertDevServerPolicy({ ...policy(), additionalAllowedHosts }, 1430)).toThrow("Unsafe development server policy.");
