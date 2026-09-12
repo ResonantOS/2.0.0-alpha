@@ -552,7 +552,8 @@ function listenerPort() {
 }
 
 function configuredPublicPort() {
-  const publicUrl = ctx.config?.httpsBridgeUrl || ctx.config?.bridgeUrl;
+  // This launcher starts HTTP only; httpsBridgeUrl is not an accepted Host source.
+  const publicUrl = ctx.config?.bridgeUrl;
   if (!publicUrl) return undefined;
   try {
     const parsed = new URL(publicUrl);
