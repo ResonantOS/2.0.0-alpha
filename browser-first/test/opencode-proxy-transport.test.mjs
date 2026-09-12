@@ -18,13 +18,13 @@ async function fixture(run, options = {}) {
   const server = await transport.startBridgeServer({port:0,bridgeToken,bridgeCapabilityTokens:{[CAP]:token},extensionOrigin:ORIGIN,routes,...options});
   const port = server.address().port;
   const headers = {Host:`127.0.0.1:${port}`,Origin:ORIGIN,[transport.bridgeTokenHeaderName]:bridgeToken,[transport.bridgeCapabilityHeaderName]:token};
-  const request = ({path=PATH,method='POST',body='{}',headers:overrides={},rawHosts,agent}={}) => new Promise((resolve,reject) => {
+  const request = ({path=PATH,method='POST',body='{}',headers:overrides={},rawHosts,agent,httpVersion='1.1'}={}) => new Promise((resolve,reject) => {
     const h = {...headers,...overrides};
     for (const k of Object.keys(h)) if (h[k] === undefined) delete h[k];
     if (rawHosts !== undefined) {
       const socket = net.connect(port,'127.0.0.1',() => {
         const pairs = Object.entries(h).filter(([k]) => k !== 'Host').map(([k,v]) => `${k}: ${v}`);
-        socket.end(`${method} ${path} HTTP/1.1\r\n${rawHosts.map(v=>`Host: ${v}\r\n`).join('')}${pairs.join('\r\n')}\r\nConnection: close\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`);
+        socket.end(`${method} ${path} HTTP/${httpVersion}\r\n${rawHosts.map(v=>`Host: ${v}\r\n`).join('')}${pairs.join('\r\n')}\r\nConnection: close\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`);
       });
       let data=''; socket.on('data',c=>data+=c); socket.on('error',reject); socket.on('end',()=>{
         const [head,...tail]=data.split('\r\n\r\n');
@@ -49,7 +49,7 @@ for (const kind of ['missing','wrong','undeclared']) test(`capability refuses be
 }));
 for (const kind of ['evil','suffix','wrong-port','missing','duplicate','absolute-target']) test(`Host refuses before upstream: ${kind}`,async()=>fixture(async f=>{
   const control=await f.request();f.reset();const h=`127.0.0.1:${f.port}`;
-  const opts={evil:{headers:{Host:`evil.example:${f.port}`}},suffix:{headers:{Host:`127.0.0.1.evil:${f.port}`}},'wrong-port':{headers:{Host:`127.0.0.1:${f.port===65535?65534:f.port+1}`}},missing:{rawHosts:[]},duplicate:{rawHosts:[h,h]},'absolute-target':{path:`http://${h}${PATH}`}}[kind];
+  const opts={evil:{headers:{Host:`evil.example:${f.port}`}},suffix:{headers:{Host:`127.0.0.1.evil:${f.port}`}},'wrong-port':{headers:{Host:`127.0.0.1:${f.port===65535?65534:f.port+1}`}},missing:{rawHosts:[],httpVersion:'1.0'},duplicate:{rawHosts:[h,h]},'absolute-target':{path:`http://${h}${PATH}`}}[kind];
   const r=await f.request(opts);
   assert.deepEqual([errorTuple(control),errorTuple(r),f.calls()],[[200,null,ORIGIN],[403,'OPENCODE_HOST_REJECTED',ORIGIN],0]);
 }));
