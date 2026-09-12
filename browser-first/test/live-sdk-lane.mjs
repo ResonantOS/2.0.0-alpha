@@ -85,6 +85,8 @@ const mode = isCi && !process.env.RESONANTOS_LIVE_SDK_MODEL ? "ci" : "local";
 const fault = String(process.env.RESONANTOS_LIVE_SDK_FAULT ?? "").trim();
 const expectFail = parseArgValue("--expect-fail");
 const childWaitBoundMs = 60_000;
+const ORIGIN = "chrome-extension://test";
+const forbiddenOpenCodeKey = /^(eventAuthorization|eventUrl|baseUrl|authorization|password|username|auth|credential)$/i;
 
 let userRoot = "";
 let bridgePort = 0;
@@ -124,6 +126,7 @@ const ctx = {
   capabilityTokens: {},
   mode,
   userRoot: "",
+  boundaryProof: { sessions: {}, readers: [] },
 };
 
 class ScenarioExcluded extends Error {
@@ -152,45 +155,6 @@ const scenarios = [
   { id: "teardown", run: teardownScenario },
   { id: "checkout-config-untouched", run: checkoutConfigUntouchedScenario },
 ];
-
-const isDirectRun = Boolean(process.argv[1]) && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url;
-
-if (isDirectRun) {
-  for (const signal of ["SIGINT", "SIGTERM"]) {
-    process.once(signal, () => {
-      void cleanup().finally(() => process.exit(signal === "SIGINT" ? 130 : 143));
-    });
-  }
-
-  let failed = false;
-  let terminalError = null;
-  try {
-    await mkdir(artifactDir, { recursive: true });
-    for (const scenario of scenarios) {
-      const status = await runScenario(scenario);
-      if (status === "failed") failed = true;
-      if (expectFail === scenario.id && status === "passed") break;
-      if (status === "failed" && scenario.fatal) break;
-    }
-  } catch (error) {
-    failed = true;
-    terminalError = error;
-  } finally {
-    await report.write({
-      status: failed ? "failed" : "passed",
-      error: terminalError,
-      metadata: {
-        mode,
-        commit: process.env.GITHUB_SHA ?? "local",
-        fault,
-        expectFail,
-      },
-    });
-    await cleanup();
-  }
-
-  if (failed) process.exit(1);
-}
 
 async function runScenario(scenario) {
   try {
@@ -284,6 +248,7 @@ async function startBridgeScenario() {
     RESONANTOS_BROWSER_FIRST_USER_ROOT: userRoot,
     RESONANTOS_BROWSER_FIRST_BRIDGE_PORT: String(bridgePort),
     RESONANTOS_EXTENSION_ROOT: stagedExtension.extensionRoot,
+    RESONANTOS_BRIDGE_ALLOWED_ORIGINS: [process.env.RESONANTOS_BRIDGE_ALLOWED_ORIGINS, ORIGIN].filter(Boolean).join(","),
     ...(mode === "ci" && !process.env.OPENAI_API_KEY ? { OPENAI_API_KEY: "live-sdk-placeholder-key" } : {}),
     ...(fault === "opencode-credential-server" ? { RESONANTOS_OPENCODE_PORT: "4231" } : {}),
   };
@@ -393,8 +358,6 @@ function currentOpenCodeRuntime() {
   return opencodeRuntimeDiagnostics({ env: process.env });
 }
 
-const ORIGIN = "chrome-extension://test";
-const forbiddenOpenCodeKey = /^(eventAuthorization|eventUrl|baseUrl|authorization|password|username|auth|credential)$/i;
 ctx.boundaryProof = ctx.boundaryProof ?? { sessions: {}, readers: [] };
 
 function countForbiddenOpenCodeFields(value) {
@@ -417,9 +380,32 @@ async function bridgeEvents(sessionId, { headers = {}, signal } = {}) {
   return fetch(url, { method: "GET", headers: requestHeaders, signal, redirect: "error" });
 }
 
+const envelopeReaders = new WeakMap();
+
+function envelopeState(reader) {
+  let state = envelopeReaders.get(reader);
+  if (!state) {
+    state = { decoder: new TextDecoder(), buffer: "", pending: [] };
+    envelopeReaders.set(reader, state);
+  }
+  return state;
+}
+
+function takePendingEnvelope(state) {
+  const frames = state.buffer.split("\n\n");
+  state.buffer = frames.pop() ?? "";
+  for (const frame of frames) {
+    const data = frame.split("\n").filter((line) => line.startsWith("data:")).map((line) => line.slice(5).replace(/^ /, "")).join("\n");
+    if (!data) continue;
+    state.pending.push(JSON.parse(data));
+  }
+  return state.pending.shift();
+}
+
 async function readEnvelope(reader, timeoutMs = 2000) {
-  const decoder = new TextDecoder();
-  let buffer = "";
+  const state = envelopeState(reader);
+  const queued = takePendingEnvelope(state);
+  if (queued) return queued;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const remaining = Math.max(1, deadline - Date.now());
@@ -428,14 +414,9 @@ async function readEnvelope(reader, timeoutMs = 2000) {
       new Promise((_, reject) => setTimeout(() => reject(new Error("envelope timeout")), remaining)),
     ]);
     if (result.done) throw new Error("OPENCODE_STREAM_DISCONNECTED");
-    buffer += decoder.decode(result.value, { stream: true });
-    const frames = buffer.split("\n\n");
-    buffer = frames.pop() ?? "";
-    for (const frame of frames) {
-      const data = frame.split("\n").filter((line) => line.startsWith("data:")).map((line) => line.slice(5).replace(/^ /, "")).join("\n");
-      if (!data) continue;
-      return JSON.parse(data);
-    }
+    state.buffer += state.decoder.decode(result.value, { stream: true });
+    const envelope = takePendingEnvelope(state);
+    if (envelope) return envelope;
   }
   throw new Error("envelope timeout");
 }
@@ -636,7 +617,7 @@ async function opencodeProxyCapabilityScenario() {
     method: "GET",
     headers: { Host: `127.0.0.1:${listenerPort}`, Origin: ORIGIN, "X-ResonantOS-Bridge-Token": token },
   });
-  assert(control.status === 200 && control.code === null && control.origin === ORIGIN, "valid events control failed");
+  assert(control.status === 200 && control.code === null && control.origin === ORIGIN, `valid events control failed: ${JSON.stringify(control)}`);
   assert(missingCap.status === 403 && missingCap.payload.code === "OPENCODE_CAPABILITY_REQUIRED", "missing capability did not return 403");
   const wrongCap = await httpBridgeRequest({
     path: eventsPath,
@@ -1155,4 +1136,43 @@ async function cleanup() {
   if (chromeProfile) await rm(chromeProfile, { recursive: true, force: true }).catch(() => undefined);
   if (stagedExtension) await stagedExtension.cleanup().catch(() => undefined);
   if (userRoot) await rm(userRoot, { recursive: true, force: true }).catch(() => undefined);
+}
+
+const isDirectRun = Boolean(process.argv[1]) && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url;
+
+if (isDirectRun) {
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    process.once(signal, () => {
+      void cleanup().finally(() => process.exit(signal === "SIGINT" ? 130 : 143));
+    });
+  }
+
+  let failed = false;
+  let terminalError = null;
+  try {
+    await mkdir(artifactDir, { recursive: true });
+    for (const scenario of scenarios) {
+      const status = await runScenario(scenario);
+      if (status === "failed") failed = true;
+      if (expectFail === scenario.id && status === "passed") break;
+      if (status === "failed" && scenario.fatal) break;
+    }
+  } catch (error) {
+    failed = true;
+    terminalError = error;
+  } finally {
+    await report.write({
+      status: failed ? "failed" : "passed",
+      error: terminalError,
+      metadata: {
+        mode,
+        commit: process.env.GITHUB_SHA ?? "local",
+        fault,
+        expectFail,
+      },
+    });
+    await cleanup();
+  }
+
+  if (failed) process.exit(1);
 }

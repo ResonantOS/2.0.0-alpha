@@ -49,6 +49,15 @@ const faultScenarios = [
   "extension-status-cards",
 ];
 
+const faultExpectedDetail = {
+  "opencode-version-pin": /OpenCode version mismatch/i,
+  "opencode-proxy-capability": /fault expected the capability-omitted SSE control to be accepted/,
+  "opencode-proxy-scope": /required upstream session\.updated events were not observed/,
+  "opencode-proxy-revocation": /revocation close was observed without toggling execution off/,
+  "opencode-proxy-raw-log": /OPENCODE_RAW_LOG_CREDENTIAL_DETECTED/,
+  "extension-status-cards": /403 bridge response outside the loopback probe/,
+};
+
 function runLaneFault(scenarioId, artifactDir) {
   return new Promise((resolve, reject) => {
     const child = spawn(
@@ -158,6 +167,9 @@ for (const scenarioId of faultScenarios) {
       assert.equal(payload.certification, "resonantos-live-sdk");
       assert.equal(scenario?.status, "passed", JSON.stringify(payload.scenarios, null, 2));
       assert.match(scenario.detail, /Expected failure observed/i);
+      if (faultExpectedDetail[scenarioId]) {
+        assert.match(scenario.detail, faultExpectedDetail[scenarioId]);
+      }
     } finally {
       await rm(artifactDir, { recursive: true, force: true });
     }
