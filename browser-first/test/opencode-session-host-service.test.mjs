@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import test from "node:test";
 
 import { OpenCodeBoundaryError } from "../host/opencode-boundary.mjs";
@@ -318,12 +319,14 @@ test("web url handler ensures serve, returns a 127.0.0.1 root url, and appends a
 });
 
 test("web url handler returns requiresCredential and never leaks the credential", async () => {
+  const password = randomBytes(16).toString("hex");
+  const header = "Basic " + randomBytes(12).toString("base64");
   const audit = [];
   const executeOpenCodeWebUrl = createOpenCodeWebUrlHandler({
     executionEnabled: async () => true,
     ensureServer: async () => ({
       baseUrl: "http://127.0.0.1:45123",
-      auth: { username: "opencode", password: "s3cret", header: "Basic x" }
+      auth: { username: "opencode", password, header }
     }),
     appendAuditEntry: async (entry) => audit.push(entry),
   });
@@ -331,8 +334,8 @@ test("web url handler returns requiresCredential and never leaks the credential"
   const result = await executeOpenCodeWebUrl({ body: { enableOpenCodeExecution: true } });
 
   assert.deepEqual(result, { url: "", requiresCredential: true });
-  assert.equal(JSON.stringify(audit).includes("s3cret"), false);
-  assert.equal(JSON.stringify(audit).includes("Basic x"), false);
+  assert.equal(JSON.stringify(audit).includes(password), false);
+  assert.equal(JSON.stringify(audit).includes(header), false);
   assert.equal(audit[0].url, "");
 });
 
@@ -352,15 +355,17 @@ test("web url handler peeks for a registered server and refuses without spawning
   assert.equal(refuseAudit[0].event, "webCockpitUrlIssued");
   assert.equal(refuseAudit[0].url, "");
 
+  const registeredPassword = randomBytes(16).toString("hex");
+  const registeredHeader = "Basic " + randomBytes(12).toString("base64");
   const registeredAudit = [];
   const registeredHandler = createOpenCodeWebUrlHandler({
     executionEnabled: async () => true,
-    ensureServer: async () => ({ baseUrl: "http://127.0.0.1:45123/session", auth: { username: "opencode", password: "s3cret", header: "Basic x" } }),
+    ensureServer: async () => ({ baseUrl: "http://127.0.0.1:45123/session", auth: { username: "opencode", password: registeredPassword, header: registeredHeader } }),
     appendAuditEntry: async (entry) => registeredAudit.push(entry),
     peekServer: async () => ({ baseUrl: "http://127.0.0.1:45123" })
   });
   const issued = await registeredHandler({ body: { enableOpenCodeExecution: true } });
   assert.deepEqual(issued, { url: "", requiresCredential: true });
   assert.equal(registeredAudit[0].url, "");
-  assert.equal(JSON.stringify(registeredAudit).includes("s3cret"), false);
+  assert.equal(JSON.stringify(registeredAudit).includes(registeredPassword), false);
 });
