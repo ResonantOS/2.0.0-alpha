@@ -1215,14 +1215,22 @@ async function extensionStatusCardsScenario() {
     const judged = [];
     const probes = [];
     let bootstrapObserved = false;
+    const upstreamOrigin = ctx.boundaryProof?.port ? `http://127.0.0.1:${ctx.boundaryProof.port}` : "";
+    let eventsReadCapability = false;
+    let upstreamExtensionRequests = 0;
     settings.on("Network.requestWillBeSent", (event) => {
       const url = event.request?.url ?? "";
+      if (upstreamOrigin && url.startsWith(upstreamOrigin)) upstreamExtensionRequests += 1;
       if (url.startsWith(ctx.bridgeUrl)) {
         const headers = Object.fromEntries(Object.entries(event.request?.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]));
+        const hasCapabilityHeader = Boolean(headers["x-resonantos-bridge-capability-token"]);
         requestMeta.set(event.requestId, {
           method: event.request?.method ?? "",
-          hasCapabilityHeader: Boolean(headers["x-resonantos-bridge-capability-token"]),
+          hasCapabilityHeader,
         });
+        try {
+          if (new URL(url).pathname === "/opencode/session/events" && hasCapabilityHeader) eventsReadCapability = true;
+        } catch { /* ignore malformed */ }
       }
     });
     settings.on("Network.responseReceived", (event) => {
@@ -1257,8 +1265,33 @@ async function extensionStatusCardsScenario() {
       );
     }
     await mkdir(artifactDir, { recursive: true });
-    await captureScreenshotArtifact(settings, path.join(artifactDir, "extension-status-cards.png"));
-    return `Settings Overview status cards loaded; no 403 outside the loopback probe. ${JSON.stringify({ probes: probes.length, judged: judged.length, statuses: judged.map((r) => `${r.method} ${new URL(r.url).pathname} ${r.status}`) })}`;
+    const screenshotPath = path.join(artifactDir, "extension-status-cards.png");
+    await captureScreenshotArtifact(settings, screenshotPath);
+    let opencodeProof = { governed: false, external: false, screenshot: "" };
+    if (ctx.boundaryProof?.port) {
+      await settings.send("Page.navigate", { url: settingsUrl.replace("#settings/overview", "#opencode") });
+      await waitForOpenCodeStartButton(settings);
+      await evaluate(settings, `document.querySelector(".opencode-start-session")?.click()`);
+      opencodeProof = await waitForOpenCodeSessionProof(settings);
+      for (let index = 0; index < 40 && !eventsReadCapability; index += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      assert(eventsReadCapability, "bridge events request with read-capability header was not observed");
+      assert(upstreamExtensionRequests === 0, "extension requested the recorded upstream origin");
+      assert(opencodeProof.governed === true, "Governed badge was not visible after UI start/resume");
+      opencodeProof.screenshot = path.join(artifactDir, "opencode-workspace.png");
+      await captureScreenshotArtifact(settings, opencodeProof.screenshot);
+    }
+    return `Settings Overview status cards loaded; no 403 outside the loopback probe. ${JSON.stringify({
+      probes: probes.length,
+      judged: judged.length,
+      screenshotPath,
+      eventsReadCapability,
+      upstreamExtensionRequests,
+      governed: opencodeProof.governed,
+      external: opencodeProof.external,
+      opencodeScreenshot: opencodeProof.screenshot,
+    })}`;
   } catch (error) {
     // Only a genuinely missing/uninstallable browser is an exclusion. Any other launch failure (no display,
     // sandbox, crash) is a real failure and must surface with its message — on CI it once hid a missing xvfb.
@@ -1305,6 +1338,43 @@ async function waitForOverviewCards(settings) {
   }
   const text = await evaluate(settings, "document.body?.innerText ?? ''").then((result) => result.result.value).catch(() => `<unavailable: ${lastError?.message ?? "no page text"}>`);
   throw new Error(`Settings Overview cards did not load non-placeholder values. ${text.slice(0, 1000)}`);
+}
+
+async function waitForOpenCodeStartButton(client) {
+  for (let index = 0; index < 80; index += 1) {
+    try {
+      const ready = (await evaluate(client, `(() => {
+        const button = document.querySelector(".opencode-start-session");
+        return Boolean(button && !button.hidden && !button.disabled);
+      })()`)).result.value;
+      if (ready) return true;
+    } catch {
+      /* document not ready */
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error("OpenCode start live session control was not shown");
+}
+
+async function waitForOpenCodeSessionProof(client) {
+  let last = { governed: false, external: false };
+  for (let index = 0; index < 80; index += 1) {
+    try {
+      last = (await evaluate(client, `(() => {
+        const nodes = [...document.querySelectorAll("[data-source], .oc-badge")];
+        const texts = nodes.map((node) => node.textContent ?? "");
+        return {
+          governed: texts.some((text) => text.includes("Governed")),
+          external: texts.some((text) => text.includes("External")),
+        };
+      })()`)).result.value;
+    } catch {
+      /* document not ready */
+    }
+    if (last?.governed) return last;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return last;
 }
 
 async function teardownScenario() {
