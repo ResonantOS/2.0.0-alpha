@@ -10,10 +10,12 @@ import { chromium } from "playwright";
 
 import { opencodeRuntimeDiagnostics } from "../host/opencode-runtime.mjs";
 import {
+  collectScanTexts,
   createRawBridgeLogSink,
   createRevocationWatcher,
   drainEnvelopes,
   envelopeRawText,
+  probeLeakDetected,
   readEnvelope,
 } from "./live-sdk-lane.mjs";
 
@@ -385,4 +387,103 @@ test("revocation watcher distinguishes EOF from malformed data", async () => {
   assert.ok(eofResult.eofAt > 0, "stream end must record eofAt");
   assert.equal(eofResult.error, "");
   assert.equal(eofResult.sawClose, true);
+});
+
+test("probeLeakDetected flags quoted keys, bare markers, and Basic credentials", () => {
+  assert.deepEqual(
+    [
+      probeLeakDetected(`{"OPENCODE_SERVER_PASSWORD":"x"}`),
+      probeLeakDetected("OPENCODE_SERVER_PASSWORD=x"),
+      probeLeakDetected("eventUrl=http://127.0.0.1:1/event"),
+      probeLeakDetected(`{"eventAuthorization":"y"}`),
+      probeLeakDetected("Authorization: Basic abc"),
+      probeLeakDetected(`{"ok":true,"sessions":[]}`),
+    ],
+    [true, true, true, true, true, false],
+  );
+});
+
+test("credentialless probe inlines the exported probeLeakDetected source", async () => {
+  const source = await readFile(lanePath, "utf8");
+  assert.match(source, /const probeLeakDetected = \$\{probeLeakDetected\.toString\(\)\}/);
+  assert.ok(source.includes(probeLeakDetected.toString()), "lane source must contain the exported predicate body");
+});
+
+async function makeScanFixture() {
+  const root = await mkdtemp(path.join(os.tmpdir(), "resonantos-scan-"));
+  const staged = path.join(root, "extension");
+  await mkdir(staged, { recursive: true });
+  await writeFile(path.join(staged, "ok.js"), "export default true;\n");
+  const bridgeConfig = path.join(root, "bridge-config.generated.js");
+  await writeFile(bridgeConfig, "globalThis.__RESONANTOS_BRIDGE_CONFIG__ = Object.freeze({});\n");
+  const pidRecord = path.join(root, "opencode-server.json");
+  await writeFile(pidRecord, "{}\n");
+  return { root, staged, bridgeConfig, pidRecord };
+}
+
+test("collectScanTexts throws when a staged file read fails", async () => {
+  const fixture = await makeScanFixture();
+  const stagedFile = path.join(fixture.staged, "ok.js");
+  try {
+    await assert.rejects(
+      () => collectScanTexts({
+        stagedRoot: fixture.staged,
+        bridgeConfigPath: fixture.bridgeConfig,
+        pidRecordPath: fixture.pidRecord,
+        readFileFn: async (filePath, encoding) => {
+          if (filePath === stagedFile) {
+            const error = new Error("EACCES");
+            error.code = "EACCES";
+            throw error;
+          }
+          return readFile(filePath, encoding);
+        },
+      }),
+      (error) => error.code === "OPENCODE_SCAN_INPUT_MISSING" && error.message.includes(stagedFile),
+    );
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("collectScanTexts throws when a staged directory cannot be read", async () => {
+  const fixture = await makeScanFixture();
+  try {
+    await assert.rejects(
+      () => collectScanTexts({
+        stagedRoot: fixture.staged,
+        bridgeConfigPath: fixture.bridgeConfig,
+        pidRecordPath: fixture.pidRecord,
+        readdirFn: async () => {
+          const error = new Error("EACCES");
+          error.code = "EACCES";
+          throw error;
+        },
+      }),
+      (error) => error.code === "OPENCODE_SCAN_INPUT_MISSING"
+        && error.message.includes(`staged-extension-dir:${fixture.staged}`),
+    );
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("collectScanTexts throws OPENCODE_SCAN_INPUT_MISSING when bridge config is unreadable", async () => {
+  const fixture = await makeScanFixture();
+  try {
+    let thrown = null;
+    try {
+      await collectScanTexts({
+        stagedRoot: fixture.staged,
+        bridgeConfigPath: path.join(fixture.root, "missing-bridge-config.generated.js"),
+        pidRecordPath: fixture.pidRecord,
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    assert.equal(thrown?.code, "OPENCODE_SCAN_INPUT_MISSING");
+    assert.match(String(thrown?.message ?? ""), /bridge-config/);
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
 });

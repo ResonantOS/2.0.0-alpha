@@ -395,40 +395,67 @@ function throwCredentialDetected() {
   throw error;
 }
 
-async function readMandatoryScanInput(filePath, which) {
+function throwScanInputMissing(which) {
+  const error = new Error(`OPENCODE_SCAN_INPUT_MISSING: ${which}`);
+  error.code = "OPENCODE_SCAN_INPUT_MISSING";
+  throw error;
+}
+
+async function readMandatoryScanInput(filePath, which, readFileFn = readFile) {
   try {
-    return await readFile(filePath, "utf8");
+    return await readFileFn(filePath, "utf8");
   } catch {
-    throw new Error(`OPENCODE_SCAN_INPUT_MISSING: ${which}`);
+    throwScanInputMissing(which);
   }
 }
 
-async function collectScanTexts() {
+export async function collectScanTexts({
+  stagedRoot = stagedExtension?.extensionRoot,
+  bridgeConfigPath = activeBridgeConfigPath,
+  pidRecordPath = path.join(userRoot, "BrowserFirst", "opencode-server.json"),
+  readFileFn = readFile,
+  readdirFn = readdir,
+} = {}) {
   const files = [];
   let stagedFileCount = 0;
   async function walk(dir) {
-    let entries = [];
-    try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
+    let entries;
+    try {
+      entries = await readdirFn(dir, { withFileTypes: true });
+    } catch {
+      throwScanInputMissing(`staged-extension-dir:${dir}`);
+    }
     for (const entry of entries) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         if (entry.name === "node_modules" || entry.name === ".git") continue;
         await walk(full);
       } else if (entry.isFile() && /\.(?:js|mjs|cjs|json|html|css|txt|md)$/i.test(entry.name)) {
+        try {
+          files.push(await readFileFn(full, "utf8"));
+        } catch {
+          throwScanInputMissing(`staged-extension:${full}`);
+        }
         stagedFileCount += 1;
-        files.push(await readFile(full, "utf8").catch(() => ""));
       }
     }
   }
-  if (stagedExtension?.extensionRoot) await walk(stagedExtension.extensionRoot);
-  assert(stagedFileCount > 0, "OPENCODE_SCAN_INPUT_MISSING: staged-extension");
-  files.push(await readMandatoryScanInput(activeBridgeConfigPath, "bridge-config"));
-  files.push(await readMandatoryScanInput(path.join(userRoot, "BrowserFirst", "opencode-server.json"), "opencode-server.json"));
+  if (stagedRoot) await walk(stagedRoot);
+  if (!(stagedFileCount > 0)) throwScanInputMissing("staged-extension");
+  files.push(await readMandatoryScanInput(bridgeConfigPath, "bridge-config", readFileFn));
+  files.push(await readMandatoryScanInput(pidRecordPath, "opencode-server.json", readFileFn));
   return {
     files,
     captures: ctx.boundaryProof?.captures ?? [],
     raw: rawLogSink.joinRaw(),
   };
+}
+
+export function probeLeakDetected(text) {
+  const body = String(text ?? "");
+  return /"(?:eventAuthorization|eventUrl|baseUrl|authorization|password|username|auth|credential)"/i.test(body)
+    || /eventAuthorization|eventUrl|OPENCODE_SERVER_PASSWORD|Basic /.test(body)
+    || /Basic /.test(body);
 }
 
 function scanTextForSecretSyntax(text) {
@@ -848,13 +875,13 @@ async function runCredentiallessSecondProcess({ port, bridgeUrl }) {
   const cwd = await mkdtemp(path.join(os.tmpdir(), "ros-opencode-second-"));
   const script = path.join(cwd, "probe.mjs");
   await writeFile(script, `
+    const probeLeakDetected = ${probeLeakDetected.toString()};
     const [bridgeUrl, port] = process.argv.slice(2);
     const checks = [];
     async function hit(url, method = "GET") {
       const response = await fetch(url, { method }).catch(() => ({ status: 0, text: async () => "" }));
       const text = await response.text?.() ?? "";
-      const leakedKey = /"(?:eventAuthorization|eventUrl|baseUrl|authorization|password|username|auth|credential)"/i.test(text);
-      checks.push({ status: response.status, leaked: leakedKey || /Basic /.test(text) });
+      checks.push({ status: response.status, leaked: probeLeakDetected(text) });
     }
     await hit("http://127.0.0.1:" + port + "/doc");
     await hit("http://127.0.0.1:" + port + "/session");
@@ -1084,8 +1111,10 @@ async function opencodeProxyRawLogScenario() {
   try {
     await scanBoundaryArtifacts();
   } catch (error) {
-    assert(error.code === "OPENCODE_RAW_LOG_CREDENTIAL_DETECTED", "raw credential scan used an unexpected code");
-    throw error;
+    if (error?.code === "OPENCODE_RAW_LOG_CREDENTIAL_DETECTED" || error?.code === "OPENCODE_SCAN_INPUT_MISSING") {
+      throw error;
+    }
+    assert(false, "raw credential scan used an unexpected code");
   }
   return "Unsanitized bridge logs contained no OpenCode credentials.";
 }
@@ -1497,6 +1526,9 @@ async function waitForOpenCodeSessionProof(client) {
 }
 
 async function teardownScenario() {
+  if (!fault && !expectFail) {
+    await scanBoundaryArtifacts();
+  }
   const teardown = await cleanupBridgeProcess();
   if (opencodePid) {
     await waitForPidToDie(opencodePid, 5000, 100);
