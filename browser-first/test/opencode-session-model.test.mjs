@@ -5,6 +5,7 @@ import {
   applyOpenCodeEvent,
   changedFilesView,
   createOpenCodeSessionState,
+  normalizeGovernedOpenCodeEvent,
   normalizeOpenCodeEvent
 } from "../resonantos-side-panel-extension/src/lib/opencode-session-model.js";
 
@@ -85,7 +86,7 @@ test("file edits roll into the changed-files map, accumulate on re-edit, and hig
     { type: "file.edited", properties: { path: "auth.ts", added: 5, removed: 2 } },
     { type: "file.edited", properties: { path: "jwt.ts", added: 3, removed: 0 } } // re-edit
   ]);
-  assert.deepEqual(state.changedFiles["jwt.ts"], { added: 45, removed: 8, status: "edited", touchedAt: state.changedFiles["jwt.ts"].touchedAt });
+  assert.deepEqual(state.changedFiles["jwt.ts"], { added: 45, removed: 8, status: "edited", touchedAt: state.changedFiles["jwt.ts"].touchedAt, source: "external" });
 
   const view = changedFilesView(state);
   assert.equal(view.length, 2);
@@ -115,7 +116,7 @@ test("permission asked adds an approval and blocks; replying clears it", () => {
 
 test("todo updates replace the plan checklist", () => {
   const state = run([{ type: "todo.updated", properties: { todos: [{ content: "Shorten TTL", status: "completed" }, { content: "Add rotation", status: "in_progress" }] } }]);
-  assert.deepEqual(state.todos, [{ label: "Shorten TTL", state: "completed" }, { label: "Add rotation", state: "in_progress" }]);
+  assert.deepEqual(state.todos, [{ label: "Shorten TTL", state: "completed", source: "external" }, { label: "Add rotation", state: "in_progress", source: "external" }]);
 });
 
 test("the reducer never mutates the input state", () => {
@@ -206,4 +207,37 @@ test("v1.18 schema: tool part transitions map to tool entries", () => {
   assert.equal(s.entries[0].state, "running");
   s = applyOpenCodeEvent(s, normalizeOpenCodeEvent({ type: "message.part.updated", properties: { part: { type: "tool", callID: "call_1", tool: "read", state: { status: "completed", title: "read done" } } } }));
   assert.equal(s.entries[0].state, "completed");
+});
+
+function envelope(sessionId, source, event) {
+  return { version: 1, sessionId, source, event };
+}
+
+test("normalizeGovernedOpenCodeEvent rejects absent mismatched or invalid source envelopes", () => {
+  const event = { type: "text.delta", properties: { messageID: "m1", text: "x" } };
+  assert.equal(normalizeGovernedOpenCodeEvent({ version: 1, source: "governed", event }, "s1"), null);
+  assert.equal(normalizeGovernedOpenCodeEvent(envelope("other", "governed", event), "s1"), null);
+  assert.equal(normalizeGovernedOpenCodeEvent(envelope("s1", "forged", event), "s1"), null);
+});
+
+test("mixed-source file records stay external rather than merging as governed", () => {
+  let state = createOpenCodeSessionState({ sessionId: "s1" });
+  state = applyOpenCodeEvent(state, normalizeGovernedOpenCodeEvent(envelope("s1", "governed", { type: "file.edited", properties: { path: "a.txt", added: 1, removed: 0 } }), "s1"));
+  state = applyOpenCodeEvent(state, normalizeGovernedOpenCodeEvent(envelope("s1", "external", { type: "file.edited", properties: { path: "a.txt", added: 2, removed: 0 } }), "s1"));
+  assert.equal(state.changedFiles["a.txt"].source, "external");
+});
+
+test("different-source transcript entries are not merged", () => {
+  let state = createOpenCodeSessionState({ sessionId: "s1" });
+  state = applyOpenCodeEvent(state, normalizeGovernedOpenCodeEvent(envelope("s1", "governed", { type: "text.delta", properties: { messageID: "m1", text: "A" } }), "s1"));
+  state = applyOpenCodeEvent(state, normalizeGovernedOpenCodeEvent(envelope("s1", "external", { type: "text.delta", properties: { messageID: "m1", text: "B" } }), "s1"));
+  assert.deepEqual(state.entries.map((entry) => [entry.text, entry.source]), [["A", "governed"], ["B", "external"]]);
+});
+
+test("bridge.closed becomes terminal transport state", () => {
+  const state = applyOpenCodeEvent(
+    createOpenCodeSessionState({ sessionId: "s1" }),
+    normalizeGovernedOpenCodeEvent(envelope("s1", "governed", { type: "bridge.closed", properties: { code: "OPENCODE_REVOKED", error: "OpenCode boundary request failed." } }), "s1")
+  );
+  assert.deepEqual([state.status, state.transportError?.code], ["error", "OPENCODE_REVOKED"]);
 });
