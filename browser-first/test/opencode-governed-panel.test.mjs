@@ -263,14 +263,15 @@ test("foreign and unscoped events cannot refresh diff", async () => {
 test("resume preserves host history attribution", async () => {
   const { container, cleanup } = setupDom();
   const stream = controllableSse();
+  const history = ["governed", "external"].flatMap((source, index) => [
+    { info: { id: `text-${index}`, role: "assistant" }, parts: [{ type: "text", text: `seeded ${source}` }], source },
+    { info: { id: `tool-${index}`, role: "assistant" }, parts: [{ type: "tool", callID: `t-${index}`, tool: "edit", state: { status: "completed", output: "ok" } }], source },
+    { info: { id: `file-${index}`, role: "assistant" }, parts: [{ type: "file", path: `${source}.ts`, added: 1, removed: 0 }], source }
+  ]);
   const bridgeRequest = jsonBridge({
     sessionId: "s1",
     events: () => stream.response,
-    messages: [
-      { info: { id: "m1", role: "assistant" }, parts: [{ type: "text", text: "seeded", messageID: "m1" }], source: "governed" },
-      { info: { id: "m2", role: "assistant" }, parts: [{ type: "tool", callID: "t1", tool: "edit", state: { status: "completed", output: "ok" } }], source: "external" },
-      { info: { id: "m3", role: "assistant" }, parts: [{ type: "file", path: "a.ts", added: 1, removed: 0 }], source: "governed" }
-    ]
+    messages: history
   });
   try {
     renderOpenCodeWorkspace({ container, bridgeRequest });
@@ -280,14 +281,13 @@ test("resume preserves host history attribution", async () => {
     container.querySelector(".ocb-session[data-session-id='s1']").click();
     for (let i = 0; i < 40 && !container.querySelector(".oc-msg .oc-badge"); i += 1) await wait(5);
     assert.deepEqual(
-      [
-        container.querySelector(".oc-msg .oc-badge")?.dataset.source,
-        container.querySelector(".oc-tool .oc-badge")?.dataset.source,
-        container.querySelector(".oc-file .oc-badge")?.dataset.source
-      ],
-      ["governed", "external", "governed"]
+      [".oc-msg", ".oc-tool", ".oc-file"].map((selector) =>
+        [...container.querySelectorAll(`${selector} .oc-badge`)].map((badge) => badge.dataset.source).sort()),
+      ["text", "tool", "file"].map((type) =>
+        history.filter((message) => message.parts[0].type === type).map((message) => message.source).sort())
     );
   } finally {
+    container.replaceChildren();
     cleanup();
   }
 });
@@ -306,8 +306,14 @@ test("mixed-source entries never merge into governed output (covers file/diff pa
   });
   emit(envelope("s1", "governed", { type: "file.edited", properties: { path: "a.txt", added: 1, removed: 0 } }));
   emit(envelope("s1", "external", { type: "file.edited", properties: { path: "a.txt", added: 2, removed: 0 } }));
-  emit(envelope("s1", "governed", { type: "session.diff", properties: { files: [{ path: "a.txt", added: 3, removed: 0, source: "governed" }] } }));
-  assert.equal(container.querySelector(".oc-file .oc-badge")?.dataset.source, "external");
+  emit(envelope("s1", "governed", { type: "session.diff", properties: { files: [{ path: "a.txt", added: 3, removed: 0, source: "governed" }, { path: "a.txt", added: 5, removed: 1, source: "external" }] } }));
+  assert.deepEqual(
+    [
+      [...container.querySelectorAll(".oc-file")].map((row) => [row.dataset.path, row.querySelector(".oc-badge").dataset.source, row.querySelector(".oc-file-stat").textContent]).sort(),
+      container.querySelector(".oc-diff-title .oc-badge")?.dataset.source
+    ],
+    [[["a.txt", "external", "+5−1"], ["a.txt", "governed", "+3−0"]], "external"]
+  );
   cleanup();
 });
 

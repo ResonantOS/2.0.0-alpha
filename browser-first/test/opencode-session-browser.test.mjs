@@ -247,8 +247,8 @@ test("seedEventsFromMessages replays history through the live reducer identicall
     error: "",
     source: "external"
   });
-  assert.equal(state.changedFiles["browser-first/test/x.test.mjs"].added, 7);
-  assert.equal(state.changedFiles["browser-first/test/x.test.mjs"].removed, 2);
+  assert.equal(state.changedFiles[JSON.stringify(["browser-first/test/x.test.mjs", "external"])].added, 7);
+  assert.equal(state.changedFiles[JSON.stringify(["browser-first/test/x.test.mjs", "external"])].removed, 2);
 });
 
 test("seeded and live duplicate tool.called events update one tool card by id", () => {

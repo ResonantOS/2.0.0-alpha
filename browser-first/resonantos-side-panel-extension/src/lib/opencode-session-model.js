@@ -24,7 +24,7 @@ export function createOpenCodeSessionState({ sessionId } = {}) {
     status: "idle", // idle | running | waiting-approval | done | error
     seq: 0, // monotonic tick, used to mark the most-recently-touched file
     entries: [], // ordered transcript: { type: "text"|"reasoning"|"tool", id, ... }
-    changedFiles: {}, // path -> { added, removed, status, touchedAt, source }
+    changedFiles: {}, // [path, source] -> { path, added, removed, status, touchedAt, source }
     approvals: [], // { id, tool, title, detail, source }
     todos: [], // { label, state, source }
     context: { tokens: 0, cost: 0 },
@@ -34,11 +34,6 @@ export function createOpenCodeSessionState({ sessionId } = {}) {
 
 function provenanceSource(value) {
   return value === "governed" ? "governed" : "external";
-}
-
-function mixedSource(previous, incoming) {
-  if (!previous) return incoming;
-  return previous === incoming ? incoming : "external";
 }
 
 const has = (type, needle) => String(type ?? "").toLowerCase().includes(needle);
@@ -278,15 +273,17 @@ export function applyOpenCodeEvent(state, event) {
     }
     case "file-edited": {
       if (!event.path) return next;
-      const prev = state.changedFiles[event.path];
+      const key = JSON.stringify([event.path, source]);
+      const prev = state.changedFiles[key];
       next.changedFiles = {
         ...state.changedFiles,
-        [event.path]: {
+        [key]: {
+          path: event.path,
           added: (prev?.added ?? 0) + event.added,
           removed: (prev?.removed ?? 0) + event.removed,
           status: "edited",
           touchedAt: next.seq,
-          source: mixedSource(prev?.source, source)
+          source
         }
       };
       return next;
@@ -295,14 +292,16 @@ export function applyOpenCodeEvent(state, event) {
       const changedFiles = { ...state.changedFiles };
       for (const file of event.files) {
         if (!file.path) continue;
-        const prev = changedFiles[file.path];
         const fileSource = provenanceSource(file.source ?? event.source);
-        changedFiles[file.path] = {
+        const key = JSON.stringify([file.path, fileSource]);
+        const prev = changedFiles[key];
+        changedFiles[key] = {
+          path: file.path,
           added: file.added,
           removed: file.removed,
           status: "edited",
           touchedAt: prev?.touchedAt ?? next.seq,
-          source: mixedSource(prev?.source, fileSource)
+          source: fileSource
         };
       }
       next.changedFiles = changedFiles;

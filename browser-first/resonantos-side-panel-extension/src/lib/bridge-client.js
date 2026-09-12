@@ -364,7 +364,7 @@ export function createBridgeClient(config = globalThis.__RESONANTOS_BRIDGE_CONFI
         throw openCodeBridgeResponseError(payload, response.status);
       }
       const contentType = String(response.headers?.get?.("content-type") ?? "").toLowerCase();
-      if (!contentType.includes("text/event-stream")) {
+      if (response.status !== 200 || contentType.split(";", 1)[0].trim() !== "text/event-stream") {
         throw openCodeBridgeResponseError({ code: "OPENCODE_PROTOCOL_ERROR", error: OPENCODE_PUBLIC_ERROR }, response.status);
       }
       return response;

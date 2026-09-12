@@ -46,16 +46,15 @@ function contentTypeOf(response) {
 }
 
 function isEventStream(response) {
-  return contentTypeOf(response).toLowerCase().includes("text/event-stream");
+  return contentTypeOf(response).toLowerCase().split(";", 1)[0].trim() === "text/event-stream";
 }
 
-function isValidEnvelope(envelope, sessionId) {
+function isValidEnvelope(envelope) {
   if (!envelope || typeof envelope !== "object") return false;
   if (envelope.version !== 1) return false;
   if (typeof envelope.sessionId !== "string" || !envelope.sessionId) return false;
-  if (envelope.sessionId !== sessionId) return false;
   if (envelope.source !== "governed" && envelope.source !== "external") return false;
-  if (!envelope.event || typeof envelope.event !== "object") return false;
+  if (!envelope.event || Object.getPrototypeOf(envelope.event) !== Object.prototype) return false;
   return true;
 }
 
@@ -82,9 +81,13 @@ function closedProperties(envelope) {
 export function createSSEParser(onEvent, onError) {
   let buffer = "";
   let failed = false;
+  let trailingCR = "";
   return function feed(chunk) {
     if (failed) return;
-    buffer += String(chunk ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    let text = trailingCR + String(chunk ?? "");
+    trailingCR = text.endsWith("\r") ? "\r" : "";
+    if (trailingCR) text = text.slice(0, -1);
+    buffer += text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
     let sep;
     while ((sep = buffer.indexOf("\n\n")) >= 0) {
       const frame = buffer.slice(0, sep);
@@ -114,6 +117,7 @@ export function createSSEParser(onEvent, onError) {
 export function createOpenCodeBridgeSource({ startSession, openEventStream, postJson, onError } = {}) {
   let sessionId = "";
   let startPromise = null;
+  let sessionInfo = null;
 
   function report(code, error = PUBLIC_OPENCODE_ERROR) {
     onError?.(typedError(code, error));
@@ -129,6 +133,7 @@ export function createOpenCodeBridgeSource({ startSession, openEventStream, post
       startPromise = Promise.resolve()
         .then(() => startSession())
         .then((info) => {
+          sessionInfo = info;
           const id = typeof info?.sessionId === "string" ? info.sessionId : "";
           if (!id) {
             report("OPENCODE_SESSION_UNKNOWN");
@@ -153,14 +158,8 @@ export function createOpenCodeBridgeSource({ startSession, openEventStream, post
 
   return {
     async start() {
-      const info = typeof startSession === "function" ? await startSession() : null;
-      const id = typeof info?.sessionId === "string" ? info.sessionId : "";
-      if (!id) {
-        report("OPENCODE_SESSION_UNKNOWN");
-        return info;
-      }
-      sessionId = id;
-      return info;
+      await loadSession();
+      return sessionInfo;
     },
 
     subscribe(onEvent) {
@@ -172,6 +171,7 @@ export function createOpenCodeBridgeSource({ startSession, openEventStream, post
       const fail = (code, error = PUBLIC_OPENCODE_ERROR) => {
         if (cancelled || terminal) return;
         terminal = true;
+        try { Promise.resolve(reader?.cancel?.()).catch(() => {}); } catch { /* noop */ }
         report(code, error);
         try { ac.abort(); } catch { /* noop */ }
       };
@@ -207,7 +207,7 @@ export function createOpenCodeBridgeSource({ startSession, openEventStream, post
             fail(codeFromPayload(payload, res?.status));
             return;
           }
-          if (!isEventStream(res) || !res.body?.getReader) {
+          if (res.status !== 200 || !isEventStream(res) || !res.body?.getReader) {
             fail("OPENCODE_PROTOCOL_ERROR");
             return;
           }
@@ -215,7 +215,11 @@ export function createOpenCodeBridgeSource({ startSession, openEventStream, post
           const decoder = new TextDecoder();
           const feed = createSSEParser((envelope) => {
             if (cancelled || terminal) return;
-            if (!isValidEnvelope(envelope, id)) return;
+            if (!isValidEnvelope(envelope)) {
+              fail("OPENCODE_PROTOCOL_ERROR");
+              return;
+            }
+            if (envelope.sessionId !== id) return;
             if (eventType(envelope) === "bridge.closed") {
               const closed = closedProperties(envelope);
               fail(closed.code, closed.error);
