@@ -43,7 +43,7 @@ operations cross the bridge.
 | `memory-source-intake-host-service.mjs` | Intake, synchronization, search, versioning, diff, wiki health, and lint orchestration |
 | `archive-review-host-service.mjs` and archive policy modules | Intake, review artifacts, verification, promotion, restore, and trusted-memory policy |
 | `addon-delegation-host-service.mjs` and `addon-delegation-service.mjs` | Optional add-on status, bounded local runtime control, delegation records, artifacts, and goals |
-| `opencode-boundary.mjs`, `opencode-event-bus.mjs`, `opencode-session-host-service.mjs`, and `opencode-client.mjs` | OpenCode credential custody, allowlisted session HTTP, one global upstream event reader with per-session delivery, and execution revocation |
+| `opencode-boundary.mjs`, `opencode-event-bus.mjs`, `opencode-session-host-service.mjs`, and `opencode-client.mjs` | OpenCode credential custody, allowlisted session HTTP, one global upstream event reader with per-session delivery, and execution revocation. |
 | `browser-diagnostics-host-service.mjs` | Redacted system/workspace diagnostics and capability-gated report/download actions |
 | `extension-prefs-host-service.mjs` | External user-state persistence for extension preferences |
 | `browser-first-*-utils.mjs` and focused policy modules | Shared pure helpers and narrow host implementation details |
