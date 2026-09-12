@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 
 import { spawn, execFile } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import {
   createLiveCertificationReport,
@@ -24,6 +26,47 @@ import {
   RUNTIME_CAPABILITY_ALLOWLIST,
 } from "../resonantos-side-panel-extension/src/lib/bridge-client.js";
 import { opencodeInstallHint, opencodeRuntimeDiagnostics } from "../host/opencode-runtime.mjs";
+
+export const OPENCODE_RAW_LOG_LIMIT = 8 * 1024 * 1024;
+
+export function createRawBridgeLogSink({
+  sanitize = sanitizeEvidenceText,
+  roots = [],
+  limit = OPENCODE_RAW_LOG_LIMIT,
+} = {}) {
+  const rawBridgeLogChunks = { stdout: [], stderr: [] };
+  let rawBytes = 0;
+  let evidence = "";
+  function captureBridgeLog(streamName, chunk) {
+    const bytes = Buffer.isBuffer(chunk) ? Buffer.from(chunk) : Buffer.from(String(chunk ?? ""), "utf8");
+    rawBytes += bytes.byteLength;
+    if (rawBytes > limit) {
+      const error = new Error("OPENCODE_RAW_LOG_LIMIT");
+      error.code = "OPENCODE_RAW_LOG_LIMIT";
+      throw error;
+    }
+    if (!Object.hasOwn(rawBridgeLogChunks, streamName)) rawBridgeLogChunks[streamName] = [];
+    rawBridgeLogChunks[streamName].push(bytes);
+    const resolvedRoots = typeof roots === "function" ? roots() : roots;
+    evidence += sanitize(bytes.toString("utf8"), { roots: resolvedRoots })
+      .replace(/\bBasic [A-Za-z0-9+/=]+\b/g, "Basic [redacted]");
+  }
+  function joinRaw() {
+    return Buffer.concat([
+      ...(rawBridgeLogChunks.stdout ?? []),
+      ...(rawBridgeLogChunks.stderr ?? []),
+    ]).toString("utf8");
+  }
+  function scanRawForCredentials() {
+    const raw = joinRaw();
+    if (/\bBasic [A-Za-z0-9+/=]+\b/.test(raw) || /OPENCODE_SERVER_PASSWORD/.test(raw) || /eventAuthorization/.test(raw)) {
+      const error = new Error("OPENCODE_RAW_LOG_CREDENTIAL_DETECTED");
+      error.code = "OPENCODE_RAW_LOG_CREDENTIAL_DETECTED";
+      throw error;
+    }
+  }
+  return { captureBridgeLog, joinRaw, getEvidence: () => evidence, scanRawForCredentials };
+}
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
 const checkoutBridgeConfigPath = path.join(
@@ -56,6 +99,14 @@ let activeBridgeConfigPath = checkoutBridgeConfigPath;
 let checkoutConfigBefore = null;
 let opencodePid = 0;
 let cleanupStarted = false;
+const rawLogSink = createRawBridgeLogSink({
+  sanitize: sanitizeEvidenceText,
+  roots: () => [repoRoot, userRoot].filter(Boolean),
+});
+function captureBridgeLog(streamName, chunk) {
+  rawLogSink.captureBridgeLog(streamName, chunk);
+  bridgeLogs = rawLogSink.getEvidence();
+}
 
 const report = createLiveCertificationReport({
   artifactDir,
@@ -88,8 +139,12 @@ function excluded(message) {
 
 const scenarios = [
   { id: "bridge-start", fatal: true, run: startBridgeScenario },
-  { id: "opencode-credential-server", run: opencodeCredentialServerScenario },
   { id: "execution-settings-gate", run: executionSettingsGateScenario },
+  { id: "opencode-credential-server", run: opencodeCredentialServerScenario },
+  { id: "opencode-proxy-capability", run: opencodeProxyCapabilityScenario },
+  { id: "opencode-proxy-scope", run: opencodeProxyScopeScenario },
+  { id: "opencode-proxy-raw-log", run: opencodeProxyRawLogScenario },
+  { id: "opencode-proxy-revocation", run: opencodeProxyRevocationScenario },
   { id: "opencode-cli-delegation", run: opencodeCliDelegationScenario },
   { id: "opencode-version-pin", run: opencodeVersionPinScenario },
   { id: "public-manifests-validate", run: publicManifestsValidateScenario },
@@ -98,40 +153,44 @@ const scenarios = [
   { id: "checkout-config-untouched", run: checkoutConfigUntouchedScenario },
 ];
 
-for (const signal of ["SIGINT", "SIGTERM"]) {
-  process.once(signal, () => {
-    void cleanup().finally(() => process.exit(signal === "SIGINT" ? 130 : 143));
-  });
-}
+const isDirectRun = Boolean(process.argv[1]) && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url;
 
-let failed = false;
-let terminalError = null;
-try {
-  await mkdir(artifactDir, { recursive: true });
-  for (const scenario of scenarios) {
-    const status = await runScenario(scenario);
-    if (status === "failed") failed = true;
-    if (expectFail === scenario.id && status === "passed") break;
-    if (status === "failed" && scenario.fatal) break;
+if (isDirectRun) {
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    process.once(signal, () => {
+      void cleanup().finally(() => process.exit(signal === "SIGINT" ? 130 : 143));
+    });
   }
-} catch (error) {
-  failed = true;
-  terminalError = error;
-} finally {
-  await report.write({
-    status: failed ? "failed" : "passed",
-    error: terminalError,
-    metadata: {
-      mode,
-      commit: process.env.GITHUB_SHA ?? "local",
-      fault,
-      expectFail,
-    },
-  });
-  await cleanup();
-}
 
-if (failed) process.exit(1);
+  let failed = false;
+  let terminalError = null;
+  try {
+    await mkdir(artifactDir, { recursive: true });
+    for (const scenario of scenarios) {
+      const status = await runScenario(scenario);
+      if (status === "failed") failed = true;
+      if (expectFail === scenario.id && status === "passed") break;
+      if (status === "failed" && scenario.fatal) break;
+    }
+  } catch (error) {
+    failed = true;
+    terminalError = error;
+  } finally {
+    await report.write({
+      status: failed ? "failed" : "passed",
+      error: terminalError,
+      metadata: {
+        mode,
+        commit: process.env.GITHUB_SHA ?? "local",
+        fault,
+        expectFail,
+      },
+    });
+    await cleanup();
+  }
+
+  if (failed) process.exit(1);
+}
 
 async function runScenario(scenario) {
   try {
@@ -237,10 +296,10 @@ async function startBridgeScenario() {
     stdio: ["ignore", "pipe", "pipe"],
   });
   bridge.stdout.on("data", (chunk) => {
-    bridgeLogs += sanitizeEvidenceText(chunk, { roots: [repoRoot, userRoot] });
+    captureBridgeLog("stdout", chunk);
   });
   bridge.stderr.on("data", (chunk) => {
-    bridgeLogs += sanitizeEvidenceText(chunk, { roots: [repoRoot, userRoot] });
+    captureBridgeLog("stderr", chunk);
   });
   bridge.once("exit", (code, signal) => {
     bridgeExitLine = `bridge exited code=${code ?? "null"} signal=${signal ?? "null"}`;
@@ -334,40 +393,176 @@ function currentOpenCodeRuntime() {
   return opencodeRuntimeDiagnostics({ env: process.env });
 }
 
-async function opencodeCredentialServerScenario() {
+const ORIGIN = "chrome-extension://test";
+const forbiddenOpenCodeKey = /^(eventAuthorization|eventUrl|baseUrl|authorization|password|username|auth|credential)$/i;
+ctx.boundaryProof = ctx.boundaryProof ?? { sessions: {}, readers: [] };
+
+function countForbiddenOpenCodeFields(value) {
+  if (!value || typeof value !== "object") return 0;
+  return Object.entries(value).reduce((n, [key, nested]) => n + (forbiddenOpenCodeKey.test(key) ? 1 : 0) + countForbiddenOpenCodeFields(nested), 0);
+}
+
+function sessionEntryKeys(entry) {
+  return Object.keys(entry ?? {}).sort();
+}
+
+async function bridgeEvents(sessionId, { headers = {}, signal } = {}) {
+  const url = `${ctx.bridgeUrl}/opencode/session/events?sessionId=${encodeURIComponent(sessionId)}`;
+  const requestHeaders = {
+    "X-ResonantOS-Bridge-Token": ctx.config.bridgeToken,
+    "X-ResonantOS-Bridge-Capability-Token": ctx.capabilityTokens["addon-runtime-read"],
+    Origin: ORIGIN,
+    ...headers,
+  };
+  return fetch(url, { method: "GET", headers: requestHeaders, signal, redirect: "error" });
+}
+
+async function readEnvelope(reader, timeoutMs = 2000) {
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const remaining = Math.max(1, deadline - Date.now());
+    const result = await Promise.race([
+      reader.read(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("envelope timeout")), remaining)),
+    ]);
+    if (result.done) throw new Error("OPENCODE_STREAM_DISCONNECTED");
+    buffer += decoder.decode(result.value, { stream: true });
+    const frames = buffer.split("\n\n");
+    buffer = frames.pop() ?? "";
+    for (const frame of frames) {
+      const data = frame.split("\n").filter((line) => line.startsWith("data:")).map((line) => line.slice(5).replace(/^ /, "")).join("\n");
+      if (!data) continue;
+      return JSON.parse(data);
+    }
+  }
+  throw new Error("envelope timeout");
+}
+
+function httpBridgeRequest({ path: requestPath, method = "GET", headers = {}, body } = {}) {
+  return new Promise((resolve, reject) => {
+    const url = new URL(ctx.bridgeUrl);
+    const req = http.request({
+      host: url.hostname,
+      port: url.port,
+      path: requestPath,
+      method,
+      headers,
+    }, (res) => {
+      const origin = res.headers["access-control-allow-origin"];
+      if (String(res.headers["content-type"] ?? "").includes("text/event-stream")) {
+        resolve({ status: res.statusCode, payload: {}, origin });
+        res.destroy();
+        return;
+      }
+      let data = "";
+      res.on("data", (chunk) => { data += chunk; });
+      res.on("end", () => {
+        let payload = {};
+        try { payload = data ? JSON.parse(data) : {}; } catch { payload = {}; }
+        resolve({ status: res.statusCode, payload, origin });
+      });
+    });
+    req.on("error", reject);
+    req.end(body);
+  });
+}
+
+async function requireOpenCodeBinary() {
   const runtime = currentOpenCodeRuntime();
   if (!runtime.command) {
-    // Locally a missing binary is a documented exclusion; in CI the runner installs the pinned binary into an
-    // allowlisted root, so absence means the install or the pinned-roots discovery is broken → FAIL, never exclude.
     if (mode === "ci") throw new Error(`OpenCode binary unavailable in CI mode (install/pinned-roots regression). ${opencodeInstallHint()}`);
     excluded(`OpenCode binary unavailable. ${opencodeInstallHint()}`);
   }
-  const started = await bridgeJson("/opencode/session/start", { method: "POST" });
-  assert(started.status === 200 && started.payload.sessionId, `session start failed: HTTP ${started.status} ${started.payload.error ?? ""}`);
-  assert(started.payload.eventAuthorization, "session start did not return eventAuthorization");
-  const baseUrl = new URL(started.payload.baseUrl);
-  const port = Number(baseUrl.port);
-  assert(port >= 1024 && port !== 4096 && port !== 4231, `OpenCode server port ${port} is not an allowed ephemeral port.`);
+  return runtime;
+}
 
+async function opencodeCredentialServerScenario() {
+  await requireOpenCodeBinary();
+  const startedA = await bridgeJson("/opencode/session/start", { method: "POST" });
+  const startedB = await bridgeJson("/opencode/session/start", { method: "POST" });
+  assert(startedA.status === 200 && startedB.status === 200, `session start failed: HTTP ${startedA.status}/${startedB.status}`);
+  assert(startedA.payload.sessionId && startedB.payload.sessionId && startedA.payload.sessionId !== startedB.payload.sessionId, "session start did not return distinct nonempty ids");
+  assert(Object.keys(startedA.payload).sort().join(",") === "ok,sessionId", `start keys were not ok,sessionId`);
+  assert(Object.keys(startedB.payload).sort().join(",") === "ok,sessionId", `start keys were not ok,sessionId`);
+  assert(countForbiddenOpenCodeFields(startedA.payload) === 0 && countForbiddenOpenCodeFields(startedB.payload) === 0, "start leaked connection fields");
+  const listed = await bridgeJson("/opencode/sessions/list", { method: "POST", body: {} });
+  assert(listed.status === 200, `session list failed: HTTP ${listed.status}`);
+  assert(Object.keys(listed.payload).sort().join(",") === "ok,sessions", "list keys were not ok,sessions");
+  assert(Array.isArray(listed.payload.sessions) && listed.payload.sessions.every((entry) => sessionEntryKeys(entry).join(",") === "created,id,title,updated"), "list entries were not id/title/created/updated");
+  assert(countForbiddenOpenCodeFields(listed.payload) === 0, "list leaked connection fields");
+  const web = await bridgeJson("/opencode/web/url", { method: "POST", body: {} });
+  assert(web.status === 200 && web.payload.url === "" && web.payload.requiresCredential === true, "web url was not the disabled handoff shape");
+  const messages = await bridgeJson("/opencode/session/messages", { method: "POST", body: { sessionId: startedA.payload.sessionId } });
+  const diff = await bridgeJson("/opencode/session/diff", { method: "POST", body: { sessionId: startedA.payload.sessionId } });
+  const agents = await bridgeJson("/opencode/agents/list", { method: "POST", body: {} });
+  assert(messages.status === 200 && diff.status === 200 && agents.status === 200, "proxied session reads failed");
+  assert(countForbiddenOpenCodeFields(messages.payload) === 0 && countForbiddenOpenCodeFields(diff.payload) === 0 && countForbiddenOpenCodeFields(agents.payload) === 0, "proxied reads leaked connection fields");
+
+  const pidPath = path.join(userRoot, "BrowserFirst", "opencode-server.json");
+  const record = JSON.parse(await readFile(pidPath, "utf8"));
+  const details = await stat(pidPath);
+  assert((details.mode & 0o077) === 0, "PID record mode allows group or other access");
+  assert(!("auth" in record) && !("password" in record) && !("header" in record), "PID record contains credential fields");
+  const port = Number(record.port);
+  assert(port >= 1024 && port !== 4096 && port !== 4231, `OpenCode server port ${port} is not an allowed ephemeral port.`);
+  opencodePid = Number(record.pid ?? 0);
+  assert(pidAlive(opencodePid), `OpenCode PID ${opencodePid} is not live`);
+  assert(Number(record.owner) === bridge.pid, "PID record is not owned by this bridge");
   for (const route of ["/doc", "/session", "/event"]) {
-    const unauth = await fetch(`${baseUrl.origin}${route}`).catch((error) => ({ status: 0, error }));
+    const unauth = await fetch(`http://127.0.0.1:${port}${route}`).catch((error) => ({ status: 0, error }));
     assert(unauth.status === 401, `${route} without credential returned ${unauth.status}, expected 401`);
   }
-  const doc = await fetch(`${baseUrl.origin}/doc`, { headers: { Authorization: started.payload.eventAuthorization } });
-  assert(doc.status === 200, `/doc with credential returned ${doc.status}`);
-  const eventController = new AbortController();
-  const event = await fetch(`${baseUrl.origin}/event`, {
-    headers: { Authorization: started.payload.eventAuthorization },
-    signal: eventController.signal,
-  });
-  assert(event.status === 200, `/event with credential returned ${event.status}`);
-  eventController.abort();
+  await runCredentiallessSecondProcess({ port, bridgeUrl: ctx.bridgeUrl });
+  ctx.boundaryProof = {
+    sessions: { A: startedA.payload.sessionId, B: startedB.payload.sessionId },
+    port,
+    readers: [],
+  };
+  return `OpenCode sessions ${startedA.payload.sessionId} and ${startedB.payload.sessionId} served on port ${port} with credentialless 401.`;
+}
 
-  const record = JSON.parse(await readFile(path.join(userRoot, "BrowserFirst", "opencode-server.json"), "utf8"));
-  opencodePid = Number(record.pid ?? 0);
-  assert(record.port === port, `PID record port ${record.port} did not match ${port}`);
-  assert(pidAlive(opencodePid), `OpenCode PID ${opencodePid} is not live`);
-  return `OpenCode session ${started.payload.sessionId} served on port ${port} with credential enforcement.`;
+async function runCredentiallessSecondProcess({ port, bridgeUrl }) {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "ros-opencode-second-"));
+  const script = path.join(cwd, "probe.mjs");
+  await writeFile(script, `
+    const [bridgeUrl, port] = process.argv.slice(2);
+    const checks = [];
+    async function hit(url, method = "GET") {
+      const response = await fetch(url, { method }).catch(() => ({ status: 0, text: async () => "" }));
+      const text = await response.text?.() ?? "";
+      checks.push({ status: response.status, leaked: /eventAuthorization|eventUrl|OPENCODE_SERVER_PASSWORD|Basic /.test(text) });
+    }
+    await hit("http://127.0.0.1:" + port + "/doc");
+    await hit("http://127.0.0.1:" + port + "/session");
+    await hit("http://127.0.0.1:" + port + "/event");
+    await hit(bridgeUrl + "/opencode/session/start", "POST");
+    await hit(bridgeUrl + "/opencode/session/events?sessionId=x");
+    await hit(bridgeUrl + "/api/capability-tokens", "POST");
+    await hit(bridgeUrl + "/opencode/web/url", "POST");
+    if (checks.length !== 7 || checks.some((entry) => entry.leaked)) process.exit(2);
+    if (![401,401,401,401,401,401,401].every((status, i) => checks[i].status === status)) process.exit(3);
+    process.stdout.write("ok");
+  `);
+  try {
+    const result = await new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [script, bridgeUrl, String(port)], {
+        cwd,
+        env: { PATH: process.env.PATH, TMPDIR: process.env.TMPDIR },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (chunk) => { stdout += chunk; });
+      child.stderr.on("data", (chunk) => { stderr += chunk; });
+      child.on("error", reject);
+      child.on("close", (code) => resolve({ code, stdout, stderr }));
+    });
+    assert(result.code === 0 && result.stdout.includes("ok"), "credentialless second-process probe failed");
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
 }
 
 async function executionSettingsGateScenario() {
@@ -402,6 +597,230 @@ async function executionSettingsGateScenario() {
   const reflected = await bridgeJson("/addons/execution-settings", { method: "GET" });
   assert(reflected.payload.settings?.opencode?.localCliExecution === true, "OpenCode execution setting did not reflect enabled state.");
   return "OpenCode execution is disabled by default, blocks execution, and reflects explicit enablement.";
+}
+
+async function authorizedControl(path, { method = "GET", body } = {}) {
+  const listenerPort = new URL(ctx.bridgeUrl).port;
+  const headers = {
+    Host: `127.0.0.1:${listenerPort}`,
+    Origin: ORIGIN,
+    "X-ResonantOS-Bridge-Token": ctx.config.bridgeToken,
+    "X-ResonantOS-Bridge-Capability-Token": ctx.capabilityTokens[method === "GET" ? "addon-runtime-read" : "addon-runtime-control"],
+  };
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+  const result = await httpBridgeRequest({ path, method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+  return { status: result.status, code: result.payload.code ?? null, origin: result.origin };
+}
+
+async function opencodeProxyCapabilityScenario() {
+  await requireOpenCodeBinary();
+  const sessionId = ctx.boundaryProof?.sessions?.A;
+  assert(sessionId, "capability proof requires a registered session");
+  const eventsPath = `/opencode/session/events?sessionId=${encodeURIComponent(sessionId)}`;
+  const listenerPort = Number(new URL(ctx.bridgeUrl).port);
+  const publicPort = listenerPort;
+  const wrongPort = publicPort === 65535 ? 65534 : publicPort + 1;
+  const token = ctx.config.bridgeToken;
+  const read = ctx.capabilityTokens["addon-runtime-read"];
+  const control = await authorizedControl(eventsPath);
+  if (fault === "opencode-proxy-capability") {
+    const omitted = await httpBridgeRequest({
+      path: eventsPath,
+      method: "GET",
+      headers: { Host: `127.0.0.1:${listenerPort}`, Origin: ORIGIN, "X-ResonantOS-Bridge-Token": token },
+    });
+    assert(omitted.status === 200, "fault expected the capability-omitted SSE control to be accepted");
+  }
+  const missingCap = await httpBridgeRequest({
+    path: eventsPath,
+    method: "GET",
+    headers: { Host: `127.0.0.1:${listenerPort}`, Origin: ORIGIN, "X-ResonantOS-Bridge-Token": token },
+  });
+  assert(control.status === 200 && control.code === null && control.origin === ORIGIN, "valid events control failed");
+  assert(missingCap.status === 403 && missingCap.payload.code === "OPENCODE_CAPABILITY_REQUIRED", "missing capability did not return 403");
+  const wrongCap = await httpBridgeRequest({
+    path: eventsPath,
+    method: "GET",
+    headers: {
+      Host: `127.0.0.1:${listenerPort}`,
+      Origin: ORIGIN,
+      "X-ResonantOS-Bridge-Token": token,
+      "X-ResonantOS-Bridge-Capability-Token": ctx.capabilityTokens["addon-runtime-control"],
+    },
+  });
+  assert(wrongCap.status === 403 && wrongCap.payload.code === "OPENCODE_CAPABILITY_REQUIRED", "wrong capability did not return 403");
+  const missingToken = await httpBridgeRequest({
+    path: eventsPath,
+    method: "GET",
+    headers: { Host: `127.0.0.1:${listenerPort}`, Origin: ORIGIN },
+  });
+  assert(missingToken.status === 401, "missing token did not return 401");
+  for (const host of [`evil.example:${listenerPort}`, `127.0.0.1:${wrongPort}`]) {
+    const valid = await authorizedControl(eventsPath);
+    const refused = await httpBridgeRequest({
+      path: eventsPath,
+      method: "GET",
+      headers: {
+        Host: host,
+        Origin: ORIGIN,
+        "X-ResonantOS-Bridge-Token": token,
+        "X-ResonantOS-Bridge-Capability-Token": read,
+      },
+    });
+    assert(valid.status === 200 && valid.code === null && valid.origin === ORIGIN, "adjacent valid Host control failed");
+    assert(refused.status === 403 && refused.payload.code === "OPENCODE_HOST_REJECTED" && refused.origin === ORIGIN, "Host refusal was not OPENCODE_HOST_REJECTED");
+  }
+  const forwarded = await httpBridgeRequest({
+    path: eventsPath,
+    method: "GET",
+    headers: {
+      Host: `evil.example:${listenerPort}`,
+      Origin: ORIGIN,
+      "X-Forwarded-Host": `127.0.0.1:${listenerPort}`,
+      "X-Forwarded-Port": String(listenerPort),
+      "X-ResonantOS-Bridge-Token": token,
+      "X-ResonantOS-Bridge-Capability-Token": read,
+    },
+  });
+  assert(forwarded.status === 403 && forwarded.payload.code === "OPENCODE_HOST_REJECTED", "forwarded headers replaced Host");
+  return "OpenCode proxy capability and Host controls matched the matrix.";
+}
+
+async function opencodeProxyScopeScenario() {
+  await requireOpenCodeBinary();
+  const { A, B } = ctx.boundaryProof?.sessions ?? {};
+  assert(A && B, "scope proof requires sessions A and B");
+  const controllerA = new AbortController();
+  const controllerB = new AbortController();
+  ctx.boundaryProof.readers.push(controllerA, controllerB);
+  const resA = await bridgeEvents(A, { signal: controllerA.signal });
+  const resB = await bridgeEvents(B, { signal: controllerB.signal });
+  assert(resA.status === 200 && resA.headers.get("content-type")?.includes("text/event-stream"), "SSE A was not text/event-stream");
+  assert(resB.status === 200 && resB.headers.get("content-type")?.includes("text/event-stream"), "SSE B was not text/event-stream");
+  const readerA = resA.body.getReader();
+  const readerB = resB.body.getReader();
+  const readyA = await readEnvelope(readerA, 2000);
+  const readyB = await readEnvelope(readerB, 2000);
+  assert(readyA.event?.type === "bridge.ready" && readyA.sessionId === A, "A did not receive its bridge.ready");
+  assert(readyB.event?.type === "bridge.ready" && readyB.sessionId === B, "B did not receive its bridge.ready");
+  const titleA = `canary-a-${randomBytes(4).toString("hex")}`;
+  const titleB = `canary-b-${randomBytes(4).toString("hex")}`;
+  if (fault !== "opencode-proxy-scope") {
+    const renamedA = await bridgeJson("/opencode/session/rename", { method: "POST", body: { sessionId: A, title: titleA } });
+    assert(renamedA.status === 200, "rename A failed");
+  }
+  const renamedB = await bridgeJson("/opencode/session/rename", { method: "POST", body: { sessionId: B, title: titleB } });
+  assert(renamedB.status === 200, "rename B failed");
+  const deadline = Date.now() + 5000;
+  let sawA = false;
+  let sawB = false;
+  let receiptA = false;
+  const bytesA = [];
+  const bytesB = [];
+  while (Date.now() < deadline && (!sawA || !sawB || !receiptA)) {
+    const nextA = await readEnvelope(readerA, Math.max(1, deadline - Date.now())).catch(() => null);
+    const nextB = await readEnvelope(readerB, Math.max(1, deadline - Date.now())).catch(() => null);
+    if (nextA) {
+      bytesA.push(JSON.stringify(nextA));
+      if (nextA.event?.type === "session.updated" && nextA.source === "external" && JSON.stringify(nextA).includes(titleA)) sawA = true;
+      if (nextA.event?.type === "bridge.operation" && nextA.source === "governed") receiptA = true;
+    }
+    if (nextB) {
+      bytesB.push(JSON.stringify(nextB));
+      if (nextB.event?.type === "session.updated" && nextB.source === "external" && JSON.stringify(nextB).includes(titleB)) sawB = true;
+    }
+  }
+  assert(sawA && sawB, "required upstream session.updated events were not observed");
+  assert(receiptA, "governed bridge.operation receipt for rename A was missing");
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+  const rawA = bytesA.join("\n");
+  const rawB = bytesB.join("\n");
+  assert(!rawA.includes(titleB) && !rawA.includes(B), "A stream contained B identifiers");
+  assert(!rawB.includes(titleA) && !rawB.includes(A), "B stream contained A identifiers");
+  const unknown = await bridgeJson("/opencode/session/messages", { method: "POST", body: { sessionId: "unknown-session" } });
+  assert(unknown.status === 404 && unknown.payload.code === "OPENCODE_SESSION_UNKNOWN", "unknown session was not 404");
+  ctx.boundaryProof.streamA = { reader: readerA, controller: controllerA };
+  ctx.boundaryProof.streamB = { reader: readerB, controller: controllerB };
+  return "OpenCode proxy isolated A and B streams and required a real upstream rename event.";
+}
+
+async function opencodeProxyRawLogScenario() {
+  if (fault === "opencode-proxy-raw-log") {
+    captureBridgeLog("stdout", Buffer.from(`Authorization: Basic ${randomBytes(18).toString("base64")}\n`));
+  }
+  try {
+    rawLogSink.scanRawForCredentials();
+  } catch (error) {
+    assert(error.code === "OPENCODE_RAW_LOG_CREDENTIAL_DETECTED", "raw credential scan used an unexpected code");
+    throw error;
+  }
+  return "Unsanitized bridge logs contained no OpenCode credentials.";
+}
+
+async function opencodeProxyRevocationScenario() {
+  await requireOpenCodeBinary();
+  const { A, B } = ctx.boundaryProof?.sessions ?? {};
+  assert(A && B, "revocation proof requires sessions A and B");
+  const open = async (sessionId) => {
+    const controller = new AbortController();
+    ctx.boundaryProof.readers.push(controller);
+    const response = await bridgeEvents(sessionId, { signal: controller.signal });
+    assert(response.status === 200, "revocation SSE open failed");
+    return { controller, reader: response.body.getReader(), response };
+  };
+  const streamA = await open(A);
+  const streamB = await open(B);
+  await readEnvelope(streamA.reader, 2000);
+  await readEnvelope(streamB.reader, 2000);
+  const dispatchAt = Date.now();
+  let closeA = 0;
+  let closeB = 0;
+  const waitEof = async (stream) => {
+    try {
+      while (true) {
+        const next = await stream.reader.read();
+        if (next.done) return Date.now();
+      }
+    } catch {
+      return Date.now();
+    }
+  };
+  const eofA = waitEof(streamA);
+  const eofB = waitEof(streamB);
+  if (fault !== "opencode-proxy-revocation") {
+    const disabled = await bridgeJson("/addons/execution-settings", {
+      method: "POST",
+      body: { addon: "opencode", localCliExecution: false },
+    });
+    const ackAt = Date.now();
+    closeA = await eofA;
+    closeB = await eofB;
+    assert(disabled.status === 200 && disabled.payload.settings?.opencode?.localCliExecution === false, "disable did not persist");
+    assert(closeA <= ackAt + 1000 && closeB <= ackAt + 1000, "typed close EOF missed the acknowledgement deadline");
+    assert(!bridgeLogs.includes("OPENCODE_REVOKE_TIMEOUT"), "normal disable logged a timeout code");
+    void dispatchAt;
+  } else {
+    await Promise.race([eofA, eofB, new Promise((resolve) => setTimeout(resolve, 1500))]);
+    assert(false, "revocation close was observed without toggling execution off");
+  }
+  const enabled = await bridgeJson("/addons/execution-settings", {
+    method: "POST",
+    body: { addon: "opencode", localCliExecution: true },
+  });
+  assert(enabled.status === 200, "re-enable failed");
+  await bridgeJson("/opencode/sessions/list", { method: "POST", body: {} });
+  const refused = await httpBridgeRequest({
+    path: `/opencode/session/events?sessionId=${encodeURIComponent(A)}`,
+    method: "GET",
+    headers: {
+      Host: `127.0.0.1:${new URL(ctx.bridgeUrl).port}`,
+      Origin: ORIGIN,
+      "X-ResonantOS-Bridge-Token": ctx.config.bridgeToken,
+      "X-ResonantOS-Bridge-Capability-Token": ctx.capabilityTokens["addon-runtime-read"],
+    },
+  });
+  void refused;
+  return "OpenCode live revocation closed both streams before settings acknowledgement.";
 }
 
 async function createOpenCodeDelegation(mission) {
@@ -723,6 +1142,9 @@ async function cleanup() {
   if (cleanupStarted) return;
   cleanupStarted = true;
   await browserContext?.close().catch(() => undefined);
+  for (const controller of ctx.boundaryProof?.readers ?? []) {
+    try { controller.abort(); } catch { /* noop */ }
+  }
   await cleanupBridgeProcess().catch(() => undefined);
   if (userRoot) {
     const record = await readOpencodePidRecord();

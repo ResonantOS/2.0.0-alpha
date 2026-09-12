@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
@@ -9,6 +9,7 @@ import test from "node:test";
 import { chromium } from "playwright";
 
 import { opencodeRuntimeDiagnostics } from "../host/opencode-runtime.mjs";
+import { createRawBridgeLogSink } from "./live-sdk-lane.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
 const lanePath = path.join(repoRoot, "browser-first", "test", "live-sdk-lane.mjs");
@@ -30,6 +31,10 @@ const faultPrerequisites = {
   "opencode-credential-server": () => (opencodeAvailable() ? null : "pinned opencode binary not found in a trusted root"),
   "execution-settings-gate": () => (opencodeAvailable() ? null : "pinned opencode binary not found in a trusted root"),
   "opencode-version-pin": () => (opencodeAvailable() ? null : "pinned opencode binary not found in a trusted root"),
+  "opencode-proxy-capability": () => (opencodeAvailable() ? null : "pinned opencode binary not found in a trusted root"),
+  "opencode-proxy-scope": () => (opencodeAvailable() ? null : "pinned opencode binary not found in a trusted root"),
+  "opencode-proxy-revocation": () => (opencodeAvailable() ? null : "pinned opencode binary not found in a trusted root"),
+  "opencode-proxy-raw-log": () => (opencodeAvailable() ? null : "pinned opencode binary not found in a trusted root"),
   "extension-status-cards": () => (chromeAvailable() ? null : "no launchable Chrome (set RESONANTOS_LIVE_CHROME_PATH or install Playwright Chromium)"),
 };
 
@@ -37,6 +42,10 @@ const faultScenarios = [
   "opencode-credential-server",
   "execution-settings-gate",
   "opencode-version-pin",
+  "opencode-proxy-capability",
+  "opencode-proxy-scope",
+  "opencode-proxy-revocation",
+  "opencode-proxy-raw-log",
   "extension-status-cards",
 ];
 
@@ -206,5 +215,42 @@ test("run-bridge-minimal honors RESONANTOS_EXTENSION_ROOT without writing checko
     }
     await restoreFile(checkoutConfigPath, before);
     await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("raw sink retains canary the sanitizer removes", () => {
+  const sink = createRawBridgeLogSink();
+  const canary = `Basic ${randomBytes(18).toString("base64")}`;
+  sink.captureBridgeLog("stdout", Buffer.from(`probe ${canary}\n`));
+  assert.deepEqual(
+    [sink.joinRaw().includes(canary), sink.getEvidence().includes(canary)],
+    [true, false],
+  );
+});
+
+test("raw log overflow fails certification", () => {
+  const sink = createRawBridgeLogSink({ limit: 8 * 1024 * 1024 });
+  sink.captureBridgeLog("stdout", Buffer.alloc(8 * 1024 * 1024));
+  assert.throws(
+    () => sink.captureBridgeLog("stderr", Buffer.from("x")),
+    (error) => error.code === "OPENCODE_RAW_LOG_LIMIT" || error.message === "OPENCODE_RAW_LOG_LIMIT",
+  );
+});
+
+test("raw-log fault fails at credential scan", { concurrency: false }, async (t) => {
+  const missing = faultPrerequisites["opencode-proxy-raw-log"]?.();
+  if (missing) {
+    t.skip(`prerequisite missing on this runner: ${missing}`);
+    return;
+  }
+  const artifactDir = await mkdtemp(path.join(os.tmpdir(), "resonantos-live-sdk-raw-log-"));
+  try {
+    const result = await runLaneFault("opencode-proxy-raw-log", artifactDir);
+    const payload = JSON.parse(await readFile(path.join(artifactDir, "scenario-matrix.json"), "utf8"));
+    const scenario = payload.scenarios.find((entry) => entry.id === "opencode-proxy-raw-log");
+    assert.equal(result.code, 0);
+    assert.match(scenario?.detail ?? "", /OPENCODE_RAW_LOG_CREDENTIAL_DETECTED/);
+  } finally {
+    await rm(artifactDir, { recursive: true, force: true });
   }
 });
