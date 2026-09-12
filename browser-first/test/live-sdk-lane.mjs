@@ -770,35 +770,73 @@ async function opencodeProxyRevocationScenario() {
   const streamB = await open(B);
   await readEnvelope(streamA.reader, 2000);
   await readEnvelope(streamB.reader, 2000);
-  const dispatchAt = Date.now();
-  let closeA = 0;
-  let closeB = 0;
-  const waitEof = async (stream) => {
+  const isRevokedClose = (envelope) => envelope?.event?.type === "bridge.closed" && envelope?.event?.properties?.code === "OPENCODE_REVOKED";
+  const isApplication = (envelope) => {
+    const type = envelope?.event?.type;
+    return Boolean(type) && type !== "bridge.closed" && type !== "bridge.ready";
+  };
+  const watchRevocation = async (reader) => {
+    let closeAt = 0;
+    let eofAt = 0;
+    let sawClose = false;
+    let applicationAfterClose = false;
     try {
       while (true) {
-        const next = await stream.reader.read();
-        if (next.done) return Date.now();
+        const next = await readEnvelope(reader, 5000);
+        if (isRevokedClose(next)) {
+          if (!sawClose) {
+            sawClose = true;
+            closeAt = Date.now();
+          }
+          continue;
+        }
+        if (sawClose && isApplication(next)) applicationAfterClose = true;
       }
     } catch {
-      return Date.now();
+      eofAt = Date.now();
     }
+    return {
+      closeAt,
+      eofAt,
+      sawClose,
+      applicationAfterClose,
+      rawHasClose: envelopeRawText(reader).includes("event: opencode.close"),
+    };
   };
-  const eofA = waitEof(streamA);
-  const eofB = waitEof(streamB);
+  const watchA = watchRevocation(streamA.reader);
+  const watchB = watchRevocation(streamB.reader);
+  const eventsPath = `/opencode/session/events?sessionId=${encodeURIComponent(A)}`;
+  const listPath = "/opencode/sessions/list";
+  const readHeaders = () => ({
+    Host: `127.0.0.1:${new URL(ctx.bridgeUrl).port}`,
+    Origin: ORIGIN,
+    "X-ResonantOS-Bridge-Token": ctx.config.bridgeToken,
+    "X-ResonantOS-Bridge-Capability-Token": ctx.capabilityTokens["addon-runtime-read"],
+  });
   if (fault !== "opencode-proxy-revocation") {
     const disabled = await bridgeJson("/addons/execution-settings", {
       method: "POST",
       body: { addon: "opencode", localCliExecution: false },
     });
     const ackAt = Date.now();
-    closeA = await eofA;
-    closeB = await eofB;
+    const [a, b] = await Promise.all([watchA, watchB]);
     assert(disabled.status === 200 && disabled.payload.settings?.opencode?.localCliExecution === false, "disable did not persist");
-    assert(closeA <= ackAt + 1000 && closeB <= ackAt + 1000, "typed close EOF missed the acknowledgement deadline");
+    assert(a.sawClose && b.sawClose && a.rawHasClose && b.rawHasClose, "typed OPENCODE_REVOKED close missing on a live stream");
+    assert(a.closeAt > 0 && a.closeAt < ackAt && b.closeAt < ackAt, "OPENCODE_REVOKED close arrived after settings acknowledgement");
+    assert(a.eofAt <= ackAt + 1000 && b.eofAt <= ackAt + 1000, "typed close EOF missed the acknowledgement deadline");
+    assert(!a.applicationAfterClose && !b.applicationAfterClose, "application frame arrived after the terminal close");
     assert(!bridgeLogs.includes("OPENCODE_REVOKE_TIMEOUT"), "normal disable logged a timeout code");
-    void dispatchAt;
+    const disabledHttp = await httpBridgeRequest({
+      path: listPath,
+      method: "POST",
+      headers: { ...readHeaders(), "Content-Type": "application/json" },
+      body: "{}",
+    });
+    const disabledSse = await httpBridgeRequest({ path: eventsPath, method: "GET", headers: readHeaders() });
+    assert(disabledHttp.status === 403 && disabledHttp.payload.code === "OPENCODE_EXECUTION_DISABLED" && disabledHttp.origin === ORIGIN, "disabled HTTP control was not OPENCODE_EXECUTION_DISABLED");
+    assert(disabledSse.status === 403 && disabledSse.payload.code === "OPENCODE_EXECUTION_DISABLED" && disabledSse.origin === ORIGIN, "disabled SSE control was not OPENCODE_EXECUTION_DISABLED");
   } else {
-    await Promise.race([eofA, eofB, new Promise((resolve) => setTimeout(resolve, 1500))]);
+    await Promise.race([watchA, watchB, new Promise((resolve) => setTimeout(resolve, 1500))]);
     assert(false, "revocation close was observed without toggling execution off");
   }
   const enabled = await bridgeJson("/addons/execution-settings", {
@@ -807,17 +845,17 @@ async function opencodeProxyRevocationScenario() {
   });
   assert(enabled.status === 200, "re-enable failed");
   await bridgeJson("/opencode/sessions/list", { method: "POST", body: {} });
-  const refused = await httpBridgeRequest({
-    path: `/opencode/session/events?sessionId=${encodeURIComponent(A)}`,
-    method: "GET",
-    headers: {
-      Host: `127.0.0.1:${new URL(ctx.bridgeUrl).port}`,
-      Origin: ORIGIN,
-      "X-ResonantOS-Bridge-Token": ctx.config.bridgeToken,
-      "X-ResonantOS-Bridge-Capability-Token": ctx.capabilityTokens["addon-runtime-read"],
-    },
+  const httpControl = await httpBridgeRequest({
+    path: listPath,
+    method: "POST",
+    headers: { ...readHeaders(), "Content-Type": "application/json" },
+    body: "{}",
   });
-  void refused;
+  const sseControl = await httpBridgeRequest({ path: eventsPath, method: "GET", headers: readHeaders() });
+  assert(httpControl.status === 200 && (httpControl.payload.code ?? null) === null && httpControl.origin === ORIGIN, `re-enabled HTTP control failed: ${JSON.stringify(httpControl)}`);
+  assert(sseControl.status === 200 && (sseControl.payload.code ?? null) === null && sseControl.origin === ORIGIN, `re-enabled SSE control failed: ${JSON.stringify(sseControl)}`);
+  const late = await readEnvelope(streamA.reader, 400).then(() => "data", () => "closed");
+  assert(late === "closed", "old stream produced data after revocation");
   return "OpenCode live revocation closed both streams before settings acknowledgement.";
 }
 
