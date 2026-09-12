@@ -9,7 +9,7 @@ import test from "node:test";
 import { chromium } from "playwright";
 
 import { opencodeRuntimeDiagnostics } from "../host/opencode-runtime.mjs";
-import { createRawBridgeLogSink } from "./live-sdk-lane.mjs";
+import { createRawBridgeLogSink, readEnvelope } from "./live-sdk-lane.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
 const lanePath = path.join(repoRoot, "browser-first", "test", "live-sdk-lane.mjs");
@@ -228,6 +228,25 @@ test("run-bridge-minimal honors RESONANTOS_EXTENSION_ROOT without writing checko
     await restoreFile(checkoutConfigPath, before);
     await rm(tempRoot, { recursive: true, force: true });
   }
+});
+
+test("SSE reader yields every frame from a batched chunk", async () => {
+  const frames = [
+    { version: 1, sessionId: "A", source: "governed", event: { type: "bridge.ready", properties: {} } },
+    { version: 1, sessionId: "A", source: "governed", event: { type: "bridge.operation", properties: { operation: "rename" } } },
+  ];
+  const chunk = Buffer.from(frames.map((frame) => `data: ${JSON.stringify(frame)}\n\n`).join(""));
+  let sent = false;
+  const reader = {
+    async read() {
+      if (sent) return { done: true, value: undefined };
+      sent = true;
+      return { done: false, value: chunk };
+    },
+  };
+  const first = await readEnvelope(reader);
+  const second = await readEnvelope(reader);
+  assert.deepEqual([first, second], frames);
 });
 
 test("raw sink retains canary the sanitizer removes", () => {

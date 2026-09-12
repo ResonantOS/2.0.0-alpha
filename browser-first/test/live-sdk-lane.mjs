@@ -385,10 +385,16 @@ const envelopeReaders = new WeakMap();
 function envelopeState(reader) {
   let state = envelopeReaders.get(reader);
   if (!state) {
-    state = { decoder: new TextDecoder(), buffer: "", pending: [] };
+    state = { decoder: new TextDecoder(), buffer: "", pending: [], raw: [] };
     envelopeReaders.set(reader, state);
   }
   return state;
+}
+
+export function envelopeRawText(reader) {
+  const state = envelopeReaders.get(reader);
+  if (!state?.raw?.length) return "";
+  return Buffer.concat(state.raw).toString("utf8");
 }
 
 function takePendingEnvelope(state) {
@@ -402,7 +408,7 @@ function takePendingEnvelope(state) {
   return state.pending.shift();
 }
 
-async function readEnvelope(reader, timeoutMs = 2000) {
+export async function readEnvelope(reader, timeoutMs = 2000) {
   const state = envelopeState(reader);
   const queued = takePendingEnvelope(state);
   if (queued) return queued;
@@ -413,8 +419,15 @@ async function readEnvelope(reader, timeoutMs = 2000) {
       reader.read(),
       new Promise((_, reject) => setTimeout(() => reject(new Error("envelope timeout")), remaining)),
     ]);
-    if (result.done) throw new Error("OPENCODE_STREAM_DISCONNECTED");
-    state.buffer += state.decoder.decode(result.value, { stream: true });
+    if (result.done) {
+      state.buffer += state.decoder.decode();
+      const last = takePendingEnvelope(state);
+      if (last) return last;
+      throw new Error("OPENCODE_STREAM_DISCONNECTED");
+    }
+    const bytes = Buffer.from(result.value);
+    state.raw.push(bytes);
+    state.buffer += state.decoder.decode(bytes, { stream: true });
     const envelope = takePendingEnvelope(state);
     if (envelope) return envelope;
   }
@@ -696,26 +709,30 @@ async function opencodeProxyScopeScenario() {
   let sawA = false;
   let sawB = false;
   let receiptA = false;
-  const bytesA = [];
-  const bytesB = [];
   while (Date.now() < deadline && (!sawA || !sawB || !receiptA)) {
     const nextA = await readEnvelope(readerA, Math.max(1, deadline - Date.now())).catch(() => null);
     const nextB = await readEnvelope(readerB, Math.max(1, deadline - Date.now())).catch(() => null);
     if (nextA) {
-      bytesA.push(JSON.stringify(nextA));
       if (nextA.event?.type === "session.updated" && nextA.source === "external" && JSON.stringify(nextA).includes(titleA)) sawA = true;
       if (nextA.event?.type === "bridge.operation" && nextA.source === "governed") receiptA = true;
     }
     if (nextB) {
-      bytesB.push(JSON.stringify(nextB));
       if (nextB.event?.type === "session.updated" && nextB.source === "external" && JSON.stringify(nextB).includes(titleB)) sawB = true;
     }
   }
   assert(sawA && sawB, "required upstream session.updated events were not observed");
   assert(receiptA, "governed bridge.operation receipt for rename A was missing");
-  await new Promise((resolve) => setTimeout(resolve, 1000));
-  const rawA = bytesA.join("\n");
-  const rawB = bytesB.join("\n");
+  const observeUntil = Date.now() + 1000;
+  while (Date.now() < observeUntil) {
+    const remaining = Math.max(1, observeUntil - Date.now());
+    await Promise.all([
+      readEnvelope(readerA, remaining).catch(() => null),
+      readEnvelope(readerB, remaining).catch(() => null),
+    ]);
+  }
+  const rawA = envelopeRawText(readerA);
+  const rawB = envelopeRawText(readerB);
+  assert(rawA.length > 0 && rawB.length > 0, "complete-stream exclusion required raw SSE bytes");
   assert(!rawA.includes(titleB) && !rawA.includes(B), "A stream contained B identifiers");
   assert(!rawB.includes(titleA) && !rawB.includes(A), "B stream contained A identifiers");
   const unknown = await bridgeJson("/opencode/session/messages", { method: "POST", body: { sessionId: "unknown-session" } });
