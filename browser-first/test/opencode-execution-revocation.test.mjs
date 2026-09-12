@@ -47,6 +47,7 @@ function createService(root, overrides = {}) {
     fs: overrides.fs,
     platform: overrides.platform ?? "linux",
     spawnProcess: overrides.spawnProcess,
+    timers: overrides.timers,
     socketOpen: async () => false,
     uniqueRuntimeId: (prefix) => `${prefix}-test-${++id}`,
     userRoot: () => root,
@@ -301,6 +302,52 @@ test("unrelated CLI receives no serve credential env", async () => {
   }
 });
 
+test("disable listener timeout is unrefed and cleared", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ros-opencode-unref-"));
+  try {
+    const created = [];
+    const service = createService(root, {
+      timers: {
+        setTimeout(handler, ms, ...args) {
+          const native = globalThis.setTimeout(handler, ms, ...args);
+          const handle = {
+            native,
+            ms,
+            unrefed: false,
+            cleared: false,
+            unrefBeforeClear: false,
+            unref() {
+              this.unrefed = true;
+              this.unrefBeforeClear = !this.cleared;
+              native.unref?.();
+              return this;
+            },
+          };
+          created.push(handle);
+          return handle;
+        },
+        clearTimeout(handle) {
+          if (!handle) return;
+          handle.cleared = true;
+          globalThis.clearTimeout(handle.native);
+        },
+      },
+    });
+    await service.executeAddonExecutionSettingsUpdate({ addon: "opencode", localCliExecution: true });
+    const unsubscribe = service.subscribeOpenCodeExecution(async () => {});
+    await service.executeAddonExecutionSettingsUpdate({ addon: "opencode", localCliExecution: false });
+    unsubscribe();
+    const revokeTimers = created.filter((handle) => handle.ms === 1000);
+    assert.equal(revokeTimers.length, 1);
+    assert.deepEqual(
+      [revokeTimers[0].unrefed, revokeTimers[0].unrefBeforeClear, revokeTimers[0].cleared],
+      [true, true, true],
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("revoke timeout persists disabled state", async () => {
   await withTempService(async (service) => {
     await service.executeAddonExecutionSettingsUpdate({ addon: "opencode", localCliExecution: true });
@@ -309,12 +356,15 @@ test("revoke timeout persists disabled state", async () => {
     console.error = (...args) => { logs.push(args.join(" ")); };
     const unsubscribe = service.subscribeOpenCodeExecution(() => new Promise(() => {}));
     const started = Date.now();
+    // A live bridge keeps the event loop alive; unref() must not cancel the fail-closed timeout.
+    const keepAlive = setTimeout(() => {}, 10000);
     let result;
     let writeCalled = false;
     try {
       result = await postSettings(service, { addon: "opencode", localCliExecution: false });
       writeCalled = result.status === 200;
     } finally {
+      clearTimeout(keepAlive);
       console.error = originalError;
       unsubscribe();
     }

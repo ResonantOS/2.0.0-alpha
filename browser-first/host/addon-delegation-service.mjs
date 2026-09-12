@@ -192,6 +192,7 @@ export function createAddonDelegationService(dependencies) {
     socketOpen,
     uniqueRuntimeId,
     userRoot,
+    timers: openCodeListenerTimers = { setTimeout, clearTimeout },
   } = dependencies;
   const isolation = isolationDependency?.resolve
     ? isolationDependency
@@ -494,17 +495,18 @@ export function createAddonDelegationService(dependencies) {
     for (const listener of [...openCodeExecutionListeners]) {
       let timer;
       const timeout = new Promise((resolve) => {
-        timer = setTimeout(() => {
+        timer = openCodeListenerTimers.setTimeout(() => {
           try { console.error("OPENCODE_REVOKE_TIMEOUT"); } catch { /* noop */ }
           resolve("timeout");
         }, 1000);
+        timer?.unref?.();
       });
       try {
         await Promise.race([Promise.resolve().then(() => listener(enabled)), timeout]);
       } catch {
         /* listener failure leaves the gate in the latched state */
       } finally {
-        clearTimeout(timer);
+        openCodeListenerTimers.clearTimeout(timer);
       }
     }
   }
