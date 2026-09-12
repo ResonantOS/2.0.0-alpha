@@ -740,3 +740,10 @@ test("bridge CORS defaults to no allowed origins", { concurrency: false }, () =>
     else process.env.RESONANTOS_BRIDGE_ALLOWED_ORIGINS = previous;
   }
 });
+
+for (const loopbackHostOnly of [false,true]) test(`Host transport guard opt-in: ${loopbackHostOnly}`,async()=>{
+  const { randomBytes } = await import('node:crypto');
+  const bridgeToken=randomBytes(32).toString('hex'), token=randomBytes(32).toString('hex');
+  const result=await evaluateBridgeRequestForSelfTest({method:'POST',url:'/transport-fixture',headers:{host:'evil.example:12345','x-resonantos-bridge-token':bridgeToken,'x-resonantos-bridge-capability-token':token},rawHeaders:['Host','evil.example:12345'],listenerPort:12345,bridgeToken,bridgeCapabilityTokens:{read:token},routes:[{method:'POST',path:'/transport-fixture',requiredCapability:'read',loopbackHostOnly,handler:async()=>({})}]});
+  assert.deepEqual([result.status,result.payload.code??null],loopbackHostOnly?[403,'OPENCODE_HOST_REJECTED']:[200,null]);
+});
