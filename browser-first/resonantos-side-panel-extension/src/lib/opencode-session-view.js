@@ -212,7 +212,10 @@ function truncateOutput(text) {
 export function renderChangedFiles(listEl, titleEl, files = [], { document: doc, onRevert } = {}) {
   const d = view(doc);
   if (!listEl || !d) return 0;
-  if (titleEl) titleEl.textContent = files.length ? `Changed files · ${files.length}` : "No changes yet";
+  if (titleEl) {
+    titleEl.textContent = files.length ? `Changed files · ${new Set(files.map((file) => file.path)).size}` : "No changes yet";
+    if (files.length) appendSourceBadge(titleEl, files.every((file) => file.source === "governed") ? "governed" : "external", d);
+  }
   listEl.replaceChildren();
   for (const file of files) {
     const row = d.createElement("li");

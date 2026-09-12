@@ -47,7 +47,7 @@ test("the session element streams events into the transcript and rolling diff pa
   const tool = d.querySelector(".oc-thread .oc-tool");
   assert.equal(tool.dataset.state, "completed");
   // Rolling diff pane picked up the edit.
-  assert.equal(d.querySelector(".oc-diff-title").textContent, "Changed files · 1");
+  assert.equal(d.querySelector(".oc-diff-title").firstChild.textContent, "Changed files · 1");
   const row = d.querySelector(".oc-file-list .oc-file");
   assert.equal(row.dataset.path, "jwt.ts");
   assert.equal(row.dataset.touched, "true");

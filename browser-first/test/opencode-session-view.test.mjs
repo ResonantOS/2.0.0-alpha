@@ -22,7 +22,7 @@ test("renderChangedFiles rows carry path, counts, and highlight the newest edit"
   ], { document: d });
 
   assert.equal(n, 2);
-  assert.equal(d.querySelector("#t").textContent, "Changed files · 2");
+  assert.equal(d.querySelector("#t").firstChild.textContent, "Changed files · 2");
   const rows = [...d.querySelectorAll("#l .oc-file")];
   assert.equal(rows[0].dataset.path, "jwt.ts");
   assert.equal(rows[0].dataset.touched, "true", "the newest edit is highlighted");

@@ -3,6 +3,8 @@ import test from "node:test";
 
 import { createOpenCodeBridgeSource, createSSEParser } from "../resonantos-side-panel-extension/src/lib/opencode-bridge-source.js";
 
+import { createBridgeClient } from "../resonantos-side-panel-extension/src/lib/bridge-client.js";
+
 const PUBLIC_ERROR = "OpenCode boundary request failed.";
 
 function wait(ms = 25) {
@@ -288,4 +290,117 @@ test("source callback retains full envelope", async () => {
   });
   await wait();
   assert.deepEqual(received, envelope);
+});
+
+for (const layer of ["source", "bridge-client"]) {
+  for (const [label, status, contentType] of [
+    ["JSON note", 200, "application/json; note=text/event-stream"],
+    ["MIME suffix", 200, "text/event-stream-bogus"],
+    ["204", 204, "text/event-stream"],
+    ["206", 206, "text/event-stream"],
+    ["201", 201, "text/event-stream"]
+  ]) {
+    test(`SSE admission refuses before parser: ${layer} ${label}`, async () => {
+      let readers = 0;
+      const errors = [];
+      const response = { ok: true, status, headers: sseHeaders(contentType),
+        body: { getReader() { readers += 1; return { read: async () => ({ done: true }) }; } } };
+      const request = createBridgeClient({ fetchImpl: async () => response });
+      const source = createOpenCodeBridgeSource({
+        startSession: async () => ({ sessionId: "s1" }),
+        openEventStream: layer === "source" ? async () => response
+          : () => request("/opencode/session/events?sessionId=s1", { responseType: "sse" }),
+        onError: (error) => errors.push(error.code)
+      });
+      const stop = source.subscribe(() => {});
+      await wait();
+      stop();
+      assert.deepEqual([errors, readers], [["OPENCODE_PROTOCOL_ERROR"], 0]);
+    });
+  }
+  test(`SSE admission accepts charset parameter: ${layer}`, async () => {
+    const envelope = { version: 1, sessionId: "s1", source: "external", event: { type: "ok" } };
+    const response = streamResponse([`data: ${JSON.stringify(envelope)}\n\n`], { contentType: "text/event-stream; charset=utf-8" });
+    const request = createBridgeClient({ fetchImpl: async () => response });
+    const events = [];
+    const source = createOpenCodeBridgeSource({
+      startSession: async () => ({ sessionId: "s1" }),
+      openEventStream: layer === "source" ? async () => response
+        : () => request("/opencode/session/events?sessionId=s1", { responseType: "sse" })
+    });
+    const stop = source.subscribe((event) => events.push(event));
+    await wait();
+    stop();
+    assert.deepEqual(events, [envelope]);
+  });
+}
+
+for (const [label, malformed] of [
+  ["array event", { version: 1, sessionId: "s1", source: "governed", event: [] }],
+  ["null event", { version: 1, sessionId: "s1", source: "governed", event: null }],
+  ["missing version", { sessionId: "s1", source: "governed", event: {} }],
+  ["invalid source", { version: 1, sessionId: "s1", source: "forged", event: {} }]
+]) {
+  test(`malformed envelope terminates with protocol error: ${label}`, async () => {
+    const errors = [];
+    const events = [];
+    let aborted = false;
+    let cancelled = false;
+    const valid = { version: 1, sessionId: "s1", source: "external", event: { type: "ok" } };
+    const response = streamResponse([`data: ${JSON.stringify(malformed)}\n\ndata: ${JSON.stringify(valid)}\n\n`]);
+    const original = response.body.getReader;
+    response.body.getReader = () => {
+      const reader = original();
+      return { ...reader, cancel() { cancelled = true; reader.cancel(); } };
+    };
+    const source = createOpenCodeBridgeSource({
+      startSession: async () => ({ sessionId: "s1" }),
+      openEventStream: async (_id, { signal }) => {
+        signal.addEventListener("abort", () => { aborted = true; });
+        return response;
+      },
+      onError: (error) => errors.push(error.code)
+    });
+    const stop = source.subscribe((event) => events.push(event));
+    await wait();
+    const outcome = [errors, events.length, aborted, cancelled];
+    stop();
+    assert.deepEqual(outcome, [["OPENCODE_PROTOCOL_ERROR"], 0, true, true]);
+  });
+}
+
+test("concurrent start and subscribe share one pending session start", async () => {
+  let calls = 0;
+  let resolveStart;
+  const pending = new Promise((resolve) => { resolveStart = resolve; });
+  const streamIds = [];
+  const promptIds = [];
+  const source = createOpenCodeBridgeSource({
+    startSession: () => { calls += 1; return pending; },
+    openEventStream: async (id) => { streamIds.push(id); return streamResponse([]); },
+    postJson: async (_route, body) => { promptIds.push(body.sessionId); }
+  });
+  const starting = source.start();
+  const stop = source.subscribe(() => {});
+  await wait();
+  resolveStart({ ok: true, sessionId: "s1" });
+  const result = await starting;
+  await source.sendPrompt("hello");
+  await wait();
+  stop();
+  assert.deepEqual([calls, result, streamIds, promptIds], [1, { ok: true, sessionId: "s1" }, ["s1"], ["s1"]]);
+});
+
+test("SSE CRLF multiline framing survives every chunk split", () => {
+  const frame = 'data: {"type":\r\ndata: "ok"}\r\n\r\n';
+  const outcomes = [];
+  for (let split = 1; split < frame.length; split += 1) {
+    const events = [];
+    const errors = [];
+    const feed = createSSEParser((event) => events.push(event), (error) => errors.push(error.code));
+    feed(frame.slice(0, split));
+    feed(frame.slice(split));
+    outcomes.push([events, errors]);
+  }
+  assert.deepEqual(outcomes, Array.from({ length: frame.length - 1 }, () => [[{ type: "ok" }], []]));
 });

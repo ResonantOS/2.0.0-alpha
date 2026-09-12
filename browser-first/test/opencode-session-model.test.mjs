@@ -86,7 +86,7 @@ test("file edits roll into the changed-files map, accumulate on re-edit, and hig
     { type: "file.edited", properties: { path: "auth.ts", added: 5, removed: 2 } },
     { type: "file.edited", properties: { path: "jwt.ts", added: 3, removed: 0 } } // re-edit
   ]);
-  assert.deepEqual(state.changedFiles["jwt.ts"], { added: 45, removed: 8, status: "edited", touchedAt: state.changedFiles["jwt.ts"].touchedAt, source: "external" });
+  assert.deepEqual(state.changedFiles[JSON.stringify(["jwt.ts", "external"])], { path: "jwt.ts", added: 45, removed: 8, status: "edited", touchedAt: state.changedFiles[JSON.stringify(["jwt.ts", "external"])].touchedAt, source: "external" });
 
   const view = changedFilesView(state);
   assert.equal(view.length, 2);
@@ -100,8 +100,8 @@ test("session.diff is authoritative and merges the cumulative file stats", () =>
     { type: "file.edited", properties: { path: "jwt.ts", added: 1, removed: 0 } },
     { type: "session.diff", properties: { files: [{ path: "jwt.ts", added: 42, removed: 8 }, { path: "auth.test.ts", added: 30, removed: 0 }] } }
   ]);
-  assert.equal(state.changedFiles["jwt.ts"].added, 42, "session.diff overwrites with the authoritative cumulative count");
-  assert.equal(state.changedFiles["auth.test.ts"].added, 30);
+  assert.equal(state.changedFiles[JSON.stringify(["jwt.ts", "external"])].added, 42, "session.diff overwrites with the authoritative cumulative count");
+  assert.equal(state.changedFiles[JSON.stringify(["auth.test.ts", "external"])].added, 30);
 });
 
 test("permission asked adds an approval and blocks; replying clears it", () => {
@@ -224,7 +224,8 @@ test("mixed-source file records stay external rather than merging as governed", 
   let state = createOpenCodeSessionState({ sessionId: "s1" });
   state = applyOpenCodeEvent(state, normalizeGovernedOpenCodeEvent(envelope("s1", "governed", { type: "file.edited", properties: { path: "a.txt", added: 1, removed: 0 } }), "s1"));
   state = applyOpenCodeEvent(state, normalizeGovernedOpenCodeEvent(envelope("s1", "external", { type: "file.edited", properties: { path: "a.txt", added: 2, removed: 0 } }), "s1"));
-  assert.equal(state.changedFiles["a.txt"].source, "external");
+  assert.deepEqual(changedFilesView(state).map(({path, source, added}) => [path, source, added]).sort(),
+    [["a.txt", "external", 2], ["a.txt", "governed", 1]]);
 });
 
 test("different-source transcript entries are not merged", () => {
