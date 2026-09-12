@@ -244,7 +244,8 @@ test("seedEventsFromMessages replays history through the live reducer identicall
     input: "npm test",
     state: "completed",
     output: "pass",
-    error: ""
+    error: "",
+    source: "external"
   });
   assert.equal(state.changedFiles["browser-first/test/x.test.mjs"].added, 7);
   assert.equal(state.changedFiles["browser-first/test/x.test.mjs"].removed, 2);
