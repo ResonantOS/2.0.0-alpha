@@ -3,6 +3,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { randomBytes } from "node:crypto";
+import { createOpencodeSessionHostService } from "../host/opencode-session-host-service.mjs";
 
 import { createAddonDelegationHostService } from "../host/addon-delegation-host-service.mjs";
 import { createBrowserDiagnosticsHostService } from "../host/browser-diagnostics-host-service.mjs";
@@ -11,14 +13,15 @@ import { createMemoryHostService } from "../host/memory-host-service.mjs";
 import { createProviderHostService } from "../host/provider-host-service.mjs";
 import { bridgeServerPort, evaluateBridgeRequestForSelfTest, startBridgeServer } from "../host/bridge-server.mjs";
 
-const bridgeToken = "bridge-token";
-const bridgeDiagnosticsReadToken = "bridge-diagnostics-read-token";
-const addonRuntimeReadToken = "addon-runtime-read-token";
-const providerDiagnosticsReadToken = "provider-diagnostics-read-token";
-const memoryReadToken = "memory-read-token";
-const extensionPrefsReadToken = "extension-prefs-read-token";
+const bridgeToken = randomBytes(32).toString("hex");
+const bridgeDiagnosticsReadToken = randomBytes(32).toString("hex");
+const addonRuntimeReadToken = randomBytes(32).toString("hex");
+const providerDiagnosticsReadToken = randomBytes(32).toString("hex");
+const memoryReadToken = randomBytes(32).toString("hex");
+const extensionPrefsReadToken = randomBytes(32).toString("hex");
 
 const protectedGetRoutes = [
+  { route: "/opencode/session/events?sessionId=registered", responseType:"sse", capability:"addon-runtime-read", correctToken:addonRuntimeReadToken, wrongToken:bridgeDiagnosticsReadToken },
   { route: "/status", capability: "bridge-diagnostics-read", correctToken: bridgeDiagnosticsReadToken, wrongToken: addonRuntimeReadToken },
   { route: "/workspace/inspect", capability: "bridge-diagnostics-read", correctToken: bridgeDiagnosticsReadToken, wrongToken: addonRuntimeReadToken },
   { route: "/browser/downloads", capability: "bridge-diagnostics-read", correctToken: bridgeDiagnosticsReadToken, wrongToken: addonRuntimeReadToken },
@@ -131,6 +134,11 @@ function createRoutes(root) {
     executeAddonUserDataDelete: async () => ({}),
     executeGoalRecord: async () => ({}),
   });
+  const {opencodeSessionRoutes} = createOpencodeSessionHostService(stubHandlers([
+    "executeOpenCodeSessionStart", "executeOpenCodeSessionPrompt", "executeOpenCodeSessionPermission", "executeOpenCodeSessionStop",
+    "executeOpenCodeSessionsList", "executeOpenCodeSessionMessages", "executeOpenCodeSessionAbort", "executeOpenCodeSessionDiff",
+    "executeOpenCodeSessionRename", "executeOpenCodeSessionDelete", "executeOpenCodeSessionArchive", "executeOpenCodeAgentsList", "executeOpenCodeSessionEvents",
+  ]));
   const prefs = createExtensionPrefsHostService({ userRoot: () => root });
   return [
     ...diagnostics.browserDiagnosticsRoutes,
@@ -138,10 +146,11 @@ function createRoutes(root) {
     ...memory.memoryBridgeRoutes,
     ...addon.addonDelegationRoutes,
     ...prefs.extensionPrefsRoutes,
+    ...opencodeSessionRoutes,
   ];
 }
 
-test("twelve bridge GET routes require route-scoped capability tokens", async () => {
+test("protected bridge GET routes require route-scoped capability tokens", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "resonantos-bridge-get-routes-"));
   const routes = createRoutes(root);
   const bridgeCapabilityTokens = {
@@ -189,25 +198,29 @@ test("twelve bridge GET routes require route-scoped capability tokens", async ()
       });
     };
 
-    for (const { route, capability, correctToken, wrongToken } of protectedGetRoutes) {
+    for (const { route, capability, correctToken, wrongToken, responseType } of protectedGetRoutes) {
       const noBridgeToken = await requestRoute(route);
       assert.equal(noBridgeToken.status, 401, `${route} without bridge token`);
 
       const bridgeTokenOnly = await requestRoute(route, { "X-ResonantOS-Bridge-Token": bridgeToken });
       assert.equal(bridgeTokenOnly.status, 403, `${route} without ${capability}`);
-      assert.match(bridgeTokenOnly.payload.error ?? "", new RegExp(`requires ${capability} capability`));
+      if (responseType === "sse") assert.equal(bridgeTokenOnly.payload.code, "OPENCODE_CAPABILITY_REQUIRED");
+      else assert.match(bridgeTokenOnly.payload.error ?? "", new RegExp(`requires ${capability} capability`));
 
+      if (responseType !== "sse") {
       const authorized = await requestRoute(route, {
         "X-ResonantOS-Bridge-Token": bridgeToken,
         "X-ResonantOS-Bridge-Capability-Token": correctToken,
       });
       assert.equal(authorized.status, 200, `${route} with ${capability}`);
+      }
 
       const wrongCapability = await requestRoute(route, {
         "X-ResonantOS-Bridge-Token": bridgeToken,
         "X-ResonantOS-Bridge-Capability-Token": wrongToken,
       });
       assert.equal(wrongCapability.status, 403, `${route} with wrong capability`);
+      if (responseType === "sse") assert.equal(wrongCapability.payload.code, "OPENCODE_CAPABILITY_REQUIRED");
     }
   } finally {
     if (server) {
@@ -215,4 +228,21 @@ test("twelve bridge GET routes require route-scoped capability tokens", async ()
     }
     await rm(root, { recursive: true, force: true });
   }
+});
+
+
+test("every SSE route declares requiredCapability", () => {
+  assert.deepEqual(createRoutes(os.tmpdir()).filter(r=>r.responseType === "sse").map(r=>r.requiredCapability), ["addon-runtime-read"]);
+});
+
+test("authorized JSON GET controls exclude SSE", async () => {
+  const root=await mkdtemp(path.join(os.tmpdir(), "bridge-json-controls-"));
+  try {
+    const routes=createRoutes(root), invoked=[];
+    for(const route of routes){const handler=route.handler;route.handler=async(...args)=>{invoked.push(route.path);return handler(...args);};}
+    for(const entry of protectedGetRoutes.filter(r=>r.responseType !== "sse")) {
+      await evaluateBridgeRequestForSelfTest({method:"GET",url:entry.route,bridgeToken,bridgeCapabilityTokens:{[entry.capability]:entry.correctToken},headers:{"X-ResonantOS-Bridge-Token":bridgeToken,"X-ResonantOS-Bridge-Capability-Token":entry.correctToken},routes});
+    }
+    assert.deepEqual(invoked,protectedGetRoutes.filter(r=>r.responseType !== "sse").map(r=>r.route));
+  }finally{await rm(root,{recursive:true,force:true});}
 });
