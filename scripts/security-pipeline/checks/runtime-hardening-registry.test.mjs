@@ -857,8 +857,17 @@ test("active runtime-hardening checks share production-derived spawn records", a
     check.family === "runtime-hardening" && check.policy !== "disabled"
   );
   assert.equal(registry.families["runtime-hardening"].status, "active");
-  assert.equal(runtimeChecks.length, 4);
-  for (const check of runtimeChecks) {
+  // Record-based checks observe the production spawn record set. The static
+  // source scanner (subprocess-no-shell-string) does not consume records; it
+  // must appear here explicitly so family membership stays reviewed.
+  const recordChecks = runtimeChecks.filter((check) => Array.isArray(check.recordSets));
+  const staticChecks = runtimeChecks.filter((check) => !Array.isArray(check.recordSets));
+  assert.equal(recordChecks.length, 4);
+  assert.deepEqual(
+    staticChecks.map((check) => check.id),
+    ["subprocess-no-shell-string"],
+  );
+  for (const check of recordChecks) {
     assert.deepEqual(check.recordSets, [RECORD_SET], `${check.id} must use the production record set`);
   }
 
@@ -945,6 +954,6 @@ test("production runtime-hardening records pass strict certification", () => {
   );
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
   const results = result.stdout.trim().split(/\n(?=\{)/).map((document) => JSON.parse(document));
-  assert.equal(results.length, 4, result.stdout);
-  assert.deepEqual(results.map(({ status }) => status), ["pass", "pass", "pass", "pass"]);
+  assert.equal(results.length, 5, result.stdout);
+  assert.deepEqual(results.map(({ status }) => status), ["pass", "pass", "pass", "pass", "pass"]);
 });

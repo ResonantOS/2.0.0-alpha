@@ -98,6 +98,7 @@ Related contributor references:
   [icon asset index](../public/icons/README.md)
 - [GitHub Action SHA-pinning policy](security-pipeline/sha-pin-policy.md)
 - [Committed private key material check](security-pipeline/committed-private-key-material.md)
+- [Subprocess no shell-string check](security-pipeline/subprocess-no-shell-string.md)
 - [Machine-readable repo map for AI assistants](../llms.txt)
 - [Architecture templates, runbooks, and add-on skill contracts](architecture/README.md#contributor-contracts)
 
