@@ -6,6 +6,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import { PassThrough } from 'node:stream';
 import { ensureOpencodeServer, resetOpencodeServerSingletonForTests, createOpencodeHttpClient } from '../host/opencode-client.mjs';
 import { createOpenCodeBoundary, publicOpenCodeError } from '../host/opencode-boundary.mjs';
+import { publicOpenCodeError as transportPublicOpenCodeError } from '../host/bridge-server.mjs';
 const turn=()=>new Promise(r=>setImmediate(r));
 const errorCode=async fn=>{try{await fn();return null;}catch(e){return e.code;}};
 const ops=['start','prompt','permission','messages','abort','diff','rename','delete','archive','list','agents','stop'];
@@ -24,6 +25,10 @@ function fixture(t, overrides={}) {
 }
 const payload=(sessionId='A')=>({sessionId,text:'hello',permissionId:'p',decision:{approved:true},title:'title'});
 const bodyFor=(op,id='A')=> op==='prompt'?{sessionId:id,text:'hello'}:op==='permission'?{sessionId:id,permissionId:'p',decision:{approved:true}}:op==='rename'?{sessionId:id,title:'title'}:scoped.includes(op)?{sessionId:id}:{};
+test('public error tables agree',()=>{
+  const codes=['OPENCODE_BRIDGE_UNAUTHORIZED','OPENCODE_CAPABILITY_REQUIRED','OPENCODE_HOST_REJECTED','OPENCODE_EXECUTION_DISABLED','OPENCODE_REVOKED','OPENCODE_UNAVAILABLE','OPENCODE_SESSION_UNKNOWN','OPENCODE_ROUTE_UNKNOWN','OPENCODE_INVALID_REQUEST','OPENCODE_UPSTREAM_AUTH','OPENCODE_UPSTREAM_FAILED','OPENCODE_PROTOCOL_ERROR','OPENCODE_TIMEOUT','OPENCODE_STREAM_DISCONNECTED','OPENCODE_SLOW_CONSUMER','OPENCODE_LIMIT','OPENCODE_INTERNAL'];
+  assert.deepEqual(Object.fromEntries(codes.map(code=>[code,publicOpenCodeError(code)])),Object.fromEntries(codes.map(code=>[code,transportPublicOpenCodeError(code)])));
+});
 test('start returns only session id',async t=>{const f=fixture(t);assert.deepEqual(await f.boundary.run('start',{}),{ok:true,sessionId:'A'});});
 test('list exposes no upstream connection fields',async t=>{const f=fixture(t);f.client.listSessions=async()=>[{id:'A',auth:f.info.auth,baseUrl:f.info.baseUrl,eventUrl:'x',eventAuthorization:f.info.auth.header}];const value=await f.boundary.run('list',{});const count=v=>v&&typeof v==='object'?Object.entries(v).reduce((n,[k,x])=>n+(/auth|password|baseUrl|eventUrl/i.test(k)?1:0)+count(x),0):0;assert.equal(count(value),0);});
 for(const op of ops)test(`disabled route does no upstream work: ${op}`,async t=>{const f=fixture(t);f.enabled=false;await errorCode(()=>f.boundary.run(op,bodyFor(op)));assert.equal(f.calls,0);});
