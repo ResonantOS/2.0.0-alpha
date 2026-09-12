@@ -116,7 +116,7 @@ The **beta.2** gate is **open**. Its exit criteria — the committed feature tra
 ([#227](https://github.com/ResonantOS/2.0.0-alpha/issues/227),
 [#232](https://github.com/ResonantOS/2.0.0-alpha/issues/232),
 [#252](https://github.com/ResonantOS/2.0.0-alpha/issues/252)), the security line
-([#321](https://github.com/ResonantOS/2.0.0-alpha/issues/321),
+([#321](https://github.com/ResonantOS/2.0.0-alpha/issues/321) — bridge-only OpenCode boundary, session filtering, source attribution and live revocation pending required Live SDK certification; full cockpit disabled,
 [#326](https://github.com/ResonantOS/2.0.0-alpha/issues/326),
 [#373](https://github.com/ResonantOS/2.0.0-alpha/issues/373),
 [#180](https://github.com/ResonantOS/2.0.0-alpha/issues/180)), the
