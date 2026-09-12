@@ -4,6 +4,7 @@ import { spawn, execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import http from "node:http";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -463,6 +464,136 @@ function httpBridgeRequest({ path: requestPath, method = "GET", headers = {}, bo
   });
 }
 
+function listenerPort() {
+  return Number(new URL(ctx.bridgeUrl).port);
+}
+
+function configuredPublicPort() {
+  const publicUrl = ctx.config?.httpsBridgeUrl || ctx.config?.bridgeUrl;
+  if (!publicUrl) return undefined;
+  try {
+    const parsed = new URL(publicUrl);
+    if (parsed.port) return parsed.port;
+    if (parsed.protocol === "https:") return "443";
+    if (parsed.protocol === "http:") return "80";
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function wrongHostPort() {
+  const listener = listenerPort();
+  const publicPort = Number(configuredPublicPort());
+  for (const candidate of [65534, 65533, 19444, 19191, 65000]) {
+    if (candidate !== listener && candidate !== publicPort && candidate !== 19443) return candidate;
+  }
+  return 65001;
+}
+
+function parseRawHttpResponse(data) {
+  const [head, ...rest] = String(data).split("\r\n\r\n");
+  const status = Number(head.split(" ")[1]);
+  const origin = head.match(/Access-Control-Allow-Origin: ([^\r]+)/i)?.[1];
+  const body = rest.join("\r\n\r\n");
+  let payload = {};
+  if (body && !/content-type:\s*text\/event-stream/i.test(head)) {
+    try { payload = JSON.parse(body.match(/\{[\s\S]*\}/)?.[0] ?? "{}"); } catch { payload = {}; }
+  }
+  return { status, payload, origin };
+}
+
+function rawBridgeHttp({ method = "GET", path: requestPath, httpVersion = "1.1", headerLines = [], body = "" } = {}) {
+  return new Promise((resolve, reject) => {
+    const url = new URL(ctx.bridgeUrl);
+    const socket = net.connect(Number(url.port), url.hostname, () => {
+      const payload = body === undefined || body === null ? "" : body;
+      const lines = [
+        `${method} ${requestPath} HTTP/${httpVersion}`,
+        ...headerLines,
+        "Connection: close",
+      ];
+      if (payload) lines.push(`Content-Length: ${Buffer.byteLength(payload)}`);
+      socket.end(`${lines.join("\r\n")}\r\n\r\n${payload}`);
+    });
+    let data = "";
+    socket.on("data", (chunk) => { data += chunk; });
+    socket.on("error", reject);
+    socket.on("end", () => {
+      resolve(parseRawHttpResponse(data));
+      socket.destroy();
+    });
+  });
+}
+
+function openCodeReadHeaders(host) {
+  const headers = {
+    Origin: ORIGIN,
+    "X-ResonantOS-Bridge-Token": ctx.config.bridgeToken,
+    "X-ResonantOS-Bridge-Capability-Token": ctx.capabilityTokens["addon-runtime-read"],
+  };
+  if (host) headers.Host = host;
+  return headers;
+}
+
+function headerLinesFrom(headers) {
+  return Object.entries(headers).filter(([, value]) => value !== undefined).map(([key, value]) => `${key}: ${value}`);
+}
+
+async function assertHostMatrix(requestPath, { method = "GET", body } = {}) {
+  const listener = listenerPort();
+  const publicPort = configuredPublicPort();
+  const wrongPort = wrongHostPort();
+  assert(wrongPort !== listener && String(wrongPort) !== String(publicPort ?? ""), "wrongPort must differ from both listener and public ports");
+  const validHost = `127.0.0.1:${listener}`;
+  const encodedBody = body === undefined ? undefined : JSON.stringify(body);
+  const send = (host) => httpBridgeRequest({
+    path: requestPath,
+    method,
+    headers: {
+      ...openCodeReadHeaders(host),
+      ...(encodedBody !== undefined ? { "Content-Type": "application/json" } : {}),
+    },
+    body: encodedBody,
+  });
+  const assertRefusal = (control, refused, label) => {
+    assert(control.status === 200 && (control.payload.code ?? null) === null && control.origin === ORIGIN, `adjacent valid-Host 200 control failed (${label})`);
+    assert(refused.status === 403 && refused.payload.code === "OPENCODE_HOST_REJECTED" && refused.origin === ORIGIN, `${label} was not OPENCODE_HOST_REJECTED`);
+  };
+  for (const [label, host] of [["evil", `evil.example:${listener}`], ["wrong-port", `127.0.0.1:${wrongPort}`]]) {
+    assertRefusal(await send(validHost), await send(host), `${method} ${label}`);
+  }
+  const commonLines = headerLinesFrom({
+    ...openCodeReadHeaders(),
+    ...(encodedBody !== undefined ? { "Content-Type": "application/json" } : {}),
+  });
+  assertRefusal(
+    await send(validHost),
+    await rawBridgeHttp({ method, path: requestPath, httpVersion: "1.0", headerLines: commonLines, body: encodedBody ?? "" }),
+    `${method} missing Host`,
+  );
+  assertRefusal(
+    await send(validHost),
+    await rawBridgeHttp({
+      method,
+      path: requestPath,
+      headerLines: [`Host: ${validHost}`, `Host: ${validHost}`, ...commonLines],
+      body: encodedBody ?? "",
+    }),
+    `${method} duplicate Host`,
+  );
+  if (publicPort && publicPort !== String(listener)) {
+    const front = await send(`127.0.0.1:${publicPort}`);
+    assert(front.status === 200 && (front.payload.code ?? null) === null && front.origin === ORIGIN, "owned public-port Host was not accepted");
+  } else {
+    const listenerControl = await send(validHost);
+    assert(listenerControl.status === 200 && (listenerControl.payload.code ?? null) === null && listenerControl.origin === ORIGIN, "listener Host control failed");
+  }
+  if (String(listener) !== "19443" && publicPort !== "19443") {
+    assertRefusal(await send(validHost), await send("localhost:19443"), `${method} unconfigured front port`);
+  }
+}
+
 async function requireOpenCodeBinary() {
   const runtime = currentOpenCodeRuntime();
   if (!runtime.command) {
@@ -611,9 +742,8 @@ async function opencodeProxyCapabilityScenario() {
   const sessionId = ctx.boundaryProof?.sessions?.A;
   assert(sessionId, "capability proof requires a registered session");
   const eventsPath = `/opencode/session/events?sessionId=${encodeURIComponent(sessionId)}`;
-  const listenerPort = Number(new URL(ctx.bridgeUrl).port);
-  const publicPort = listenerPort;
-  const wrongPort = publicPort === 65535 ? 65534 : publicPort + 1;
+  const listPath = "/opencode/sessions/list";
+  const bridgeListener = listenerPort();
   const token = ctx.config.bridgeToken;
   const read = ctx.capabilityTokens["addon-runtime-read"];
   const control = await authorizedControl(eventsPath);
@@ -621,14 +751,14 @@ async function opencodeProxyCapabilityScenario() {
     const omitted = await httpBridgeRequest({
       path: eventsPath,
       method: "GET",
-      headers: { Host: `127.0.0.1:${listenerPort}`, Origin: ORIGIN, "X-ResonantOS-Bridge-Token": token },
+      headers: { Host: `127.0.0.1:${bridgeListener}`, Origin: ORIGIN, "X-ResonantOS-Bridge-Token": token },
     });
     assert(omitted.status === 200, "fault expected the capability-omitted SSE control to be accepted");
   }
   const missingCap = await httpBridgeRequest({
     path: eventsPath,
     method: "GET",
-    headers: { Host: `127.0.0.1:${listenerPort}`, Origin: ORIGIN, "X-ResonantOS-Bridge-Token": token },
+    headers: { Host: `127.0.0.1:${bridgeListener}`, Origin: ORIGIN, "X-ResonantOS-Bridge-Token": token },
   });
   assert(control.status === 200 && control.code === null && control.origin === ORIGIN, `valid events control failed: ${JSON.stringify(control)}`);
   assert(missingCap.status === 403 && missingCap.payload.code === "OPENCODE_CAPABILITY_REQUIRED", "missing capability did not return 403");
@@ -636,7 +766,7 @@ async function opencodeProxyCapabilityScenario() {
     path: eventsPath,
     method: "GET",
     headers: {
-      Host: `127.0.0.1:${listenerPort}`,
+      Host: `127.0.0.1:${bridgeListener}`,
       Origin: ORIGIN,
       "X-ResonantOS-Bridge-Token": token,
       "X-ResonantOS-Bridge-Capability-Token": ctx.capabilityTokens["addon-runtime-control"],
@@ -646,32 +776,19 @@ async function opencodeProxyCapabilityScenario() {
   const missingToken = await httpBridgeRequest({
     path: eventsPath,
     method: "GET",
-    headers: { Host: `127.0.0.1:${listenerPort}`, Origin: ORIGIN },
+    headers: { Host: `127.0.0.1:${bridgeListener}`, Origin: ORIGIN },
   });
   assert(missingToken.status === 401, "missing token did not return 401");
-  for (const host of [`evil.example:${listenerPort}`, `127.0.0.1:${wrongPort}`]) {
-    const valid = await authorizedControl(eventsPath);
-    const refused = await httpBridgeRequest({
-      path: eventsPath,
-      method: "GET",
-      headers: {
-        Host: host,
-        Origin: ORIGIN,
-        "X-ResonantOS-Bridge-Token": token,
-        "X-ResonantOS-Bridge-Capability-Token": read,
-      },
-    });
-    assert(valid.status === 200 && valid.code === null && valid.origin === ORIGIN, "adjacent valid Host control failed");
-    assert(refused.status === 403 && refused.payload.code === "OPENCODE_HOST_REJECTED" && refused.origin === ORIGIN, "Host refusal was not OPENCODE_HOST_REJECTED");
-  }
+  await assertHostMatrix(listPath, { method: "POST", body: {} });
+  await assertHostMatrix(eventsPath, { method: "GET" });
   const forwarded = await httpBridgeRequest({
     path: eventsPath,
     method: "GET",
     headers: {
-      Host: `evil.example:${listenerPort}`,
+      Host: `evil.example:${bridgeListener}`,
       Origin: ORIGIN,
-      "X-Forwarded-Host": `127.0.0.1:${listenerPort}`,
-      "X-Forwarded-Port": String(listenerPort),
+      "X-Forwarded-Host": `127.0.0.1:${bridgeListener}`,
+      "X-Forwarded-Port": String(bridgeListener),
       "X-ResonantOS-Bridge-Token": token,
       "X-ResonantOS-Bridge-Capability-Token": read,
     },
