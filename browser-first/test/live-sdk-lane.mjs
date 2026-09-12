@@ -395,8 +395,17 @@ function throwCredentialDetected() {
   throw error;
 }
 
+async function readMandatoryScanInput(filePath, which) {
+  try {
+    return await readFile(filePath, "utf8");
+  } catch {
+    throw new Error(`OPENCODE_SCAN_INPUT_MISSING: ${which}`);
+  }
+}
+
 async function collectScanTexts() {
   const files = [];
+  let stagedFileCount = 0;
   async function walk(dir) {
     let entries = [];
     try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
@@ -406,13 +415,15 @@ async function collectScanTexts() {
         if (entry.name === "node_modules" || entry.name === ".git") continue;
         await walk(full);
       } else if (entry.isFile() && /\.(?:js|mjs|cjs|json|html|css|txt|md)$/i.test(entry.name)) {
+        stagedFileCount += 1;
         files.push(await readFile(full, "utf8").catch(() => ""));
       }
     }
   }
   if (stagedExtension?.extensionRoot) await walk(stagedExtension.extensionRoot);
-  if (activeBridgeConfigPath) files.push(await readFile(activeBridgeConfigPath, "utf8").catch(() => ""));
-  if (userRoot) files.push(await readFile(path.join(userRoot, "BrowserFirst", "opencode-server.json"), "utf8").catch(() => ""));
+  assert(stagedFileCount > 0, "OPENCODE_SCAN_INPUT_MISSING: staged-extension");
+  files.push(await readMandatoryScanInput(activeBridgeConfigPath, "bridge-config"));
+  files.push(await readMandatoryScanInput(path.join(userRoot, "BrowserFirst", "opencode-server.json"), "opencode-server.json"));
   return {
     files,
     captures: ctx.boundaryProof?.captures ?? [],
@@ -424,6 +435,15 @@ function scanTextForSecretSyntax(text) {
   return /["']eventAuthorization["']/.test(text)
     || /OPENCODE_SERVER_PASSWORD/.test(text)
     || /\bBasic [A-Za-z0-9+/]{16,}={0,2}\b/.test(text);
+}
+
+function boundaryProofReaders() {
+  const proof = ctx.boundaryProof ?? {};
+  return [
+    proof.streamA?.reader,
+    proof.streamB?.reader,
+    ...(proof.readers ?? []),
+  ].filter((reader) => reader && typeof reader.read === "function");
 }
 
 async function scanBoundaryArtifacts() {
@@ -442,17 +462,30 @@ async function scanBoundaryArtifacts() {
     if (scanTextForSecretSyntax(JSON.stringify(capture))) throwCredentialDetected();
     if (countForbiddenOpenCodeFields(capture.payload) > 0) throwCredentialDetected();
   }
+  for (const reader of boundaryProofReaders()) {
+    const raw = envelopeRawText(reader);
+    if (raw && scanTextForSecretSyntax(raw)) throwCredentialDetected();
+  }
 }
 
 async function bridgeEvents(sessionId, { headers = {}, signal } = {}) {
-  const url = `${ctx.bridgeUrl}/opencode/session/events?sessionId=${encodeURIComponent(sessionId)}`;
+  const route = `/opencode/session/events?sessionId=${encodeURIComponent(sessionId)}`;
+  const url = `${ctx.bridgeUrl}${route}`;
   const requestHeaders = {
     "X-ResonantOS-Bridge-Token": ctx.config.bridgeToken,
     "X-ResonantOS-Bridge-Capability-Token": ctx.capabilityTokens["addon-runtime-read"],
     Origin: ORIGIN,
     ...headers,
   };
-  return fetch(url, { method: "GET", headers: requestHeaders, signal, redirect: "error" });
+  const response = await fetch(url, { method: "GET", headers: requestHeaders, signal, redirect: "error" });
+  recordOpenCodeCapture({
+    route,
+    method: "GET",
+    status: response.status,
+    headers: Object.fromEntries(response.headers.entries()),
+    payload: {},
+  });
+  return response;
 }
 
 const envelopeReaders = new WeakMap();
@@ -460,7 +493,7 @@ const envelopeReaders = new WeakMap();
 function envelopeState(reader) {
   let state = envelopeReaders.get(reader);
   if (!state) {
-    state = { decoder: new TextDecoder(), buffer: "", pending: [], raw: [] };
+    state = { decoder: new TextDecoder(), buffer: "", pending: [], raw: [], inflight: null };
     envelopeReaders.set(reader, state);
   }
   return state;
@@ -483,6 +516,12 @@ function takePendingEnvelope(state) {
   return state.pending.shift();
 }
 
+function streamDisconnectedError() {
+  const error = new Error("OPENCODE_STREAM_DISCONNECTED");
+  error.code = "OPENCODE_STREAM_DISCONNECTED";
+  return error;
+}
+
 export async function readEnvelope(reader, timeoutMs = 2000) {
   const state = envelopeState(reader);
   const queued = takePendingEnvelope(state);
@@ -490,15 +529,27 @@ export async function readEnvelope(reader, timeoutMs = 2000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const remaining = Math.max(1, deadline - Date.now());
-    const result = await Promise.race([
-      reader.read(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("envelope timeout")), remaining)),
-    ]);
+    if (!state.inflight) state.inflight = Promise.resolve(reader.read());
+    let timer;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error("envelope timeout")), remaining);
+    });
+    let result;
+    try {
+      result = await Promise.race([state.inflight, timeout]);
+    } catch (error) {
+      if (error instanceof Error && error.message === "envelope timeout") throw error;
+      state.inflight = null;
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+    state.inflight = null;
     if (result.done) {
       state.buffer += state.decoder.decode();
       const last = takePendingEnvelope(state);
       if (last) return last;
-      throw new Error("OPENCODE_STREAM_DISCONNECTED");
+      throw streamDisconnectedError();
     }
     const bytes = Buffer.from(result.value);
     state.raw.push(bytes);
@@ -507,6 +558,59 @@ export async function readEnvelope(reader, timeoutMs = 2000) {
     if (envelope) return envelope;
   }
   throw new Error("envelope timeout");
+}
+
+export async function drainEnvelopes(reader, untilMs) {
+  const frames = [];
+  while (Date.now() < untilMs) {
+    const remaining = Math.max(1, untilMs - Date.now());
+    try {
+      frames.push(await readEnvelope(reader, remaining));
+    } catch (error) {
+      if (error instanceof Error && error.message === "envelope timeout") continue;
+      throw error;
+    }
+  }
+  return frames;
+}
+
+export function createRevocationWatcher(readEnvelopeImpl = readEnvelope) {
+  const isRevokedClose = (envelope) => envelope?.event?.type === "bridge.closed" && envelope?.event?.properties?.code === "OPENCODE_REVOKED";
+  const isApplication = (envelope) => {
+    const type = envelope?.event?.type;
+    return Boolean(type) && type !== "bridge.closed" && type !== "bridge.ready";
+  };
+  return async function watchRevocation(reader, timeoutMs = 5000) {
+    let closeAt = 0;
+    let eofAt = 0;
+    let sawClose = false;
+    let applicationAfterClose = false;
+    let error = "";
+    try {
+      while (true) {
+        const next = await readEnvelopeImpl(reader, timeoutMs);
+        if (isRevokedClose(next)) {
+          if (!sawClose) {
+            sawClose = true;
+            closeAt = Date.now();
+          }
+          continue;
+        }
+        if (sawClose && isApplication(next)) applicationAfterClose = true;
+      }
+    } catch (caught) {
+      if (caught?.code === "OPENCODE_STREAM_DISCONNECTED") eofAt = Date.now();
+      else error = String(caught);
+    }
+    return {
+      closeAt,
+      eofAt,
+      sawClose,
+      applicationAfterClose,
+      error,
+      rawHasClose: envelopeRawText(reader).includes("event: opencode.close"),
+    };
+  };
 }
 
 function httpBridgeRequest({ path: requestPath, method = "GET", headers = {}, body } = {}) {
@@ -520,8 +624,9 @@ function httpBridgeRequest({ path: requestPath, method = "GET", headers = {}, bo
       headers,
     }, (res) => {
       const origin = res.headers["access-control-allow-origin"];
+      const responseHeaders = { ...res.headers };
       if (String(res.headers["content-type"] ?? "").includes("text/event-stream")) {
-        resolve({ status: res.statusCode, payload: {}, origin });
+        resolve({ status: res.statusCode, payload: {}, origin, headers: responseHeaders, body: "" });
         res.destroy();
         return;
       }
@@ -530,19 +635,24 @@ function httpBridgeRequest({ path: requestPath, method = "GET", headers = {}, bo
       res.on("end", () => {
         let payload = {};
         try { payload = data ? JSON.parse(data) : {}; } catch { payload = {}; }
-        resolve({ status: res.statusCode, payload, origin });
+        resolve({ status: res.statusCode, payload, origin, headers: responseHeaders, body: data });
       });
     });
     req.on("error", reject);
     req.end(body);
   }).then((result) => {
-    recordOpenCodeCapture({
+    const contentType = String(result.headers?.["content-type"] ?? "");
+    const capture = {
       route: requestPath,
       method,
       status: result.status,
-      headers: { origin: result.origin },
+      headers: result.headers ?? {},
       payload: result.payload,
-    });
+    };
+    if (contentType.includes("application/json") || (!contentType.includes("text/event-stream") && result.body)) {
+      capture.body = result.body ?? "";
+    }
+    recordOpenCodeCapture(capture);
     return result;
   });
 }
@@ -703,6 +813,7 @@ async function opencodeCredentialServerScenario() {
   assert(countForbiddenOpenCodeFields(listed.payload) === 0, "list leaked connection fields");
   const web = await bridgeJson("/opencode/web/url", { method: "POST", body: {} });
   assert(web.status === 200 && web.payload.url === "" && web.payload.requiresCredential === true, "web url was not the disabled handoff shape");
+  assert(Object.keys(web.payload).sort().join(",") === "ok,requiresCredential,url", "web url keys were not the disabled handoff shape");
   const messages = await bridgeJson("/opencode/session/messages", { method: "POST", body: { sessionId: startedA.payload.sessionId } });
   const diff = await bridgeJson("/opencode/session/diff", { method: "POST", body: { sessionId: startedA.payload.sessionId } });
   const agents = await bridgeJson("/opencode/agents/list", { method: "POST", body: {} });
@@ -742,7 +853,8 @@ async function runCredentiallessSecondProcess({ port, bridgeUrl }) {
     async function hit(url, method = "GET") {
       const response = await fetch(url, { method }).catch(() => ({ status: 0, text: async () => "" }));
       const text = await response.text?.() ?? "";
-      checks.push({ status: response.status, leaked: /eventAuthorization|eventUrl|OPENCODE_SERVER_PASSWORD|Basic /.test(text) });
+      const leakedKey = /"(?:eventAuthorization|eventUrl|baseUrl|authorization|password|username|auth|credential)"/i.test(text);
+      checks.push({ status: response.status, leaked: leakedKey || /Basic /.test(text) });
     }
     await hit("http://127.0.0.1:" + port + "/doc");
     await hit("http://127.0.0.1:" + port + "/session");
@@ -846,7 +958,7 @@ async function opencodeProxyCapabilityScenario() {
     headers: { Host: `127.0.0.1:${bridgeListener}`, Origin: ORIGIN, "X-ResonantOS-Bridge-Token": token },
   });
   assert(control.status === 200 && control.code === null && control.origin === ORIGIN, `valid events control failed: ${JSON.stringify(control)}`);
-  assert(missingCap.status === 403 && missingCap.payload.code === "OPENCODE_CAPABILITY_REQUIRED", "missing capability did not return 403");
+  assert(missingCap.status === 403 && missingCap.payload.code === "OPENCODE_CAPABILITY_REQUIRED" && missingCap.origin === ORIGIN, "missing capability did not return 403");
   const wrongCap = await httpBridgeRequest({
     path: eventsPath,
     method: "GET",
@@ -857,15 +969,25 @@ async function opencodeProxyCapabilityScenario() {
       "X-ResonantOS-Bridge-Capability-Token": ctx.capabilityTokens["addon-runtime-control"],
     },
   });
-  assert(wrongCap.status === 403 && wrongCap.payload.code === "OPENCODE_CAPABILITY_REQUIRED", "wrong capability did not return 403");
+  assert(wrongCap.status === 403 && wrongCap.payload.code === "OPENCODE_CAPABILITY_REQUIRED" && wrongCap.origin === ORIGIN, "wrong capability did not return 403");
   const missingToken = await httpBridgeRequest({
     path: eventsPath,
     method: "GET",
     headers: { Host: `127.0.0.1:${bridgeListener}`, Origin: ORIGIN },
   });
-  assert(missingToken.status === 401, "missing token did not return 401");
+  assert(missingToken.status === 401 && missingToken.origin === ORIGIN, "missing token did not return 401");
   await assertHostMatrix(listPath, { method: "POST", body: {} });
   await assertHostMatrix(eventsPath, { method: "GET" });
+  const forwardedControl = await httpBridgeRequest({
+    path: eventsPath,
+    method: "GET",
+    headers: {
+      Host: `127.0.0.1:${bridgeListener}`,
+      Origin: ORIGIN,
+      "X-ResonantOS-Bridge-Token": token,
+      "X-ResonantOS-Bridge-Capability-Token": read,
+    },
+  });
   const forwarded = await httpBridgeRequest({
     path: eventsPath,
     method: "GET",
@@ -878,7 +1000,8 @@ async function opencodeProxyCapabilityScenario() {
       "X-ResonantOS-Bridge-Capability-Token": read,
     },
   });
-  assert(forwarded.status === 403 && forwarded.payload.code === "OPENCODE_HOST_REJECTED", "forwarded headers replaced Host");
+  assert(forwardedControl.status === 200 && (forwardedControl.payload.code ?? null) === null && forwardedControl.origin === ORIGIN, "forwarded-header adjacent valid-Host control failed");
+  assert(forwarded.status === 403 && forwarded.payload.code === "OPENCODE_HOST_REJECTED" && forwarded.origin === ORIGIN, "forwarded headers replaced Host");
   return "OpenCode proxy capability and Host controls matched the matrix.";
 }
 
@@ -911,27 +1034,26 @@ async function opencodeProxyScopeScenario() {
   let sawA = false;
   let sawB = false;
   let receiptA = false;
-  while (Date.now() < deadline && (!sawA || !sawB || !receiptA)) {
+  let receiptB = false;
+  while (Date.now() < deadline && (!sawA || !sawB || !receiptA || !receiptB)) {
     const nextA = await readEnvelope(readerA, Math.max(1, deadline - Date.now())).catch(() => null);
     const nextB = await readEnvelope(readerB, Math.max(1, deadline - Date.now())).catch(() => null);
     if (nextA) {
       if (nextA.event?.type === "session.updated" && nextA.source === "external" && JSON.stringify(nextA).includes(titleA)) sawA = true;
-      if (nextA.event?.type === "bridge.operation" && nextA.source === "governed") receiptA = true;
+      if (nextA.event?.type === "bridge.operation" && nextA.source === "governed" && nextA.event?.properties?.operation === "rename") receiptA = true;
     }
     if (nextB) {
       if (nextB.event?.type === "session.updated" && nextB.source === "external" && JSON.stringify(nextB).includes(titleB)) sawB = true;
+      if (nextB.event?.type === "bridge.operation" && nextB.source === "governed" && nextB.event?.properties?.operation === "rename") receiptB = true;
     }
   }
   assert(sawA && sawB, "required upstream session.updated events were not observed");
-  assert(receiptA, "governed bridge.operation receipt for rename A was missing");
+  assert(receiptA && receiptB, "governed bridge.operation receipts for rename A and B were missing");
   const observeUntil = Date.now() + 1000;
-  while (Date.now() < observeUntil) {
-    const remaining = Math.max(1, observeUntil - Date.now());
-    await Promise.all([
-      readEnvelope(readerA, remaining).catch(() => null),
-      readEnvelope(readerB, remaining).catch(() => null),
-    ]);
-  }
+  await Promise.all([
+    drainEnvelopes(readerA, observeUntil),
+    drainEnvelopes(readerB, observeUntil),
+  ]);
   const rawA = envelopeRawText(readerA);
   const rawB = envelopeRawText(readerB);
   assert(rawA.length > 0 && rawB.length > 0, "complete-stream exclusion required raw SSE bytes");
@@ -939,6 +1061,17 @@ async function opencodeProxyScopeScenario() {
   assert(!rawB.includes(titleA) && !rawB.includes(A), "B stream contained A identifiers");
   const unknown = await bridgeJson("/opencode/session/messages", { method: "POST", body: { sessionId: "unknown-session" } });
   assert(unknown.status === 404 && unknown.payload.code === "OPENCODE_SESSION_UNKNOWN", "unknown session was not 404");
+  const unknownEvents = await httpBridgeRequest({
+    path: "/opencode/session/events?sessionId=unknown-session",
+    method: "GET",
+    headers: {
+      Host: `127.0.0.1:${listenerPort()}`,
+      Origin: ORIGIN,
+      "X-ResonantOS-Bridge-Token": ctx.config.bridgeToken,
+      "X-ResonantOS-Bridge-Capability-Token": ctx.capabilityTokens["addon-runtime-read"],
+    },
+  });
+  assert(unknownEvents.status === 404 && unknownEvents.payload.code === "OPENCODE_SESSION_UNKNOWN" && unknownEvents.origin === ORIGIN, "unknown session SSE was not 404");
   ctx.boundaryProof.streamA = { reader: readerA, controller: controllerA };
   ctx.boundaryProof.streamB = { reader: readerB, controller: controllerB };
   return "OpenCode proxy isolated A and B streams and required a real upstream rename event.";
@@ -972,41 +1105,9 @@ async function opencodeProxyRevocationScenario() {
   const streamB = await open(B);
   await readEnvelope(streamA.reader, 2000);
   await readEnvelope(streamB.reader, 2000);
-  const isRevokedClose = (envelope) => envelope?.event?.type === "bridge.closed" && envelope?.event?.properties?.code === "OPENCODE_REVOKED";
-  const isApplication = (envelope) => {
-    const type = envelope?.event?.type;
-    return Boolean(type) && type !== "bridge.closed" && type !== "bridge.ready";
-  };
-  const watchRevocation = async (reader) => {
-    let closeAt = 0;
-    let eofAt = 0;
-    let sawClose = false;
-    let applicationAfterClose = false;
-    try {
-      while (true) {
-        const next = await readEnvelope(reader, 5000);
-        if (isRevokedClose(next)) {
-          if (!sawClose) {
-            sawClose = true;
-            closeAt = Date.now();
-          }
-          continue;
-        }
-        if (sawClose && isApplication(next)) applicationAfterClose = true;
-      }
-    } catch {
-      eofAt = Date.now();
-    }
-    return {
-      closeAt,
-      eofAt,
-      sawClose,
-      applicationAfterClose,
-      rawHasClose: envelopeRawText(reader).includes("event: opencode.close"),
-    };
-  };
-  const watchA = watchRevocation(streamA.reader);
-  const watchB = watchRevocation(streamB.reader);
+  const watchRevocation = createRevocationWatcher();
+  const watchA = watchRevocation(streamA.reader, 5000);
+  const watchB = watchRevocation(streamB.reader, 5000);
   const eventsPath = `/opencode/session/events?sessionId=${encodeURIComponent(A)}`;
   const listPath = "/opencode/sessions/list";
   const readHeaders = () => ({
@@ -1015,38 +1116,41 @@ async function opencodeProxyRevocationScenario() {
     "X-ResonantOS-Bridge-Token": ctx.config.bridgeToken,
     "X-ResonantOS-Bridge-Capability-Token": ctx.capabilityTokens["addon-runtime-read"],
   });
+  let disabled = null;
   if (fault !== "opencode-proxy-revocation") {
-    const disabled = await bridgeJson("/addons/execution-settings", {
+    disabled = await bridgeJson("/addons/execution-settings", {
       method: "POST",
       body: { addon: "opencode", localCliExecution: false },
     });
-    const ackAt = Date.now();
-    const [a, b] = await Promise.all([watchA, watchB]);
-    assert(disabled.status === 200 && disabled.payload.settings?.opencode?.localCliExecution === false, "disable did not persist");
-    assert(a.sawClose && b.sawClose && a.rawHasClose && b.rawHasClose, "typed OPENCODE_REVOKED close missing on a live stream");
-    assert(a.closeAt > 0 && a.closeAt < ackAt && b.closeAt < ackAt, "OPENCODE_REVOKED close arrived after settings acknowledgement");
-    assert(a.eofAt <= ackAt + 1000 && b.eofAt <= ackAt + 1000, "typed close EOF missed the acknowledgement deadline");
-    assert(!a.applicationAfterClose && !b.applicationAfterClose, "application frame arrived after the terminal close");
-    assert(!bridgeLogs.includes("OPENCODE_REVOKE_TIMEOUT"), "normal disable logged a timeout code");
-    const disabledHttp = await httpBridgeRequest({
-      path: listPath,
-      method: "POST",
-      headers: { ...readHeaders(), "Content-Type": "application/json" },
-      body: "{}",
-    });
-    const disabledSse = await httpBridgeRequest({ path: eventsPath, method: "GET", headers: readHeaders() });
-    assert(disabledHttp.status === 403 && disabledHttp.payload.code === "OPENCODE_EXECUTION_DISABLED" && disabledHttp.origin === ORIGIN, "disabled HTTP control was not OPENCODE_EXECUTION_DISABLED");
-    assert(disabledSse.status === 403 && disabledSse.payload.code === "OPENCODE_EXECUTION_DISABLED" && disabledSse.origin === ORIGIN, "disabled SSE control was not OPENCODE_EXECUTION_DISABLED");
-  } else {
-    await Promise.race([watchA, watchB, new Promise((resolve) => setTimeout(resolve, 1500))]);
-    assert(false, "revocation close was observed without toggling execution off");
   }
+  const ackAt = Date.now();
+  const [a, b] = await Promise.all([watchA, watchB]);
+  if (disabled) {
+    assert(disabled.status === 200 && disabled.payload.settings?.opencode?.localCliExecution === false, "disable did not persist");
+  }
+  assert(a.sawClose && b.sawClose && a.rawHasClose && b.rawHasClose, "typed OPENCODE_REVOKED close missing on a live stream");
+  assert(a.closeAt > 0 && a.closeAt < ackAt && b.closeAt < ackAt, "OPENCODE_REVOKED close arrived after settings acknowledgement");
+  assert(!a.error && !b.error, "revocation watcher recorded a non-EOF error");
+  assert(a.eofAt <= ackAt + 1000 && b.eofAt <= ackAt + 1000, "typed close EOF missed the acknowledgement deadline");
+  assert(!a.applicationAfterClose && !b.applicationAfterClose, "application frame arrived after the terminal close");
+  assert(!bridgeLogs.includes("OPENCODE_REVOKE_TIMEOUT"), "normal disable logged a timeout code");
+  const disabledHttp = await httpBridgeRequest({
+    path: listPath,
+    method: "POST",
+    headers: { ...readHeaders(), "Content-Type": "application/json" },
+    body: "{}",
+  });
+  const disabledSse = await httpBridgeRequest({ path: eventsPath, method: "GET", headers: readHeaders() });
+  assert(disabledHttp.status === 403 && disabledHttp.payload.code === "OPENCODE_EXECUTION_DISABLED" && disabledHttp.origin === ORIGIN, "disabled HTTP control was not OPENCODE_EXECUTION_DISABLED");
+  assert(disabledSse.status === 403 && disabledSse.payload.code === "OPENCODE_EXECUTION_DISABLED" && disabledSse.origin === ORIGIN, "disabled SSE control was not OPENCODE_EXECUTION_DISABLED");
   const enabled = await bridgeJson("/addons/execution-settings", {
     method: "POST",
     body: { addon: "opencode", localCliExecution: true },
   });
   assert(enabled.status === 200, "re-enable failed");
   await bridgeJson("/opencode/sessions/list", { method: "POST", body: {} });
+  ctx.boundaryProof.port = await readCurrentUpstreamPort();
+  assert(ctx.boundaryProof.port > 0, "new generation port was not recorded");
   const httpControl = await httpBridgeRequest({
     path: listPath,
     method: "POST",
@@ -1186,6 +1290,11 @@ async function extensionStatusCardsScenario() {
   let panel = null;
   let settings = null;
   const responses = [];
+  const upstreamPort = await readCurrentUpstreamPort();
+  ctx.boundaryProof.port = upstreamPort;
+  const upstreamOrigin = `http://127.0.0.1:${upstreamPort}`;
+  const upstreamPid = Number((await readOpencodePidRecord())?.pid ?? 0);
+  assert(pidAlive(upstreamPid), "Chrome exclusion origin is not a live OpenCode pid");
   try {
     const launched = await launchExtensionContext({
       repoRoot,
@@ -1216,12 +1325,17 @@ async function extensionStatusCardsScenario() {
     const judged = [];
     const probes = [];
     let bootstrapObserved = false;
-    const upstreamOrigin = ctx.boundaryProof?.port ? `http://127.0.0.1:${ctx.boundaryProof.port}` : "";
     let eventsReadCapability = false;
     let upstreamExtensionRequests = 0;
     settings.on("Network.requestWillBeSent", (event) => {
       const url = event.request?.url ?? "";
-      if (upstreamOrigin && url.startsWith(upstreamOrigin)) upstreamExtensionRequests += 1;
+      if (upstreamOrigin) {
+        try {
+          if (new URL(url).origin === upstreamOrigin) upstreamExtensionRequests += 1;
+        } catch {
+          /* ignore malformed */
+        }
+      }
       if (url.startsWith(ctx.bridgeUrl)) {
         const headers = Object.fromEntries(Object.entries(event.request?.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]));
         const hasCapabilityHeader = Boolean(headers["x-resonantos-bridge-capability-token"]);
@@ -1362,11 +1476,15 @@ async function waitForOpenCodeSessionProof(client) {
   for (let index = 0; index < 80; index += 1) {
     try {
       last = (await evaluate(client, `(() => {
+        const visible = (el) => {
+          if (!el) return false;
+          const box = el.getBoundingClientRect();
+          return box.width > 0 && box.height > 0 && getComputedStyle(el).visibility !== "hidden";
+        };
         const nodes = [...document.querySelectorAll("[data-source], .oc-badge")];
-        const texts = nodes.map((node) => node.textContent ?? "");
         return {
-          governed: texts.some((text) => text.includes("Governed")),
-          external: texts.some((text) => text.includes("External")),
+          governed: nodes.some((node) => (node.textContent ?? "").includes("Governed") && visible(node)),
+          external: nodes.some((node) => (node.textContent ?? "").includes("External") && visible(node)),
         };
       })()`)).result.value;
     } catch {
@@ -1404,6 +1522,17 @@ async function readOpencodePidRecord() {
   } catch {
     return null;
   }
+}
+
+async function readCurrentUpstreamPort() {
+  const record = await readOpencodePidRecord();
+  assert(record && typeof record === "object", "OpenCode PID record missing");
+  const port = Number(record.port);
+  assert(port >= 1024 && port !== 4096 && port !== 4231, `OpenCode server port ${port} is not an allowed ephemeral port.`);
+  const pid = Number(record.pid ?? 0);
+  assert(pidAlive(pid), `OpenCode PID ${pid} is not live`);
+  assert(Number(record.owner) === bridge.pid, "PID record is not owned by this bridge");
+  return port;
 }
 
 function pidAlive(pid) {
@@ -1490,6 +1619,17 @@ if (isDirectRun) {
     failed = true;
     terminalError = error;
   } finally {
+    if (!fault && !expectFail) {
+      const recorded = new Map(report.scenarios.map((entry) => [entry.id, entry]));
+      const missing = scenarios
+        .map((scenario) => scenario.id)
+        .filter((id) => recorded.get(id)?.status !== "passed");
+      if (missing.length) {
+        failed = true;
+        const diagnostic = `required scenarios missing or not passed: ${missing.join(",")}`;
+        terminalError = terminalError ?? new Error(diagnostic);
+      }
+    }
     await report.write({
       status: failed ? "failed" : "passed",
       error: terminalError,

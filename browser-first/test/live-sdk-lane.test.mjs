@@ -9,7 +9,13 @@ import test from "node:test";
 import { chromium } from "playwright";
 
 import { opencodeRuntimeDiagnostics } from "../host/opencode-runtime.mjs";
-import { createRawBridgeLogSink, readEnvelope } from "./live-sdk-lane.mjs";
+import {
+  createRawBridgeLogSink,
+  createRevocationWatcher,
+  drainEnvelopes,
+  envelopeRawText,
+  readEnvelope,
+} from "./live-sdk-lane.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
 const lanePath = path.join(repoRoot, "browser-first", "test", "live-sdk-lane.mjs");
@@ -38,6 +44,16 @@ const faultPrerequisites = {
   "extension-status-cards": () => (chromeAvailable() ? null : "no launchable Chrome (set RESONANTOS_LIVE_CHROME_PATH or install Playwright Chromium)"),
 };
 
+const prerequisiteSkipsForbidden = Boolean(process.env.OPENCODE_COMMAND)
+  && (process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true");
+
+function skipOrFailPrerequisite(t, skipMessage) {
+  if (prerequisiteSkipsForbidden) {
+    assert.fail(`prerequisite missing in CI live-sdk certification: ${skipMessage}`);
+  }
+  t.skip(skipMessage);
+}
+
 const faultScenarios = [
   "opencode-credential-server",
   "execution-settings-gate",
@@ -53,7 +69,7 @@ const faultExpectedDetail = {
   "opencode-version-pin": /OpenCode version mismatch/i,
   "opencode-proxy-capability": /fault expected the capability-omitted SSE control to be accepted/,
   "opencode-proxy-scope": /required upstream session\.updated events were not observed/,
-  "opencode-proxy-revocation": /revocation close was observed without toggling execution off/,
+  "opencode-proxy-revocation": /typed OPENCODE_REVOKED close missing on a live stream/,
   "opencode-proxy-raw-log": /OPENCODE_RAW_LOG_CREDENTIAL_DETECTED/,
   "extension-status-cards": /403 bridge response outside the loopback probe/,
 };
@@ -155,7 +171,7 @@ for (const scenarioId of faultScenarios) {
   test(`live SDK lane detects injected ${scenarioId} fault`, { concurrency: false }, async (t) => {
     const missing = faultPrerequisites[scenarioId]?.();
     if (missing) {
-      t.skip(`prerequisite missing on this runner: ${missing}`);
+      skipOrFailPrerequisite(t, `prerequisite missing on this runner: ${missing}`);
       return;
     }
     const artifactDir = await mkdtemp(path.join(os.tmpdir(), `resonantos-live-sdk-${scenarioId}-`));
@@ -196,7 +212,7 @@ test("run-bridge-minimal honors RESONANTOS_EXTENSION_ROOT without writing checko
     });
     const started = await waitForBridgeStarted(child).catch((error) => {
       if (/EPERM|EACCES|operation not permitted/i.test(error.message)) {
-        t.skip(`loopback listen is denied by this sandbox: ${error.message.split("\n")[0]}`);
+        skipOrFailPrerequisite(t, `loopback listen is denied by this sandbox: ${error.message.split("\n")[0]}`);
         return null;
       }
       throw error;
@@ -279,7 +295,7 @@ test("raw log overflow fails certification", () => {
 test("raw-log fault fails at credential scan", { concurrency: false }, async (t) => {
   const missing = faultPrerequisites["opencode-proxy-raw-log"]?.();
   if (missing) {
-    t.skip(`prerequisite missing on this runner: ${missing}`);
+    skipOrFailPrerequisite(t, `prerequisite missing on this runner: ${missing}`);
     return;
   }
   const artifactDir = await mkdtemp(path.join(os.tmpdir(), "resonantos-live-sdk-raw-log-"));
@@ -292,4 +308,81 @@ test("raw-log fault fails at credential scan", { concurrency: false }, async (t)
   } finally {
     await rm(artifactDir, { recursive: true, force: true });
   }
+});
+
+function sseData(frame) {
+  return Buffer.from(`data: ${JSON.stringify(frame)}\n\n`);
+}
+
+function timedSseReader(events, { hangWhenEmpty = true } = {}) {
+  let index = 0;
+  const startedAt = Date.now();
+  return new ReadableStream({
+    async pull(controller) {
+      if (index >= events.length) {
+        if (hangWhenEmpty) await new Promise(() => {});
+        else controller.close();
+        return;
+      }
+      const event = events[index++];
+      const wait = Math.max(0, (event.atMs ?? 0) - (Date.now() - startedAt));
+      await new Promise((resolve) => setTimeout(resolve, wait));
+      if (event.close) {
+        controller.close();
+        return;
+      }
+      controller.enqueue(event.bytes ?? sseData(event.frame));
+    },
+  }).getReader();
+}
+
+test("observation drain captures a late foreign frame while the other stream idles", async () => {
+  const canary = `foreign-canary-${randomBytes(4).toString("hex")}`;
+  const readerA = timedSseReader([
+    { atMs: 10, frame: { version: 1, sessionId: "A", source: "governed", event: { type: "bridge.ready", properties: {} } } },
+    { atMs: 30, frame: { version: 1, sessionId: "A", source: "external", event: { type: "session.updated", properties: { title: canary } } } },
+  ]);
+  const readerB = timedSseReader([]);
+  const observeUntil = Date.now() + 1000;
+  await Promise.all([
+    drainEnvelopes(readerA, observeUntil),
+    drainEnvelopes(readerB, observeUntil),
+  ]);
+  assert.match(envelopeRawText(readerA), new RegExp(canary));
+});
+
+test("readEnvelope timeout does not drop the in-flight chunk", async () => {
+  const frame = { version: 1, sessionId: "late", source: "governed", event: { type: "bridge.ready", properties: {} } };
+  const reader = timedSseReader([{ atMs: 150, frame }]);
+  await assert.rejects(() => readEnvelope(reader, 40), /envelope timeout/);
+  const received = await readEnvelope(reader, 1000);
+  assert.deepEqual(received, frame);
+  assert.match(envelopeRawText(reader), /"sessionId":"late"/);
+});
+
+test("revocation watcher distinguishes EOF from malformed data", async () => {
+  const revoked = {
+    version: 1,
+    sessionId: "A",
+    source: "governed",
+    event: { type: "bridge.closed", properties: { code: "OPENCODE_REVOKED", error: "revoked" } },
+  };
+  const watchRevocation = createRevocationWatcher();
+  const malformed = timedSseReader([
+    { atMs: 0, frame: revoked },
+    { atMs: 5, bytes: Buffer.from("data: {not-json}\n\n") },
+  ]);
+  const malformedResult = await watchRevocation(malformed, 500);
+  assert.equal(malformedResult.eofAt, 0);
+  assert.ok(malformedResult.error, "malformed JSON must be recorded as error, not EOF");
+  assert.equal(malformedResult.sawClose, true);
+
+  const ending = timedSseReader([
+    { atMs: 0, frame: revoked },
+    { atMs: 5, close: true },
+  ], { hangWhenEmpty: false });
+  const eofResult = await watchRevocation(ending, 500);
+  assert.ok(eofResult.eofAt > 0, "stream end must record eofAt");
+  assert.equal(eofResult.error, "");
+  assert.equal(eofResult.sawClose, true);
 });
