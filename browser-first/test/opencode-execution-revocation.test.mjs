@@ -186,10 +186,17 @@ for (const kind of ["write", "audit"]) {
       }
       const { boundary } = boundaryFixture(t, { executionEnabled: () => service.openCodeProxyExecutionEnabled() });
       if (kind === "audit") await boundary.run("start", {});
-      const unsubscribe = service.subscribeOpenCodeExecution((enabled) => (enabled ? undefined : boundary.revoke()));
+      let notified = false;
+      const unsubscribe = service.subscribeOpenCodeExecution((enabled) => {
+        if (!enabled) notified = true;
+        return enabled ? undefined : boundary.revoke();
+      });
       await service.executeAddonExecutionSettingsUpdate({ addon: "opencode", localCliExecution: false }).then(() => false, () => true);
       unsubscribe();
-      assert.equal(await service.openCodeProxyExecutionEnabled(), false);
+      assert.deepEqual(
+        [await service.openCodeProxyExecutionEnabled(), notified],
+        [false, true],
+      );
     });
   });
 }

@@ -122,22 +122,63 @@ function responseFixture() {
     destroy(){this.destroyed=true;queueMicrotask(()=>this.emit('close'));},
   });return response;
 }
-test('self-test events marker is JSON safe',async()=>{
+function liveEventsBoundary(t) {
+  let subscribers=0, enabled=true;
+  const child=new EventEmitter();
+  child.kill=()=>{child.exitCode=0;child.emit('exit');};
+  const password=secret();
+  const header='Basic '+Buffer.from(`opencode:${password}`).toString('base64');
+  const info={baseUrl:'http://127.0.0.1:45125',directory:'/fixture',auth:{username:'opencode',password,header},process:child};
+  const client={createSession:async()=>({id:'A'}),listSessions:async()=>[{id:'A'}],supportsPromptMessageId:async()=>false,prompt:async()=>null,replyPermission:async()=>true,messages:async()=>[],abort:async()=>true,sessionDiff:async()=>[],rename:async()=>({id:'A'}),remove:async()=>true,archive:async()=>({id:'A'}),listAgents:async()=>[]};
+  const inner=createOpenCodeBoundary({
+    ensureServer:async()=>info,
+    createClient:()=>client,
+    fetchImpl:async()=>new Response(new ReadableStream({start(){}}),{headers:{'content-type':'text/event-stream'}}),
+    executionEnabled:async()=>enabled,
+    forgetServer:async()=>{},
+    log:()=>{},
+  });
+  t.after(()=>inner.dispose());
+  return {
+    run:(...a)=>inner.run(...a),
+    validateEvents:(...a)=>inner.validateEvents(...a),
+    openEvents:async(...a)=>{subscribers+=1;return inner.openEvents(...a);},
+    revoke:(...a)=>inner.revoke(...a),
+    dispose:(...a)=>inner.dispose(...a),
+    get subscribers(){return subscribers;},
+    setEnabled(value){enabled=value;},
+  };
+}
+function liveEventsRoutes(boundary) {
+  return createOpencodeSessionHostService(createOpencodeSessionHandlers({boundary})).opencodeSessionRoutes;
+}
+test('self-test events marker is JSON safe',async t=>{
+  const boundary=liveEventsBoundary(t);
+  await boundary.run('start',{});
   const bridgeToken=secret(),token=secret();
-  const invoke=createBridgeRouteSelfTestInvoker({bridgeToken,bridgeCapabilityTokens:{[CAP]:token},listenerPort:12345,routes:[eventsRoute(subscriptionFixture())]});
-  assert.deepEqual(await invoke({method:'GET',routePath:EVENTS,capabilityToken:token}),{status:200,payload:{stream:true}});
+  const invoke=createBridgeRouteSelfTestInvoker({bridgeToken,bridgeCapabilityTokens:{[CAP]:token},listenerPort:12345,routes:liveEventsRoutes(boundary)});
+  const evaluated=await invoke({method:'GET',routePath:EVENTS,capabilityToken:token});
+  const direct=await createOpencodeSessionHandlers({boundary}).executeOpenCodeSessionEvents({}, {
+    url:EVENTS,selfTest:true,headers:{host:'127.0.0.1:12345'},rawHeaders:['Host','127.0.0.1:12345'],
+    socket:{localPort:12345},openCodeTransport:{listenerPort:12345,getPublicPort:()=>undefined},
+  });
+  assert.deepEqual([evaluated, direct],[{status:200,payload:{stream:true}},{stream:true}]);
 });
-test('self-test never subscribes',async()=>{
-  let subscribers=0;const bridgeToken=secret(),token=secret();
-  const route=eventsRoute(null,{handler:async(_,request)=>{if(request.selfTest)return {stream:true};subscribers++;return subscriptionFixture();}});
-  const invoke=createBridgeRouteSelfTestInvoker({bridgeToken,bridgeCapabilityTokens:{[CAP]:token},listenerPort:12345,routes:[route]});
-  await invoke({method:'GET',routePath:EVENTS,capabilityToken:token});assert.equal(subscribers,0);
-});
-test('self-test validates boundary: registry',async()=>{
+test('self-test never subscribes',async t=>{
+  const boundary=liveEventsBoundary(t);
+  await boundary.run('start',{});
   const bridgeToken=secret(),token=secret();
-  const route=eventsRoute(null,{handler:async()=>{throw new transport.OpenCodeBoundaryError('OPENCODE_SESSION_UNKNOWN');}});
-  const invoke=createBridgeRouteSelfTestInvoker({bridgeToken,bridgeCapabilityTokens:{[CAP]:token},listenerPort:12345,routes:[route]});
-  const result=await invoke({method:'GET',routePath:EVENTS,capabilityToken:token});assert.deepEqual([result.status,result.payload.code],[404,'OPENCODE_SESSION_UNKNOWN']);
+  const invoke=createBridgeRouteSelfTestInvoker({bridgeToken,bridgeCapabilityTokens:{[CAP]:token},listenerPort:12345,routes:liveEventsRoutes(boundary)});
+  const result=await invoke({method:'GET',routePath:EVENTS,capabilityToken:token});
+  assert.deepEqual([result, boundary.subscribers],[{status:200,payload:{stream:true}},0]);
+});
+test('self-test validates boundary: registry',async t=>{
+  const boundary=liveEventsBoundary(t);
+  await boundary.run('start',{});
+  const bridgeToken=secret(),token=secret();
+  const invoke=createBridgeRouteSelfTestInvoker({bridgeToken,bridgeCapabilityTokens:{[CAP]:token},listenerPort:12345,routes:liveEventsRoutes(boundary)});
+  const result=await invoke({method:'GET',routePath:'/opencode/session/events?sessionId=missing',capabilityToken:token});
+  assert.deepEqual([result.status,result.payload.code],[404,'OPENCODE_SESSION_UNKNOWN']);
 });
 test('self-test validates boundary: execution',async t=>{
   let enabled=true;

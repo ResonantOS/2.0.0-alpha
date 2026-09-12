@@ -239,10 +239,15 @@ test("authorized JSON GET controls exclude SSE", async () => {
   const root=await mkdtemp(path.join(os.tmpdir(), "bridge-json-controls-"));
   try {
     const routes=createRoutes(root), invoked=[];
+    const listenerPort=47773;
+    const host=`127.0.0.1:${listenerPort}`;
     for(const route of routes){const handler=route.handler;route.handler=async(...args)=>{invoked.push(route.path);return handler(...args);};}
     for(const entry of protectedGetRoutes.filter(r=>r.responseType !== "sse")) {
-      await evaluateBridgeRequestForSelfTest({method:"GET",url:entry.route,bridgeToken,bridgeCapabilityTokens:{[entry.capability]:entry.correctToken},headers:{"X-ResonantOS-Bridge-Token":bridgeToken,"X-ResonantOS-Bridge-Capability-Token":entry.correctToken},routes});
+      await evaluateBridgeRequestForSelfTest({method:"GET",url:entry.route,bridgeToken,listenerPort,bridgeCapabilityTokens:{[entry.capability]:entry.correctToken},headers:{Host:host,"X-ResonantOS-Bridge-Token":bridgeToken,"X-ResonantOS-Bridge-Capability-Token":entry.correctToken},rawHeaders:["Host",host],routes});
     }
-    assert.deepEqual(invoked,protectedGetRoutes.filter(r=>r.responseType !== "sse").map(r=>r.route));
+    const jsonRoutes=protectedGetRoutes.filter(r=>r.responseType !== "sse").map(r=>r.route);
+    assert.equal(protectedGetRoutes.some(r=>r.responseType === "sse"), true);
+    assert.deepEqual(invoked, jsonRoutes);
+    assert.equal(invoked.includes("/opencode/session/events"), false);
   }finally{await rm(root,{recursive:true,force:true});}
 });
