@@ -5,6 +5,7 @@ import net from 'node:net';
 import { randomBytes } from 'node:crypto';
 import * as transport from '../host/bridge-server.mjs';
 import { createBridgeRouteSelfTestInvoker } from '../host/bridge-self-test-invoker.mjs';
+import { createOpenCodeBoundary } from '../host/opencode-boundary.mjs';
 const ORIGIN = 'chrome-extension://test';
 const secret = () => randomBytes(32).toString('hex');
 const PATH = '/opencode/session/start';
@@ -132,11 +133,40 @@ test('self-test never subscribes',async()=>{
   const invoke=createBridgeRouteSelfTestInvoker({bridgeToken,bridgeCapabilityTokens:{[CAP]:token},listenerPort:12345,routes:[route]});
   await invoke({method:'GET',routePath:EVENTS,capabilityToken:token});assert.equal(subscribers,0);
 });
-for(const [kind,code,status] of [['execution','OPENCODE_EXECUTION_DISABLED',403],['registry','OPENCODE_SESSION_UNKNOWN',404]]) test(`self-test validates boundary: ${kind}`,async()=>{
+test('self-test validates boundary: registry',async()=>{
   const bridgeToken=secret(),token=secret();
-  const route=eventsRoute(null,{handler:async()=>{throw new transport.OpenCodeBoundaryError(code);}});
+  const route=eventsRoute(null,{handler:async()=>{throw new transport.OpenCodeBoundaryError('OPENCODE_SESSION_UNKNOWN');}});
   const invoke=createBridgeRouteSelfTestInvoker({bridgeToken,bridgeCapabilityTokens:{[CAP]:token},listenerPort:12345,routes:[route]});
-  const result=await invoke({method:'GET',routePath:EVENTS,capabilityToken:token});assert.deepEqual([result.status,result.payload.code],[status,code]);
+  const result=await invoke({method:'GET',routePath:EVENTS,capabilityToken:token});assert.deepEqual([result.status,result.payload.code],[404,'OPENCODE_SESSION_UNKNOWN']);
+});
+test('self-test validates boundary: execution',async t=>{
+  let enabled=true;
+  const child=new EventEmitter();
+  child.kill=()=>{child.exitCode=0;child.emit('exit');};
+  const password=secret();
+  const header='Basic '+Buffer.from(`opencode:${password}`).toString('base64');
+  const info={baseUrl:'http://127.0.0.1:45125',directory:'/fixture',auth:{username:'opencode',password,header},process:child};
+  const client={createSession:async()=>({id:'A'}),listSessions:async()=>[{id:'A'}],supportsPromptMessageId:async()=>false,prompt:async()=>null,replyPermission:async()=>true,messages:async()=>[],abort:async()=>true,sessionDiff:async()=>[],rename:async()=>({id:'A'}),remove:async()=>true,archive:async()=>({id:'A'}),listAgents:async()=>[]};
+  const boundary=createOpenCodeBoundary({
+    ensureServer:async()=>info,
+    createClient:()=>client,
+    fetchImpl:async()=>new Response(new ReadableStream({start(){}}),{headers:{'content-type':'text/event-stream'}}),
+    executionEnabled:async()=>enabled,
+    forgetServer:async()=>{},
+    log:()=>{},
+  });
+  t.after(()=>boundary.dispose());
+  await boundary.run('start',{});
+  enabled=false;
+  const bridgeToken=secret(),token=secret();
+  const route=eventsRoute(null,{handler:async(_,request)=>{
+    await boundary.validateEvents('A');
+    if(request.selfTest===true)return {stream:true};
+    return boundary.openEvents('A');
+  }});
+  const invoke=createBridgeRouteSelfTestInvoker({bridgeToken,bridgeCapabilityTokens:{[CAP]:token},listenerPort:12345,routes:[route]});
+  const result=await invoke({method:'GET',routePath:EVENTS,capabilityToken:token});
+  assert.deepEqual([result.status,result.payload.code],[403,'OPENCODE_EXECUTION_DISABLED']);
 });
 test('SSE transport sends envelopes not JSON wrapper',async()=>{
   const sub=subscriptionFixture(),response=responseFixture();
