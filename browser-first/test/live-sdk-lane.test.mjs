@@ -249,6 +249,14 @@ test("SSE reader yields every frame from a batched chunk", async () => {
   assert.deepEqual([first, second], frames);
 });
 
+test("raw sink clear empties captured bytes", () => {
+  const sink = createRawBridgeLogSink();
+  sink.captureBridgeLog("stdout", Buffer.from("hello\n"));
+  sink.clear();
+  assert.equal(sink.joinRaw(), "");
+  assert.equal(sink.getEvidence(), "");
+});
+
 test("raw sink retains canary the sanitizer removes", () => {
   const sink = createRawBridgeLogSink();
   const canary = `Basic ${randomBytes(18).toString("base64")}`;

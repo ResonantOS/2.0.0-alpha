@@ -2,7 +2,7 @@
 
 import { spawn, execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
 import os from "node:os";
@@ -66,7 +66,13 @@ export function createRawBridgeLogSink({
       throw error;
     }
   }
-  return { captureBridgeLog, joinRaw, getEvidence: () => evidence, scanRawForCredentials };
+  function clear() {
+    rawBridgeLogChunks.stdout = [];
+    rawBridgeLogChunks.stderr = [];
+    rawBytes = 0;
+    evidence = "";
+  }
+  return { captureBridgeLog, joinRaw, getEvidence: () => evidence, scanRawForCredentials, clear };
 }
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
@@ -352,6 +358,13 @@ async function bridgeJson(route, { method = "GET", body, capability } = {}) {
   const text = await response.text().catch(() => "");
   let payload = {};
   try { payload = text ? JSON.parse(text) : {}; } catch { payload = { raw: text }; }
+  recordOpenCodeCapture({
+    route,
+    method,
+    status: response.status,
+    headers: Object.fromEntries(response.headers.entries()),
+    payload,
+  });
   return { status: response.status, ok: response.ok && payload.ok !== false, payload };
 }
 
@@ -359,7 +372,13 @@ function currentOpenCodeRuntime() {
   return opencodeRuntimeDiagnostics({ env: process.env });
 }
 
-ctx.boundaryProof = ctx.boundaryProof ?? { sessions: {}, readers: [] };
+ctx.boundaryProof = ctx.boundaryProof ?? { sessions: {}, readers: [], captures: [] };
+
+function recordOpenCodeCapture(entry) {
+  ctx.boundaryProof = ctx.boundaryProof ?? { sessions: {}, readers: [], captures: [] };
+  ctx.boundaryProof.captures = ctx.boundaryProof.captures ?? [];
+  ctx.boundaryProof.captures.push(entry);
+}
 
 function countForbiddenOpenCodeFields(value) {
   if (!value || typeof value !== "object") return 0;
@@ -368,6 +387,61 @@ function countForbiddenOpenCodeFields(value) {
 
 function sessionEntryKeys(entry) {
   return Object.keys(entry ?? {}).sort();
+}
+
+function throwCredentialDetected() {
+  const error = new Error("OPENCODE_RAW_LOG_CREDENTIAL_DETECTED");
+  error.code = "OPENCODE_RAW_LOG_CREDENTIAL_DETECTED";
+  throw error;
+}
+
+async function collectScanTexts() {
+  const files = [];
+  async function walk(dir) {
+    let entries = [];
+    try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === "node_modules" || entry.name === ".git") continue;
+        await walk(full);
+      } else if (entry.isFile() && /\.(?:js|mjs|cjs|json|html|css|txt|md)$/i.test(entry.name)) {
+        files.push(await readFile(full, "utf8").catch(() => ""));
+      }
+    }
+  }
+  if (stagedExtension?.extensionRoot) await walk(stagedExtension.extensionRoot);
+  if (activeBridgeConfigPath) files.push(await readFile(activeBridgeConfigPath, "utf8").catch(() => ""));
+  if (userRoot) files.push(await readFile(path.join(userRoot, "BrowserFirst", "opencode-server.json"), "utf8").catch(() => ""));
+  return {
+    files,
+    captures: ctx.boundaryProof?.captures ?? [],
+    raw: rawLogSink.joinRaw(),
+  };
+}
+
+function scanTextForSecretSyntax(text) {
+  return /["']eventAuthorization["']/.test(text)
+    || /OPENCODE_SERVER_PASSWORD/.test(text)
+    || /\bBasic [A-Za-z0-9+/]{16,}={0,2}\b/.test(text);
+}
+
+async function scanBoundaryArtifacts() {
+  rawLogSink.scanRawForCredentials();
+  const { files, captures } = await collectScanTexts();
+  for (const text of files) {
+    if (scanTextForSecretSyntax(text)) throwCredentialDetected();
+    try {
+      const parsed = JSON.parse(text);
+      if (countForbiddenOpenCodeFields(parsed) > 0) throwCredentialDetected();
+    } catch (error) {
+      if (error.code === "OPENCODE_RAW_LOG_CREDENTIAL_DETECTED") throw error;
+    }
+  }
+  for (const capture of captures) {
+    if (scanTextForSecretSyntax(JSON.stringify(capture))) throwCredentialDetected();
+    if (countForbiddenOpenCodeFields(capture.payload) > 0) throwCredentialDetected();
+  }
 }
 
 async function bridgeEvents(sessionId, { headers = {}, signal } = {}) {
@@ -461,6 +535,15 @@ function httpBridgeRequest({ path: requestPath, method = "GET", headers = {}, bo
     });
     req.on("error", reject);
     req.end(body);
+  }).then((result) => {
+    recordOpenCodeCapture({
+      route: requestPath,
+      method,
+      status: result.status,
+      headers: { origin: result.origin },
+      payload: result.payload,
+    });
+    return result;
   });
 }
 
@@ -644,6 +727,7 @@ async function opencodeCredentialServerScenario() {
     sessions: { A: startedA.payload.sessionId, B: startedB.payload.sessionId },
     port,
     readers: [],
+    captures: ctx.boundaryProof?.captures ?? [],
   };
   return `OpenCode sessions ${startedA.payload.sessionId} and ${startedB.payload.sessionId} served on port ${port} with credentialless 401.`;
 }
@@ -864,7 +948,7 @@ async function opencodeProxyRawLogScenario() {
     captureBridgeLog("stdout", Buffer.from(`Authorization: Basic ${randomBytes(18).toString("base64")}\n`));
   }
   try {
-    rawLogSink.scanRawForCredentials();
+    await scanBoundaryArtifacts();
   } catch (error) {
     assert(error.code === "OPENCODE_RAW_LOG_CREDENTIAL_DETECTED", "raw credential scan used an unexpected code");
     throw error;
@@ -1308,6 +1392,8 @@ async function cleanup() {
   if (chromeProfile) await rm(chromeProfile, { recursive: true, force: true }).catch(() => undefined);
   if (stagedExtension) await stagedExtension.cleanup().catch(() => undefined);
   if (userRoot) await rm(userRoot, { recursive: true, force: true }).catch(() => undefined);
+  rawLogSink.clear();
+  bridgeLogs = "";
 }
 
 const isDirectRun = Boolean(process.argv[1]) && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url;
