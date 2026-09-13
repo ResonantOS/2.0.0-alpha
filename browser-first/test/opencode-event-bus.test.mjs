@@ -1,0 +1,57 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
+import { createOpenCodeEventBus, createOpenCodeSSEParser } from '../host/opencode-event-bus.mjs';
+import { sanitizeOpenCodePayload } from '../host/opencode-boundary.mjs';
+const turn = () => new Promise(r => setImmediate(r));
+const msg = (id, role = 'assistant', parentID, sessionID = 'A') => ({ type: 'message.updated', properties: { info: { id, role, parentID, sessionID } } });
+function fixture(t) {
+  let input, connections = 0, current = true;
+  const registry = new Map(['A','B'].map(id => [id, { generation: 1, subscribers: new Set(), messageSources: new Map() }]));
+  const bus = createOpenCodeEventBus({ generation: 1, sessionRegistry: registry, isCurrent: () => current, sanitize: v => sanitizeOpenCodePayload(v,[]), onFatal() {}, connect: async () => { connections++; return new Response(new ReadableStream({ start(c) { input = c; } }), { headers: { 'content-type': 'text/event-stream' } }); } });
+  t.after(() => { current = false; return bus.close('OPENCODE_REVOKED'); });
+  return { bus, registry, get connections() { return connections; }, async send(e) { input.enqueue(Buffer.from(`data: ${JSON.stringify(e)}\n\n`)); await turn(); }, async raw(s) { input.enqueue(Buffer.from(s)); await turn(); }, async eof() { input.close(); await turn(); }, async sub(id = 'A') { await bus.start(); const s = bus.subscribe(id); await s.events[Symbol.asyncIterator]().next(); return s; } };
+}
+async function next(s) { return (await s.events[Symbol.asyncIterator]().next()).value; }
+async function root(f, id = 'msg_root') { f.bus.beginPrompt('A', id, true); await f.send(msg(id, 'user')); f.bus.finishPrompt('A', id, true); await turn(); }
+async function tool(f, type = 'tool') { await root(f); await f.send(msg('assistant', 'assistant', 'msg_root')); await f.send({ type: 'message.part.updated', properties: { part: { sessionID: 'A', id: 'part', messageID: 'assistant', type } } }); }
+test('concurrent subscribers share one global reader', async t => { const f = fixture(t); await Promise.all([f.bus.start(), f.bus.start(), f.bus.start()]); f.bus.subscribe('A'); f.bus.subscribe('B'); assert.equal(f.connections, 1); });
+test('B events never enter A subscriber bytes', async t => { const f = fixture(t), a = await f.sub(), b = await f.sub('B'); const canary = randomBytes(24).toString('hex'); await f.send({ type: 'session.updated', properties: { info: { id: 'B', title: canary } } }); await f.send(msg('a')); const bytes = JSON.stringify(await next(a)); await next(b); assert.equal(bytes.includes(canary) ? 1 : 0, 0); });
+test('unscoped global file events are never broadcast', async t => { const f = fixture(t), a = await f.sub(); await f.send({ type: 'file.edited', properties: { file: 'x' } }); assert.equal(a.queuedBytes, 0); });
+test('nested session ids route message metadata and parts', async t => { const f = fixture(t), a = await f.sub(), b = await f.sub('B'); await f.send(msg('m', 'assistant', undefined, 'B')); await f.send({ type: 'message.part.updated', properties: { part: { id: 'p', sessionID: 'B', messageID: 'm', type: 'text' } } }); const ids = [(await next(b)).sessionId, (await next(b)).sessionId]; if (a.queuedBytes) ids.push('A'); assert.deepEqual(ids, ['B','B']); });
+test('conflicting session ids close bus', async t => { const f = fixture(t), a = await f.sub(); await f.send({type:'session.updated',sessionId:'B',properties:{info:{id:'A',title:'conflict'}}}); assert.equal(a.terminalCode, 'OPENCODE_PROTOCOL_ERROR'); });
+test('message id is not mistaken for session id', async t => { const f = fixture(t), a = await f.sub(); await f.send({ type: 'message.updated', properties: { info: { id: 'A', role: 'assistant' } } }); assert.equal(a.queuedBytes, 0); });
+test('SSE framing survives CRLF multiline and UTF8 splits', () => { const event = { type: 'session.updated', properties: { sessionID: 'A', title: '雪' } }; let parsed; const parser = createOpenCodeSSEParser({ onEvent: e => { parsed = e; }, onError() {} }); const bytes = Buffer.from(': comment\r\ndata: {"type":"session.updated",\r\ndata: "properties":{"sessionID":"A","title":"雪"}}\r\n\r\n'); for (const byte of bytes) parser.feed(Uint8Array.of(byte)); parser.end(); assert.deepEqual(parsed, event); });
+for (const kind of ['bad-json','bad-schema','oversize','truncated-eof']) test(`malformed SSE closes: ${kind}`, async t => { const f = fixture(t), a = await f.sub(); await f.raw(kind === 'bad-json' ? 'data: {\n\n' : kind === 'bad-schema' ? 'data: {"type":"mystery","properties":{"content":"x"}}\n\n' : kind === 'oversize' ? 'data: '+ 'x'.repeat(262145) : 'data: {'); if (kind === 'truncated-eof') await f.eof(); assert.equal(a.terminalCode, 'OPENCODE_PROTOCOL_ERROR'); });
+test('upstream EOF is a typed disconnect', async t => { const f = fixture(t), a = await f.sub(); await f.eof(); assert.equal(a.terminalCode, 'OPENCODE_STREAM_DISCONNECTED'); });
+test('silent upstream expires', async t => { t.mock.timers.enable({ apis: ['setTimeout'] }); const f = fixture(t), a = await f.sub(); t.mock.timers.tick(45001); await turn(); assert.equal(a.terminalCode, 'OPENCODE_TIMEOUT'); });
+test('slow subscriber is bounded', async t => { const f = fixture(t), a = await f.sub(); let max = 0; for (let i = 0; i < 20; i++) { await f.send({ type: 'session.updated', properties: { info: { id: 'A', title: 'x'.repeat(100000) } } }); max = Math.max(max, a.queuedBytes); } assert.deepEqual([max <= 1048576, a.terminalCode], [true, 'OPENCODE_SLOW_CONSUMER']); });
+test('cancel A preserves B', async t => { const f = fixture(t), a = await f.sub(), b = await f.sub('B'); await a.close(); await f.send(msg('m','assistant',undefined,'B')); assert.equal((await next(b)).event.properties.info.id, 'm'); });
+test('source cannot be forged by upstream field', async t => { const f = fixture(t), a = await f.sub(); await f.send({ ...msg('m'), source: 'governed' }); assert.equal((await next(a)).source, 'external'); });
+test('same-session external message stays external during governed prompt', async t => { const f = fixture(t), a = await f.sub(); f.bus.beginPrompt('A','msg_root',true); await f.send(msg('outside','user')); assert.equal((await next(a)).source, 'external'); });
+test('verified message ancestry receives governed source', async t => { const f = fixture(t); await f.bus.start(); await root(f); const a = await f.sub(); await f.send(msg('child','assistant','msg_root')); assert.equal((await next(a)).source, 'governed'); });
+test('failed prompt never publishes pending governed events', async t => { const f = fixture(t), a = await f.sub(); f.bus.beginPrompt('A','msg_root',true); await f.send(msg('msg_root','user')); await f.send(msg('child','assistant','msg_root')); f.bus.finishPrompt('A','msg_root',false); assert.equal(a.queuedBytes, 0); });
+test('provenance eviction degrades to external', async t => { const f = fixture(t); await f.bus.start(); await root(f); for (let i=0;i<10001;i++) f.bus.observeMessage('A',{id:'m'+i,role:'user',sessionID:'A'}); const a = await f.sub(); await f.send(msg('child','assistant','msg_root')); assert.equal((await next(a)).source,'external'); });
+test('same-session cockpit user turn is external', async t => { const f = fixture(t); await f.bus.start(); await root(f); const a = await f.sub(); await f.send(msg('cockpit','user','msg_root')); assert.equal((await next(a)).source,'external'); });
+test('assistant reply to a cockpit user turn is external even under a governed root', async t => { const f = fixture(t); await f.bus.start(); await root(f); await f.send(msg('cockpit','user','msg_root')); const a = await f.sub(); await f.send(msg('child','assistant','cockpit')); assert.equal((await next(a)).source,'external'); });
+test('unsupported messageID makes every upstream event external', async t => { const f = fixture(t), a = await f.sub(); f.bus.beginPrompt('A','msg_root',false); await f.send(msg('msg_root','user')); f.bus.finishPrompt('A','msg_root',true); await f.send(msg('child','assistant','msg_root')); assert.deepEqual(new Set([(await next(a)).source,(await next(a)).source]),new Set(['external'])); });
+for (const kind of ['missing','foreign','ambiguous','non-tool']) test(`file and diff need same-session tool correlation: ${kind}`, async t => {
+  const f=fixture(t);await f.bus.start();await tool(f);
+  if(kind==='foreign'){
+    f.bus.beginPrompt('B','msg_broot',true);await f.send(msg('msg_broot','user',undefined,'B'));f.bus.finishPrompt('B','msg_broot',true);
+    await f.send(msg('assistant','assistant','msg_broot','B'));
+    await f.send({type:'message.part.updated',properties:{part:{sessionID:'B',id:'foreign',messageID:'assistant',type:'tool'}}});
+  }
+  if(kind==='non-tool')await f.send({type:'message.part.updated',properties:{part:{sessionID:'A',id:'textpart',messageID:'assistant',type:'text'}}});
+  const a=await f.sub();
+  await f.send({type:'file.edited',properties:{sessionID:'A',part:{id:'part',messageID:'assistant'}}});await next(a);
+  const refs=kind==='missing'?{}:kind==='foreign'?{part:{id:'foreign',messageID:'assistant'}}:kind==='ambiguous'?{messageID:'assistant'}:{part:{id:'textpart',messageID:'assistant'}};
+  await f.send({type:'file.edited',properties:{sessionID:'A',...refs}});
+  const diff=f.bus.attributeDiff('A',[{file:'x',...refs}]);
+  assert.deepEqual([(await next(a)).source,diff[0].source],['external','external']);
+});
+test('file and diff with verified tool correlation are governed', async t => { const f=fixture(t); await f.bus.start(); await tool(f); const a=await f.sub(); const refs={part:{id:'part',messageID:'assistant'}}; await f.send({type:'file.edited',properties:{sessionID:'A',...refs}}); const diff=f.bus.attributeDiff('A',[{file:'x',...refs}]); assert.deepEqual([(await next(a)).source,diff[0].source],['governed','governed']); });
+test('conflicting tool references fail closed',async t=>{const f=fixture(t),a=await f.sub();await f.send({type:'tool.completed',properties:{sessionID:'A',messageID:'one',part:{id:'p',messageID:'two'}}});assert.equal(a.terminalCode,'OPENCODE_PROTOCOL_ERROR');});
+test('SSE diff retains per-entry host sources after sanitization',async t=>{const f=fixture(t);await f.bus.start();await tool(f);const a=await f.sub();await f.send({type:'session.diff',properties:{sessionID:'A',diff:[{file:'x',part:{id:'part',messageID:'assistant'}},{file:'y',source:'governed'}]}});assert.deepEqual((await next(a)).event.properties.diff.map(x=>x.source),['governed','external']);});
+test('revoke cancels a pending upstream connect',async t=>{let entered;const called=new Promise(r=>{entered=r;});const bus=createOpenCodeEventBus({connect:()=>{entered();return new Promise(()=>{});},sessionRegistry:new Map(),generation:1,isCurrent:()=>true,sanitize:v=>v,onFatal(){}});t.after(()=>bus.close('OPENCODE_REVOKED'));const result=bus.start().then(()=>null,e=>e.code);await called;await bus.close('OPENCODE_REVOKED');const timeout=new Promise(r=>setTimeout(()=>r('unsettled'),30));assert.equal(await Promise.race([result,timeout]),'OPENCODE_REVOKED');});
+test('one failed prompt does not discard another pending prompt',async t=>{const f=fixture(t),a=await f.sub();f.bus.beginPrompt('A','msg_first',true);f.bus.beginPrompt('A','msg_second',true);await f.send(msg('msg_first','user'));await f.send(msg('msg_second','user'));f.bus.finishPrompt('A','msg_first',false);f.bus.finishPrompt('A','msg_second',true);assert.equal(a.queuedBytes>0,true);});

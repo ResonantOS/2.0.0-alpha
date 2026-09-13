@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
@@ -9,6 +9,15 @@ import test from "node:test";
 import { chromium } from "playwright";
 
 import { opencodeRuntimeDiagnostics } from "../host/opencode-runtime.mjs";
+import {
+  collectScanTexts,
+  createRawBridgeLogSink,
+  createRevocationWatcher,
+  drainEnvelopes,
+  envelopeRawText,
+  probeLeakDetected,
+  readEnvelope,
+} from "./live-sdk-lane.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
 const lanePath = path.join(repoRoot, "browser-first", "test", "live-sdk-lane.mjs");
@@ -30,15 +39,42 @@ const faultPrerequisites = {
   "opencode-credential-server": () => (opencodeAvailable() ? null : "pinned opencode binary not found in a trusted root"),
   "execution-settings-gate": () => (opencodeAvailable() ? null : "pinned opencode binary not found in a trusted root"),
   "opencode-version-pin": () => (opencodeAvailable() ? null : "pinned opencode binary not found in a trusted root"),
+  "opencode-proxy-capability": () => (opencodeAvailable() ? null : "pinned opencode binary not found in a trusted root"),
+  "opencode-proxy-scope": () => (opencodeAvailable() ? null : "pinned opencode binary not found in a trusted root"),
+  "opencode-proxy-revocation": () => (opencodeAvailable() ? null : "pinned opencode binary not found in a trusted root"),
+  "opencode-proxy-raw-log": () => (opencodeAvailable() ? null : "pinned opencode binary not found in a trusted root"),
   "extension-status-cards": () => (chromeAvailable() ? null : "no launchable Chrome (set RESONANTOS_LIVE_CHROME_PATH or install Playwright Chromium)"),
 };
+
+const prerequisiteSkipsForbidden = Boolean(process.env.OPENCODE_COMMAND)
+  && (process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true");
+
+function skipOrFailPrerequisite(t, skipMessage) {
+  if (prerequisiteSkipsForbidden) {
+    assert.fail(`prerequisite missing in CI live-sdk certification: ${skipMessage}`);
+  }
+  t.skip(skipMessage);
+}
 
 const faultScenarios = [
   "opencode-credential-server",
   "execution-settings-gate",
   "opencode-version-pin",
+  "opencode-proxy-capability",
+  "opencode-proxy-scope",
+  "opencode-proxy-revocation",
+  "opencode-proxy-raw-log",
   "extension-status-cards",
 ];
+
+const faultExpectedDetail = {
+  "opencode-version-pin": /OpenCode version mismatch/i,
+  "opencode-proxy-capability": /fault expected the capability-omitted SSE control to be accepted/,
+  "opencode-proxy-scope": /required upstream session\.updated events were not observed/,
+  "opencode-proxy-revocation": /typed OPENCODE_REVOKED close missing on a live stream/,
+  "opencode-proxy-raw-log": /OPENCODE_RAW_LOG_CREDENTIAL_DETECTED/,
+  "extension-status-cards": /403 bridge response outside the loopback probe/,
+};
 
 function runLaneFault(scenarioId, artifactDir) {
   return new Promise((resolve, reject) => {
@@ -137,7 +173,7 @@ for (const scenarioId of faultScenarios) {
   test(`live SDK lane detects injected ${scenarioId} fault`, { concurrency: false }, async (t) => {
     const missing = faultPrerequisites[scenarioId]?.();
     if (missing) {
-      t.skip(`prerequisite missing on this runner: ${missing}`);
+      skipOrFailPrerequisite(t, `prerequisite missing on this runner: ${missing}`);
       return;
     }
     const artifactDir = await mkdtemp(path.join(os.tmpdir(), `resonantos-live-sdk-${scenarioId}-`));
@@ -149,6 +185,9 @@ for (const scenarioId of faultScenarios) {
       assert.equal(payload.certification, "resonantos-live-sdk");
       assert.equal(scenario?.status, "passed", JSON.stringify(payload.scenarios, null, 2));
       assert.match(scenario.detail, /Expected failure observed/i);
+      if (faultExpectedDetail[scenarioId]) {
+        assert.match(scenario.detail, faultExpectedDetail[scenarioId]);
+      }
     } finally {
       await rm(artifactDir, { recursive: true, force: true });
     }
@@ -175,7 +214,7 @@ test("run-bridge-minimal honors RESONANTOS_EXTENSION_ROOT without writing checko
     });
     const started = await waitForBridgeStarted(child).catch((error) => {
       if (/EPERM|EACCES|operation not permitted/i.test(error.message)) {
-        t.skip(`loopback listen is denied by this sandbox: ${error.message.split("\n")[0]}`);
+        skipOrFailPrerequisite(t, `loopback listen is denied by this sandbox: ${error.message.split("\n")[0]}`);
         return null;
       }
       throw error;
@@ -206,5 +245,245 @@ test("run-bridge-minimal honors RESONANTOS_EXTENSION_ROOT without writing checko
     }
     await restoreFile(checkoutConfigPath, before);
     await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("SSE reader yields every frame from a batched chunk", async () => {
+  const frames = [
+    { version: 1, sessionId: "A", source: "governed", event: { type: "bridge.ready", properties: {} } },
+    { version: 1, sessionId: "A", source: "governed", event: { type: "bridge.operation", properties: { operation: "rename" } } },
+  ];
+  const chunk = Buffer.from(frames.map((frame) => `data: ${JSON.stringify(frame)}\n\n`).join(""));
+  let sent = false;
+  const reader = {
+    async read() {
+      if (sent) return { done: true, value: undefined };
+      sent = true;
+      return { done: false, value: chunk };
+    },
+  };
+  const first = await readEnvelope(reader);
+  const second = await readEnvelope(reader);
+  assert.deepEqual([first, second], frames);
+});
+
+test("raw sink clear empties captured bytes", () => {
+  const sink = createRawBridgeLogSink();
+  sink.captureBridgeLog("stdout", Buffer.from("hello\n"));
+  sink.clear();
+  assert.equal(sink.joinRaw(), "");
+  assert.equal(sink.getEvidence(), "");
+});
+
+test("raw sink retains canary the sanitizer removes", () => {
+  const sink = createRawBridgeLogSink();
+  const canary = `Basic ${randomBytes(18).toString("base64")}`;
+  sink.captureBridgeLog("stdout", Buffer.from(`probe ${canary}\n`));
+  assert.deepEqual(
+    [sink.joinRaw().includes(canary), sink.getEvidence().includes(canary)],
+    [true, false],
+  );
+});
+
+test("raw log overflow fails certification", () => {
+  const sink = createRawBridgeLogSink({ limit: 8 * 1024 * 1024 });
+  sink.captureBridgeLog("stdout", Buffer.alloc(8 * 1024 * 1024));
+  assert.throws(
+    () => sink.captureBridgeLog("stderr", Buffer.from("x")),
+    (error) => error.code === "OPENCODE_RAW_LOG_LIMIT" || error.message === "OPENCODE_RAW_LOG_LIMIT",
+  );
+});
+
+test("raw-log fault fails at credential scan", { concurrency: false }, async (t) => {
+  const missing = faultPrerequisites["opencode-proxy-raw-log"]?.();
+  if (missing) {
+    skipOrFailPrerequisite(t, `prerequisite missing on this runner: ${missing}`);
+    return;
+  }
+  const artifactDir = await mkdtemp(path.join(os.tmpdir(), "resonantos-live-sdk-raw-log-"));
+  try {
+    const result = await runLaneFault("opencode-proxy-raw-log", artifactDir);
+    const payload = JSON.parse(await readFile(path.join(artifactDir, "scenario-matrix.json"), "utf8"));
+    const scenario = payload.scenarios.find((entry) => entry.id === "opencode-proxy-raw-log");
+    assert.equal(result.code, 0);
+    assert.match(scenario?.detail ?? "", /OPENCODE_RAW_LOG_CREDENTIAL_DETECTED/);
+  } finally {
+    await rm(artifactDir, { recursive: true, force: true });
+  }
+});
+
+function sseData(frame) {
+  return Buffer.from(`data: ${JSON.stringify(frame)}\n\n`);
+}
+
+function timedSseReader(events, { hangWhenEmpty = true } = {}) {
+  let index = 0;
+  const startedAt = Date.now();
+  return new ReadableStream({
+    async pull(controller) {
+      if (index >= events.length) {
+        if (hangWhenEmpty) await new Promise(() => {});
+        else controller.close();
+        return;
+      }
+      const event = events[index++];
+      const wait = Math.max(0, (event.atMs ?? 0) - (Date.now() - startedAt));
+      await new Promise((resolve) => setTimeout(resolve, wait));
+      if (event.close) {
+        controller.close();
+        return;
+      }
+      controller.enqueue(event.bytes ?? sseData(event.frame));
+    },
+  }).getReader();
+}
+
+test("observation drain captures a late foreign frame while the other stream idles", async () => {
+  const canary = `foreign-canary-${randomBytes(4).toString("hex")}`;
+  const readerA = timedSseReader([
+    { atMs: 10, frame: { version: 1, sessionId: "A", source: "governed", event: { type: "bridge.ready", properties: {} } } },
+    { atMs: 30, frame: { version: 1, sessionId: "A", source: "external", event: { type: "session.updated", properties: { title: canary } } } },
+  ]);
+  const readerB = timedSseReader([]);
+  const observeUntil = Date.now() + 1000;
+  await Promise.all([
+    drainEnvelopes(readerA, observeUntil),
+    drainEnvelopes(readerB, observeUntil),
+  ]);
+  assert.match(envelopeRawText(readerA), new RegExp(canary));
+});
+
+test("readEnvelope timeout does not drop the in-flight chunk", async () => {
+  const frame = { version: 1, sessionId: "late", source: "governed", event: { type: "bridge.ready", properties: {} } };
+  const reader = timedSseReader([{ atMs: 150, frame }]);
+  await assert.rejects(() => readEnvelope(reader, 40), /envelope timeout/);
+  const received = await readEnvelope(reader, 1000);
+  assert.deepEqual(received, frame);
+  assert.match(envelopeRawText(reader), /"sessionId":"late"/);
+});
+
+test("revocation watcher distinguishes EOF from malformed data", async () => {
+  const revoked = {
+    version: 1,
+    sessionId: "A",
+    source: "governed",
+    event: { type: "bridge.closed", properties: { code: "OPENCODE_REVOKED", error: "revoked" } },
+  };
+  const watchRevocation = createRevocationWatcher();
+  const malformed = timedSseReader([
+    { atMs: 0, frame: revoked },
+    { atMs: 5, bytes: Buffer.from("data: {not-json}\n\n") },
+  ]);
+  const malformedResult = await watchRevocation(malformed, 500);
+  assert.equal(malformedResult.eofAt, 0);
+  assert.ok(malformedResult.error, "malformed JSON must be recorded as error, not EOF");
+  assert.equal(malformedResult.sawClose, true);
+
+  const ending = timedSseReader([
+    { atMs: 0, frame: revoked },
+    { atMs: 5, close: true },
+  ], { hangWhenEmpty: false });
+  const eofResult = await watchRevocation(ending, 500);
+  assert.ok(eofResult.eofAt > 0, "stream end must record eofAt");
+  assert.equal(eofResult.error, "");
+  assert.equal(eofResult.sawClose, true);
+});
+
+test("probeLeakDetected flags quoted keys, bare markers, and Basic credentials", () => {
+  assert.deepEqual(
+    [
+      probeLeakDetected(`{"OPENCODE_SERVER_PASSWORD":"x"}`),
+      probeLeakDetected("OPENCODE_SERVER_PASSWORD=x"),
+      probeLeakDetected("eventUrl=http://127.0.0.1:1/event"),
+      probeLeakDetected(`{"eventAuthorization":"y"}`),
+      probeLeakDetected("Authorization: Basic abc"),
+      probeLeakDetected(`{"ok":true,"sessions":[]}`),
+    ],
+    [true, true, true, true, true, false],
+  );
+});
+
+test("credentialless probe inlines the exported probeLeakDetected source", async () => {
+  const source = await readFile(lanePath, "utf8");
+  assert.match(source, /const probeLeakDetected = \$\{probeLeakDetected\.toString\(\)\}/);
+  assert.ok(source.includes(probeLeakDetected.toString()), "lane source must contain the exported predicate body");
+});
+
+async function makeScanFixture() {
+  const root = await mkdtemp(path.join(os.tmpdir(), "resonantos-scan-"));
+  const staged = path.join(root, "extension");
+  await mkdir(staged, { recursive: true });
+  await writeFile(path.join(staged, "ok.js"), "export default true;\n");
+  const bridgeConfig = path.join(root, "bridge-config.generated.js");
+  await writeFile(bridgeConfig, "globalThis.__RESONANTOS_BRIDGE_CONFIG__ = Object.freeze({});\n");
+  const pidRecord = path.join(root, "opencode-server.json");
+  await writeFile(pidRecord, "{}\n");
+  return { root, staged, bridgeConfig, pidRecord };
+}
+
+test("collectScanTexts throws when a staged file read fails", async () => {
+  const fixture = await makeScanFixture();
+  const stagedFile = path.join(fixture.staged, "ok.js");
+  try {
+    await assert.rejects(
+      () => collectScanTexts({
+        stagedRoot: fixture.staged,
+        bridgeConfigPath: fixture.bridgeConfig,
+        pidRecordPath: fixture.pidRecord,
+        readFileFn: async (filePath, encoding) => {
+          if (filePath === stagedFile) {
+            const error = new Error("EACCES");
+            error.code = "EACCES";
+            throw error;
+          }
+          return readFile(filePath, encoding);
+        },
+      }),
+      (error) => error.code === "OPENCODE_SCAN_INPUT_MISSING" && error.message.includes(stagedFile),
+    );
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("collectScanTexts throws when a staged directory cannot be read", async () => {
+  const fixture = await makeScanFixture();
+  try {
+    await assert.rejects(
+      () => collectScanTexts({
+        stagedRoot: fixture.staged,
+        bridgeConfigPath: fixture.bridgeConfig,
+        pidRecordPath: fixture.pidRecord,
+        readdirFn: async () => {
+          const error = new Error("EACCES");
+          error.code = "EACCES";
+          throw error;
+        },
+      }),
+      (error) => error.code === "OPENCODE_SCAN_INPUT_MISSING"
+        && error.message.includes(`staged-extension-dir:${fixture.staged}`),
+    );
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("collectScanTexts throws OPENCODE_SCAN_INPUT_MISSING when bridge config is unreadable", async () => {
+  const fixture = await makeScanFixture();
+  try {
+    let thrown = null;
+    try {
+      await collectScanTexts({
+        stagedRoot: fixture.staged,
+        bridgeConfigPath: path.join(fixture.root, "missing-bridge-config.generated.js"),
+        pidRecordPath: fixture.pidRecord,
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    assert.equal(thrown?.code, "OPENCODE_SCAN_INPUT_MISSING");
+    assert.match(String(thrown?.message ?? ""), /bridge-config/);
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
   }
 });

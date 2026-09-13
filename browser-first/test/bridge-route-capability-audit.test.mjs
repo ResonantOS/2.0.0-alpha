@@ -96,6 +96,7 @@ const opencodeSessionHandlers = [
   "executeOpenCodeSessionDelete",
   "executeOpenCodeSessionArchive",
   "executeOpenCodeAgentsList",
+  "executeOpenCodeSessionEvents",
 ];
 
 function handlers(names) {

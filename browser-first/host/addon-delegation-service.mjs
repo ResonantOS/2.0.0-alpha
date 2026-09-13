@@ -192,6 +192,7 @@ export function createAddonDelegationService(dependencies) {
     socketOpen,
     uniqueRuntimeId,
     userRoot,
+    timers: openCodeListenerTimers = { setTimeout, clearTimeout },
   } = dependencies;
   const isolation = isolationDependency?.resolve
     ? isolationDependency
@@ -437,12 +438,12 @@ export function createAddonDelegationService(dependencies) {
     const defaults = defaultAddonExecutionSettings();
     return {
       hermes: { localCliExecution: Boolean(value?.hermes?.localCliExecution ?? defaults.hermes.localCliExecution) },
-      opencode: { localCliExecution: Boolean(value?.opencode?.localCliExecution ?? defaults.opencode.localCliExecution) },
+      opencode: { localCliExecution: value?.opencode?.localCliExecution === true },
     };
   }
 
   async function readAddonExecutionSettings() {
-    const raw = await readFile(addonExecutionSettingsPath(), "utf8").catch(() => "");
+    const raw = await isolationFs.readFile(addonExecutionSettingsPath(), "utf8").catch(() => "");
     if (!raw) return defaultAddonExecutionSettings();
     try {
       return normalizeAddonExecutionSettings(JSON.parse(raw));
@@ -454,10 +455,60 @@ export function createAddonDelegationService(dependencies) {
   async function writeAddonExecutionSettings(next) {
     const normalized = normalizeAddonExecutionSettings(next);
     const filePath = addonExecutionSettingsPath();
-    await mkdir(path.dirname(filePath), { recursive: true });
-    await writeFile(filePath, `${JSON.stringify(normalized, null, 2)}\n`, { mode: 0o600 });
-    await chmod(filePath, 0o600).catch(() => undefined);
+    await isolationFs.mkdir(path.dirname(filePath), { recursive: true });
+    await isolationFs.writeFile(filePath, `${JSON.stringify(normalized, null, 2)}\n`, { mode: 0o600 });
+    await isolationFs.chmod(filePath, 0o600).catch(() => undefined);
     return normalized;
+  }
+
+  let openCodeDisabledLatch = false;
+  const openCodeExecutionListeners = new Set();
+  let settingsUpdateQueue = Promise.resolve();
+
+  function serializeSettingsUpdate(work) {
+    const run = settingsUpdateQueue.then(work, work);
+    settingsUpdateQueue = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  async function openCodeProxyExecutionEnabled() {
+    if (openCodeDisabledLatch) return false;
+    try {
+      const settings = await readAddonExecutionSettings();
+      return settings?.opencode?.localCliExecution === true;
+    } catch {
+      return false;
+    }
+  }
+
+  function subscribeOpenCodeExecution(listener) {
+    if (typeof listener !== "function") {
+      throw new TypeError("subscribeOpenCodeExecution requires a listener.");
+    }
+    openCodeExecutionListeners.add(listener);
+    return () => {
+      openCodeExecutionListeners.delete(listener);
+    };
+  }
+
+  async function notifyOpenCodeExecution(enabled) {
+    for (const listener of [...openCodeExecutionListeners]) {
+      let timer;
+      const timeout = new Promise((resolve) => {
+        timer = openCodeListenerTimers.setTimeout(() => {
+          try { console.error("OPENCODE_REVOKE_TIMEOUT"); } catch { /* noop */ }
+          resolve("timeout");
+        }, 1000);
+        timer?.unref?.();
+      });
+      try {
+        await Promise.race([Promise.resolve().then(() => listener(enabled)), timeout]);
+      } catch {
+        /* listener failure leaves the gate in the latched state */
+      } finally {
+        openCodeListenerTimers.clearTimeout(timer);
+      }
+    }
   }
 
   async function appendAddonGovernanceAuditEntry(entry) {
@@ -2061,27 +2112,14 @@ except BaseException as exc:
       overrideFound: runtime.overrideFound,
       taskCounts: statusCounts,
       delegationPackets: tasks.length,
+      proxyExecutionEnabled: await openCodeProxyExecutionEnabled(),
       requiredGrants: ["filesystem", "shell", "providers", "ui-embedding"],
       boundary: "OpenCode is an add-on agent. Filesystem, shell, provider secrets, wallet actions, and trusted memory writes remain mediated by ResonantOS.",
     };
   }
 
   const executeOpenCodeWebUrl = createOpenCodeWebUrlHandler({
-    executionEnabled: async (payload = {}) => {
-      const executionSettings = await readAddonExecutionSettings();
-      return addonLocalCliExecutionEnabled("opencode", payload, executionSettings);
-    },
-    ensureServer: () => ensureOpenCodeServer({
-      fetchImpl: (...args) => fetch(...args),
-      spawnImpl: (cmd, args, opts) => spawnProcess(cmd, args, opts),
-      command: opencodeCommand(),
-      hostname: "127.0.0.1",
-      port: process.env.RESONANTOS_OPENCODE_PORT ? Number(process.env.RESONANTOS_OPENCODE_PORT) : undefined,
-      env: process.env,
-    }),
-    // #343: never spawn a server just to refuse the cockpit handoff — peek the
-    // registered singleton first; only an already-running server yields a URL.
-    peekServer: () => peekOpenCodeServer({ command: opencodeCommand(), hostname: "127.0.0.1", env: process.env }),
+    executionEnabled: () => openCodeProxyExecutionEnabled(),
     appendAuditEntry: appendAddonGovernanceAuditEntry,
   });
 
@@ -2197,8 +2235,6 @@ except BaseException as exc:
       "OPENCODE_CONFIG",
       "OPENCODE_DATA",
       "OPENCODE_CACHE",
-      "OPENCODE_SERVER_USERNAME",
-      "OPENCODE_SERVER_PASSWORD",
       ...openCodeProviderEnvKeys(model),
     ];
     const inherited = Object.fromEntries(
@@ -2732,33 +2768,54 @@ except BaseException as exc:
   }
 
   async function executeAddonExecutionSettingsUpdate(payload = {}) {
-    const current = await readAddonExecutionSettings();
-    const addon = String(payload.addon ?? "").trim().toLowerCase();
-    if (!["hermes", "opencode"].includes(addon)) {
-      throw new Error("Execution settings can only be updated for Hermes or OpenCode.");
-    }
-    const next = normalizeAddonExecutionSettings(current);
-    const previousLocalCliExecution = Boolean(next[addon].localCliExecution);
-    const nextLocalCliExecution = Boolean(payload.localCliExecution);
-    next[addon] = {
-      ...next[addon],
-      localCliExecution: nextLocalCliExecution,
-    };
-    const settings = await writeAddonExecutionSettings(next);
-    if (previousLocalCliExecution !== nextLocalCliExecution) {
-      await appendAddonGovernanceAuditEntry({
-        at: new Date().toISOString(),
-        addonId: addon,
-        field: "localCliExecution",
-        from: previousLocalCliExecution,
-        to: nextLocalCliExecution,
-      });
-    }
-    return {
-      addon,
-      settings,
-      status: settings[addon].localCliExecution ? "enabled" : "disabled",
-    };
+    return serializeSettingsUpdate(async () => {
+      const current = await readAddonExecutionSettings();
+      const addon = String(payload.addon ?? "").trim().toLowerCase();
+      if (!["hermes", "opencode"].includes(addon)) {
+        throw new Error("Execution settings can only be updated for Hermes or OpenCode.");
+      }
+      if (addon === "opencode" && typeof payload.localCliExecution !== "boolean") {
+        throw new Error("OpenCode localCliExecution must be a boolean.");
+      }
+      const next = normalizeAddonExecutionSettings(current);
+      const previousLocalCliExecution = Boolean(next[addon].localCliExecution);
+      const nextLocalCliExecution = addon === "opencode"
+        ? payload.localCliExecution
+        : Boolean(payload.localCliExecution);
+      next[addon] = {
+        ...next[addon],
+        localCliExecution: nextLocalCliExecution,
+      };
+      if (addon === "opencode" && nextLocalCliExecution === false) {
+        openCodeDisabledLatch = true;
+        await notifyOpenCodeExecution(false);
+      }
+      let settings;
+      try {
+        settings = await writeAddonExecutionSettings(next);
+        if (previousLocalCliExecution !== nextLocalCliExecution) {
+          await appendAddonGovernanceAuditEntry({
+            at: new Date().toISOString(),
+            addonId: addon,
+            field: "localCliExecution",
+            from: previousLocalCliExecution,
+            to: nextLocalCliExecution,
+          });
+        }
+      } catch (error) {
+        if (addon === "opencode") openCodeDisabledLatch = true;
+        throw error;
+      }
+      if (addon === "opencode" && nextLocalCliExecution === true) {
+        openCodeDisabledLatch = false;
+        await notifyOpenCodeExecution(true);
+      }
+      return {
+        addon,
+        settings,
+        status: settings[addon].localCliExecution ? "enabled" : "disabled",
+      };
+    });
   }
 
   async function executeHermesDashboardStatus(payload = {}) {
@@ -2871,6 +2928,8 @@ except BaseException as exc:
     executeAddonsStatus,
     executeAddonExecutionSettingsGet,
     executeAddonExecutionSettingsUpdate,
+    openCodeProxyExecutionEnabled,
+    subscribeOpenCodeExecution,
     executeAddonUninstallAudit,
     executeAddonRunningWork,
     executeAddonUserDataList,

@@ -37,6 +37,8 @@ human-only according to the capability contract.
 Provider secrets and trusted memory writes are host-owned. Do not place secrets
 in extension source, generated config, Chrome storage, fixtures, or diagnostics.
 
+OpenCode session HTTP and events use capability-scoped bridge routes. The extension receives session identifiers, never the OpenCode server URL or Basic credential. Turning OpenCode local execution off revokes active requests and event streams. The existing session panel displays only its selected session's events with Governed or External source labels. The full cockpit remains disabled.
+
 ## Opt-in React Shell Development
 
 The React shell served by Vite is an optional development surface. Bridge

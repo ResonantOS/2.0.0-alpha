@@ -41,8 +41,8 @@ test("bootstrap rejects a capability the launcher cannot mint (the #200 failure 
 });
 
 test("a minted capability token authorizes its route end-to-end (#203)", async () => {
-  const bridgeToken = "smoke-bridge-token";
-  const mintMap = buildBridgeCapabilityTokens({ mint: () => "minted-credential-token" });
+  const bridgeToken = createBridgeToken();
+  const mintMap = buildBridgeCapabilityTokens({ mint: createBridgeToken });
   const capability = capabilityForBridgeRoute("/providers/credentials", "POST"); // provider-credential-write
   const bootstrap = scopedCapabilityTokenPayload([capability], mintMap);
   const routes = [{
@@ -76,4 +76,11 @@ test("dashboard proxy mirrors /auth so the Hermes login redirect resolves (#203,
     DASHBOARD_PROXY_MIRROR_PATHS.some((entry) => entry.bridge === "/auth"),
     "dashboard proxy must mirror /auth or the Hermes /auth/login redirect 404s",
   );
+});
+
+
+test("first-run events capability maps to a minted read token", () => {
+  const tokens=buildBridgeCapabilityTokens({mint:createBridgeToken});
+  const capability=capabilityForBridgeRoute("/opencode/session/events?sessionId=registered","GET");
+  assert.deepEqual([capability,typeof tokens[capability] === "string"],["addon-runtime-read",true]);
 });

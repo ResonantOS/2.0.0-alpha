@@ -13,6 +13,7 @@ import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
+const RESERVED_PORTS = [4096, 4231]; // port-literal-allowlist: rejected ports
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
 const PROMPT_FALLBACK_TIMEOUT_MS = 600_000;
@@ -56,7 +57,7 @@ export function opencodeServeBaseUrl(serverInfo = {}) {
 export async function pickFreeLoopbackPort({
   netImpl = net,
   hostname = DEFAULT_HOST,
-  avoid = [4096, 4231], // port-literal-allowlist: avoid-set — ports we refuse to pick, never ones we bind by default
+  avoid = RESERVED_PORTS,
   attempts = 8
 } = {}) {
   const avoided = new Set(avoid);
@@ -85,8 +86,8 @@ export async function opencodeServerHealthy({ fetchImpl, baseUrl, headers = {}, 
   const controller = typeof AbortController === "function" ? new AbortController() : null;
   const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
   try {
-    const res = await fetchImpl(`${baseUrl}/doc`, { method: "GET", headers: { ...headers }, signal: controller?.signal });
-    return Boolean(res && res.ok);
+    const res = await fetchImpl(`${baseUrl}/doc`, { method: "GET", headers: { ...headers }, signal: controller?.signal, redirect: "error" });
+    return Boolean(res && res.status === 200);
   } catch {
     return false;
   } finally {
@@ -102,8 +103,8 @@ export async function opencodeServerEnforcesAuth({ fetchImpl, baseUrl, timeoutMs
   const controller = typeof AbortController === "function" ? new AbortController() : null;
   const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
   try {
-    const res = await fetchImpl(`${baseUrl}/doc`, { method: "GET", signal: controller?.signal });
-    return Boolean(res) && (res.status === 401 || res.status === 403);
+    const res = await fetchImpl(`${baseUrl}/doc`, { method: "GET", signal: controller?.signal, redirect: "error" });
+    return Boolean(res) && res.status === 401;
   } catch {
     return false;
   } finally {
@@ -122,7 +123,8 @@ export function resetOpencodeServerSingletonForTests() {
 
 export function forgetOpencodeServer(serverInfo) {
   if (serverInfo?.key) {
-    inflight.delete(serverInfo.key);
+    const owned = inflight.get(serverInfo.key)?.serverInfo;
+    if (owned === serverInfo || (owned?.process && owned.process === serverInfo.process)) inflight.delete(serverInfo.key);
     return;
   }
   for (const [key, value] of inflight.entries()) {
@@ -201,6 +203,8 @@ export async function ensureOpencodeServer({
   const directory = resolveOpencodeCwd({ cwd, env });
   const envPort = Number(env.RESONANTOS_OPENCODE_PORT);
   const explicitPort = Number.isInteger(port) && port > 0 ? port : (envPort > 0 ? envPort : 0);
+  if ((explicitPort && (!Number.isInteger(explicitPort) || explicitPort < 1024 || explicitPort > 65535 || isReservedPort(explicitPort)))
+      || !["127.0.0.1", "localhost", "::1", "[::1]"].includes(hostname)) throw clientError("OPENCODE_INVALID_REQUEST", 400);
   // Per-process runtime config is immutable for the bridge lifetime.
   const key = `${command}|${hostname}|${directory}|${explicitPort}`;
   if (inflight.has(key)) {
@@ -267,6 +271,7 @@ async function startOpencodeServer({
   const skipWrite = await cleanupStalePidOnce(pidRecord, directory, processImpl);
   const spawnPort = explicitPort > 0 ? explicitPort : await pickEphemeralPort({ hostname });
 
+  if (!Number.isInteger(spawnPort) || spawnPort < 1024 || spawnPort > 65535 || isReservedPort(spawnPort)) throw clientError("OPENCODE_INVALID_REQUEST", 400);
   const startedAt = Date.now();
   const child = spawnImpl(command, ["serve", "--hostname", hostname, "--port", String(spawnPort)], {
     cwd: directory,
@@ -299,7 +304,9 @@ async function startOpencodeServer({
   });
 
   const announcedPortPromise = waitForAnnouncedPort(child, spawnPort, maxWaitMs);
-  const announcedPort = await announcedPortPromise;
+  let announcedPort;
+  try { announcedPort = await announcedPortPromise; }
+  catch { try { child.kill(); } catch {} throw clientError("OPENCODE_PROTOCOL_ERROR", 502); }
   const baseUrl = opencodeBaseUrl({ hostname, port: announcedPort });
   const deadline = startedAt + maxWaitMs;
   while (true) {
@@ -345,8 +352,15 @@ function waitForAnnouncedPort(child, spawnPort, maxWaitMs) {
     child.stdout?.on?.("data", (chunk) => {
       if (settled) return;
       buffer += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
-      const match = buffer.match(/listening on https?:\/\/[^\s:/]+:(\d+)/i);
-      if (match) finish(Number(match[1]));
+      if (buffer.length > 16384) { buffer = buffer.slice(-16384); }
+      const match = buffer.match(/listening on (https?:\/\/[^\s]+)/i);
+      if (match) {
+        let url;
+        try { url = new URL(match[1]); } catch {}
+        if (!url || url.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) || Number(url.port) !== spawnPort || isReservedPort(Number(url.port))) {
+          settled = true; clearTimeout(timer); reject(clientError("OPENCODE_PROTOCOL_ERROR", 502));
+        } else finish(Number(url.port));
+      }
     });
   });
 }
@@ -456,49 +470,73 @@ export function createOpencodeHttpClient(options = {}) {
   let cachedDoc = apiDoc ?? null;
   let docLoaded = Boolean(apiDoc);
   let docPromise = null;
+  let cachedSupport;
 
-  const fetchWithTimeout = async (callName, url, init = {}, timeoutMs = requestTimeoutMs) => {
-    const controller = typeof AbortController === "function" ? new AbortController() : null;
-    const timer = controller && typeof setTimeoutImpl === "function"
-      ? setTimeoutImpl(() => controller.abort(), timeoutMs)
-      : null;
+  if (typeof fetchImpl !== "function" || !/^Basic [A-Za-z0-9+/]+={0,2}$/.test(headers.Authorization ?? "")) throw clientError("OPENCODE_UPSTREAM_AUTH", 502);
+  const origin = new URL(baseUrl);
+  if (origin.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(origin.hostname) || origin.username || origin.password || origin.pathname !== "/" || origin.search || origin.hash) throw clientError("OPENCODE_INVALID_REQUEST", 400);
+  const generationSignal = options.signal;
+  const checkGeneration = () => { if (generationSignal?.aborted) throw clientError("OPENCODE_REVOKED", 403); };
+  generationSignal?.addEventListener("abort", () => { cachedDoc = null; docLoaded = false; docPromise = null; cachedSupport = undefined; }, { once: true });
+
+  // The timeout and generation cancellation cover fetch AND bounded body consumption.
+  const fetchWithTimeout = async (_callName, url, init = {}, timeoutMs = requestTimeoutMs) => {
+    checkGeneration();
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    generationSignal?.addEventListener("abort", abort, { once: true });
+    const timer = setTimeoutImpl(abort, timeoutMs);
+    let onAbort, bodyReader;
+    const canceled = new Promise((_, reject) => {
+      onAbort = () => { void bodyReader?.cancel().catch(() => {}); reject(clientError(generationSignal?.aborted ? "OPENCODE_REVOKED" : "OPENCODE_TIMEOUT", generationSignal?.aborted ? 403 : 504)); };
+      controller.signal.addEventListener("abort", onAbort, { once: true });
+    });
     try {
-      return await fetchImpl(url, { ...init, signal: controller?.signal });
+      return await Promise.race([canceled, (async () => {
+        const res = await fetchImpl(url, { ...init, signal: controller.signal, redirect: "error" });
+        checkGeneration();
+        if (res?.status === 401 || res?.status === 403) throw clientError("OPENCODE_UPSTREAM_AUTH", 502);
+        if (!res || res.status < 200 || res.status >= 300) throw clientError("OPENCODE_UPSTREAM_FAILED", 502);
+        let text = "";
+        if (res.body?.getReader) {
+          const reader = res.body.getReader(); bodyReader = reader; const chunks = []; let size = 0, complete = false;
+          try { while (true) { const { done, value } = await reader.read(); if (done) { complete = true; break; } size += value.byteLength; if (size > 1048576) throw clientError("OPENCODE_PROTOCOL_ERROR", 502); chunks.push(Buffer.from(value)); } }
+          finally { if (!complete || controller.signal.aborted) await reader.cancel().catch(() => {}); reader.releaseLock(); bodyReader = null; }
+          text = Buffer.concat(chunks).toString("utf8");
+        } else { text = await res.text(); if (Buffer.byteLength(text) > 1048576) throw clientError("OPENCODE_PROTOCOL_ERROR", 502); }
+        checkGeneration();
+        if (controller.signal.aborted) throw clientError("OPENCODE_TIMEOUT", 504);
+        try { return text ? JSON.parse(text) : null; } catch { throw clientError("OPENCODE_PROTOCOL_ERROR", 502); }
+      })()]);
     } catch (error) {
-      if (controller?.signal?.aborted || error?.name === "AbortError") {
-        throw new Error(`opencode ${callName} timed out after ${timeoutMs}ms`);
-      }
-      throw error;
+      if (error?.code?.startsWith("OPENCODE_")) throw error;
+      throw clientError("OPENCODE_UPSTREAM_FAILED", 502);
     } finally {
-      if (timer && typeof clearTimeoutImpl === "function") clearTimeoutImpl(timer);
+      clearTimeoutImpl(timer); generationSignal?.removeEventListener("abort", abort); controller.signal.removeEventListener("abort", onAbort);
     }
   };
-
   const loadApiDoc = async () => {
+    checkGeneration();
     if (docLoaded) return cachedDoc;
-    if (docPromise) return docPromise;
-    docPromise = (async () => {
-      try {
-        const res = await fetchWithTimeout("loadApiDoc", `${baseUrl}/doc`, { method: "GET", headers: { ...headers } });
-        if (!res?.ok) return null;
-        const text = await res.text().catch(() => "");
-        cachedDoc = text ? JSON.parse(text) : null;
-        docLoaded = true;
-      } catch {
-        cachedDoc = null;
-      } finally {
-        docPromise = null;
-      }
-      return cachedDoc;
-    })();
+    if (!docPromise) docPromise = (async () => {
+      const doc = await fetchWithTimeout("loadApiDoc", `${baseUrl}/doc`, { method: "GET", headers: { ...headers } });
+      if (!doc || typeof doc !== "object" || Array.isArray(doc) || !doc.paths || typeof doc.paths !== "object") throw clientError("OPENCODE_PROTOCOL_ERROR", 502);
+      checkGeneration(); cachedDoc = doc; docLoaded = true; return doc;
+    })().finally(() => { docPromise = null; });
     return docPromise;
   };
-
-  const hasEndpoint = async (path, method) => {
-    const doc = await loadApiDoc();
-    return Boolean(doc?.paths?.[path]?.[String(method).toLowerCase()]);
+  const hasEndpoint = async (path, method) => Boolean((await loadApiDoc())?.paths?.[path]?.[method.toLowerCase()]);
+  const resolveLocal = (value, doc, seen = new Set()) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    if (!value.$ref) return value;
+    const ref = value.$ref;
+    if (typeof ref !== "string" || !ref.startsWith("#/") || seen.has(ref)) throw clientError("OPENCODE_PROTOCOL_ERROR", 502);
+    seen.add(ref);
+    let target = doc;
+    for (const key of ref.slice(2).split("/").map(k => k.replace(/~1/g, "/").replace(/~0/g, "~"))) target = Object.hasOwn(target ?? {}, key) ? target[key] : null;
+    if (!target) throw clientError("OPENCODE_PROTOCOL_ERROR", 502);
+    return resolveLocal(target, doc, seen);
   };
-
   const routeQuery = (extra = {}) => ({
     ...(pinnedDirectory ? { directory: pinnedDirectory } : {}),
     ...(workspace ? { workspace } : {}),
@@ -507,23 +545,25 @@ export function createOpencodeHttpClient(options = {}) {
 
   const call = async (callName, method, path, body, query, { timeoutMs = requestTimeoutMs } = {}) => {
     const fullPath = appendQuery(path, query);
-    const res = await fetchWithTimeout(callName, `${baseUrl}${fullPath}`, {
-      method,
-      headers: { "content-type": "application/json", ...headers },
+    return fetchWithTimeout(callName, `${baseUrl}${fullPath}`, {
+      method, headers: { "content-type": "application/json", ...headers },
       body: body === undefined ? undefined : JSON.stringify(body)
     }, timeoutMs);
-    const text = await res.text().catch(() => "");
-    let data = null;
-    try { data = text ? JSON.parse(text) : null; } catch { data = text; }
-    if (!res.ok) {
-      throw new Error(`opencode ${method} ${fullPath} failed: ${res.status} ${typeof data === "string" ? data : (data?.error ?? "")}`.trim());
-    }
-    return data;
   };
 
   return {
     createSession: (title = "ResonantOS session") => call("createSession", "POST", "/session", { title }, routeQuery()),
-    prompt: async (sessionId, parts, { model, agent } = {}) => {
+    supportsPromptMessageId: async () => {
+      checkGeneration();
+      if (cachedSupport !== undefined) return cachedSupport;
+      const doc = await loadApiDoc();
+      const path = doc.paths?.["/session/{sessionID}/prompt_async"] ? "/session/{sessionID}/prompt_async" : "/session/{sessionID}/message";
+      const body = resolveLocal(doc.paths?.[path]?.post?.requestBody, doc);
+      const schema = resolveLocal(body?.content?.["application/json"]?.schema, doc);
+      cachedSupport = Boolean(resolveLocal(schema?.properties?.messageID, doc));
+      return cachedSupport;
+    },
+    prompt: async (sessionId, parts, { model, agent, messageID } = {}) => {
       const usesPromptAsync = await hasEndpoint("/session/{sessionID}/prompt_async", "POST");
       const path = usesPromptAsync
         ? `/session/${encodePathSegment(sessionId)}/prompt_async`
@@ -531,6 +571,7 @@ export function createOpencodeHttpClient(options = {}) {
       const structuredModel = modelPayload(model);
       return call("prompt", "POST", path, {
         parts: textParts(parts),
+        ...(messageID ? { messageID } : {}),
         ...(structuredModel ? { model: structuredModel } : {}),
         ...(agent ? { agent } : {})
       }, routeQuery(), { timeoutMs: usesPromptAsync ? requestTimeoutMs : promptFallbackTimeoutMs });
@@ -553,3 +594,7 @@ export function createOpencodeHttpClient(options = {}) {
     eventUrl: () => `${baseUrl}/event`
   };
 }
+
+function isReservedPort(port) { return RESERVED_PORTS.includes(port); }
+
+function clientError(code, status) { const error = new Error("OpenCode boundary request failed."); error.code = code; error.status = status; return error; }

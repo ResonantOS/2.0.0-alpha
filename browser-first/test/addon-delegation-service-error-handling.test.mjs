@@ -5,6 +5,7 @@ import { access, chmod, link, mkdtemp, mkdir, readFile, realpath, rename, rm, st
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { randomBytes } from "node:crypto";
 
 import { createAddonDelegationService } from "../host/addon-delegation-service.mjs";
 import { listFilesRecursive } from "../host/browser-first-host-utils.mjs";
@@ -1000,9 +1001,8 @@ test("OpenCode web cockpit URL refuses with a structured error when execution is
     await assert.rejects(
       () => service.executeOpenCodeWebUrl({}),
       (error) => {
-        assert.equal(error.code, "opencode_web_url_execution_disabled");
-        assert.equal(error.addonId, "opencode");
-        assert.match(error.message, /explicit OpenCode execution/);
+        assert.equal(error.code, "OPENCODE_EXECUTION_DISABLED");
+        assert.equal(error.message, "OpenCode boundary request failed.");
         return true;
       },
     );
@@ -1023,28 +1023,27 @@ test("OpenCode web cockpit URL issuance is execution-gated, loopback-only, and i
         ensured += 1;
         return { baseUrl: "http://127.0.0.1:4231/session?directory=%2Frepo" };
       },
-      // a server is already registered -> the handler may issue the URL (#343 peek)
+      // A registered server still cannot expose its URL through the disabled cockpit.
       peekOpenCodeServer: () => ({ baseUrl: "http://127.0.0.1:4231" }),
     });
     const auditPath = path.join(root, "BrowserFirst", "Settings", "addon-governance-audit.jsonl");
 
-    const first = await service.executeOpenCodeWebUrl({ enableOpenCodeExecution: true });
-    const second = await service.executeOpenCodeWebUrl({ enableOpenCodeExecution: true });
+    await service.executeAddonExecutionSettingsUpdate({addon:"opencode",localCliExecution:true});
+    const first = await service.executeOpenCodeWebUrl({});
+    const second = await service.executeOpenCodeWebUrl({});
 
-    assert.equal(ensured, 2);
-    assert.equal(new URL(first.url).hostname, "127.0.0.1");
-    assert.deepEqual(first, { url: "http://127.0.0.1:4231/" });
-    assert.deepEqual(second, { url: "http://127.0.0.1:4231/" });
+    assert.equal(ensured, 0);
+    assert.deepEqual(first, {url:"",requiresCredential:true});
+    assert.deepEqual(second, {url:"",requiresCredential:true});
     assert.equal((await stat(auditPath)).mode & 0o777, 0o600);
     const entries = (await readFile(auditPath, "utf8"))
       .trim()
       .split("\n")
-      .map((line) => JSON.parse(line));
+      .map((line) => JSON.parse(line)).filter(entry=>entry.event === "webCockpitUrlIssued");
     assert.equal(entries.length, 2);
     assert.ok(entries.every((entry) => entry.addonId === "opencode"));
     assert.ok(entries.every((entry) => entry.event === "webCockpitUrlIssued"));
-    assert.ok(entries.every((entry) => entry.url === "http://127.0.0.1:4231/"));
-    assert.ok(entries.every((entry) => new URL(entry.url).hostname === "127.0.0.1"));
+    assert.ok(entries.every((entry) => entry.url === ""));
   });
 });
 
@@ -1519,11 +1518,12 @@ test("OpenCode web cockpit URL issuance does not spawn a server just to refuse (
       ensureOpenCodeServer: async () => { ensured += 1; return { baseUrl: "http://127.0.0.1:4231" }; },
       peekOpenCodeServer: () => null, // nothing registered
     });
-    const result = await service.executeOpenCodeWebUrl({ enableOpenCodeExecution: true });
+    await service.executeAddonExecutionSettingsUpdate({addon:"opencode",localCliExecution:true});
+    const result = await service.executeOpenCodeWebUrl({});
     assert.equal(ensured, 0);
     assert.deepEqual(result, { url: "", requiresCredential: true });
     const auditPath = path.join(root, "BrowserFirst", "Settings", "addon-governance-audit.jsonl");
-    const entries = (await readFile(auditPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+    const entries = (await readFile(auditPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line)).filter(entry=>entry.event === "webCockpitUrlIssued");
     assert.equal(entries.length, 1);
     assert.equal(entries[0].event, "webCockpitUrlIssued");
     assert.equal(entries[0].url, "");
@@ -2130,5 +2130,37 @@ test("Hermes delegation fails closed when profileHome would make home or root wr
       }
       await assert.rejects(() => access(insideSecrets), /ENOENT/, "a rejected profileHome must not have been created inside the protected Secrets directory");
     });
+  });
+});
+
+
+test("OpenCode proxy execution rejects non-boolean updates", async () => {
+  await withTempService(async service => {
+    const rejected=[];
+    for(const value of ["false","true",0,1,null,{},[]]) {
+      rejected.push(await service.executeAddonExecutionSettingsUpdate({addon:"opencode",localCliExecution:value}).then(()=>false,()=>true));
+    }
+    assert.deepEqual(rejected,Array(7).fill(true));
+  });
+});
+test("OpenCode proxy execution rejects non-boolean persisted settings", async () => {
+  await withTempService(async (service,root) => {
+    const file=path.join(root,"BrowserFirst","Settings","addon-execution.json");
+    await mkdir(path.dirname(file),{recursive:true});
+    await writeFile(file,JSON.stringify({opencode:{localCliExecution:"true"}}));
+    assert.equal(await service.openCodeProxyExecutionEnabled(),false);
+  });
+});
+test("unrelated CLI receives no serve credential env", async () => {
+  await withTempService(async (_service,root) => {
+    let captured;
+    await withEnv({OPENCODE_SERVER_USERNAME:randomBytes(16).toString("hex"),OPENCODE_SERVER_PASSWORD:randomBytes(32).toString("hex"),OPENAI_API_KEY:randomBytes(32).toString("hex"),RESONANTOS_OPENCODE_EXECUTION:"enabled",RESONANTOS_OPENCODE_PROVIDER_ENV:"OPENCODE_SERVER_USERNAME,OPENCODE_SERVER_PASSWORD"},async()=>{
+      const service=createService(root,{platform:"linux",opencodeRuntimeDiagnostics:()=>({installed:true,command:"/usr/local/bin/opencode",commandRedacted:"<opencode>"}),spawnProcess:(_command,_args,options)=>{
+        captured=options.env;const child=fakeChild();queueMicrotask(()=>child.emit("error",new Error("fixture stopped")));return child;
+      }});
+      const task=await service.executeDelegationRecord({target:"opencode",mission:"Check serve credential exclusion."});
+      await service.executeOpenCodeDelegationStart({path:task.path,model:"openai/gpt-5.4-mini"});
+    });
+    assert.deepEqual([!!captured,!!captured&&Object.hasOwn(captured,"OPENCODE_SERVER_USERNAME"),!!captured&&Object.hasOwn(captured,"OPENCODE_SERVER_PASSWORD")],[true,false,false]);
   });
 });
