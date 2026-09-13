@@ -8,6 +8,15 @@ for anyone building panels, add-ons, or app-shell UI.
   scoped runtime radius contract; preserves the existing palette and explains
   which ROSI generation informs Settings components.
 
+## Resonant Extension Framework V0.1
+
+The framework package lived here during design; when ADR-055 was drafted
+the proposal moved to [`docs/architecture/ADR-055-resonant-extension-framework.md`](../architecture/ADR-055-resonant-extension-framework.md)
+and the specifications moved to
+[`docs/addons/resonant-extension-framework/`](../addons/resonant-extension-framework/README.md).
+See that folder for the canonical list of framework specs, conflict
+documents, and resolution records.
+
 ## ROSI — Resonant OS Interface design system
 
 For implemented Settings density behavior, see
