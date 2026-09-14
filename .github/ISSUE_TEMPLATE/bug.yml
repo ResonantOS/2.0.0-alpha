@@ -53,7 +53,7 @@ body:
     attributes:
       label: Environment
       description: Operating system, Chromium browser/version, and Node.js version when the bridge is involved.
-      placeholder: macOS 15; Chrome 138; Node.js 22.13.0
+      placeholder: macOS 15; Chrome 138; Node.js 24.21.0
     validations:
       required: true
 

@@ -405,3 +405,14 @@ test("the add-on lifecycle uninstall design note is approved release documentati
   });
   assert.equal(classify("docs/addons/some-other-note.md", "added").bucket, "review", "docs/addons/ stays manual-review by default; only the listed note is approved");
 });
+
+test("recognizes only the vendored Augmentor product scope", () => {
+  for (const path of ["apps/augmentor/README.md", "apps/augmentor/pipe.mjs", "apps/augmentor/plugin/package.json"]) {
+    const result = auditModule.classify(path, "added");
+    assert.equal(result.bucket, "include");
+    assert.match(result.reason, /vendored Augmentor product/);
+  }
+  for (const path of ["apps/other/README.md", "apps/augmentor-next/pipe.mjs", "unknown.txt"]) {
+    assert.equal(auditModule.classify(path, "added").bucket, "review");
+  }
+});

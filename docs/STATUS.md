@@ -10,7 +10,7 @@ it only from the current worktree, deterministic checks, GitHub issues, and
 | --- | --- | --- |
 | Package | `resonantos-vnext` `2.0.0-beta.1` | `package.json` |
 | Extension | Manifest V3 `0.1.14`; Chrome 116 minimum | `browser-first/resonantos-side-panel-extension/manifest.json` |
-| Node.js | `>=22.13.0` | `package.json` and `.nvmrc` |
+| Node.js | `>=24.21.0` | `package.json` and `.nvmrc` |
 | Alpha runtime | Chrome extension plus local Node.js bridge | `browser-first/resonantos-side-panel-extension/`, `browser-first/host/`, `run-bridge-minimal.mjs` |
 | Development branch | `dev`; changes use a feature branch and a PR into `dev` | `AGENTS.md` |
 | Release planning | GitHub issues organized in Project 2 | [Project 2](https://github.com/orgs/ResonantOS/projects/2) |

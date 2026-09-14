@@ -226,6 +226,15 @@ export function collectChangedPaths(options, runGit) {
 }
 
 export function classify(changedPath, state) {
+  // This exact subtree is Manolo Remiddi's vendored MIT Augmentor product.
+  // Recognize its independent release surface without admitting other apps or
+  // treating its native messaging host as the ResonantOS Alpha runtime.
+  if (changedPath.startsWith("apps/augmentor/")) {
+    return {
+      bucket: "include",
+      reason: "vendored Augmentor product (independent extension, native host, and published plugin)",
+    };
+  }
   if (changedPath.startsWith("browser-first/")) {
     return {
       bucket: "include",
