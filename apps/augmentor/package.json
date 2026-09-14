@@ -7,5 +7,8 @@
   "dependencies": {
     "fflate": "0.8.2",
     "ws": "8.21.0"
+  },
+  "engines": {
+    "node": ">=24.21.0"
   }
 }
