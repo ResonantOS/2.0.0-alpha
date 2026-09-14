@@ -1,0 +1,11 @@
+{
+  "name": "augmentor",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Augmentor root: native-messaging pipe (pipe.mjs) speaking to the running DSH app's /api surface. The plugin/ subdirectory is its own package (the dsh-augmentor bundle).",
+  "type": "module",
+  "dependencies": {
+    "fflate": "0.8.2",
+    "ws": "8.21.0"
+  }
+}

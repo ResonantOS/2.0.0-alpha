@@ -1,0 +1,13 @@
+# Augmentor — dsh-augmentor plugin, pipe, and Chromium extension
+# Copyright © 2026 Manolo Remiddi
+# SPDX-License-Identifier: MIT
+# License: MIT — see LICENSE at the repository root.
+
+# Bundle patch layer (dsh.bundle.patch): mounts the plugin by bare name once
+# the package is installed into a profile's node_modules (dsh plugin add,
+# milestone M4). M1 instead mounts the entry file directly from source via a
+# home-patch insert row, which resolves dependencies from this package's own
+# node_modules.
+- insert:
+  - id: dsh-augmentor
+    name: 'dsh-augmentor'

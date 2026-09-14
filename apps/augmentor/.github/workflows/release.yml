@@ -1,0 +1,148 @@
+# Augmentor — dsh-augmentor plugin, pipe, and Chromium extension
+# Copyright © 2026 Manolo Remiddi
+# SPDX-License-Identifier: MIT
+# License: MIT — see LICENSE at the repository root.
+
+# Release: tag push -> verify -> prove -> publish -> prove -> release.
+#
+# Trigger: push of a tag vX.Y.Z (the tag must point at a commit that
+# contains this file — tag the tip of master AFTER committing + pushing).
+# Manual dispatch processes any existing tag (e.g. to create the GitHub
+# Release + asset for a version that was published by hand).
+#
+# Order matters:
+#   1. verify   three-way lockstep (tag <-> plugin <-> extension manifest),
+#               CHANGELOG section, built artifact — scripts/pack-release.sh
+#   2. pack     dist zip (allowlist copy) + extracted release notes
+#   3. prove    install-proof on the tagged tree (local source)
+#   4. publish  npm publish --provenance (OIDC trusted publishing — no npm
+#               token stored anywhere; the npm account must have the
+#               GitHub provenance provider configured, one-time setup)
+#   5. prove    install-proof via the npm registry, pinned to the version
+#               just published (pin sidesteps pnpm >= 11's 24h release-age
+#               gate — the exact journey a user takes on day one)
+#   6. release  GitHub Release from the tag: notes = CHANGELOG section,
+#               asset = the dist zip
+#
+# Publishing is idempotent: an already-published version skips step 4, so
+# a re-run or a dispatch for a hand-published tag still produces the
+# release + asset.
+
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'release tag to process (e.g. v0.1.30)'
+        required: true
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write # create the GitHub Release
+  id-token: write # npm provenance (OIDC)
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}
+
+      - name: Resolve version from tag
+        run: |
+          printf 'tag=%s\n' "$TAG"
+          case "$TAG" in
+            v[0-9]*.*) : ;;
+            *) echo "::error::tag must look like vX.Y.Z, got: $TAG"; exit 1 ;;
+          esac
+          VER="${TAG#v}"
+          printf '%s' "$VER" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
+            || { echo "::error::version must be X.Y.Z, got: $VER"; exit 1; }
+          echo "VER=$VER" >> "$GITHUB_ENV"
+          echo "dist/augmentor-$VER-dist.zip"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Chromium (playwright build + system deps)
+        run: npx -y playwright@latest install --with-deps chromium
+
+      - name: DSH CLI
+        run: |
+          npm install -g @deepseek-ai/dsh@0.1.5-rc.1
+          dsh --version
+
+      - name: Verify + pack (lockstep, changelog, asset)
+        run: sh scripts/pack-release.sh "$VER"
+
+      - name: Install proof (local source, tagged tree)
+        env:
+          PROOF_MODEL_PICKER_SPEC: https://github.com/ManoloRemiddi/dsh-model-picker-augmented/releases/download/v1.1.2/dsh-model-picker-augmented-1.1.2.tgz
+          PROOF_LLM: '0'
+          PROOF_SOURCE: local
+          PROOF_REPO: ${{ github.workspace }}
+        run: |
+          export CHROME_BIN="$(ls -d "$HOME/.cache/ms-playwright/chromium-"*/chrome-linux*/chrome | head -n1)"
+          echo "CHROME_BIN=$CHROME_BIN"
+          node test/install-proof.mjs
+
+      - name: Publish to npm (provenance; skip when already published)
+        working-directory: plugin
+        run: |
+          # npm publish runs the package's `prepare` (esbuild bundle), so the
+          # plugin's own devDependencies must be installed first — nothing
+          # earlier in this workflow touches plugin/ (the install-proof
+          # steps clone their own copies).
+          pnpm install --frozen-lockfile
+          if [ "$(npm view "dsh-augmentor@$VER" version 2>/dev/null)" = "$VER" ]; then
+            echo "dsh-augmentor@$VER is already published — skipping npm publish"
+          else
+            npm publish --provenance
+          fi
+
+      - name: Install proof (npm source, pinned to the released version)
+        env:
+          PROOF_MODEL_PICKER_SPEC: https://github.com/ManoloRemiddi/dsh-model-picker-augmented/releases/download/v1.1.2/dsh-model-picker-augmented-1.1.2.tgz
+          PROOF_LLM: '0'
+          PROOF_SOURCE: npm
+          PROOF_NPM_SPEC: "dsh-augmentor@${{ env.VER }}"
+          PROOF_REPO: ${{ github.workspace }}
+        run: |
+          export CHROME_BIN="$(ls -d "$HOME/.cache/ms-playwright/chromium-"*/chrome-linux*/chrome | head -n1)"
+          # A fresh publish is not instantly resolvable: npm itself says it
+          # "may take a few minutes to become available". The very first
+          # release run proved the package 6 s after publishing and pnpm
+          # could not resolve it. Wait for the version to be visible
+          # (up to 5 min), then run the pinned proof.
+          for i in $(seq 1 30); do
+            [ "$(npm view "dsh-augmentor@$VER" version 2>/dev/null)" = "$VER" ] && break
+            echo "waiting for registry propagation ($i/30)…"
+            sleep 10
+          done
+          [ "$(npm view "dsh-augmentor@$VER" version 2>/dev/null)" = "$VER" ] \
+            || { echo "::error::dsh-augmentor@$VER not visible on the registry after 5 min"; exit 1; }
+          node test/install-proof.mjs
+
+      - name: GitHub Release (notes + asset)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" \
+            --title "Augmentor $TAG" \
+            --notes-file "dist/augmentor-$VER-notes.md" \
+            "dist/augmentor-$VER-dist.zip"
+          echo "release $TAG created with dist asset"

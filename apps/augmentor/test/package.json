@@ -1,0 +1,13 @@
+{
+  "name": "augmentor-test-deps",
+  "private": true,
+  "description": "Headless E2E deps for test/panel-e2e.mjs (jsdom + marked). Not part of the plugin bundle.",
+  "scripts": {
+    "panel-e2e": "node panel-e2e.mjs",
+    "sw-e2e": "node sw-e2e.mjs"
+  },
+  "dependencies": {
+    "jsdom": "^30.0.1",
+    "marked": "^18.0.11"
+  }
+}
