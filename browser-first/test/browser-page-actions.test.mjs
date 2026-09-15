@@ -844,3 +844,18 @@ test("page understanding fixtures: the REAL content.js read_page extracts the ex
   const visible = String(mediaOnly.snapshot.text ?? "").trim();
   assert.ok(visible.length < 40, "media-only page yields no substantial visible text (got: " + visible.slice(0, 60) + ")");
 });
+
+for (const action of ["typeIntoActivePage", "clickActivePageText"]) {
+  test(`D3: ${action} refusal is presented as a human handoff`, async () => {
+    const reason = "This control was not recognised, so a human performs it on the page.";
+    const harness = createHarness({
+      sendMessage: () => ({ ok: false, approvalRequired: true, deniedToAutomation: true, humanHandoff: true, error: reason })
+    });
+    const result = await harness.actions[action]({ text: "Topic", field: "Topic", userApproved: true });
+    assert.equal(result.humanHandoff, true);
+    assert.ok(harness.events.some((event) => event[0] === "status" && event[1] === "Human action required"));
+    assert.ok(harness.events.some((event) => event[0] === "message" && event[2] === `Human action required: ${reason}`));
+    assert.ok(harness.events.some((event) => event[0] === "activity" && event[1] === "waiting-for-human"));
+    assert.equal(harness.events.some((event) => event[0] === "status" && event[1] === "Page action failed"), false);
+  });
+}

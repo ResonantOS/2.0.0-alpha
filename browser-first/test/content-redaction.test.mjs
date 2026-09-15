@@ -268,10 +268,17 @@ test("content field safety policy classifies high-risk editable fields before au
   assert.equal(classify("#login").kind, "login");
   assert.equal(classify("#email").kind, "personal-contact");
   assert.equal(classify("#draft").kind, "document-edit");
-  assert.equal(classify("#generic").kind, "generic-text");
+  assert.equal(classify("#generic").kind, "unknown");
+  assert.equal(classify("#generic").safeToType, false);
   assert.equal(classify("#generic").safeToSubmit, false);
-  // #224: credential aliases typed as type="text" must never classify as
-  // generic-text, or Agent Control would type into them.
+  // Sensitive classes retain both refusals, ahead of benign recognition.
+  for (const selector of ["#password", "#card", "#login", "#email"]) {
+    assert.equal(classify(selector).safeToType, false);
+    assert.equal(classify(selector).safeToSubmit, false);
+  }
+  assert.equal(classify("#draft").safeToType, true);
+  assert.equal(classify("#draft").safeToSubmit, false);
+  // #224: credential aliases retain their specific boundary.
   for (const selector of ["#passwd", "#pwd", "#pin", "#passkey", "#seccode", "#pinlabel"]) {
     assert.equal(classify(selector).kind, "credential", `${selector} must be a credential boundary`);
     assert.equal(classify(selector).safeToType, false, `${selector} must not be typable by Agent Control`);
@@ -304,7 +311,7 @@ test("content page snapshots redact sensitive and ambiguous editable values", as
   assert.match(serialized, /\[redacted:credential\]/);
   assert.match(serialized, /\[redacted:personal-contact\]/);
   assert.match(serialized, /\[redacted:payment\]/);
-  assert.match(serialized, /\[redacted:generic-text\]/);
+  assert.match(serialized, /\[redacted:unknown\]/);
   assert.match(serialized, /\[redacted:document-edit\]/);
   assert.match(serialized, /resonantos browser/);
   assert.ok(response.snapshot.fields.every((field) => typeof field.fieldKind === "string"));
@@ -572,6 +579,7 @@ test("content typing actions support plaintext-only contenteditable regions", as
   });
   const draft = snapshot.fields.find((field) => field.id === "draft");
   assert.equal(draft?.contentEditable, "plaintext-only");
+  assert.equal(draft?.fieldKind, "document-edit");
   assert.equal(draft?.section.label, "Draft editor");
 
   let response = null;
@@ -693,7 +701,7 @@ test("#224: typing by label into credential/payment/login/contact fields is deni
     assert.equal(response.fieldSafety.kind, kind, `${field} must report the ${kind} boundary`);
     assert.match(response.error, /human-only|human-controlled/, `${field} must return a hard-boundary diagnostic`);
     assert.equal(dom.window.document.getElementById(id).value, expected, `${field} value must be unchanged after a blocked typing attempt`);
-    assert.equal(dom.window.document.getElementById("generic").value, "", "a safe field must not receive the blocked text");
+    assert.equal(dom.window.document.getElementById("generic").value, "", "an unrelated field must not receive the blocked text");
   }
 
   let generic = null;
@@ -705,8 +713,10 @@ test("#224: typing by label into credential/payment/login/contact fields is deni
   }, {}, (payload) => {
     generic = payload;
   });
-  assert.equal(generic?.ok, true, "generic text fields remain typable under policy");
-  assert.equal(dom.window.document.getElementById("generic").value, "hello world");
+  assert.equal(generic?.ok, false, "D3: an unrecognised topic input is now human-only");
+  assert.equal(generic.humanHandoff, true);
+  assert.equal(generic.fieldSafety.kind, "unknown");
+  assert.equal(dom.window.document.getElementById("generic").value, "");
 });
 
 test("#224: typing by exact ref into a sensitive field is denied and never reclassifies it safe", async () => {
@@ -791,7 +801,7 @@ test("#224: ambiguous label matches expose fieldKind so sensitive candidates are
   assert.ok(response.candidates.every((candidate) => /^r\d+$/.test(candidate.ref)), "ambiguous candidates expose exact refs");
 });
 
-test("#224: submit on a generic non-search field stays human-gated while the typed value lands", async () => {
+test("#224: submit on a document editor stays human-only while the typed value lands", async () => {
   const { dom, listener } = await loadContentScript(`
     <!doctype html>
     <form id="note-form">
@@ -814,7 +824,8 @@ test("#224: submit on a generic non-search field stays human-gated while the typ
 
   assert.equal(response?.ok, false);
   assert.equal(response.deniedToAutomation, true);
-  assert.match(response.error, /human approval/i, "non-search submit stays human-gated");
+  assert.equal(response.humanHandoff, true);
+  assert.match(response.error, /submitted by the human/i, "non-search submit stays human-only");
   assert.equal(dom.window.document.getElementById("notes").value, "draft note", "the typed draft lands even when auto-submit is denied");
 });
 
@@ -852,7 +863,9 @@ test("#224: camelCase/digit-suffixed credential aliases classify credential, nev
   credentialAliasNegatives.forEach((name, index) => {
     const safety = classify(`#n${index}`);
     assert.notEqual(safety.kind, "credential", `name="${name}" must not substring-match a credential alias`);
-    assert.equal(safety.kind, "generic-text", `name="${name}" stays a plain generic-text field`);
+    assert.equal(safety.kind, "unknown", `name="${name}" is unrecognised, not a credential`);
+    assert.equal(safety.safeToType, false);
+    assert.equal(safety.safeToSubmit, false);
   });
 });
 
@@ -938,4 +951,126 @@ test("#224: underscore-named search fields classify search-query but stay gated 
   assert.match(response.error, /human must submit/i);
   assert.equal(dom.window.document.getElementById("terms").value, "resonantos hardening", "the typed query still lands");
   assert.equal(dom.window.document.getElementById("topic").value, "", "no other field receives text");
+});
+
+test("D3: only positively recognised benign controls allow typing", async () => {
+  const dom = new JSDOM("<!doctype html>", { runScripts: "outside-only" });
+  dom.window.eval(await readFile(fieldSafetyScriptPath, "utf8"));
+  const cases = [
+    ['<input>', "unknown", false, false],
+    ['<input type="text" name="topic">', "unknown", false, false],
+    ['<input type="number" name="quantity">', "unknown", false, false],
+    ['<input type="url">', "unknown", false, false],
+    ['<input name="footnotes">', "unknown", false, false],
+    ['<input name="notes_extra">', "unknown", false, false],
+    ['<input type="number" name="notes">', "unknown", false, false],
+    ['<select><option>Option</option></select>', "unknown", false, false],
+    ['<div role="textbox"></div>', "unknown", false, false],
+    ['<div contenteditable="false"></div>', "unknown", false, false],
+    ['<div contenteditable="invalid"></div>', "unknown", false, false],
+    ['<input type="search">', "search-query", true, true],
+    ['<input role="searchbox">', "search-query", true, true],
+    ['<input name="q">', "search-query", true, true],
+    ['<input aria-label="Search catalog">', "search-query", true, true],
+    ['<textarea></textarea>', "document-edit", true, false],
+    ['<input type="text" name="notes">', "document-edit", true, false],
+    ['<input aria-label="Notes">', "document-edit", true, false],
+    ['<div contenteditable></div>', "document-edit", true, false],
+    ['<div contenteditable="true"></div>', "document-edit", true, false],
+    ['<div contenteditable="plaintext-only"></div>', "document-edit", true, false],
+    ['<input type="password" aria-label="Search">', "credential", false, false],
+    ['<input type="password" name="notes">', "credential", false, false],
+    ['<input name="notes" autocomplete="cc-number">', "payment", false, false],
+    ['<input name="notes" autocomplete="username">', "login", false, false],
+    ['<input name="notes" autocomplete="email">', "personal-contact", false, false],
+    ['<input type="search" name="otp">', "credential", false, false],
+    ['<input type="search" autocomplete="cc-number">', "payment", false, false],
+    ['<textarea name="username"></textarea>', "login", false, false],
+    ['<div contenteditable="true" aria-label="Email"></div>', "personal-contact", false, false],
+    ['<input type="tel" role="searchbox">', "personal-contact", false, false],
+  ];
+  for (const [html, kind, safeToType, safeToSubmit] of cases) {
+    dom.window.document.body.innerHTML = html;
+    const safety = dom.window.ResonantOSContentFieldSafety.classifyEditableField(dom.window.document.body.firstElementChild);
+    assert.deepEqual({ kind: safety.kind, safeToType: safety.safeToType, safeToSubmit: safety.safeToSubmit },
+      { kind, safeToType, safeToSubmit }, html);
+    if (kind === "unknown") assert.match(safety.reason, /not recognised, so a human performs it/);
+  }
+  dom.window.close();
+});
+
+test("D3: unknown controls hand off without mutation by label, exact ref, or focus even with approval", async () => {
+  const { dom, listener } = await loadContentScript(`<!doctype html>
+    <form><label for="topic">Topic</label><input id="topic" value="original"><button type="submit">Go</button></form>`);
+  const field = dom.window.document.getElementById("topic");
+  const send = (message) => new Promise((resolve) => listener({ channel: "resonantos.browser_first.content", ...message }, {}, resolve));
+  const snapshot = (await send({ type: "read_page" })).snapshot;
+  const ref = snapshot.fields.find((entry) => entry.id === "topic").ref;
+  let mutations = 0;
+  for (const event of ["input", "change", "submit"]) dom.window.document.addEventListener(event, () => { mutations += 1; });
+  for (const target of [{ field: "Topic" }, { ref }, {}]) {
+    field.focus();
+    for (const userApproved of [false, true]) {
+      for (const submit of [false, true]) {
+        const result = await send({ type: "type_text", ...target, text: "automated", userApproved, submit });
+        assert.equal(result.ok, false);
+        assert.equal(result.deniedToAutomation, true);
+        assert.equal(result.humanHandoff, true);
+        assert.equal(result.fieldSafety.kind, "unknown");
+        assert.match(result.error, /not recognised, so a human performs it/);
+        assert.equal(field.value, "original");
+      }
+    }
+  }
+  assert.equal(mutations, 0, "a refusal must not fire input, change, or submit events");
+  field.setSelectionRange(0, field.value.length);
+  const selection = await send({ type: "get_selection" });
+  assert.equal(selection.selection, null, "inline actions must not capture an unknown control's text");
+  dom.window.close();
+});
+
+test("D3: recognised search submission and document editing still work", async () => {
+  const { dom, listener } = await loadContentScript(`<!doctype html>
+    <form><input id="catalog" type="search"><button type="submit">Go</button></form>
+    <textarea id="draft"></textarea><div id="editor" contenteditable="true"></div>`);
+  let submitted = 0;
+  dom.window.document.querySelector("form").addEventListener("submit", (event) => { event.preventDefault(); submitted += 1; });
+  for (const [field, submit, kind] of [["catalog", true, "search-query"], ["draft", false, "document-edit"], ["editor", false, "document-edit"]]) {
+    const result = await new Promise((resolve) => listener({ channel: "resonantos.browser_first.content", type: "type_text", field, text: "benign text", submit }, {}, resolve));
+    assert.equal(result.ok, true, field);
+    assert.equal(result.fieldSafety.kind, kind);
+    const element = dom.window.document.getElementById(field);
+    assert.equal(element.value ?? element.textContent, "benign text");
+  }
+  assert.equal(submitted, 1);
+  dom.window.close();
+});
+
+test("D3: clicks in a form containing an unknown control hand off without activation", async () => {
+  const { dom, listener } = await loadContentScript('<!doctype html><form><input name="topic"><button type="button">Continue</button></form>');
+  let clicks = 0;
+  dom.window.document.querySelector("button").addEventListener("click", () => { clicks += 1; });
+  const result = await new Promise((resolve) => listener({ channel: "resonantos.browser_first.content", type: "click_text", text: "Continue", userApproved: true }, {}, resolve));
+  assert.equal(result.humanHandoff, true);
+  assert.equal(result.deniedToAutomation, true);
+  assert.match(result.error, /unrecognised-control boundary/);
+  assert.equal(clicks, 0);
+  dom.window.close();
+});
+
+test("D3: a scripted unknown control outside a form cannot bypass the boundary by clicking", async () => {
+  const { dom, listener } = await loadContentScript('<!doctype html><input name="topic" aria-label="Topic" onclick="void 0">');
+  const send = (message) => new Promise((resolve) => listener({ channel: "resonantos.browser_first.content", ...message }, {}, resolve));
+  let clicks = 0;
+  dom.window.document.querySelector("input").addEventListener("click", () => { clicks += 1; });
+  const snapshot = (await send({ type: "read_page" })).snapshot;
+  for (const target of [{ text: "Topic" }, { ref: snapshot.controls[0].ref }]) {
+    const result = await send({ type: "click_text", ...target, userApproved: true });
+    assert.equal(result.ok, false);
+    assert.equal(result.humanHandoff, true);
+    assert.equal(result.deniedToAutomation, true);
+    assert.match(result.error, /unrecognised-control boundary/);
+  }
+  assert.equal(clicks, 0);
+  dom.window.close();
 });

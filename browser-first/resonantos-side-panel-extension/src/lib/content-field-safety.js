@@ -97,10 +97,22 @@
     ) {
       return { kind: "search-query", safeToType: true, safeToSubmit: true, reason: "Search/query fields may be typed and submitted by Agent Control." };
     }
-    if (element instanceof HTMLTextAreaElement || element?.isContentEditable) {
+    // Single-line notes are a supported draft surface (the #223 certification
+    // fixture uses one). Require an exact name/label, never a generic text input.
+    const isNotesInput = type === "text" && [
+      element?.getAttribute?.("name"),
+      element?.getAttribute?.("aria-label"),
+      relatedLabelText(element)
+    ].some((value) => /^notes$/i.test(String(value ?? "").trim()));
+    const contentEditable = element?.getAttribute?.("contenteditable")?.toLowerCase();
+    if (
+      isNotesInput || element instanceof HTMLTextAreaElement || element?.isContentEditable ||
+      ["", "true", "plaintext-only"].includes(contentEditable)
+    ) {
       return { kind: "document-edit", safeToType: true, safeToSubmit: false, reason: "Document-like fields may be edited but not submitted automatically." };
     }
-    return { kind: "generic-text", safeToType: true, safeToSubmit: false, reason: "Generic text fields may be edited but not submitted automatically." };
+    // D3: editing requires a positive benign classification at every automation level.
+    return { kind: "unknown", safeToType: false, safeToSubmit: false, reason: "This control was not recognised, so a human performs it on the page." };
   }
 
   globalThis.ResonantOSContentFieldSafety = Object.freeze({
