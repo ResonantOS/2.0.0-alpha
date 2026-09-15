@@ -37,7 +37,7 @@ import { encode, decode } from '../wire.mjs'
 
 const AUG = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const BASE = (process.env.DSH_BASE ?? 'http://127.0.0.1:3080').replace(/\/+$/, '')
-const REPO = 'ManoloRemiddi/augmentor-dsh-extension-plugin'
+const REPO = 'ResonantOS/2.0.0-alpha'
 const SEMVER = /^\d+\.\d+\.\d+$/
 const CANONICAL = (ver) =>
   `https://github.com/${REPO}/releases/download/v${ver}/augmentor-${ver}-dist.zip`

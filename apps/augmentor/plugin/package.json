@@ -1,6 +1,6 @@
 {
   "name": "dsh-augmentor",
-  "version": "0.1.32",
+  "version": "0.1.33",
   "description": "Augmentor for DeepSeek Harness: DSH plugin + Chrome extension that drives the user's real browser from any DSH session — live page snapshot, click, type, tabs — with save-to-workspace chat sessions.",
   "type": "module",
   "main": "dist/index.js",
