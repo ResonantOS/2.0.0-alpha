@@ -218,3 +218,21 @@ that way until the audience justifies it.
 - pnpm ≥ 11 release-age gate: bare-name installs resolve the previous release
   for ~24h after a publish; pin `dsh-augmentor@<version>` in announcements for
   the first day (documented in README + site)
+
+## Runtime dependencies are not shipped in the archive
+
+`pipe.mjs` imports `fflate` at runtime to extract an update, and `fflate` and
+`ws` are dependencies of `apps/augmentor/package.json`. The release archive
+deliberately contains **no** `node_modules`: `scripts/pack-release.sh` fails the
+build if any is staged. The archive carries `package.json` only.
+
+Update-by-extraction therefore works only while the dependency set is
+unchanged — an existing installation keeps the `node_modules` it already has,
+and 0.1.33 adds no dependency. **Any future release that adds or bumps a
+runtime dependency cannot be delivered by extraction alone**: the extracted
+pipe would fail to start. Such a release needs an install step, or the
+dependency vendored into the archive.
+
+Verified for 0.1.33 by `test/updates-bridge.test.mjs`, which extracts the real
+archive over a modelled 0.1.32 installation and asserts the resulting tree is
+byte-identical and that both URL and version guards still refuse.
