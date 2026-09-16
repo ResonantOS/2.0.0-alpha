@@ -1,0 +1,8 @@
+# Augmentor — dsh-augmentor plugin, pipe, and Chromium extension
+# Copyright © 2026 Manolo Remiddi
+# SPDX-License-Identifier: MIT
+# License: MIT — see LICENSE at the repository root.
+
+name: Augmentor
+description: Browser-control agent — drives the user's real Chromium through the Augmentor extension (browser_* tools + local bash/fs).
+order: 2

@@ -87,6 +87,7 @@ function makeRepository() {
     "4. [Contribute safely](CONTRIBUTING.md)",
     "5. [Use the documentation index](docs/README.md)",
   ].join("\n"));
+  writeFixture(root, "apps/augmentor/README.md", "# Vendored Augmentor\n");
   writeFixture(root, "README.md", [
     "# Fixture",
     "",
@@ -2407,5 +2408,21 @@ test("gitignored and untracked-ignored Markdown is not validated in a git checko
     assert.doesNotMatch(found, /missing-ignored-[abc]\.md/, "gitignored / .claude paths must not be validated");
     assert.match(found, /missing-untracked\.md/, "tracked docs are validated");
     assert.match(found, /missing-really-untracked\.md/, "untracked but not ignored docs are validated");
+  });
+});
+
+test("vendored published engine floor stays independent while private manifests must agree", () => {
+  withRepository((root) => {
+    const published = "apps/augmentor/plugin/package.json";
+    const privateManifest = "apps/augmentor/test/package.json";
+    writeFixture(root, published, JSON.stringify({ name: "dsh-augmentor", engines: { node: ">=22.18.0" } }));
+    writeFixture(root, privateManifest, JSON.stringify({ private: true, engines: { node: ">=22.18.0" } }));
+    const output = messages(validateRepositoryDocs(root).findings);
+    assert(!output.some((message) => message.includes(published)));
+    assert(output.some((message) => message.includes(privateManifest) && message.includes("does not agree")));
+    for (const node of [undefined, "invalid"]) {
+      writeFixture(root, published, JSON.stringify({ engines: { node } }));
+      assert(messages(validateRepositoryDocs(root).findings).some((message) => message.includes(published) && message.includes("must declare engines.node")));
+    }
   });
 });

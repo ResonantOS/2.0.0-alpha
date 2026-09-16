@@ -11,16 +11,30 @@ import { DecodingMode, EntityDecoder, htmlDecodeTree } from "entities/decode";
 import semver from "semver";
 import { isAlias, isMap, isSeq, parseDocument } from "yaml";
 
-const CANONICAL_ENTRYPOINTS = [
+const CANONICAL_READING_ORDER = [
   "AGENTS.md",
   "README.md",
   "INSTALL.md",
   "CONTRIBUTING.md",
   "docs/README.md",
 ];
+// The vendored Augmentor package has its own documentation index; it does not
+// extend the repository's required five-file contributor reading order.
+const CANONICAL_ENTRYPOINTS = [
+  ...CANONICAL_READING_ORDER,
+  "apps/augmentor/README.md",
+];
+// Published vendored packages serve npm consumers independently of this repo's
+// toolchain pin. Keep dsh-augmentor's Node 22 support; still require a valid floor.
+const VENDORED_PUBLISHED_MANIFESTS = new Set([
+  "apps/augmentor/plugin/package.json",
+]);
 const IMPLICIT_DOCUMENT_CONSUMERS = new Set([
   ".github/pull_request_template.md",
   "index.html",
+  // Vendored Augmentor HTML is consumed by its extension and lab, not doc navigation.
+  "apps/augmentor/extension/sidepanel.html",
+  "apps/augmentor/lab/veil-preview.html",
   "browser-first/resonantos-side-panel-extension/src/main-workspace.html",
   "browser-first/resonantos-side-panel-extension/src/side-panel.html",
 ]);
@@ -1217,7 +1231,7 @@ function validateEntrypoints(context) {
   if (findings.length > 0) return findings;
 
   const orderedLinks = entrypointLinks(context, "AGENTS.md");
-  const positions = CANONICAL_ENTRYPOINTS.map((path) => orderedLinks.find((link) => link.path === path)?.index ?? -1);
+  const positions = CANONICAL_READING_ORDER.map((path) => orderedLinks.find((link) => link.path === path)?.index ?? -1);
   if (positions.some((position) => position === -1) || positions.some((position, index) => index > 0 && position < positions[index - 1])) {
     findings.push(createFinding(
       "AGENTS.md",
@@ -1769,7 +1783,7 @@ function validateEngineFloor(metadata, path, nvmVersion, findings) {
   const floor = normalizedRange ? semver.minVersion(normalizedRange) : null;
   if (!floor) {
     findings.push(createFinding(path, 1, `${path} must declare engines.node with a >= Node version floor`));
-  } else if (!semver.eq(nvmVersion, floor.version)) {
+  } else if (!VENDORED_PUBLISHED_MANIFESTS.has(path) && !semver.eq(nvmVersion, floor.version)) {
     findings.push(createFinding(
       path,
       1,

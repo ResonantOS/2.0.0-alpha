@@ -39,7 +39,7 @@
     "browser-first:audit-scope:staged": "node scripts/browser-first-release-scope-audit.mjs --staged --strict"
   },
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=24.21.0"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.3",

@@ -1,0 +1,64 @@
+# Augmentor — dsh-augmentor plugin, pipe, and Chromium extension
+# Copyright © 2026 Manolo Remiddi
+# SPDX-License-Identifier: MIT
+# License: MIT — see LICENSE at the repository root.
+
+name: install-proof
+
+# Deterministic proof that the documented install journey works:
+# fresh clone -> fresh DSH home -> dsh web -> dsh plugin add -> unpacked
+# extension -> install-native-host.sh -> restart -> handshake pipes: 1.
+# Runs the repo content that is being merged (PROOF_REPO = checkout path),
+# against both the tested DSH version and npm latest. No LLM credentials
+# in CI, so the LLM leg
+# (PROOF_LLM=1) is left for a credentialed local shell.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  install-proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        dsh: [0.1.5-rc.1, latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Chromium (playwright build + system deps)
+        run: npx -y playwright@latest install --with-deps chromium
+
+      - name: DSH CLI
+        run: |
+          npm install -g @deepseek-ai/dsh@${{ matrix.dsh }}
+          dsh --version
+
+      - name: Regression tests
+        run: |
+          npm install --ignore-scripts
+          npm ci --prefix test
+          node --test test/dsh-auth.test.mjs test/dsh-remote.test.mjs test/prompts.test.mjs test/chat-render.test.mjs test/pipe-lifecycle.test.mjs
+
+      - name: Run the install proof
+        env:
+          PROOF_MODEL_PICKER_SPEC: https://github.com/ManoloRemiddi/dsh-model-picker-augmented/releases/download/v1.1.2/dsh-model-picker-augmented-1.1.2.tgz
+          PROOF_LLM: '0'
+          PROOF_SOURCE: local
+          PROOF_REPO: ${{ github.workspace }}
+        run: |
+          export CHROME_BIN="$(ls -d "$HOME/.cache/ms-playwright/chromium-"*/chrome-linux*/chrome | head -n1)"
+          echo "CHROME_BIN=$CHROME_BIN"
+          node test/install-proof.mjs
