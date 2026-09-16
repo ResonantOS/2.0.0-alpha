@@ -11,6 +11,77 @@ Durable plan for: (a) promoting Augmentor, (b) making releases a two-second
 tag push, (c) giving users a way to update the plugin + extension.
 Supersedes the ad-hoc promotion checklist of 2026-09-01.
 
+## v0.1.33 transitional bridge — current procedure
+
+The canonical source and pipe/extension update authority are now
+`ResonantOS/2.0.0-alpha` (`apps/augmentor/` in the monorepo). Keep one fixed
+`RELEASE_REPO` constant: both discovery and the exact-URL download allowlist
+use it, with no environment override that could redirect executable updates.
+The native host name stays `com.deepseek.dsh.augmentor`.
+
+Release inputs: the packaging argument, `extension/manifest.json` and
+`plugin/package.json` must all be `0.1.33`, with a non-empty CHANGELOG section.
+The running pipe reads the extension manifest; the plugin reads its own
+package version at boot. The root package's `0.1.0` is not a release input.
+Keep the plugin's `engines.node` at `>=22.18.0`. The consolidated pipe package
+requires Node.js 24.21.0 or newer; existing users must meet that floor before
+restarting the new pipe.
+
+Build locally from the ResonantOS root:
+
+```sh
+sh apps/augmentor/scripts/pack-release.sh 0.1.33
+node --test apps/augmentor/test/updates-bridge.test.mjs
+```
+
+The asset is `apps/augmentor/dist/augmentor-0.1.33-dist.zip`, containing one
+`augmentor-0.1.33/` directory. The existing allowlist includes extension, shared,
+pipe, wire codec, plugin, presets, installer, package files and user docs.
+The pipe rejects ZIP data larger than **15 MiB (15,728,640 bytes)**, after
+fetching it. This is a compressed-download cap, not an extracted-size limit.
+No test-only transport override is shipped in the asset.
+
+**Human publication order (preparing this release publishes nothing):**
+
+1. Review and integrate the bridge commit through the ResonantOS workflow into
+   `dev`. Rebuild from that reviewed tree, run the gates and record the ZIP's
+   byte size and SHA-256. Do not use a GitHub-generated source archive.
+2. Create the ResonantOS `v0.1.33` release and upload the reviewed
+   `augmentor-0.1.33-dist.zip`. Make it the latest non-draft, non-prerelease
+   release returned by `/repos/ResonantOS/2.0.0-alpha/releases/latest`.
+   Confirm `tag_name` is `v0.1.33` and the named asset has the exact canonical
+   download URL. Future releases must preserve this API/asset contract.
+3. If publishing npm 0.1.33, do so as a separately authorized maintainer action;
+   the bridge uses the bundled plugin and this rehearsal does not publish npm.
+   Linked-plugin users restart DSH; npm-installed users need the corresponding
+   plugin update separately. Never alter the plugin's Node 22 engine floor.
+4. **Manolo publishes last**: in `ManoloRemiddi/augmentor-dsh-extension-plugin`,
+   publish `v0.1.33` with the **same, byte-identical ZIP** and release notes.
+   The tag should identify the reviewed bridge payload in that repository's
+   layout. Inspect its tag-triggered automation before tagging: the historical
+   workflow also publishes npm. Do not blindly run the old procedure below.
+   This must be the latest non-draft, non-prerelease release at that source,
+   with asset URL
+   `https://github.com/ManoloRemiddi/augmentor-dsh-extension-plugin/releases/download/v0.1.33/augmentor-0.1.33-dist.zip`.
+   Old clients' strict allowlist makes this step essential.
+5. On an installed 0.1.32 client with Node.js 24.21.0+, check for updates,
+   download 0.1.33, reload the unpacked extension and restart DSH. Confirm the
+   new pipe reports 0.1.33 and queries ResonantOS for subsequent updates.
+   Keep the original repository's bridge release available to lagging clients.
+
+The offline rehearsal creates a scratch 0.1.32 client with the legacy fixed
+source, runs the real native-messaging handlers against loopback API/asset
+stubs, applies the actual packaging output, compares every extracted file,
+and restarts the installed pipe to check the new authority. It also rejects
+non-canonical URLs and malformed versions before any asset request. This is
+not proof of live GitHub publication, DSH/npm installation or Chrome reload.
+
+## Historical roadmap (original standalone repository)
+
+The sections below describe the original repository and its old release
+workflow; their `master`/tag-push instructions do not apply to the monorepo or
+override the bridge publication order above.
+
 ## Status snapshot (2026-09-01)
 
 | item | state |
@@ -147,3 +218,21 @@ that way until the audience justifies it.
 - pnpm ≥ 11 release-age gate: bare-name installs resolve the previous release
   for ~24h after a publish; pin `dsh-augmentor@<version>` in announcements for
   the first day (documented in README + site)
+
+## Runtime dependencies are not shipped in the archive
+
+`pipe.mjs` imports `fflate` at runtime to extract an update, and `fflate` and
+`ws` are dependencies of `apps/augmentor/package.json`. The release archive
+deliberately contains **no** `node_modules`: `scripts/pack-release.sh` fails the
+build if any is staged. The archive carries `package.json` only.
+
+Update-by-extraction therefore works only while the dependency set is
+unchanged — an existing installation keeps the `node_modules` it already has,
+and 0.1.33 adds no dependency. **Any future release that adds or bumps a
+runtime dependency cannot be delivered by extraction alone**: the extracted
+pipe would fail to start. Such a release needs an install step, or the
+dependency vendored into the archive.
+
+Verified for 0.1.33 by `test/updates-bridge.test.mjs`, which extracts the real
+archive over a modelled 0.1.32 installation and asserts the resulting tree is
+byte-identical and that both URL and version guards still refuse.

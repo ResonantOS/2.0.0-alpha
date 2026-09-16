@@ -89,10 +89,9 @@ const VERSION = manifestVersion()
 const TRACE_DIR = path.join(AUGMENTOR_DIR, 'trace')
 const DSH_BASE = (process.env.DSH_AUGMENTOR_URL ?? 'http://127.0.0.1:3080').replace(/\/+$/, '')
 const PLUGIN_WS_PATH = '/api/augmentor/ws'
-// 0.1.30 (Phase 1): the public GitHub repo that publishes the release
-// assets the in-place update fetches (same identity install-native-host.sh
-// clones from; the workflow's gh-release step names it in CI).
-const RELEASE_REPO = 'ManoloRemiddi/augmentor-dsh-extension-plugin'
+// Fixed update authority: both discovery and the strict download URL use
+// this repository. Changing it requires a reviewed release, not an env override.
+const RELEASE_REPO = 'ResonantOS/2.0.0-alpha'
 
 // Action-channel token (drives the user's browser, so it is gated). Same
 // resolution as the plugin: explicit env > $DSH_HOME/augmentor-ws-token

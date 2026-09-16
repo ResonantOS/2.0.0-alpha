@@ -11,6 +11,23 @@ All notable changes to Augmentor (the `dsh-augmentor` plugin + the Chromium
 extension). Versions are locked across `plugin/package.json` and
 `extension/manifest.json`.
 
+## 0.1.33 — 2026-09-15
+
+### Changed
+
+- Move pipe/extension update discovery and the canonical download authority to
+  `ResonantOS/2.0.0-alpha`. Keep the strict version and exact-URL guards.
+- Transitional bridge: publish the same ZIP in Manolo's original repository
+  last, after the ResonantOS release exists, so installed 0.1.32 clients can
+  migrate on their next update and native-host restart.
+- Keep the native messaging host identity and the npm plugin's Node 22 support.
+
+### Verification
+
+- Add an offline native-messaging rehearsal using loopback GitHub API and asset
+  stubs, real release packaging and in-place extraction, refusal checks, and
+  a restart that checks the new update authority.
+
 ## 0.1.32 — 2026-09-10
 
 ### Fixed

@@ -42,7 +42,7 @@ fence — by design).
 
 ## DSH compatibility
 
-Augmentor 0.1.32 targets **DSH 0.1.5-rc.1** and its authenticated Typert API.
+Augmentor 0.1.33 targets **DSH 0.1.5-rc.1** and its authenticated Typert API.
 Upgrade the plugin, native host and extension together. Augmentor 0.1.31
 and earlier do not work with this DSH release: their SDK dependency,
 HTTP method names, authentication and event streams predate the new API.
@@ -52,11 +52,12 @@ To update an existing installation after installing this release:
 ```sh
 npm install -g @deepseek-ai/dsh@0.1.5-rc.1
 ./install-native-host.sh <extension-id>
-dsh plugin --profile web add <absolute-path-to-this-repo>/plugin
+dsh plugin --profile web add <absolute-path-to-augmentor>/plugin
 ```
 
 Restart DSH and reload Augmentor at `chrome://extensions`. For the npm
-plugin path, use `dsh plugin --profile web add dsh-augmentor@0.1.32` from npm. The installer reconciles dependencies, installs
+plugin path, use `dsh plugin --profile web add dsh-augmentor@0.1.33` only after
+that npm version is published; the ZIP already includes the matching plugin. The installer reconciles dependencies, installs
 the Augmentor preset when missing, and backs up a legacy preset before
 renaming its persona `text` setting to `prefix`. A custom `DSH_HOME` must
 be the same for DSH, the installer and the browser/native host.
@@ -68,13 +69,16 @@ authentication is required.
 
 ## Install
 
-Tested on **Linux with Chromium**, Node.js 22.19+ or 24+, and DSH 0.1.5-rc.1.
+The consolidated native-host package requires Node.js 24.21.0 or newer and
+DSH 0.1.5-rc.1. The standalone npm plugin retains its Node.js 22.18+ floor.
+The inherited install flow was tested on **Linux with Chromium**.
 
 1. Install/update DSH: `npm install -g @deepseek-ai/dsh@0.1.5-rc.1`.
-2. [Download Augmentor 0.1.32 ZIP](https://github.com/ManoloRemiddi/augmentor-dsh-extension-plugin/releases/download/v0.1.32/augmentor-0.1.32-dist.zip) and extract the entire
-   `augmentor-0.1.32` folder to a permanent location. It includes the plugin,
+2. [Download Augmentor 0.1.33 ZIP](https://github.com/ResonantOS/2.0.0-alpha/releases/download/v0.1.33/augmentor-0.1.33-dist.zip) (once published) and extract the entire
+   `augmentor-0.1.33` folder to a permanent location. It includes the plugin,
    extension, native host and preset. Keep all the files together.
-   Source alternative: `git clone --branch v0.1.32 https://github.com/ManoloRemiddi/augmentor-dsh-extension-plugin.git`.
+   Source alternative after tagging: `git clone --branch v0.1.33 https://github.com/ResonantOS/2.0.0-alpha.git`,
+   then work from `2.0.0-alpha/apps/augmentor/`.
 3. Open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**,
    select `extension/` in the extracted folder and copy the extension ID.
 4. From the extracted folder, run `sh install-native-host.sh EXTENSION_ID "$HOME/.config/chromium"`
@@ -83,7 +87,8 @@ Tested on **Linux with Chromium**, Node.js 22.19+ or 24+, and DSH 0.1.5-rc.1.
    Brave `~/.config/BraveSoftware/Brave-Browser`. Other platforms are not verified;
    these shell commands are not a Windows installer.
 5. In the same folder, run `dsh plugin --profile web add "$PWD/plugin"`.
-   Alternatively install `dsh plugin --profile web add dsh-augmentor@0.1.32`.
+   After npm publication, alternatively install
+   `dsh plugin --profile web add dsh-augmentor@0.1.33`.
    Choose one method and use your app's actual profile if different from `web`.
    Pinning the npm version avoids an older release being selected by release-age filtering.
 6. Restart the existing DSH process/service, or start a new instance with `dsh web`.
@@ -91,7 +96,7 @@ Tested on **Linux with Chromium**, Node.js 22.19+ or 24+, and DSH 0.1.5-rc.1.
    A bare `http://127.0.0.1:3080/` may show “dsh web authentication required”.
    This authenticates the browser to DSH on your own PC; it does not require a
    DeepSeek account or approval. Restart Chromium, open the side panel and test
-   a prompt with a configured model. `/api/augmentor` should report `0.1.32` and `pipes: 1`.
+   a prompt with a configured model. `/api/augmentor` should report `0.1.33` and `pipes: 1`.
 
 For upgrades from 0.1.31 or earlier, use these manual steps if the old panel
 cannot connect. Back up the old folder, update all three components and rerun
@@ -103,6 +108,32 @@ legacy settings before migration.
 DSH and a configured local model can work offline once installed. Cloud models
 require their provider's credentials and internet. Accessing online pages also
 requires internet.
+
+### Update source and the 0.1.33 bridge
+
+From 0.1.33, **Updates** checks GitHub's latest release in
+`ResonantOS/2.0.0-alpha`. The pipe accepts only the exact HTTPS asset URL
+`https://github.com/ResonantOS/2.0.0-alpha/releases/download/v<version>/augmentor-<version>-dist.zip`,
+with a numeric `X.Y.Z` version, a matching `augmentor-<version>/` ZIP directory,
+and at most 15 MiB (15,728,640 bytes) of downloaded ZIP data. The source is
+fixed in the pipe; there is no environment override. Plugin update discovery
+continues to use npm's `dsh-augmentor/latest`.
+
+Installed 0.1.32 pipes still check `ManoloRemiddi/augmentor-dsh-extension-plugin`
+and can only download that repository's assets. Manolo must publish the 0.1.33
+bridge ZIP there **last**, after the same release and asset exist in ResonantOS.
+After the in-place download, reload the extension to restart its native host;
+the new pipe then checks ResonantOS. Restart DSH to load the updated linked
+plugin. The native host name remains `com.deepseek.dsh.augmentor`.
+This checkout prepares the release; it does not establish that either GitHub
+release or the npm version has been published. See [Release plan](RELEASE-PLAN.md).
+
+Offline rehearsal from the ResonantOS repository root (install this package's
+`ws` and `fflate` dependencies first):
+
+```sh
+node --test apps/augmentor/test/updates-bridge.test.mjs
+```
 
 ### Optional: Model Picker Augmented
 

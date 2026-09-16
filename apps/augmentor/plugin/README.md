@@ -17,7 +17,7 @@ layer mounts the plugin automatically.
 
 ## Compatibility
 
-Version 0.1.32 requires DSH 0.1.5-rc.1 and matching Augmentor native-host
+Version 0.1.33 requires DSH 0.1.5-rc.1 and matching Augmentor native-host
 and extension files. The tools SDK is a host-provided optional peer, not
 an installed runtime dependency: a second copy in the DSH profile can
 shadow the host registry and break tool scheduling. The exact SDK remains
@@ -35,7 +35,10 @@ Augmentor releases do not support DSH's authenticated Typert API.
 
 ## Install
 
-**From npm (recommended):**
+**From npm (published versions only):**
+
+The 0.1.33 bridge ZIP includes this plugin; preparing the ZIP does not publish
+0.1.33 to npm. Use the bundled plugin until that version is available.
 
 ```sh
 dsh plugin --profile web add dsh-augmentor
@@ -44,8 +47,8 @@ dsh plugin --profile web add dsh-augmentor
 **From git (no npm needed):**
 
 ```sh
-git clone https://github.com/ManoloRemiddi/augmentor-dsh-extension-plugin.git
-dsh plugin --profile web add /path/to/augmentor-dsh-extension-plugin/plugin
+git clone https://github.com/ResonantOS/2.0.0-alpha.git
+dsh plugin --profile web add /path/to/2.0.0-alpha/apps/augmentor/plugin
 ```
 
 `dsh plugin` is a thin pnpm forwarder: it installs the package into the
