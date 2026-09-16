@@ -61,6 +61,10 @@ Read the browser-control sections of the
 [Module Ownership](architecture/MODULE-OWNERSHIP.md). Use the issue and Project 2
 item to determine required live-browser proof and human-only actions.
 
+Read [ADR-038: Guardian/Engineer Boundary And Core-Only Invariants](architecture/ADR-038-guardian-engineer-core-only-invariants.md)
+for recovery authority, the first-party privilege split, and policy boundaries
+that cannot be requested through manifests or presets.
+
 ## Change Living Archive
 
 Read [ADR-007: Living Archive Boundaries](architecture/ADR-007-living-archive-boundaries.md),
