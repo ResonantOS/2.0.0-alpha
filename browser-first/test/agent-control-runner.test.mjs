@@ -825,3 +825,24 @@ test("#226: cancelling the run job mid-loop with a queued job in the REAL store 
   assert.ok(jobWrites.every(([jobId]) => jobId !== queuedJob.id));
   assert.equal(harness.getPendingApproval(), null);
 });
+
+test("D3: unknown field stops the real executor as a human handoff without an approval job", async () => {
+  const { harness, win } = await createCertifiedRunner({
+    decisions: [{ status: "continue", thought: "enter a topic", action: { type: "type", field: "Topic", text: "automated", userApproved: true } }]
+  });
+  const input = win.document.createElement("input");
+  input.setAttribute("aria-label", "Topic");
+  input.value = "original";
+  win.document.body.append(input);
+  const result = await harness.runner.continueControlLoop({ goal: "enter a topic" });
+  assert.equal(result.ok, false);
+  assert.equal(result.handoff, true);
+  assert.equal(harness.getPendingApproval(), null);
+  assert.equal(input.value, "original");
+  assert.equal(harness.getControlRun().steps[0].details.phase, "handoff");
+  const message = harness.events.filter((event) => event[0] === "message").map((event) => event[2]).join("\n");
+  assert.match(message, /not recognised, so a human performs it/);
+  assert.match(message, /complete the action yourself on the page/);
+  assert.doesNotMatch(message, /click the submit\/commit control/);
+  win.close();
+});

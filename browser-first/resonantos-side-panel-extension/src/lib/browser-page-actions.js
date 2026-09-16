@@ -427,6 +427,12 @@ export function createBrowserPageActions(deps) {
       setActivity("completed", "Typed into page", response.fieldName || response.tagName || "active field");
       return response;
     }
+    if (response?.humanHandoff) {
+      await addMessage("system", `Human action required: ${response.error}`);
+      setStatus("Human action required");
+      setActivity("waiting-for-human", "Complete this action on the page", response.error);
+      return response;
+    }
     await addMessage("system", `I could not type into the page: ${response?.error ?? "unknown error"}`);
     setStatus("Page action failed");
     setActivity("failed", "Typing failed", response?.error ?? "unknown error");
@@ -441,6 +447,12 @@ export function createBrowserPageActions(deps) {
       await addMessage("system", `Clicked "${response.clickedText || text || ref}" on the active page.`);
       setStatus("Ready");
       setActivity("completed", "Clicked page element", response.clickedText || text || ref);
+      return response;
+    }
+    if (response?.humanHandoff) {
+      await addMessage("system", `Human action required: ${response.error}`);
+      setStatus("Human action required");
+      setActivity("waiting-for-human", "Complete this action on the page", response.error);
       return response;
     }
     await addMessage("system", `I could not click "${text || ref}": ${response?.error ?? "unknown error"}`);

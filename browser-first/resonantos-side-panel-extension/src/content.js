@@ -457,7 +457,10 @@ const isSubmitLikeElement = (element) => {
 };
 
 const isHardRestrictedElement = (element, fallbackText = "") => {
-  // A sensitive field anywhere in the enclosing form makes every control in
+  // Scripted controls can be click targets without an enclosing form. Their
+  // own field boundary still applies, including D3's unknown-control refusal.
+  if (element?.matches?.(editableSelector) && !classifyEditableField(element).safeToType) return true;
+  // A sensitive or unrecognised field in the enclosing form makes every control in
   // that form hard-restricted: a click near a password/payment field is a
   // human-only action even when the control's own label looks harmless.
   const form = element?.closest?.("form");
@@ -501,7 +504,7 @@ const clickElement = async (element, { userApproved = false, fallbackText = "" }
       approvalRequired: true,
       deniedToAutomation: true,
       humanHandoff: true,
-      error: `Clicking "${visibleText(element) || fallbackText}" crosses a wallet/payment/login/credential boundary and must be completed by the human.`
+      error: `Clicking "${visibleText(element) || fallbackText}" crosses a wallet/payment/login/credential, personal-contact, or unrecognised-control boundary and must be completed by the human.`
     };
   }
   // #240: submit-like is UNCONDITIONALLY human-only. Do not add a userApproved
@@ -793,11 +796,12 @@ const typeIntoPage = ({ text, field = "", ref = "", submit = false, userApproved
   const element = target.element;
   const fieldSafety = classifyEditableField(element);
   if (!fieldSafety.safeToType) {
-    pulseControlOverlay({ state: "blocked", label: fieldSafety.reason, phase: "blocked", target: element });
+    pulseControlOverlay({ state: "blocked", label: fieldSafety.reason, phase: "handoff", target: element });
     return {
       ok: false,
       approvalRequired: true,
       deniedToAutomation: true,
+      humanHandoff: true,
       fieldSafety,
       error: fieldSafety.reason
     };
@@ -808,13 +812,14 @@ const typeIntoPage = ({ text, field = "", ref = "", submit = false, userApproved
   setNativeValue(element, value);
   if (submit) {
     if (!fieldSafety.safeToSubmit) {
-      pulseControlOverlay({ state: "blocked", label: "Approval required to submit this field", phase: "blocked", target: element });
+      pulseControlOverlay({ state: "blocked", label: "Human-only: submit this field yourself", phase: "handoff", target: element });
       return {
         ok: false,
         approvalRequired: true,
         deniedToAutomation: true,
+        humanHandoff: true,
         fieldSafety,
-        error: "Submitting a non-search field requires human approval."
+        error: "This non-search field must be submitted by the human on the page."
       };
     }
     if (!formIsSafeToAutoSubmit(element.form)) {
@@ -982,8 +987,8 @@ const editableRootForSelection = () => {
 
 const editableSelectionDetails = (element) => {
   if (!element || !isEditable(element)) return null;
-  // Never read a selection out of a sensitive field (password, payment,
-  // credential): the inline assistant must not see that text at all.
+  // Never read a selection out of a human-only field (sensitive or unknown):
+  // the inline assistant must not see that text at all.
   const fieldSafety = classifyEditableField(element);
   if (fieldSafety && !fieldSafety.safeToType) return null;
   if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
@@ -1199,7 +1204,7 @@ const timeoutAfter = (ms, errorMessage) => new Promise((_, reject) => {
 const runInlineAction = async (action) => {
   const { panel } = ensureInlineAssistantUi();
   const result = panel.querySelector(".ros-inline-result");
-  // If the panel is anchored to a field that classifies as sensitive, refuse
+  // If the panel is anchored to a human-only field, refuse
   // the action outright and drop any captured selection state.
   const activeField = panel.dataset.activeRef ? elementByControlRef(panel.dataset.activeRef) : null;
   const activeFieldSafety = activeField ? classifyEditableField(activeField) : null;

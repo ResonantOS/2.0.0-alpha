@@ -806,7 +806,9 @@ export function createAgentControlRunner(deps) {
             ? [
               `Agent Control Mode stopped at action ${stepIndex + 1}: ${controlStepLabel(step)}`,
               executedResult?.error ?? "This action is human-only.",
-              "This is human-only: click the submit/commit control yourself on the page, then resume or continue the job."
+              boundary === "public-submit"
+                ? "This is human-only: click the submit/commit control yourself on the page, then resume or continue the job."
+                : "This is human-only: complete the action yourself on the page, then resume or continue the job."
             ].join("\n")
             : `Agent Control Mode blocked at action ${stepIndex + 1}: ${controlStepLabel(step)}\n${reason}`;
           await addMessage("system", message);
