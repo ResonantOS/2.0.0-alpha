@@ -318,3 +318,21 @@ test("control reporting service reports delegation failures", async () => {
 
   assert.ok(harness.events.some((event) => event[0] === "message" && /Delegation failed: delegate down/.test(event[2])));
 });
+
+test('reports archives and delegation receive union redaction without losing benign references', async () => {
+  const secret = 'client_secret="synthetic: private value"';
+  const url = 'https://example.test/?next=%3Fclient_secret%3Dsynthetic-value%26view%3Dwide&ref=home';
+  const job = { id: 'job-safe', goal: secret, status: 'blocked', summary: 'ghp_' + 'x'.repeat(20), steps: [], pageLock: { url, siteKey: 'example.test', tabId: 7 } };
+  const h = createHarness({ currentControlRun: job, lastSnapshot: { title: secret, url }, pendingApproval: { step: { type: 'click', text: secret }, reason: secret } });
+  for (const report of [h.service.buildControlReport([], 'blocked'), h.service.buildBrowserJobReport(job), h.service.buildControlDelegationPacket()]) {
+    assert.doesNotMatch(report, /synthetic|private value|ghp_/); assert.match(report, /REDACTED/); assert.match(report, /job-safe/);
+  }
+  await h.service.saveControlReportToArchive([], 'blocked');
+  await h.service.saveBrowserJobReportToArchive(job); await h.service.delegateControlIssue();
+  const bodies = h.events.filter(([kind]) => kind === 'bridge').map((event) => event[2]);
+  assert.equal(bodies.length, 3);
+  for (const body of bodies) assert.doesNotMatch(JSON.stringify(body), /synthetic|private value|ghp_/);
+  assert.equal(bodies[0].url, 'https://example.test/?next=%3Fclient_secret%3DREDACTED%26view%3Dwide&ref=home');
+  assert.equal(bodies[1].sourceMessageId, 'job-safe'); assert.equal(bodies[2].sourceControlRunId, 'job-safe');
+  assert.match(bodies[2].mission, /client_secret="REDACTED"/);
+});

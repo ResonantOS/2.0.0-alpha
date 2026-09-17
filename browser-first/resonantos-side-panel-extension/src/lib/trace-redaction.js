@@ -1,36 +1,79 @@
-// Redaction pass for durable Agent Control trace artifacts (reports and
-// delegation packets). The in-memory run keeps full fidelity for resume and
-// UX; only exported artifacts pass through this scrubber so secrets echoed in
-// goals, URLs, notes, or errors never reach the archive.
-
-const SECRET_URL_PARAM_NAMES =
-  "(?:token|key|secret|password|passwd|pwd|pin|otp|auth[_-]?code|access[_-]?token|refresh[_-]?token|api[_-]?key|session|sid|signature|csrf|jwt|code)";
-const URL_PARAM_PATTERN = new RegExp(`([?&])(${SECRET_URL_PARAM_NAMES})(=)([^&#\\s]*)`, "gi");
-// Percent-encoded URLs nested inside another URL's query value keep their
-// separators as %3F / %26 / %3D; the plain pattern above never sees them, so a
-// redirect like ?next=https%3A%2F%2Fb.com%2F%3Ftoken%3Dabc would leak.
+// Shared strict redaction for durable traces, reports and session summaries.
+// Live execution retains its original text; this is a lossy storage boundary.
+const SECRET_NAMES = "(?:password|passwd|pwd|token|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|otp|pin|auth[_-]?code|signature|jwt|session|sid|csrf|key|code|client[_-]?(?:secret|id|token)|session[_-]?(?:id|token|key)|id[_-]?token|csrf[_-]?token|jwt[_-]?token)";
+const SECRET_PROPERTY_PATTERN = new RegExp(`^${SECRET_NAMES}$`, "i");
+const URL_PARAM_PATTERN = new RegExp(`([?&])(${SECRET_NAMES})(=)([^&#\\s]*)`, "gi");
 const ENCODED_URL_PARAM_PATTERN = new RegExp(
-  `(%3F|%26)(${SECRET_URL_PARAM_NAMES})(%3D)((?:(?!%26|%23)[^&#\\s])*)`,
-  "gi"
+  `(%3F|%26)(${SECRET_NAMES})(%3D)((?:(?!%26|%23)[^&#\\s])*)`, "gi"
 );
-const SECRET_ASSIGNMENT_NAMES =
-  "(?:password|passwd|pwd|token|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|otp|pin|auth[_-]?code|signature|jwt|session|sid|csrf|key|code)";
-// The value match runs through to whitespace, &, or # so values containing
-// commas or semicolons (password=abc,defsecret) are redacted in full.
-const ASSIGNMENT_PATTERN = new RegExp(`\\b(${SECRET_ASSIGNMENT_NAMES})(\\s*[=:]\\s*)[^\\s&#]+`, "gi");
-// "Authorization: Bearer <token>" / "Token: Bearer <x>" — the credential is
-// the word after Bearer, so redact the whole scheme+token span. This must run
-// before ASSIGNMENT_PATTERN, which would otherwise consume only the literal
-// word "Bearer" as the value and leave the token itself in the artifact.
+// Capture delimiters; quoted values may contain spaces, colons and escapes.
+// Unquoted values retain the original comma/semicolon coverage.
+const QUOTED_VALUE = String.raw`"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'`;
+const ASSIGNMENT_PATTERN = new RegExp(
+  String.raw`\b(${SECRET_NAMES})(\s*[=:]\s*)(${QUOTED_VALUE}|[^\s&#]+)`, "gi"
+);
+// Preserve JSON neighbors for primitive values without narrowing the legacy
+// unquoted comma/semicolon credential family.
+const JSON_PRIMITIVE = String.raw`(?:-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null|REDACTED|\[redacted\])(?=\s*(?:,\s*["']|}))`;
+const QUOTED_ASSIGNMENT_PATTERN = new RegExp(
+  String.raw`\b(${SECRET_NAMES})(\s*["']\s*[=:]\s*)(${QUOTED_VALUE}|${JSON_PRIMITIVE}|[^\s&#]+)`, "gi"
+);
 const BEARER_PATTERN = /\bBearer\s+[A-Za-z0-9\-._~+/=]+/g;
+const PROVIDER_KEY_PREFIX_PATTERN = /\b(?:sk_live_[A-Za-z0-9]{8,}|AKIA[0-9A-Z]{16}|AIza[A-Za-z0-9_-]{25,39}|gh[pousr]_[A-Za-z0-9]{20,}|xox[abp]-[A-Za-z0-9-]{10,})\b/g;
+const BASE58_HEURISTIC_PATTERN = /\b[A-HJ-NP-Za-hj-np-z1-9]{40,90}\b/g;
 const HEX_TOKEN_PATTERN = /\b[0-9a-fA-F]{32,}\b/g;
 
-export function redactTraceText(value) {
+export function redactTraceText(value, {
+  replacement = "REDACTED",
+  tokenReplacement = "[REDACTED-TOKEN]"
+} = {}) {
   if (typeof value !== "string") return "";
-  return String(value)
-    .replace(URL_PARAM_PATTERN, (match, separator, name, eq) => `${separator}${name}${eq}REDACTED`)
-    .replace(ENCODED_URL_PARAM_PATTERN, (match, separator, name, eq) => `${separator}${name}${eq}REDACTED`)
-    .replace(BEARER_PATTERN, "REDACTED")
-    .replace(ASSIGNMENT_PATTERN, (match, name, separator) => `${name}${separator}REDACTED`)
-    .replace(HEX_TOKEN_PATTERN, "[REDACTED-TOKEN]");
+  const replaceAssignment = (match, name, separator, secret) => {
+    const quote = secret[0] === '"' || secret[0] === "'" ? secret[0] : "";
+    return `${name}${separator}${quote}${replacement}${quote}`;
+  };
+  return value
+    // Bearer must precede every name/value pass, including URL assignments.
+    .replace(BEARER_PATTERN, () => replacement)
+    .replace(QUOTED_ASSIGNMENT_PATTERN, replaceAssignment)
+    .replace(ASSIGNMENT_PATTERN, replaceAssignment)
+    .replace(URL_PARAM_PATTERN, (match, separator, name, eq) => `${separator}${name}${eq}${replacement}`)
+    .replace(ENCODED_URL_PARAM_PATTERN, (match, separator, name, eq) => `${separator}${name}${eq}${replacement}`)
+    .replace(PROVIDER_KEY_PREFIX_PATTERN, () => tokenReplacement)
+    .replace(BASE58_HEURISTIC_PATTERN, () => tokenReplacement)
+    .replace(HEX_TOKEN_PATTERN, () => tokenReplacement);
+}
+
+export function redactTraceValue(value, options = {}) {
+  const ancestors = new WeakSet();
+  function visit(input) {
+    if (typeof input === "string") return redactTraceText(input, options);
+    if (input === null || typeof input === "boolean") return input;
+    if (typeof input === "number") return Number.isFinite(input) ? input : null;
+    if (typeof input !== "object" || ancestors.has(input)) return null;
+    if (!Array.isArray(input) && ![Object.prototype, null].includes(Object.getPrototypeOf(input))) return null;
+    ancestors.add(input);
+    const output = Array.isArray(input) ? [] : {};
+    const descriptors = Object.getOwnPropertyDescriptors(input);
+    if (Array.isArray(input)) {
+      for (let index = 0; index < input.length; index++) {
+        const descriptor = descriptors[index];
+        output.push(descriptor && Object.hasOwn(descriptor, "value") ? visit(descriptor.value) : null);
+      }
+    } else {
+      for (const [name, descriptor] of Object.entries(descriptors)) {
+        if (!descriptor.enumerable) continue;
+        const cleanName = redactTraceText(name, options);
+        let key = cleanName;
+        for (let suffix = 2; Object.hasOwn(output, key); suffix++) key = `${cleanName}#${suffix}`;
+        const cleanValue = !Object.hasOwn(descriptor, "value") ? null
+          : SECRET_PROPERTY_PATTERN.test(name) ? options.replacement ?? "REDACTED"
+            : visit(descriptor.value);
+        Object.defineProperty(output, key, { value: cleanValue, enumerable: true, writable: true, configurable: true });
+      }
+    }
+    ancestors.delete(input);
+    return output;
+  }
+  return visit(value);
 }
