@@ -2426,3 +2426,161 @@ test("vendored published engine floor stays independent while private manifests 
     }
   });
 });
+
+const MATRIX_PATH = "docs/augmentor-future-list-acceptance-matrix.md";
+
+function fixtureGit(root, ...args) {
+  const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8" });
+  assert.equal(result.status, 0, `git ${args.join(" ")}: ${result.stderr}`);
+  return result.stdout;
+}
+
+function evidenceFixture(root, content, targets = {}, { git = true } = {}) {
+  writeFixture(root, MATRIX_PATH, content);
+  const index = readFileSync(join(root, "docs/README.md"), "utf8");
+  writeFixture(root, "docs/README.md", `${index}\n[Matrix](augmentor-future-list-acceptance-matrix.md)\n`);
+  for (const [path, value] of Object.entries(targets)) writeFixture(root, path, value);
+  if (git) {
+    fixtureGit(root, "init", "--quiet");
+    fixtureGit(root, "add", ".");
+  }
+}
+
+function evidenceFindings(root, options = {}) {
+  return validateRepositoryDocs(root, options).findings
+    .filter((finding) => finding.message.startsWith("evidence citation"));
+}
+
+function citationFinding(line, token, reason = "does not resolve to a tracked file") {
+  return { path: MATRIX_PATH, line, message: `evidence citation "${token}" ${reason}` };
+}
+
+test("evidence citations reject missing exact paths and basenames with source lines", () => {
+  withRepository((root) => {
+    evidenceFixture(root, "# Matrix\n\n`proof/missing.test.mjs`\n\n`absent.js`\n");
+    assert.deepEqual(evidenceFindings(root), [
+      citationFinding(3, "proof/missing.test.mjs"), citationFinding(5, "absent.js"),
+    ]);
+  });
+});
+
+test("evidence citations accept tracked paths and unique basenames but reject a missing control", () => {
+  withRepository((root) => {
+    evidenceFixture(root, "# Matrix\n`proof/unique.test.mjs` `unique.test.mjs` `Makefile` `.nvmrc` `proof/file with spaces.js` `file with spaces.js`\n`missing.js`\n", {
+      "proof/unique.test.mjs": "", "Makefile": "", "proof/file with spaces.js": "",
+    });
+    assert.deepEqual(evidenceFindings(root), [citationFinding(3, "missing.js")]);
+  });
+});
+
+test("evidence citations reject ambiguous basenames and accept explicit disambiguation", () => {
+  withRepository((root) => {
+    evidenceFixture(root, "# Matrix\n`shared.js` `z/shared.js`\n", { "z/shared.js": "", "a/shared.js": "" });
+    assert.deepEqual(evidenceFindings(root), [citationFinding(2, "shared.js", "is ambiguous: a/shared.js, z/shared.js")]);
+  });
+});
+
+test("evidence citations never repair a wrong directory using a basename", () => {
+  withRepository((root) => {
+    evidenceFixture(root, "# Matrix\n`wrong/proof.js` `right/proof.js`\n", { "right/proof.js": "" });
+    assert.deepEqual(evidenceFindings(root), [citationFinding(2, "wrong/proof.js")]);
+  });
+});
+
+test("evidence citations reject untracked ignored and deleted indexed targets", () => {
+  withRepository((root) => {
+    evidenceFixture(root, "# Matrix\n`untracked.js`\n`ignored.js`\n`deleted.js`\n`staged.js`\n", {
+      ".gitignore": "ignored.js\n", "deleted.js": "", "staged.js": "",
+    });
+    writeFixture(root, "untracked.js", "");
+    writeFixture(root, "ignored.js", "");
+    rmSync(join(root, "deleted.js"));
+    assert.deepEqual(evidenceFindings(root), [
+      citationFinding(2, "untracked.js"), citationFinding(3, "ignored.js"),
+      citationFinding(4, "deleted.js", "does not exist as a file inside the repository"),
+    ]);
+  });
+});
+
+test("evidence citations respect Markdown code spans and ignore non-file tokens", () => {
+  withRepository((root) => {
+    evidenceFixture(root, [
+      "# Matrix", "`single.js` and ``double.mjs``", "", "| Evidence |", "| --- |", "| `table/path.tsx` |", "",
+      "```text", "`fenced.js`", "```", "", "<!-- `comment.js` -->", "",
+      "`https://example.com/file.js` `mailto:a@example.com` `npm run check` `node missing.js` `git diff path/file.js`",
+      "`beta.1` `beta.2` `@tab` `FL-01` `dev` `deferred` `(C)` `epic`",
+      "Plain missing.js and \\`escaped.js\\` are not citations.",
+    ].join("\n"));
+    assert.deepEqual(evidenceFindings(root), [
+      citationFinding(2, "double.mjs"), citationFinding(2, "single.js"), citationFinding(6, "table/path.tsx"),
+    ]);
+  });
+});
+
+test("evidence citations are limited to configured documents", () => {
+  withRepository((root) => {
+    evidenceFixture(root, "# Matrix\n`missing.js`\n");
+    writeFixture(root, "docs/linked.md", "# Linked Heading\n`missing.js`\n");
+    assert.deepEqual(evidenceFindings(root), [citationFinding(2, "missing.js")]);
+  });
+});
+
+test("evidence citations fail closed without a tracked inventory", () => {
+  withRepository((root) => {
+    evidenceFixture(root, "# Matrix\n`proof.js`\n", { "proof.js": "" }, { git: false });
+    assert.deepEqual(evidenceFindings(root), [{
+      path: MATRIX_PATH, line: 1, message: "evidence citation inventory unavailable: cannot obtain tracked files from Git; supply trackedFiles explicitly",
+    }]);
+    assert.deepEqual(evidenceFindings(root, { trackedFiles: ["proof.js", "proof.js"] }), []);
+    assert.deepEqual(evidenceFindings(root, { trackedFiles: [] }), [citationFinding(2, "proof.js")]);
+  });
+});
+
+test("evidence citations reject targets that are not files inside the repository", () => {
+  withRepository((root) => {
+    withRepository((outside) => {
+      evidenceFixture(root, "# Matrix\n`directory.js`\n`escape.js`\n`regular.js`\n", { "directory.js": "", "regular.js": "" });
+      symlinkSync(join(outside, ".nvmrc"), join(root, "escape.js"));
+      fixtureGit(root, "add", "escape.js");
+      rmSync(join(root, "directory.js"));
+      mkdirSync(join(root, "directory.js"));
+      assert.deepEqual(evidenceFindings(root), [
+        citationFinding(2, "directory.js", "does not exist as a file inside the repository"),
+        citationFinding(3, "escape.js", "does not exist as a file inside the repository"),
+      ]);
+    });
+  });
+});
+
+test("CLI rejects a missing evidence citation and succeeds after correction", () => {
+  withRepository((root) => {
+    evidenceFixture(root, "# Matrix\n`missing.js`\n", { "proof.js": "" });
+    const run = () => spawnSync(process.execPath, [SCRIPT_PATH], { cwd: root, encoding: "utf8" });
+    const red = run();
+    assert.equal(red.status, 1, `missing evidence must fail the CLI: ${red.stdout} ${red.stderr}`);
+    assert.match(red.stderr, /docs\/augmentor-future-list-acceptance-matrix\.md:2: evidence citation "missing\.js" does not resolve to a tracked file/);
+    assert.deepEqual(evidenceFindings(root), [citationFinding(2, "missing.js")]);
+    writeFixture(root, MATRIX_PATH, "# Matrix\n`proof.js`\n");
+    const green = run();
+    assert.equal(green.status, 0, green.stderr);
+    assert.match(green.stdout, /Documentation contract validation passed/);
+  });
+});
+
+test("repository matrix validation detects an injected missing citation and resolves the real citations", () => {
+  const root = fileURLToPath(new URL("../", import.meta.url));
+  const trackedFiles = fixtureGit(root, "ls-files", "--cached", "-z").split("\0").filter(Boolean);
+  const documents = trackedFiles.filter((path) => /\.md(?:own)?$/i.test(path))
+    .map((path) => ({ path, content: readFileSync(join(root, path), "utf8") }));
+  const matrix = documents.find((doc) => doc.path === MATRIX_PATH);
+  assert.ok(matrix, "the configured matrix must be present");
+  const sentinel = "browser-first/test/a4-nonexistent-proof.test.mjs";
+  assert.equal(trackedFiles.includes(sentinel), false);
+  const changedDocuments = documents.map((doc) => doc.path === MATRIX_PATH
+    ? { ...doc, content: `${doc.content}\n\`${sentinel}\`\n` } : doc);
+  const injected = evidenceFindings(root, { files: trackedFiles, trackedFiles, documents: changedDocuments });
+  assert.deepEqual(injected.filter((finding) => finding.message.includes(sentinel)), [
+    citationFinding(matrix.content.split("\n").length + 1, sentinel),
+  ]);
+  assert.deepEqual(evidenceFindings(root, { files: trackedFiles, trackedFiles, documents }), []);
+});

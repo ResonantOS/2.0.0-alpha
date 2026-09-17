@@ -12,34 +12,38 @@ pricing, warranty, and independent review summaries, save a multi-tab
 research trail to Living Archive intake, and produce a side-by-side decision
 note the human can act on.
 
+Goals and prompts describe intended workflows, not certified end-to-end
+automation. Check generated claims against separately captured source content.
+
 ## Augmentor features used
 
-- [#237 Multi-step workflows](../augmentor-future-list-acceptance-matrix.md#automation)
-  — supported
+- [#237 Workflow recipe documentation](../augmentor-future-list-acceptance-matrix.md#automation)
+  — available; execution depends on the bounded capabilities below
 - [#218 Page content analysis / Q&A](../augmentor-future-list-acceptance-matrix.md#web-understanding)
   — supported
 - [#221 One-click / question-driven summaries](../augmentor-future-list-acceptance-matrix.md#summarization-research)
   — supported
 - [#227 Research-trail save and archive review handoff](../augmentor-future-list-acceptance-matrix.md#summarization-research)
-  — future
+  — partial save/review foundation; broader acceptance remains open
 - [#232 Spreadsheet and document artifact contract](../augmentor-future-list-acceptance-matrix.md#multi-model-backend-provider-routing)
-  — future
+  — open artifact-contract acceptance work; proof required
+- [#228 Living Archive context continuity acceptance proof](../augmentor-future-list-acceptance-matrix.md#cross-tab-intelligence)
+  — restores saved state; does not reopen or verify live tabs
 
 ## Safe automated steps
 
 The Augmentor can:
 
-- Read each open product page and extract specifications, price, warranty,
-  and a bounded excerpt of independent reviews (`#218`).
-- Compare two or three products side-by-side with each tab cited, and
-  produce a single tabular summary inside the chat.
-- Save the multi-tab comparison as a research-trail capture to the Living
-  Archive intake (per `#227`).
-- Draft decision notes with the human's chosen constraints (budget, use
-  case, accessibility, ecosystem), without adding facts the human did not
-  supply.
-- Resume after a restart and surface the saved comparison (per Living
-  Archive continuity acceptance `#228`).
+- Read each readable product page separately and extract specifications, price,
+  warranty, and bounded review excerpts with citations (`#218`).
+- Save captured source pages as a research trail for archive review (`#227`).
+  This does not itself save a generated comparison.
+- Restore explicitly saved state after a restart (`#228`); the human reopens
+  and verifies current pages and prices.
+
+Cross-source comparison and decision notes are human-reviewed goals using those
+separately captured sources and the human's constraints. Tab provenance alone
+does not establish grounded comparison, and #232 artifact acceptance remains open.
 
 ## Human-only checkpoints
 
@@ -63,18 +67,18 @@ takes to the vendor site.
 
 ## Suggested prompts
 
-- "For each open tab, extract: product name, key specs, current price,
-  warranty, and the top three independent-review snippets. Cite each tab."
-- "Build a comparison table against my constraints: under $700, two
-  USB-C ports, and a 30-day return policy."
-- "Save the comparison to my Living Archive intake as a research trail so
-  I can pick this up tomorrow."
-- "Resume tomorrow: confirm the comparison still matches the open tabs and
-  my constraints."
+- "Summarise this product page: name, key specs, price, warranty, and bounded
+  review excerpts. Cite the source and flag missing details."
+- "Using my separately captured summaries, draft a comparison for me to check:
+  under $700, two USB-C ports, and a 30-day return policy."
+- "Capture the source pages for archive review; I will retain and check
+  the generated comparison separately."
+- "Show the restored saved context tomorrow so I can verify the live pages,
+  current prices, and comparison myself."
 
 ## Evidence to capture
 
-- The comparison table with each tab cited.
+- The separately captured summaries and human-checked comparison with source citations.
 - The Living Archive intake item id for the research trail.
 - A screenshot of the human-only checklist above being shown in the side
   panel after the human reviews the decision notes.
