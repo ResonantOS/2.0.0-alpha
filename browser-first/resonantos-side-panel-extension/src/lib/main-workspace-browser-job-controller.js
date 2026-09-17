@@ -1,4 +1,4 @@
-const TERMINAL_STATUSES = new Set(["blocked", "cancelled", "completed", "denied", "failed"]);
+import { mutateBrowserJobStorage } from "./browser-job-store.js";
 
 export function createMainWorkspaceBrowserJobController({
   addSystemMessage = async () => undefined,
@@ -33,60 +33,38 @@ export function createMainWorkspaceBrowserJobController({
     await openSidebar();
   };
 
-  const focusJob = async (job) => {
-    if (!job?.id) return false;
-    await storage?.set?.({
-      [activeBrowserJobKey]: job.id,
-      [pendingSidebarPromptKey]: {
-        createdAt: now(),
-        prompt: `/jobs focus ${job.id}`
-      }
-    }).catch(() => undefined);
-    afterChange();
-    await openSidebar();
-    return true;
-  };
-
   const routeJobCommand = async (job, command) => {
-    if (!job?.id || !command) return false;
-    await storage?.set?.({
-      [activeBrowserJobKey]: job.id,
-      [pendingSidebarPromptKey]: {
-        createdAt: now(),
-        prompt: `/${command} ${job.id}`
-      }
-    }).catch(() => undefined);
+    try {
+      const result = await mutateBrowserJobStorage({ storage, storageKeys, now,
+        mutation: { type: "focus", jobId: job?.id, command } });
+      if (!result.changed) return false;
+    } catch (error) {
+      await addSystemMessage(error.code === "unsafe-focus"
+        ? "This saved browser job cannot be focused safely. Reopen the side panel to reload and repair browser job history."
+        : "Browser job history could not be updated safely.");
+      return false;
+    }
     afterChange();
     await openSidebar();
     return true;
   };
 
+  const focusJob = (job) => routeJobCommand(job, "jobs focus");
   const pauseJob = (job) => routeJobCommand(job, "pause");
-
   const continueJob = (job) => routeJobCommand(job, "continue");
 
   const cancelJob = async (job) => {
     if (!job?.id) return false;
-    const { activeJobId, jobs } = await readJobs();
-    let changed = false;
-    const completedAt = now();
-    const nextJobs = jobs.map((candidate) => {
-      if (candidate?.id !== job.id || TERMINAL_STATUSES.has(candidate?.status)) return candidate;
-      changed = true;
-      return {
-        ...candidate,
-        completedAt,
-        pageLock: null,
-        status: "cancelled",
-        updatedAt: completedAt
-      };
-    });
-    if (!changed) return false;
-    await storage?.set?.({
-      [activeBrowserJobKey]: activeJobId || job.id,
-      [browserJobsKey]: nextJobs
-    }).catch(() => undefined);
-    await addSystemMessage(`Stopped browser job ${job.id}: ${job.goal || "Untitled browser task"}`);
+    let result;
+    try {
+      result = await mutateBrowserJobStorage({ storage, storageKeys, now,
+        mutation: { type: "cancel", jobId: job.id } });
+    } catch {
+      await addSystemMessage("Browser job history could not be updated safely.");
+      return false;
+    }
+    if (!result.changed) return false;
+    await addSystemMessage(`Stopped browser job ${result.job.id}: ${result.job.goal || "Untitled browser task"}`);
     afterChange();
     return true;
   };

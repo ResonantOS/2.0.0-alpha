@@ -375,6 +375,153 @@ const changedRouting = (value, fields) => Boolean(value && fields.some((field) =
   return redactTraceText(text) !== text;
 }));
 
+function selectSafeId(value, reserved, nextReplacement) {
+  const original = String(value);
+  if (redactTraceText(original) === original && !reserved.has(original)) return original;
+  let id;
+  do { id = `job-redacted-${nextReplacement()}`; } while (reserved.has(id));
+  return id;
+}
+
+function durableRecord(input, live, previous = null) {
+  const clean = sanitizedJobInput(input);
+  const unsafeLock = Object.hasOwn(input, "pageLock")
+    ? changedRouting(input.pageLock, ["url", "siteKey"]) : previous?.unsafeLock ?? false;
+  const unsafePreflight = Object.hasOwn(input, "preflightDecision")
+    ? changedRouting(input.preflightDecision, ["id", "siteKey", "taskClass"]) : previous?.unsafePreflight ?? false;
+  const candidate = {
+    ...previous?.job, ...clean,
+    id: live.id, status: live.status,
+    createdAt: redactTraceValue(live.createdAt),
+    updatedAt: redactTraceValue(live.updatedAt),
+    completedAt: redactTraceValue(live.completedAt)
+  };
+  if (unsafeLock) candidate.pageLock = null;
+  if (unsafePreflight) candidate.preflightDecision = null;
+  if ((unsafeLock || unsafePreflight) && LOCK_HOLDING_JOB_STATUSES.includes(candidate.status)) {
+    candidate.status = "paused";
+    candidate.pageLock = null;
+    candidate.pendingApproval = null;
+    candidate.lastError = SAVED_TARGET_REDACTED;
+  }
+  return { job: normalizeBrowserJob(candidate, { now: () => live.updatedAt }), unsafeLock, unsafePreflight };
+}
+
+// External mutations coordinate only within this realm, adapter and jobs key.
+// Live stores retain their own hydration/write queues and failed-read guards.
+const externalMutationQueues = new WeakMap();
+class BrowserJobMutationError extends Error {
+  constructor(message, code = "storage") { super(message); this.code = code; }
+}
+const unsafeFocus = () => new BrowserJobMutationError(
+  "This saved browser job cannot be focused safely. Reopen the side panel to reload and repair browser job history.",
+  "unsafe-focus"
+);
+const focusableId = (id) => typeof id === "string" && id.length > 0 &&
+  !/[\s\u0000-\u001f\u007f-\u009f]/u.test(id) && redactTraceText(id) === id;
+const objectRecord = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+
+export function mutateBrowserJobStorage({ storage, storageKeys, mutation, now = defaultNow }) {
+  if (typeof storage?.get !== "function" || typeof storage?.set !== "function") {
+    return Promise.reject(new BrowserJobMutationError("Browser job storage is unavailable."));
+  }
+  const jobsKey = storageKeys?.browserJobs ?? "augmentorBrowserJobs";
+  const activeKey = storageKeys?.activeBrowserJob ?? "augmentorActiveBrowserJob";
+  const promptKey = storageKeys?.pendingSidebarPrompt ?? "augmentorPendingSidebarPrompt";
+  const operation = async () => {
+    try {
+      // Settings adapters accept string keys; Chrome storage and workspace
+      // adapters accept them too. Missing history is unknown, never empty.
+      const history = await storage.get(jobsKey);
+      if (!objectRecord(history) || !Object.hasOwn(history, jobsKey) || !Array.isArray(history[jobsKey])) {
+        throw new BrowserJobMutationError("Browser job history could not be read safely.");
+      }
+      const originals = history[jobsKey];
+      for (const record of originals) {
+        if (!objectRecord(record)) throw new BrowserJobMutationError("Browser job history could not be read safely.");
+      }
+      const active = Object.hasOwn(history, activeKey) ? history : await storage.get(activeKey);
+      if (!objectRecord(active)) {
+        throw new BrowserJobMutationError("Browser job history could not be read safely.");
+      }
+      const stored = { [activeKey]: active[activeKey] };
+      const { type, jobId, command } = mutation;
+      if (!["cancel", "clear-settings-terminal", "focus"].includes(type)) {
+        throw new BrowserJobMutationError("Browser job mutation is unavailable.");
+      }
+      const matches = originals.filter((job) => job.id === jobId);
+      if (type === "focus") {
+        if (matches.length !== 1 || !focusableId(jobId)) throw unsafeFocus();
+        if (!["jobs focus", "pause", "continue"].includes(command)) throw unsafeFocus();
+        const envelope = redactTraceValue({
+          [activeKey]: jobId,
+          [promptKey]: { createdAt: now(), prompt: `/${command} ${jobId}` }
+        });
+        await storage.set(envelope);
+        return { changed: true, job: null, removed: 0, activeJobId: jobId };
+      }
+      if (type === "cancel" && matches.length > 1) {
+        throw new BrowserJobMutationError("Browser job identity could not be resolved safely.");
+      }
+      const target = matches[0];
+      if (type === "cancel" && (!target || isTerminalBrowserJobStatus(target.status))) {
+        return { changed: false, job: null, removed: 0, activeJobId: redactTraceValue(stored[activeKey] ?? null) };
+      }
+      const timestamp = now();
+      const reserved = new Set(originals.map((job) => String(job.id ?? "")));
+      const counts = new Map();
+      for (const job of originals) counts.set(job.id, (counts.get(job.id) ?? 0) + 1);
+      let replacementIndex = 0;
+      const mapped = new Map();
+      let removed = 0;
+      const jobs = [];
+      for (const original of originals) {
+        // Settings selects by original status, before invalid-status quarantine.
+        if (type === "clear-settings-terminal" && isTerminalBrowserJobStatus(original.status)) {
+          removed++; continue;
+        }
+        const id = focusableId(original.id) && counts.get(original.id) === 1
+          ? original.id : selectSafeId(original.id ?? "", reserved, () => ++replacementIndex);
+        reserved.add(id);
+        let input = { ...original, id };
+        if (type === "cancel" && original === target) {
+          input = { ...input, status: "cancelled", updatedAt: timestamp, completedAt: timestamp, pageLock: null };
+        } else if (!VALID_JOB_STATUSES.includes(original.status)) {
+          input = { ...input, status: "paused", pendingApproval: null, pageLock: null, preflightDecision: null,
+            lastError: "Saved job status was invalid. Review this job before continuing." };
+        }
+        const live = normalizeBrowserJob(sanitizedJobInput(input), { now: () => timestamp });
+        const job = durableRecord(input, live).job;
+        mapped.set(original, job);
+        jobs.push(job);
+      }
+      const activeMatches = originals.filter((job) => job.id === stored[activeKey]);
+      const focused = stored[activeKey] != null && stored[activeKey] !== "" && activeMatches.length === 1
+        ? mapped.get(activeMatches[0]) : null;
+      const committedTarget = type === "cancel" ? mapped.get(target) : null;
+      const activeJobId = focused?.id ?? committedTarget?.id ?? null;
+      const envelope = redactTraceValue({
+        [jobsKey]: jobs,
+        ...(type === "cancel" || activeJobId !== (stored[activeKey] ?? null) ? { [activeKey]: activeJobId } : {})
+      });
+      const result = redactTraceValue({ changed: true, job: committedTarget, removed, activeJobId });
+      await storage.set(envelope);
+      return result;
+    } catch (error) {
+      if (error instanceof BrowserJobMutationError) throw error;
+      throw new BrowserJobMutationError("Browser job history could not be updated safely.");
+    }
+  };
+  let queues = externalMutationQueues.get(storage);
+  if (!queues) { queues = new Map(); externalMutationQueues.set(storage, queues); }
+  const previous = queues.get(jobsKey);
+  const result = previous ? previous.then(operation) : operation();
+  const settled = () => { if (queues.get(jobsKey) === tail) queues.delete(jobsKey); };
+  const tail = result.then(settled, settled);
+  queues.set(jobsKey, tail);
+  return result;
+}
+
 export function createBrowserJobStore({
   storage,
   storageKeys,
@@ -413,36 +560,9 @@ export function createBrowserJobStore({
   }
   let replacementIndex = 0;
   function safeId(value, reserved) {
-    const original = String(value);
-    if (redactTraceText(original) === original && !reserved.has(original)) return original;
-    let id;
-    do { id = `job-redacted-${++replacementIndex}`; } while (reserved.has(id));
-    return id;
+    return selectSafeId(value, reserved, () => ++replacementIndex);
   }
 
-  function durableRecord(input, live, previous = null) {
-    const clean = sanitizedJobInput(input);
-    const unsafeLock = Object.hasOwn(input, "pageLock")
-      ? changedRouting(input.pageLock, ["url", "siteKey"]) : previous?.unsafeLock ?? false;
-    const unsafePreflight = Object.hasOwn(input, "preflightDecision")
-      ? changedRouting(input.preflightDecision, ["id", "siteKey", "taskClass"]) : previous?.unsafePreflight ?? false;
-    const candidate = {
-      ...previous?.job, ...clean,
-      id: live.id, status: live.status,
-      createdAt: redactTraceValue(live.createdAt),
-      updatedAt: redactTraceValue(live.updatedAt),
-      completedAt: redactTraceValue(live.completedAt)
-    };
-    if (unsafeLock) candidate.pageLock = null;
-    if (unsafePreflight) candidate.preflightDecision = null;
-    if ((unsafeLock || unsafePreflight) && LOCK_HOLDING_JOB_STATUSES.includes(candidate.status)) {
-      candidate.status = "paused";
-      candidate.pageLock = null;
-      candidate.pendingApproval = null;
-      candidate.lastError = SAVED_TARGET_REDACTED;
-    }
-    return { job: normalizeBrowserJob(candidate, { now: () => live.updatedAt }), unsafeLock, unsafePreflight };
-  }
   let activeJobId = null;
   let monitorCollapsed = true;
 
