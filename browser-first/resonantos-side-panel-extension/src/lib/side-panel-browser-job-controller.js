@@ -32,6 +32,10 @@ export function createSidePanelBrowserJobController({
   };
 
   const createBrowserJob = async ({ existingJob = null, goal, planner = "observe-act-verify-loop", summary = "", status = "running" }) => {
+    const historyFailureMessage = "Browser job history could not be loaded. No browser job was started.";
+    if (browserJobStore.isHistoryReadBlocked?.()) {
+      throw new Error(historyFailureMessage);
+    }
     const pageLock = await prepareBrowserJobPageLock({ goal, existingJob, status });
     if (existingJob?.id) {
       await browserJobStore.activateJob(existingJob.id);
@@ -43,6 +47,9 @@ export function createSidePanelBrowserJobController({
         pageLock,
         preflightDecision: consumeNextControlPreflightDecision() ?? existingJob.preflightDecision ?? null
       });
+      if (browserJobStore.isHistoryReadBlocked?.()) {
+        throw new Error(historyFailureMessage);
+      }
       renderJobMonitor();
       return updated ?? existingJob;
     }
@@ -55,6 +62,10 @@ export function createSidePanelBrowserJobController({
       preflightDecision: consumeNextControlPreflightDecision(),
       status
     });
+    // The store may resolve null when admission is blocked; return a job or reject.
+    if (job === null) {
+      throw new Error(historyFailureMessage);
+    }
     renderJobMonitor();
     return job;
   };

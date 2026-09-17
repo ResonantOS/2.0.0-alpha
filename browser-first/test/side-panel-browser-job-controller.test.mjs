@@ -3,6 +3,9 @@ import test from "node:test";
 
 import { createSidePanelBrowserJobController } from "../resonantos-side-panel-extension/src/lib/side-panel-browser-job-controller.js";
 
+import { createBrowserJobStore, normalizeBrowserJob } from "../resonantos-side-panel-extension/src/lib/browser-job-store.js";
+import { createSidePanelControlCommandController } from "../resonantos-side-panel-extension/src/lib/side-panel-control-command-controller.js";
+
 function createStore({ recovered = [], focusedJob = null } = {}) {
   const events = [];
   const jobs = [];
@@ -166,4 +169,96 @@ test("side panel browser job controller focuses jobs into current control run st
   assert.equal(harness.getPendingApproval().step.action, "click");
   assert.ok(harness.events.some((event) => event[0] === "activate-tab" && event[1] === "job-focus"));
   assert.ok(harness.events.some((event) => event[0] === "render-control"));
+});
+
+const historyFailureMessage = "Browser job history could not be loaded. No browser job was started.";
+function createHistoryHarness(prepare = async () => null) {
+  const now = () => "2026-05-26T10:00:00.000Z";
+  const saved = normalizeBrowserJob({ id: "saved", goal: "Read the current page", status: "paused" }, { now });
+  const backing = { jobs: [saved], active: saved.id, collapsed: true };
+  const writes = [];
+  const events = [];
+  let failRead = false;
+  let allocated = 0;
+  const store = createBrowserJobStore({
+    storageKeys: { browserJobs: "jobs", activeBrowserJob: "active", jobMonitorCollapsed: "collapsed" },
+    now, createId: () => `new-${++allocated}`,
+    storage: {
+      get: async () => { if (failRead) throw new Error("history read failed"); return structuredClone(backing); },
+      set: async (value) => { writes.push(structuredClone(value)); Object.assign(backing, structuredClone(value)); }
+    }
+  });
+  const controller = createSidePanelBrowserJobController({
+    browserJobStore: store,
+    prepareBrowserJobPageLock: async (request) => { events.push("prepare"); return prepare(request); },
+    renderJobMonitor: () => events.push("render")
+  });
+  return { store, controller, backing, saved, writes, events, failRead: () => { failRead = true; }, allocated: () => allocated };
+}
+
+for (const resumed of [false, true]) {
+  test(`failed history refuses fresh and resumed commands through the existing error boundary (${resumed ? "resumed" : "fresh"})`, async (t) => {
+    const h = createHistoryHarness();
+    const before = structuredClone(h.backing);
+    h.failRead();
+    await h.store.hydrate();
+    const messages = [];
+    let ticks = 0;
+    t.mock.method(console, "error", () => undefined);
+    const commands = createSidePanelControlCommandController({
+      browserJobStore: h.store, createBrowserJob: h.controller.createBrowserJob,
+      taskConsentStore: { consentFor: async () => null },
+      activeTab: async () => ({ id: 42, url: "https://example.com" }),
+      addMessage: async (role, content) => messages.push([role, content]),
+      getBrowserJobScheduler: () => ({ tick: async () => { ticks++; } })
+    });
+    const result = await commands.runControlCommand("Read the current page", resumed ? { resumedFromJob: h.saved } : {});
+    assert.equal(result, null, "failed history must refuse the command");
+    assert.deepEqual(messages, [["system", `Agent Control could not start.\n${historyFailureMessage}`]]);
+    assert.deepEqual(h.events, [], "refusal must precede page-lock preparation and rendering");
+    assert.equal(ticks, 0);
+    assert.equal(h.allocated(), 0);
+    assert.equal(h.writes.length, 0);
+    assert.deepEqual(h.backing, before);
+  });
+
+  test(`admission observes history failure during page-lock preparation (${resumed ? "resumed" : "fresh"})`, { timeout: 2000 }, async (t) => {
+    const preparation = Promise.withResolvers();
+    t.after(() => preparation.resolve(null));
+    const h = createHistoryHarness(() => preparation.promise);
+    await h.store.hydrate();
+    const existingJob = h.store.findJob("saved");
+    const before = structuredClone(h.backing);
+    const writesBefore = h.writes.length;
+    const creation = h.controller.createBrowserJob({ goal: "Read the current page", existingJob: resumed ? existingJob : null });
+    const rejected = assert.rejects(creation, { message: historyFailureMessage });
+    assert.deepEqual(h.events, ["prepare"]);
+    h.failRead();
+    await h.store.hydrate();
+    preparation.resolve(null);
+    await rejected;
+    assert.deepEqual(h.events, ["prepare"], "failed admission must not render success");
+    assert.deepEqual(h.store.getJobs(), []);
+    assert.equal(h.allocated(), 0);
+    assert.equal(h.writes.length, writesBefore);
+    assert.deepEqual(h.backing, before);
+  });
+}
+
+test("failed-history approval and completion updates remain fulfilled", async () => {
+  const h = createHistoryHarness();
+  const before = structuredClone(h.backing);
+  h.failRead();
+  await h.store.hydrate();
+  for (const patch of [
+    { status: "approval", pendingApproval: { step: { type: "click", text: "Continue" } } },
+    { status: "completed", completedAt: "2026-05-26T10:01:00.000Z" },
+    { artifacts: [{ type: "report", title: "Saved result" }] },
+    { steps: [{ type: "read", state: "completed", note: "Page read" }] }
+  ]) assert.equal(await h.controller.updateBrowserJob("saved", patch), null);
+  void h.controller.updateBrowserJob("saved", { summary: "Fire-and-forget completion" });
+  await h.store.persist();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(h.writes.length, 0, "fulfilled background updates must not attempt storage writes");
+  assert.deepEqual(h.backing, before);
 });

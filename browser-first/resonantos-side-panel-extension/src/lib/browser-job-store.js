@@ -388,6 +388,7 @@ export function createBrowserJobStore({
   let durableJobs = new Map();
   let hydrationQueue = null;
   let writeQueue = null;
+  let historyReadBlocked = false;
   const enqueue = (operation) => (...args) => {
     // Ordinary mutations update live state immediately, as scheduler callers
     // require. Only hydration gates them; writes serialize detached snapshots.
@@ -400,8 +401,10 @@ export function createBrowserJobStore({
     }
     return result;
   };
-  function writeEnvelope(envelope) {
-    const save = () => storage?.set?.(envelope).catch(() => undefined);
+  function writeEnvelope(envelope, { hydration = false } = {}) {
+    const save = () => historyReadBlocked && !hydration
+      ? undefined
+      : storage?.set?.(envelope).catch(() => undefined);
     const result = writeQueue ? writeQueue.then(save) : Promise.resolve(save());
     const settled = () => { if (writeQueue === tail) writeQueue = null; };
     const tail = result.then(settled, settled);
@@ -469,57 +472,78 @@ export function createBrowserJobStore({
     // A mutation queued behind an earlier hydration may have started a write
     // since this hydration was queued. Read only after that snapshot settles.
     if (writeQueue) await writeQueue;
-    let readSucceeded = false;
-    const stored = await storage?.get?.([
-      storageKeys.browserJobs,
-      storageKeys.activeBrowserJob,
-      storageKeys.jobMonitorCollapsed
-    ]).then((value) => { readSucceeded = true; return value; }).catch(() => ({}));
-    const originals = Array.isArray(stored?.[storageKeys.browserJobs]) ? stored[storageKeys.browserJobs] : [];
-    const reserved = new Set(originals.map((job) => String(job?.id ?? "")));
-    const used = new Set();
-    const identities = new Map();
-    const candidates = originals.map((original) => {
-      const originalId = String(original?.id ?? createId());
-      const id = redactTraceText(originalId) === originalId && !used.has(originalId)
-        ? originalId : safeId(originalId, new Set([...reserved, ...used]));
-      used.add(id); reserved.add(id);
-      if (!identities.has(originalId)) identities.set(originalId, id);
-      const input = { ...original, id };
-      const clean = sanitizedJobInput(input);
-      const live = normalizeBrowserJob(clean, { now });
-      return durableRecord(input, live).job;
-    }).sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt))).slice(0, maxJobs);
-    const collapsed = typeof stored?.[storageKeys.jobMonitorCollapsed] === "boolean"
-      ? stored[storageKeys.jobMonitorCollapsed] : true;
-    const storedActiveId = identities.get(String(stored?.[storageKeys.activeBrowserJob] ?? ""));
-    const storedActive = candidates.find((job) => job.id === storedActiveId);
-    const nextActiveId = storedActive && isActiveBrowserJobStatus(storedActive.status)
-      ? storedActive.id
-      : candidates.find((job) => isActiveBrowserJobStatus(job.status))?.id ?? storedActive?.id ?? null;
-    const envelope = {
-      [storageKeys.activeBrowserJob]: nextActiveId,
-      [storageKeys.browserJobs]: candidates,
-      [storageKeys.jobMonitorCollapsed]: collapsed
-    };
-    // Missing keys already represent these defaults. Migrate only a changed
-    // effective value, including newly selected focus or sanitized job records.
-    const defaults = {
-      [storageKeys.activeBrowserJob]: null,
-      [storageKeys.browserJobs]: [],
-      [storageKeys.jobMonitorCollapsed]: true
-    };
-    if (readSucceeded && Object.entries(envelope).some(([key, value]) => {
-      const previous = stored?.[key] === undefined ? defaults[key] : stored[key];
-      return JSON.stringify(value) !== JSON.stringify(previous);
-    })) {
-      await writeEnvelope(redactTraceValue(envelope));
+    const previousReplacementIndex = replacementIndex;
+    try {
+      let readSucceeded = false;
+      let stored;
+      if (typeof storage?.get === "function") {
+        try {
+          stored = await storage.get([
+            storageKeys.browserJobs,
+            storageKeys.activeBrowserJob,
+            storageKeys.jobMonitorCollapsed
+          ]);
+          readSucceeded = true;
+        } catch {
+          stored = {};
+          historyReadBlocked = true;
+        }
+      }
+      const originals = Array.isArray(stored?.[storageKeys.browserJobs]) ? stored[storageKeys.browserJobs] : [];
+      const reserved = new Set(originals.map((job) => String(job?.id ?? "")));
+      const used = new Set();
+      const identities = new Map();
+      const candidates = originals.map((original) => {
+        const originalId = String(original?.id ?? createId());
+        const id = redactTraceText(originalId) === originalId && !used.has(originalId)
+          ? originalId : safeId(originalId, new Set([...reserved, ...used]));
+        used.add(id); reserved.add(id);
+        if (!identities.has(originalId)) identities.set(originalId, id);
+        const input = { ...original, id };
+        const clean = sanitizedJobInput(input);
+        const live = normalizeBrowserJob(clean, { now });
+        return durableRecord(input, live).job;
+      }).sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt))).slice(0, maxJobs);
+      const collapsed = typeof stored?.[storageKeys.jobMonitorCollapsed] === "boolean"
+        ? stored[storageKeys.jobMonitorCollapsed] : true;
+      const storedActiveId = identities.get(String(stored?.[storageKeys.activeBrowserJob] ?? ""));
+      const storedActive = candidates.find((job) => job.id === storedActiveId);
+      const nextActiveId = storedActive && isActiveBrowserJobStatus(storedActive.status)
+        ? storedActive.id
+        : candidates.find((job) => isActiveBrowserJobStatus(job.status))?.id ?? storedActive?.id ?? null;
+      const envelope = {
+        [storageKeys.activeBrowserJob]: nextActiveId,
+        [storageKeys.browserJobs]: candidates,
+        [storageKeys.jobMonitorCollapsed]: collapsed
+      };
+      // Missing keys already represent these defaults. Migrate only a changed
+      // effective value, including newly selected focus or sanitized job records.
+      const defaults = {
+        [storageKeys.activeBrowserJob]: null,
+        [storageKeys.browserJobs]: [],
+        [storageKeys.jobMonitorCollapsed]: true
+      };
+      // Prepare the complete state before migration or any live installation.
+      const nextDurableJobs = new Map(candidates.map((job) => [job.id, { job: redactTraceValue(job), unsafeLock: false, unsafePreflight: false }]));
+      if (readSucceeded && Object.entries(envelope).some(([key, value]) => {
+        const previous = stored?.[key] === undefined ? defaults[key] : stored[key];
+        return JSON.stringify(value) !== JSON.stringify(previous);
+      })) {
+        // Recovery may migrate this validated envelope while ordinary writes
+        // remain blocked until hydration completes.
+        await writeEnvelope(redactTraceValue(envelope), { hydration: true });
+      }
+      jobs = candidates;
+      durableJobs = nextDurableJobs;
+      activeJobId = nextActiveId;
+      monitorCollapsed = collapsed;
+      if (readSucceeded) historyReadBlocked = false;
+      return snapshot();
+    } catch (error) {
+      historyReadBlocked = true;
+      replacementIndex = previousReplacementIndex;
+      throw error;
     }
-    jobs = candidates;
-    durableJobs = new Map(jobs.map((job) => [job.id, { job: redactTraceValue(job), unsafeLock: false, unsafePreflight: false }]));
-    activeJobId = nextActiveId;
-    monitorCollapsed = collapsed;
-    return snapshot();
   }
 
   function snapshot() {
@@ -583,6 +607,9 @@ export function createBrowserJobStore({
   }
 
   async function createJob({ goal, planner = "observe-act-verify-loop", summary = "", preflightDecision = null, pageLock = null, status = "running", activate = true }) {
+    // A failed history read cannot safely admit a new durable job.
+    // The controller converts this fulfilled null into a reported refusal.
+    if (historyReadBlocked) return null;
     const normalizedLock = normalizePageLock(pageLock, { now });
     const conflict = conflictingActiveJobForLock(normalizedLock);
     const initialStatus = VALID_JOB_STATUSES.includes(status) ? status : "running";
@@ -721,6 +748,7 @@ export function createBrowserJobStore({
     getSchedulerState,
     getStaleJobs,
     hydrate: enqueue(hydrate),
+    isHistoryReadBlocked: () => historyReadBlocked,
     persist: enqueue(persist),
     recoverInterruptedJobs: enqueue(recoverInterruptedJobs),
     setMonitorCollapsed: enqueue(setMonitorCollapsed),

@@ -928,20 +928,6 @@ test('migration and later mutations preserve storage order', async () => {
   assert.doesNotMatch(JSON.stringify(writes), /synthetic|private value/);
 });
 
-test('failed reads do not trigger migration writes and write failures remain resolved', async () => {
-  let writes = 0;
-  const store = createBrowserJobStore({ storageKeys: { browserJobs: 'jobs', activeBrowserJob: 'active', jobMonitorCollapsed: 'collapsed' }, storage: {
-    get: async () => { throw new Error('synthetic read failure'); },
-    set: async () => { writes++; throw new Error('synthetic write failure'); }
-  } });
-  await assert.doesNotReject(store.hydrate());
-  assert.equal(writes, 0, 'a failed read must not itself trigger migration');
-  // The existing later-mutation failure contract is intentionally unchanged.
-  const job = await store.createJob({ goal: traceSecret });
-  assert.equal(job.goal, traceSecret);
-  await assert.doesNotReject(store.updateJob(job.id, { summary: traceSecret }));
-});
-
 test('duplicate legacy and generated identities never collapse retained jobs', async () => {
   const h = createHarness({ active: 'job-redacted-1', jobs: [
     { id: 'token=first', status: 'queued', goal: 'unsafe' },
@@ -1019,4 +1005,201 @@ test('a queued second hydration waits for mutations admitted after the first hyd
   releaseUpdate(); await Promise.all([update, second]);
   assert.equal(readsBeforeUpdateSettled, 1, 'do not read stale storage ahead of an earlier mutation');
   assert.equal(store.currentJob().summary, traceClean);
+});
+
+const historyKeys = { browserJobs: "jobs", activeBrowserJob: "active", jobMonitorCollapsed: "collapsed" };
+const historyNow = () => "2026-05-26T10:00:00.000Z";
+function savedHistory() {
+  return { jobs: [normalizeBrowserJob({ id: "saved", goal: "Saved work", status: "completed" }, { now: historyNow })], active: "saved", collapsed: false };
+}
+function historyHarness(backing = savedHistory()) {
+  const writes = [];
+  let allocated = 0;
+  const storage = {
+    get: async () => structuredClone(backing),
+    set: async (value) => {
+      writes.push(structuredClone(value));
+      Object.assign(backing, structuredClone(value));
+    }
+  };
+  const store = createBrowserJobStore({ storage, storageKeys: historyKeys, now: historyNow, createId: () => `new-${++allocated}` });
+  return { store, storage, backing, writes, allocated: () => allocated };
+}
+
+for (const field of ["goal", "pageLock.url", "id"]) {
+  for (const rehydrate of [false, true]) {
+    test(`resolved hydration errors block writes and recover (${field}, rehydrate=${rehydrate})`, async () => {
+      const h = historyHarness();
+      if (rehydrate) await h.store.hydrate();
+      const before = structuredClone(h.backing);
+      const liveBefore = structuredClone(h.store.snapshot());
+      const successfulGet = h.storage.get;
+      const payload = structuredClone(before);
+      const record = payload.jobs[0];
+      let idReads = 0;
+      const getter = () => {
+        // Reach the raw record spread after identity reservation and selection.
+        if (field === "id" && ++idReads < 3) return "saved";
+        throw new Error(`unreadable ${field}`);
+      };
+      if (field === "pageLock.url") {
+        record.pageLock = {};
+        Object.defineProperty(record.pageLock, "url", { enumerable: true, get: getter });
+      } else {
+        Object.defineProperty(record, field, { enumerable: true, get: getter });
+      }
+      // Resolve the payload directly: structuredClone would throw inside get().
+      h.storage.get = async () => payload;
+
+      await assert.rejects(h.store.hydrate(), { message: `unreadable ${field}` });
+      assert.deepEqual(h.store.snapshot(), liveBefore, "failed hydration must not install partial state");
+      assert.equal(await h.store.createJob({ goal: "Refused work" }), null,
+        "failed normalization must refuse creation");
+      await h.store.persist();
+      assert.equal(h.store.isHistoryReadBlocked(), true);
+      assert.equal(h.allocated(), 0);
+      assert.equal(h.writes.length, 0, "failed normalization must suppress every attempted write");
+      assert.deepEqual(h.backing, before, "saved history must remain unchanged");
+
+      h.storage.get = successfulGet;
+      await h.store.hydrate();
+      assert.equal(h.store.isHistoryReadBlocked(), false);
+      assert.deepEqual(h.store.getJobs().map((job) => job.id), ["saved"]);
+      const created = await h.store.createJob({ goal: "New work" });
+      assert.equal(created.id, "new-1");
+      assert.deepEqual(h.backing.jobs.map((job) => job.id).sort(), ["new-1", "saved"]);
+    });
+  }
+}
+
+for (const synchronous of [false, true]) {
+  test(`failed hydration preserves backing history across every mutation (${synchronous ? "thrown" : "rejected"})`, async () => {
+    const h = historyHarness();
+    const before = structuredClone(h.backing);
+    h.storage.get = synchronous
+      ? () => { throw new Error("history read failed"); }
+      : async () => { throw new Error("history read failed"); };
+    await assert.doesNotReject(h.store.hydrate());
+    assert.deepEqual(h.store.getJobs(), []);
+    assert.equal(h.writes.length, 0, "failed hydration must not migrate");
+    const results = await Promise.all([
+      h.store.activateJob("saved"), h.store.clearCompletedJobs(),
+      h.store.createJob({ goal: "New work" }), h.store.persist(),
+      h.store.recoverInterruptedJobs(), h.store.setMonitorCollapsed(false),
+      h.store.toggleMonitorCollapsed(), h.store.updateJob("saved", { summary: "Update" })
+    ]);
+    assert.equal(h.writes.length, 0, "failed history read must suppress every attempted write");
+    assert.deepEqual(h.backing, before);
+    assert.equal(results[2], null, "failed history read must refuse creation");
+    assert.equal(h.allocated(), 0);
+    assert.equal(h.store.isHistoryReadBlocked(), true);
+  });
+}
+
+test("mutations waiting on rejected hydration cannot write or create jobs", { timeout: 2000 }, async (t) => {
+  const h = historyHarness();
+  const before = structuredClone(h.backing);
+  const read = Promise.withResolvers();
+  t.after(() => read.resolve({}));
+  h.storage.get = () => read.promise;
+  const hydration = h.store.hydrate();
+  const pending = Promise.all([hydration, h.store.createJob({ goal: "New work" }),
+    h.store.updateJob("saved", { summary: "Update" }), h.store.setMonitorCollapsed(false), h.store.persist()]);
+  assert.equal(h.allocated(), 0);
+  assert.equal(h.writes.length, 0);
+  read.reject(new Error("history read failed"));
+  const results = await pending;
+  assert.equal(results[1], null, "waiting creation must resolve null after rejected hydration");
+  assert.equal(h.allocated(), 0);
+  assert.equal(h.writes.length, 0);
+  assert.deepEqual(h.backing, before);
+});
+
+for (const kind of ["canonical", "empty", "legacy"]) {
+  test(`only a successful read reopens persistence and admission (${kind})`, async () => {
+    const initial = kind === "empty" ? {} : kind === "legacy"
+      ? { jobs: [{ id: "saved", goal: "Saved work", status: "completed" }], active: "saved" } : savedHistory();
+    const h = historyHarness(initial);
+    const before = structuredClone(initial);
+    const successfulGet = h.storage.get;
+    h.storage.get = async () => { throw new Error("history read failed"); };
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (attempt === 2) delete h.storage.get;
+      await h.store.hydrate();
+      assert.equal(await h.store.createJob({ goal: "Refused work" }), null, "failed or absent retry cannot reopen admission");
+      await h.store.persist();
+      assert.equal(h.writes.length, 0);
+      assert.equal(h.allocated(), 0);
+      assert.deepEqual(h.backing, before);
+      assert.equal(h.store.isHistoryReadBlocked(), true);
+    }
+    h.storage.get = successfulGet;
+    await h.store.hydrate();
+    assert.equal(h.store.isHistoryReadBlocked(), false);
+    assert.deepEqual(h.store.getJobs().map((job) => job.id), kind === "empty" ? [] : ["saved"]);
+    assert.equal(h.writes.length, kind === "legacy" ? 1 : 0, "recovery must enable required migration writes");
+    const created = await h.store.createJob({ goal: "New work" });
+    assert.equal(created.id, "new-1");
+    assert.deepEqual(h.backing.jobs.map((job) => job.id).sort(), kind === "empty" ? ["new-1"] : ["new-1", "saved"]);
+  });
+}
+
+test("failed rehydration blocks writes after an earlier write settles", { timeout: 2000 }, async (t) => {
+  const h = historyHarness();
+  await h.store.hydrate();
+  const write = Promise.withResolvers();
+  const readStarted = Promise.withResolvers();
+  const read = Promise.withResolvers();
+  t.after(() => { write.resolve(); read.resolve({}); readStarted.resolve(); });
+  let reads = 0;
+  h.storage.set = async (value) => {
+    h.writes.push(structuredClone(value));
+    await write.promise;
+    Object.assign(h.backing, structuredClone(value));
+  };
+  h.storage.get = () => { reads++; readStarted.resolve(); return read.promise; };
+  const earlier = h.store.updateJob("saved", { summary: "Committed update" });
+  const hydration = h.store.hydrate();
+  const pending = Promise.all([earlier, hydration, h.store.updateJob("saved", { summary: "Unsafe later update" }), h.store.persist()]);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(reads, 0, "rehydration must wait for the earlier write");
+  assert.equal(h.writes.length, 1);
+  write.resolve();
+  await readStarted.promise;
+  const committed = structuredClone(h.backing);
+  assert.equal(committed.jobs[0].summary, "Committed update");
+  read.reject(new Error("history read failed"));
+  await pending;
+  assert.equal(h.writes.length, 1, "post-failure mutations must not attempt another write");
+  assert.deepEqual(h.backing, committed);
+});
+
+for (const kind of ["absent", "empty", "set-only"]) {
+  test(`hydration without a readable adapter preserves creation and persistence contracts (${kind})`, async () => {
+    const writes = [];
+    const storage = kind === "absent" ? undefined : kind === "empty" ? {} : { set: async (value) => writes.push(structuredClone(value)) };
+    const store = createBrowserJobStore({ storage, storageKeys: historyKeys, createId: () => "new", now: historyNow });
+    await store.hydrate();
+    const job = await store.createJob({ goal: "Local work" });
+    assert.equal(job.id, "new");
+    const updated = await store.updateJob(job.id, { summary: "Updated locally" });
+    assert.equal(updated.summary, "Updated locally");
+    await store.persist();
+    assert.equal(store.currentJob().summary, "Updated locally");
+    assert.equal(writes.length, kind === "set-only" ? 3 : 0);
+    assert.equal(store.isHistoryReadBlocked(), false);
+  });
+}
+
+test("write rejection after a successful read remains resolved", async () => {
+  let writes = 0;
+  const store = createBrowserJobStore({ storageKeys: historyKeys, storage: {
+    get: async () => ({}),
+    set: async () => { writes++; throw new Error("synthetic write failure"); }
+  } });
+  await store.hydrate();
+  const job = await store.createJob({ goal: traceSecret });
+  assert.equal(job.goal, traceSecret);
+  await assert.doesNotReject(store.updateJob(job.id, { summary: traceSecret }));
+  assert.equal(writes, 2);
 });
