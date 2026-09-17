@@ -17,11 +17,13 @@ import {
 
 function createHarness(initial = {}) {
   const writes = [];
+  const argumentsSeen = [];
   const storage = {
-    get: async () => initial,
+    get: async () => structuredClone(initial),
     set: async (payload) => {
-      writes.push(payload);
-      Object.assign(initial, payload);
+      argumentsSeen.push(payload);
+      writes.push(structuredClone(payload));
+      Object.assign(initial, structuredClone(payload));
     }
   };
   let idIndex = 0;
@@ -38,6 +40,8 @@ function createHarness(initial = {}) {
   });
   return {
     store,
+    argumentsSeen,
+    backing: initial,
     writes
   };
 }
@@ -743,4 +747,276 @@ test("browser job store persists active job and recovers interrupted jobs after 
   await harness.store.activateJob("done-job");
   assert.equal(harness.store.getActiveJobId(), "done-job");
   assert.equal(harness.writes.at(-1).active, "done-job");
+});
+
+const traceSecret = 'client_secret="synthetic: private value"';
+const traceClean = 'client_secret="REDACTED"';
+const latestJob = (harness, id) => harness.writes.at(-1).jobs.find((job) => job.id === id);
+
+test('every persisted text-bearing branch is sanitized while live text remains usable', async () => {
+  const h = createHarness();
+  const job = await h.store.createJob({ goal: traceSecret, planner: traceSecret, summary: traceSecret,
+    pageLock: { tabId: 7, url: 'https://example.test/?view=wide', siteKey: 'example.test', reason: traceSecret },
+    preflightDecision: { id: 'control-safe', siteKey: 'example.test', taskClass: 'read', goal: traceSecret, reason: traceSecret, source: traceSecret, permissionMode: traceSecret } });
+  const fields = ['phase', 'decision', 'action', 'approvalDecision', 'result', 'safetyClass', 'strategyPhase', 'strategyRationale', 'completionCheck', 'scenarioName', 'humanInterventionState', 'uncertainty', 'verificationRetry', 'actionRetry', 'nextHumanAction'];
+  const details = Object.fromEntries(fields.map((field) => [field, traceSecret]));
+  Object.assign(details, { observation: { title: traceSecret, url: traceSecret }, preferredProbes: [traceSecret], successSignals: [traceSecret], stopConditions: [traceSecret], recoveryOptions: [traceSecret], targetCandidates: [{ ref: traceSecret, label: traceSecret, context: traceSecret, fieldKind: traceSecret, tagName: traceSecret, form: { id: traceSecret, label: traceSecret, name: traceSecret } }] });
+  const live = await h.store.updateJob(job.id, { status: 'approval', lastError: traceSecret,
+    artifacts: [{ title: traceSecret, nested: [{ password: 'x', pin: 1234, note: traceSecret }] }],
+    steps: [{ type: traceSecret, label: traceSecret, state: traceSecret, note: traceSecret, details, updatedAt: 'token=x', timing: { startedAt: 'token=x' } }],
+    pendingApproval: { step: { type: 'type', text: traceSecret }, reason: traceSecret, history: [{ note: traceSecret }], results: [{ password: 'x' }] } });
+  assert.equal(live.goal, traceSecret); assert.equal(live.pendingApproval.step.text, traceSecret);
+  const saved = latestJob(h, job.id);
+  for (const field of ['goal', 'planner', 'summary', 'lastError']) assert.equal(saved[field], traceClean, field);
+  for (const field of ['goal', 'reason', 'source', 'permissionMode']) assert.equal(saved.preflightDecision[field], traceClean, `preflight.${field}`);
+  assert.equal(saved.pageLock.reason, traceClean); assert.equal(saved.pageLock.tabId, 7);
+  assert.equal(saved.preflightDecision.id, 'control-safe'); assert.equal(saved.pageLock.url, 'https://example.test/?view=wide');
+  for (const field of ['type', 'label', 'state', 'note']) assert.equal(saved.steps[0][field], traceClean, `step.${field}`);
+  for (const field of fields) assert.equal(saved.steps[0].details[field], traceClean, `details.${field}`);
+  for (const field of ['preferredProbes', 'successSignals', 'stopConditions', 'recoveryOptions']) assert.deepEqual(saved.steps[0].details[field], [traceClean], field);
+  assert.deepEqual(saved.steps[0].details.observation, { title: traceClean, url: traceClean });
+  for (const field of ['ref', 'label', 'context', 'fieldKind', 'tagName']) assert.equal(saved.steps[0].details.targetCandidates[0][field], traceClean, field);
+  for (const field of ['id', 'label', 'name']) assert.equal(saved.steps[0].details.targetCandidates[0].form[field], traceClean, field);
+  assert.equal(saved.steps[0].updatedAt, 'token=REDACTED'); assert.equal(saved.steps[0].timing.startedAt, 'token=REDACTED');
+  assert.deepEqual(saved.artifacts, [{ title: traceClean, nested: [{ password: 'REDACTED', pin: 'REDACTED', note: traceClean }] }]);
+  assert.deepEqual(saved.pendingApproval, { step: { type: 'type', text: traceClean }, reason: traceClean, history: [{ note: traceClean }], results: [{ password: 'REDACTED' }], stepIndex: 0 });
+  for (const argument of h.argumentsSeen) assert.doesNotMatch(JSON.stringify(argument), /synthetic|private value/);
+});
+
+test('redaction precedes truncation on creation updates and migration', async () => {
+  const provider = 'ghp_' + 'x'.repeat(24);
+  const long = (bound) => 'ordinary '.repeat(Math.ceil(bound / 9)).slice(0, bound - 9) + ' ' + provider;
+  const expected = (bound) => 'ordinary '.repeat(Math.ceil(bound / 9)).slice(0, bound - 9) + ' [REDACTE';
+  const h = createHarness();
+  const job = await h.store.createJob({ goal: long(300), summary: long(700) });
+  assert.equal(latestJob(h, job.id).goal, expected(300)); assert.equal(latestJob(h, job.id).summary, expected(700));
+  await h.store.updateJob(job.id, { goal: long(300), steps: [{ details: { observation: { url: long(240) } } }] });
+  assert.equal(latestJob(h, job.id).steps[0].details.observation.url, expected(240));
+  await h.store.setMonitorCollapsed(false);
+  assert.equal(latestJob(h, job.id).goal, expected(300), 'later writes retain pre-truncation redaction');
+  const migrated = createHarness({ jobs: [{ id: 'old', status: 'completed', goal: long(300), summary: long(700) }] });
+  await migrated.store.hydrate();
+  assert.equal(migrated.store.getJobs()[0].goal, expected(300));
+  const locked = await h.store.createJob({ goal: 'target', pageLock: { tabId: 2, url: long(240) } });
+  assert.equal(latestJob(h, locked.id).pageLock, null); assert.equal(latestJob(h, locked.id).status, 'paused');
+});
+
+test('all mutation paths write detached sanitized snapshots', async () => {
+  const h = createHarness(); const job = await h.store.createJob({ goal: traceSecret });
+  const live = await h.store.updateJob(job.id, { artifacts: [{ nested: { note: traceSecret } }] });
+  const argument = h.argumentsSeen.at(-1); const before = structuredClone(argument);
+  live.artifacts[0].nested.note = 'mutated';
+  assert.deepEqual(argument, before, 'storage set argument has no live aliases');
+  await h.store.activateJob(job.id); await h.store.persist();
+  await h.store.recoverInterruptedJobs({ reason: traceSecret });
+  await h.store.setMonitorCollapsed(false); await h.store.toggleMonitorCollapsed(); await h.store.clearCompletedJobs();
+  for (const write of h.writes) assert.doesNotMatch(JSON.stringify(write), /synthetic|private value/);
+});
+
+test('legacy migration sanitizes approvals and artifacts and is idempotent', async () => {
+  const h = createHarness({ active: 'safe', collapsed: false, jobs: [{ id: 'safe', status: 'approval', goal: traceSecret, updatedAt: '2026-05-26T09:00:00.000Z', artifacts: [{ password: 'x' }], pendingApproval: { step: { text: traceSecret }, history: [{ pin: 1 }] } }] });
+  await h.store.hydrate();
+  assert.equal(h.store.currentJob().goal, traceClean);
+  assert.equal(h.store.currentJob().pendingApproval.step.text, traceClean);
+  assert.equal(h.writes.length, 1, 'migration is written back');
+  assert.equal(h.backing.active, 'safe'); assert.equal(h.backing.collapsed, false);
+  const next = createHarness(h.backing); await next.store.hydrate();
+  assert.equal(next.writes.length, 0, 'sanitized migration is stable');
+  assert.deepEqual(next.store.snapshot(), h.store.snapshot());
+});
+
+test('hydration does not write missing keys whose effective values are already defaults', async () => {
+  for (const initial of [{}, { jobs: [] }, { active: null, collapsed: false }]) {
+    const h = createHarness(initial);
+    await h.store.hydrate();
+    assert.equal(h.writes.length, 0, 'absent default-valued keys need no migration write');
+    assert.deepEqual(h.store.snapshot(), {
+      activeJobId: null, jobs: [], monitorCollapsed: initial.collapsed ?? true
+    });
+  }
+
+  const seed = createHarness();
+  await seed.store.createJob({ goal: 'safe job' });
+  const { collapsed, ...withoutPreference } = seed.backing;
+  const unchanged = createHarness(withoutPreference);
+  await unchanged.store.hydrate();
+  assert.equal(unchanged.writes.length, 0, 'missing default preference does not rewrite clean jobs');
+
+  const { active, ...withoutFocus } = seed.backing;
+  const focused = createHarness(withoutFocus);
+  await focused.store.hydrate();
+  assert.equal(focused.writes.length, 1, 'a selected job differs from the missing focus default');
+  assert.equal(focused.backing.active, active);
+
+  const legacy = createHarness({ jobs: [{ id: 'old', goal: traceSecret, status: 'queued' }] });
+  await legacy.store.hydrate();
+  assert.equal(legacy.writes.length, 1, 'missing envelope keys never bypass secret migration');
+  assert.equal(legacy.backing.jobs[0].goal, traceClean);
+});
+
+test('identity migration preserves safe handles and separates unsafe handles', async () => {
+  const unsafe = ['token=first', 'token=second'];
+  const h = createHarness({ active: unsafe[1], jobs: [...unsafe, 'job-safe'].map((id) => ({ id, status: 'queued', goal: 'safe' })) });
+  await h.store.hydrate();
+  const ids = h.store.getJobs().map((job) => job.id);
+  assert.equal(new Set(ids).size, 3); assert.ok(ids.includes('job-safe'));
+  assert.ok(ids.every((id) => !id.includes('token=') && !id.includes('REDACTED')));
+  assert.equal(h.store.getActiveJobId(), ids[1]);
+  await h.store.updateJob(ids[0], { id: 'rename', summary: 'updated' });
+  assert.equal(h.store.findJob(ids[0]).id, ids[0], 'updates cannot rename identities');
+  const next = createHarness(h.backing); await next.store.hydrate();
+  assert.deepEqual(next.store.getJobs().map((job) => job.id), h.store.getJobs().map((job) => job.id));
+});
+
+test('redacted routing metadata cannot become a shared execution key', async () => {
+  for (const field of ['url', 'siteKey']) {
+    const h = createHarness();
+    const job = await h.store.createJob({ goal: 'route', pageLock: { tabId: 4, [field]: 'token=route-private' } });
+    assert.equal(job.status, 'running'); assert.equal(job.pageLock[field], 'token=route-private');
+    const saved = latestJob(h, job.id);
+    assert.equal(saved.status, 'paused'); assert.equal(saved.pageLock, null); assert.equal(saved.pendingApproval, null);
+    assert.equal(saved.lastError, 'Saved target details were redacted. Check the page before resuming.');
+  }
+  for (const field of ['id', 'siteKey', 'taskClass']) {
+    const h = createHarness(); const job = await h.store.createJob({ goal: 'route', preflightDecision: { [field]: 'token=route-private' } });
+    assert.equal(latestJob(h, job.id).preflightDecision, null); assert.equal(latestJob(h, job.id).status, 'paused');
+  }
+});
+
+test('live and durable lifecycle decisions stay aligned', async () => {
+  let tick = 0; const writes = [];
+  const store = createBrowserJobStore({ storage: { set: async (value) => writes.push(structuredClone(value)) }, storageKeys: { browserJobs: 'jobs' }, now: () => new Date(1_800_000_000_000 + tick++).toISOString(), createId: () => 'safe' });
+  const job = await store.createJob({ goal: traceSecret, pageLock: { tabId: 7 } });
+  for (const patch of [{ status: 'approval', pendingApproval: { step: { text: traceSecret } } }, { status: 'paused' }, { status: 'completed' }, { status: 'running', allowHumanStopOverride: true }, { status: 'cancelled' }, { status: 'completed', summary: traceSecret }]) {
+    const live = await store.updateJob(job.id, patch); const saved = writes.at(-1).jobs[0];
+    for (const field of ['id', 'status', 'createdAt', 'updatedAt', 'completedAt', 'pageLock']) assert.deepEqual(saved[field], live[field], field);
+    assert.equal(saved.goal, traceClean);
+  }
+});
+
+test('approval admission cannot be resurrected by shrinking or invalidate live approval by expansion', async () => {
+  const h = createHarness(); const job = await h.store.createJob({ goal: 'approval' });
+  await h.store.updateJob(job.id, { status: 'approval', pendingApproval: { step: { password: 'x'.repeat(4100) } } });
+  assert.equal(h.store.currentJob().pendingApproval, null); assert.equal(latestJob(h, job.id).pendingApproval, null);
+  const expanded = { values: Array.from({ length: 230 }, () => ({ pin: 1 })) };
+  const live = await h.store.updateJob(job.id, { pendingApproval: { step: expanded } });
+  assert.ok(live.pendingApproval); assert.equal(latestJob(h, job.id).pendingApproval, null, 'durable expansion exceeds 4000');
+  const history = [{ values: Array.from({ length: 700 }, () => ({ pin: 1 })) }];
+  await h.store.updateJob(job.id, { pendingApproval: { step: { text: traceSecret }, history, results: history } });
+  assert.equal(h.store.currentJob().pendingApproval.history.length, 1);
+  assert.deepEqual(latestJob(h, job.id).pendingApproval.history, []); assert.deepEqual(latestJob(h, job.id).pendingApproval.results, []);
+  await h.store.updateJob(job.id, { pendingApproval: { step: { text: traceSecret }, history: [{ password: 'x'.repeat(12000) }], results: [{ password: 'x'.repeat(12000) }] } });
+  assert.deepEqual(latestJob(h, job.id).pendingApproval.history, []); assert.deepEqual(latestJob(h, job.id).pendingApproval.results, []);
+  await h.store.updateJob(job.id, { status: 'completed' }); assert.equal(latestJob(h, job.id).pendingApproval, null);
+});
+
+test('migration and later mutations preserve storage order', async () => {
+  let release; const gate = new Promise((resolve) => { release = resolve; });
+  let started; const migrationStarted = new Promise((resolve) => { started = resolve; });
+  const writes = [];
+  const store = createBrowserJobStore({ storageKeys: { browserJobs: 'jobs', activeBrowserJob: 'active', jobMonitorCollapsed: 'collapsed' }, storage: {
+    get: async () => ({ jobs: [{ id: 'old', goal: traceSecret, status: 'queued' }] }),
+    set: async (value) => { started(); if (!writes.length) await gate; writes.push(structuredClone(value)); }
+  } });
+  const hydration = store.hydrate();
+  // Baseline has no migration write; avoid a hanging red test.
+  await Promise.race([migrationStarted, hydration]);
+  assert.equal(store.getJobs().length, 0, 'do not install legacy records before migration write finishes');
+  const update = store.updateJob('old', { summary: traceSecret });
+  release(); await Promise.all([hydration, update]);
+  assert.equal(writes.length, 2); assert.equal(writes.at(-1).jobs[0].summary, traceClean);
+  assert.doesNotMatch(JSON.stringify(writes), /synthetic|private value/);
+});
+
+test('failed reads do not trigger migration writes and write failures remain resolved', async () => {
+  let writes = 0;
+  const store = createBrowserJobStore({ storageKeys: { browserJobs: 'jobs', activeBrowserJob: 'active', jobMonitorCollapsed: 'collapsed' }, storage: {
+    get: async () => { throw new Error('synthetic read failure'); },
+    set: async () => { writes++; throw new Error('synthetic write failure'); }
+  } });
+  await assert.doesNotReject(store.hydrate());
+  assert.equal(writes, 0, 'a failed read must not itself trigger migration');
+  // The existing later-mutation failure contract is intentionally unchanged.
+  const job = await store.createJob({ goal: traceSecret });
+  assert.equal(job.goal, traceSecret);
+  await assert.doesNotReject(store.updateJob(job.id, { summary: traceSecret }));
+});
+
+test('duplicate legacy and generated identities never collapse retained jobs', async () => {
+  const h = createHarness({ active: 'job-redacted-1', jobs: [
+    { id: 'token=first', status: 'queued', goal: 'unsafe' },
+    { id: 'job-redacted-1', status: 'queued', goal: 'first safe' },
+    { id: 'job-redacted-1', status: 'queued', goal: 'duplicate' }
+  ] });
+  await h.store.hydrate();
+  assert.equal(new Set(h.store.getJobs().map((job) => job.id)).size, 3);
+  assert.equal(h.store.currentJob().goal, 'first safe');
+  const store = createBrowserJobStore({ storageKeys: { browserJobs: 'jobs' }, createId: () => 'token=generated' });
+  const first = await store.createJob({ goal: 'first' }); const second = await store.createJob({ goal: 'second' });
+  assert.notEqual(first.id, second.id); assert.equal(store.getJobs().length, 2);
+  assert.match(first.id, /^job-/); assert.doesNotMatch(first.id, /token|REDACTED/);
+});
+
+test('approval step history and result admission honor exact JSON boundaries', async () => {
+  const padded = (chars, wrap = false) => {
+    const value = { pin: 1, padding: '' };
+    const base = wrap ? [value] : value;
+    value.padding = '.'.repeat(chars - JSON.stringify(base).length);
+    assert.equal(JSON.stringify(base).length, chars);
+    return base;
+  };
+  const h = createHarness(); const job = await h.store.createJob({ goal: 'bounds' });
+  // Replacing numeric 1 with the JSON string "REDACTED" expands by 9.
+  for (const size of [3991, 3992, 4000, 4001]) {
+    const live = await h.store.updateJob(job.id, { status: 'approval', pendingApproval: { step: padded(size) } });
+    assert.equal(Boolean(live.pendingApproval), size <= 4000, `raw step size ${size}`);
+    const saved = latestJob(h, job.id).pendingApproval;
+    assert.equal(Boolean(saved), size <= 3991, `durable step size ${size + 9}`);
+    if (saved) assert.equal(JSON.stringify(saved.step).length, 4000);
+  }
+  for (const size of [11991, 11992, 12000, 12001]) {
+    const live = await h.store.updateJob(job.id, { pendingApproval: { step: { type: 'click' }, history: padded(size, true), results: padded(size, true) } });
+    for (const field of ['history', 'results']) {
+      assert.equal(live.pendingApproval[field].length, size <= 12000 ? 1 : 0, `raw ${field} size ${size}`);
+      const saved = latestJob(h, job.id).pendingApproval[field];
+      assert.equal(saved.length, size <= 11991 ? 1 : 0, `durable ${field} size ${size + 9}`);
+      if (saved.length) assert.equal(JSON.stringify(saved).length, 12000);
+    }
+  }
+});
+
+test('overlapping ordinary writes retain order and detached call-time snapshots', async () => {
+  let release; const gate = new Promise((resolve) => { release = resolve; });
+  const writes = []; let calls = 0;
+  const store = createBrowserJobStore({ storageKeys: { browserJobs: 'jobs' }, createId: () => 'safe', storage: {
+    set: async (value) => { const call = ++calls; if (call === 1) await gate; writes.push(structuredClone(value)); }
+  } });
+  const creation = store.createJob({ goal: traceSecret });
+  const update = store.updateJob('safe', { summary: traceSecret });
+  const persistence = store.persist();
+  assert.equal(store.findJob('safe').summary, traceSecret, 'live mutations remain immediate');
+  assert.equal(calls, 1, 'only the oldest write starts before it settles');
+  release(); await Promise.all([creation, update, persistence]);
+  assert.equal(writes.length, 3); assert.equal(writes[0].jobs[0].summary, '');
+  assert.equal(writes[1].jobs[0].summary, traceClean); assert.equal(writes[2].jobs[0].summary, traceClean);
+  assert.doesNotMatch(JSON.stringify(writes), /synthetic|private value/);
+});
+
+test('a queued second hydration waits for mutations admitted after the first hydration', async () => {
+  let releaseMigration; const migrationGate = new Promise((resolve) => { releaseMigration = resolve; });
+  let releaseUpdate; const updateGate = new Promise((resolve) => { releaseUpdate = resolve; });
+  let reads = 0; let writes = 0; let backing = { jobs: [{ id: 'safe', goal: traceSecret, status: 'queued' }] };
+  const store = createBrowserJobStore({ storageKeys: { browserJobs: 'jobs', activeBrowserJob: 'active', jobMonitorCollapsed: 'collapsed' }, storage: {
+    get: async () => { reads++; return structuredClone(backing); },
+    set: async (value) => { writes++; await (writes === 1 ? migrationGate : updateGate); backing = structuredClone(value); }
+  } });
+  const first = store.hydrate();
+  const update = store.updateJob('safe', { summary: traceSecret });
+  const second = store.hydrate();
+  releaseMigration(); await first;
+  await new Promise((resolve) => setImmediate(resolve));
+  const readsBeforeUpdateSettled = reads;
+  releaseUpdate(); await Promise.all([update, second]);
+  assert.equal(readsBeforeUpdateSettled, 1, 'do not read stale storage ahead of an earlier mutation');
+  assert.equal(store.currentJob().summary, traceClean);
 });

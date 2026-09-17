@@ -80,3 +80,83 @@ test("redactTraceText leaves clean trace text unchanged", () => {
   ].join("\n");
   assert.equal(redactTraceText(clean), clean);
 });
+
+const secretNames = [
+  'password', 'passwd', 'pwd', 'token', 'secret', 'otp', 'pin', 'signature', 'jwt', 'session', 'sid', 'csrf', 'key', 'code',
+  ...['api:key', 'access:token', 'refresh:token', 'auth:code', 'client:secret', 'client:id', 'client:token',
+    'session:id', 'session:token', 'session:key', 'id:token', 'csrf:token', 'jwt:token']
+    .flatMap((parts) => ['', '_', '-'].map((separator) => parts.replace(':', separator)))
+];
+for (const options of [{}, { replacement: '[redacted]', tokenReplacement: '[redacted]' }]) {
+  const replacement = options.replacement ?? 'REDACTED';
+  test(`shared redaction preserves the strict union in ${replacement} output style`, () => {
+    for (const name of secretNames) {
+      for (const spelling of [name, name.toUpperCase()]) {
+        for (const [input, expected] of [
+          [`?${spelling}=synthetic-value&view=wide`, `?${spelling}=${replacement}&view=wide`],
+          [`%3F${spelling}%3Dsynthetic-value%26view%3Dwide`, `%3F${spelling}%3D${replacement}%26view%3Dwide`],
+          [`${spelling}=synthetic-value done`, `${spelling}=${replacement} done`],
+          [`{"${spelling}":"synthetic-value","view":"wide"}`, `{"${spelling}":"${replacement}","view":"wide"}`]
+        ]) {
+          assert.equal(redactTraceText(input, options), expected, input);
+          assert.equal(redactTraceText(expected, options), expected, `idempotence: ${input}`);
+        }
+      }
+    }
+    const tokens = ['sk_live_' + 'X'.repeat(8), 'AKIA' + 'X'.repeat(16), 'AIza' + 'x'.repeat(25),
+      ...'pousr'.split('').map((c) => `gh${c}_` + 'x'.repeat(20)),
+      ...'abp'.split('').map((c) => `xox${c}-` + 'x'.repeat(10)), 'Z'.repeat(40), 'a'.repeat(32)];
+    for (const token of tokens) assert.equal(redactTraceText(`before ${token} after`, options), `before ${options.tokenReplacement ?? '[REDACTED-TOKEN]'} after`);
+    const benign = 'job-123 control-abc https://example.test/?view=wide&ref=home abcdef sk_live_short ghp_short xoxb-short';
+    assert.equal(redactTraceText(benign, options), benign);
+  });
+  test(`Bearer and quoted credentials are consumed completely in ${replacement} style`, () => {
+    for (const [input, expected] of [
+      ['Token: Bearer synthetic-a1-value done', `Token: ${replacement} done`],
+      ['client_secret="left: right" done', `client_secret="${replacement}" done`],
+      ['password="left \\"middle\\" right" done', `password="${replacement}" done`],
+      ["client_secret='left: right' done", `client_secret='${replacement}' done`],
+      ['?token=Bearer synthetic-a1-value&view=wide', `?token=${replacement}&view=wide`],
+      ['%3Fclient_secret%3Dleft%3A%20right%26view%3Dwide', `%3Fclient_secret%3D${replacement}%26view%3Dwide`],
+      ['password=left,right;end done', `password=${replacement} done`]
+    ]) assert.equal(redactTraceText(input, options), expected);
+  });
+}
+
+test('recursive trace redaction detaches and safely handles arbitrary JSON', async () => {
+  const { redactTraceValue } = await import('../resonantos-side-panel-extension/src/lib/trace-redaction.js');
+  assert.equal(typeof redactTraceValue, 'function', 'recursive redactor exists');
+  let reads = 0;
+  const input = { nested: [{ password: 'x', pin: 7, client_secret: { private: true }, note: 'token=synthetic-value' }], count: 2, ok: true, empty: null };
+  Object.defineProperty(input, 'getter', { enumerable: true, get() { reads++; return 'secret'; } });
+  Object.defineProperty(input, '__proto__', { enumerable: true, value: { note: 'safe' } });
+  input['token=first'] = 'first'; input['token=second'] = 'second'; input.self = input;
+  input.unsupported = () => {}; input.infinity = Infinity;
+  const output = redactTraceValue(input);
+  assert.equal(reads, 0);
+  assert.notEqual(output, input); assert.notEqual(output.nested, input.nested);
+  assert.deepEqual(output.nested, [{ password: 'REDACTED', pin: 'REDACTED', client_secret: 'REDACTED', note: 'token=REDACTED' }]);
+  assert.equal(output.count, 2); assert.equal(output.ok, true); assert.equal(output.empty, null);
+  assert.equal(output.getter, null); assert.equal(output.self, null); assert.equal(output.unsupported, null); assert.equal(output.infinity, null);
+  assert.equal(Object.getPrototypeOf(output), Object.prototype);
+  assert.ok(Object.hasOwn(output, '__proto__')); assert.deepEqual(output.__proto__, { note: 'safe' });
+  assert.deepEqual(Object.entries(output).filter(([key]) => key.startsWith('token=')).map(([, value]) => value), ['first', 'second']);
+  assert.doesNotMatch(JSON.stringify(output), /synthetic-value|token=first|token=second/);
+  assert.deepEqual(redactTraceValue(output), output);
+});
+
+test('quoted JSON numeric credentials retain benign neighboring fields', () => {
+  assert.equal(redactTraceText('{"pin":1234,"view":"wide"}'), '{"pin":REDACTED,"view":"wide"}');
+});
+
+test('provider and heuristic boundaries retain below-threshold benign text', () => {
+  const benign = ['sk_live_' + 'X'.repeat(7), 'AKIA' + 'X'.repeat(15), 'AIza' + 'x'.repeat(24),
+    'ghp_' + 'x'.repeat(19), 'xoxb-' + 'x'.repeat(9), 'Z'.repeat(39), 'Z'.repeat(91), 'a'.repeat(31)];
+  for (const text of benign) assert.equal(redactTraceText(text), text);
+});
+
+test('quoted names preserve full unquoted comma and semicolon secret coverage', () => {
+  assert.equal(redactTraceText('"token":left,right;end done'), '"token":REDACTED done');
+  assert.equal(redactTraceText('{"pin":1234,"view":"wide"}'), '{"pin":REDACTED,"view":"wide"}');
+  assert.equal(redactTraceText('{"pin":REDACTED,"view":"wide"}'), '{"pin":REDACTED,"view":"wide"}');
+});
