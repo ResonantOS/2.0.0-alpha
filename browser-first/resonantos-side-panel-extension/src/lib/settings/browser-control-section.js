@@ -1,3 +1,4 @@
+import { mutateBrowserJobStorage } from "../browser-job-store.js";
 import { noteCard, safeErrorMessage, setStatus, settingsHeader } from "./settings-common.js";
 import {
   createModeStatusSection,
@@ -5,8 +6,6 @@ import {
   formatModeStatusLine,
   permissionLabel
 } from "./mode-status-section.js";
-
-const terminalJobStatuses = new Set(["completed", "blocked", "denied", "cancelled", "failed"]);
 
 function readableTab(tab) {
   return typeof tab?.url === "string" && /^https?:\/\//i.test(tab.url);
@@ -186,7 +185,7 @@ export function renderBrowserControlSection(container, { bridgeRequest, getBridg
   );
   const jobsDisclosure = controlDisclosure(
     "Browser job history",
-    "Review recent browser-control jobs. Clearing browser jobs removes completed, blocked, cancelled, and failed history from the local monitor only.",
+    "Review recent browser-control jobs. Clearing browser jobs removes completed, blocked, denied, cancelled, and failed history from the local monitor only.",
     [jobsList, clearJobs]
   );
 
@@ -341,18 +340,7 @@ export function renderBrowserControlSection(container, { bridgeRequest, getBridg
     if (clearJobs.disabled) return;
     clearJobs.disabled = true;
     try {
-      const key = storageKeys.browserJobs;
-      if (!key || typeof storage?.get !== "function" || typeof storage?.set !== "function") {
-        throw new Error("Browser job storage is unavailable.");
-      }
-      // A display fallback is unsafe for a read-modify-write operation.
-      const stored = await storage.get(key);
-      const jobs = stored?.[key];
-      if (!stored || (jobs !== undefined && !Array.isArray(jobs))) {
-        throw new Error("Browser job history could not be read safely.");
-      }
-      const kept = (jobs ?? []).filter((job) => !terminalJobStatuses.has(job?.status));
-      await storage.set({ [key]: kept });
+      await mutateBrowserJobStorage({ storage, storageKeys, mutation: { type: "clear-settings-terminal" } });
       await load();
     } catch (error) {
       setStatus(statusNode, `Clear failed: ${safeErrorMessage(error)}`, "error");

@@ -1,3 +1,4 @@
+import * as jobStorageModule from "../resonantos-side-panel-extension/src/lib/browser-job-store.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -1203,3 +1204,212 @@ test("write rejection after a successful read remains resolved", async () => {
   await assert.doesNotReject(store.updateJob(job.id, { summary: traceSecret }));
   assert.equal(writes, 2);
 });
+
+// External writers share only this adapter/key queue, never the live store queue.
+const externalKeys = { browserJobs: "jobs", activeBrowserJob: "active", pendingSidebarPrompt: "prompt" };
+function externalHarness(jobs = [], active = null) {
+  const data = { jobs, active }; const writes = []; let reads = 0;
+  const storage = {
+    async get() { reads++; return structuredClone(data); },
+    async set(value) { writes.push(value); Object.assign(data, structuredClone(value)); }
+  };
+  const mutate = (mutation, options = {}) => {
+    assert.equal(typeof jobStorageModule.mutateBrowserJobStorage, "function", "shared storage mutation helper must exist");
+    return jobStorageModule.mutateBrowserJobStorage({ storage, storageKeys: externalKeys,
+      now: () => "2026-05-26T10:00:00.000Z", mutation, ...options });
+  };
+  return { data, writes, storage, mutate, reads: () => reads };
+}
+
+for (const removesFocus of [true, false]) {
+  test(`external Settings clear with single-key reads ${removesFocus ? "repairs removed" : "preserves surviving"} focus`, async () => {
+    const running = normalizeBrowserJob({ id: "running", status: "running" }, {
+      now: () => "2026-05-26T10:00:00.000Z"
+    });
+    const h = externalHarness([
+      { id: "completed", status: "completed" }, structuredClone(running)
+    ], removesFocus ? "completed" : "running");
+    h.storage.get = async (key) => {
+      assert.equal(typeof key, "string", "adapter only accepts single-key reads");
+      return { [key]: structuredClone(h.data[key]) };
+    };
+
+    const result = await h.mutate({ type: "clear-settings-terminal" });
+
+    assert.deepEqual(h.writes, [removesFocus
+      ? { jobs: [running], active: null }
+      : { jobs: [running] }], "write exactly the surviving history and only the required focus repair");
+    const expectedActive = removesFocus ? null : "running";
+    assert.deepEqual(h.data, { jobs: [running], active: expectedActive },
+      "persist repaired or preserved focus alongside the surviving job");
+    assert.equal(result.activeJobId, expectedActive,
+      "report the repaired or preserved active identity from single-key storage");
+    assert.equal(result.removed, 1);
+  });
+}
+
+for (const type of ["cancel", "clear-settings-terminal"]) {
+  test(`external ${type} sanitizes every survivor before truncation and approval admission`, async () => {
+    const boundary = "ordinary ".repeat(33).slice(0, 291) + " " + "ghp_" + "x".repeat(24);
+    const siblings = Array.from({ length: 44 }, (_, i) => ({ id: `safe-${i}`, status: "approval",
+      goal: boundary, summary: traceSecret, artifacts: [{ note: traceSecret }],
+      pendingApproval: { step: { text: 'password="' + "x".repeat(4100) + '"' } } }));
+    siblings[0].pageLock = { tabId: 2, url: "https://example.test/?token=private" };
+    siblings[1].preflightDecision = { id: "token=private", siteKey: "example.test" };
+    const h = externalHarness([{ id: "target", status: type === "cancel" ? "running" : "completed" }, ...siblings]);
+    await h.mutate({ type, jobId: "target" });
+    const saved = h.data.jobs.filter((job) => job.id !== "target");
+    assert.deepEqual(saved.map((job) => job.id), siblings.map((job) => job.id), "retain over forty survivors in order");
+    for (const job of saved) {
+      assert.equal(job.goal, "ordinary ".repeat(33).slice(0, 291) + " [REDACTE");
+      assert.equal(job.summary, traceClean); assert.equal(job.artifacts[0].note, traceClean);
+      assert.equal(job.pendingApproval, null, "original oversized approval cannot become admitted after redaction");
+    }
+    assert.equal(saved[0].pageLock, null); assert.equal(saved[0].status, "paused");
+    assert.equal(saved[1].preflightDecision, null); assert.equal(saved[1].status, "paused");
+    for (const write of h.writes) assert.doesNotMatch(JSON.stringify(write), /synthetic|private|ghp_/);
+  });
+}
+
+test("external mutation identities remain unique, reserve removed IDs, and remap focus", async () => {
+  const input = [{ id: "job-redacted-1", status: "completed" }, { id: "token=private", status: "running" },
+    { id: "duplicate", status: "paused" }, { id: "duplicate", status: "paused" },
+    { status: "paused" }, { id: "", status: "paused" }, { id: "safe", status: "paused" }];
+  for (let run = 0; run < 2; run++) {
+    const h = externalHarness(structuredClone(input), "token=private");
+    await h.mutate({ type: "clear-settings-terminal" });
+    const ids = h.data.jobs.map((job) => job.id);
+    assert.equal(new Set(ids).size, ids.length); assert.ok(ids.every(Boolean));
+    assert.equal(ids[0], "job-redacted-2", "allocator is operation-local and reserves removed records");
+    assert.equal(h.data.active, ids[0]); assert.equal(ids.at(-1), "safe");
+  }
+  for (const active of [null, "absent", "duplicate", "target"]) {
+    const h = externalHarness([{ id: "target", status: "running" }, ...input], active);
+    await h.mutate({ type: "cancel", jobId: "target" });
+    assert.equal(h.data.active, "target", "cancel repairs missing or ambiguous focus");
+  }
+  for (const active of ["safe", "token=private"]) {
+    const h = externalHarness([{ id: "target", status: "running" }, ...input], active);
+    await h.mutate({ type: "cancel", jobId: "target" });
+    assert.equal(h.data.active, active === "safe" ? "safe" : h.data.jobs[2].id,
+      "cancel preserves and remaps a different uniquely focused record");
+  }
+  const unsafe = externalHarness([{ id: "token=private", status: "running" }]);
+  const cancelled = await unsafe.mutate({ type: "cancel", jobId: "token=private" });
+  assert.equal(cancelled.job.id, "job-redacted-1"); assert.equal(cancelled.activeJobId, cancelled.job.id);
+  const missing = externalHarness([{ id: "safe", status: "running" }]);
+  assert.equal((await missing.mutate({ type: "cancel", jobId: "absent" })).changed, false);
+  assert.equal(missing.writes.length, 0);
+  for (const active of ["absent", "duplicate", "job-redacted-1"]) {
+    const h = externalHarness(structuredClone(input), active);
+    await h.mutate({ type: "clear-settings-terminal" }); assert.equal(h.data.active, null);
+  }
+  const h = externalHarness(input);
+  await assert.rejects(() => h.mutate({ type: "cancel", jobId: "duplicate" }));
+  assert.equal(h.writes.length, 0);
+});
+
+test("external mutations refuse unknown history without touching stored records", async () => {
+  for (const mutation of [
+    { type: "clear-settings-terminal" },
+    { type: "cancel", jobId: "running" },
+    { type: "focus", jobId: "running", command: "jobs focus" }
+  ]) {
+    for (const envelope of [{}, { active: "running" }, { jobs: undefined }, { jobs: null }]) {
+      const h = externalHarness([{ id: "running", status: "running" }], "running");
+      const original = structuredClone(h.data);
+      h.storage.get = async () => envelope;
+      const outcome = await h.mutate(mutation).then(() => null, (error) => error);
+      assert.deepEqual(h.data, original, "unknown history must leave stored records untouched");
+      assert.equal(h.writes.length, 0, "unknown history must never write");
+      assert.match(outcome?.message ?? "", /history could not be read safely/);
+    }
+  }
+});
+
+test("external clear accepts explicitly empty history", async () => {
+  const h = externalHarness([]);
+  assert.equal((await h.mutate({ type: "clear-settings-terminal" })).removed, 0);
+  assert.deepEqual(h.data.jobs, []);
+});
+
+test("external mutation failures write nothing and queue processing recovers", { timeout: 2000 }, async () => {
+  const badRecord = { id: "bad", status: "paused", get goal() { throw new Error("private preparation"); } };
+  for (const stored of [null, [], "bad", { jobs: {} }, { jobs: [null] }, { jobs: [[]] }, { jobs: [3] }, { jobs: [badRecord] }]) {
+    const h = externalHarness(); h.storage.get = () => stored;
+    await assert.rejects(() => h.mutate({ type: "clear-settings-terminal" }), (error) => !/private/.test(error.message));
+    assert.equal(h.writes.length, 0);
+  }
+  for (const mode of ["throw", "reject", "missing-get", "missing-set"]) {
+    const h = externalHarness();
+    if (mode === "throw") h.storage.get = () => { throw new Error("private read"); };
+    if (mode === "reject") h.storage.get = () => Promise.reject(new Error("private read"));
+    if (mode === "missing-get") delete h.storage.get;
+    if (mode === "missing-set") delete h.storage.set;
+    await assert.rejects(() => h.mutate({ type: "clear-settings-terminal" }), (error) => !/private/.test(error.message));
+    assert.equal(h.writes.length, 0);
+  }
+  const h = externalHarness([{ id: "target", status: "running" }]);
+  const save = h.storage.set; h.storage.set = async () => { throw new Error("private commit"); };
+  await assert.rejects(() => h.mutate({ type: "cancel", jobId: "target" }), (error) => !/private/.test(error.message));
+  h.storage.set = save;
+  assert.equal((await h.mutate({ type: "cancel", jobId: "target" })).changed, true);
+});
+
+async function boundedMutationWait(promise) {
+  let timer;
+  try {
+    return await Promise.race([promise, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error("External mutation did not settle")), 500);
+    })]);
+  } finally { clearTimeout(timer); }
+}
+
+for (const rejectFirst of [false, true]) {
+  test(`queued helper mutations wait for commit settlement (reject=${rejectFirst})`, { timeout: 2000 }, async () => {
+    const h = externalHarness([{ id: "a", status: "running" }, { id: "b", status: "running" }]);
+    const gate = Promise.withResolvers(); const started = Promise.withResolvers(); const save = h.storage.set;
+    let firstWrite = true;
+    h.storage.set = async (value) => {
+      if (firstWrite) { firstWrite = false; started.resolve(); await gate.promise; }
+      await save(value);
+    };
+    const first = h.mutate({ type: "cancel", jobId: "a" });
+    const outcome = first.then((value) => value, () => null);
+    await boundedMutationWait(started.promise);
+    const second = jobStorageModule.mutateBrowserJobStorage({ storage: h.storage, storageKeys: externalKeys,
+      mutation: { type: "cancel", jobId: "b" } });
+    try {
+      await Promise.resolve(); assert.equal(h.reads(), 1, "second caller must not read before first commit");
+      const independent = externalHarness([{ id: "c", status: "running" }]);
+      assert.equal((await boundedMutationWait(independent.mutate({ type: "cancel", jobId: "c" }))).changed, true);
+      h.data.other = [{ id: "d", status: "running" }];
+      assert.equal((await boundedMutationWait(h.mutate({ type: "cancel", jobId: "d" }, {
+        storageKeys: { ...externalKeys, browserJobs: "other" } }))).changed, true);
+    } finally { if (rejectFirst) gate.reject(new Error("private")); else gate.resolve(); }
+    await boundedMutationWait(outcome); const result = await boundedMutationWait(second);
+    assert.deepEqual(h.data.jobs.map((job) => job.status), [rejectFirst ? "running" : "cancelled", "cancelled"]);
+    const submitted = structuredClone(h.writes.at(-1)); result.job.goal = "mutated result";
+    assert.deepEqual(h.writes.at(-1), submitted, "returned result must not alias submitted records");
+  });
+}
+
+for (const type of ["cancel", "clear-settings-terminal"]) {
+  test(`external ${type} quarantines unknown statuses without creating runnable work`, async () => {
+    const h = externalHarness([{ id: "target", status: type === "cancel" ? "unknown" : "completed" },
+      ...[undefined, "mystery"].map((status, i) => ({ id: `unknown-${i}`, status,
+        pageLock: { tabId: 2 }, pendingApproval: { step: { type: "click" } }, preflightDecision: { id: "safe" } }))]);
+    await h.mutate({ type, jobId: "target" });
+    for (const job of h.data.jobs.filter((job) => job.id !== "target")) {
+      assert.equal(job.status, "paused"); assert.equal(job.pageLock, null);
+      assert.equal(job.pendingApproval, null); assert.equal(job.preflightDecision, null);
+      assert.equal(job.lastError, "Saved job status was invalid. Review this job before continuing.");
+    }
+    if (type === "cancel") assert.equal(h.data.jobs[0].status, "cancelled");
+    assert.equal(browserJobSchedulerState(h.data.jobs).runnableQueued.length, 0);
+    const hydrated = createHarness(structuredClone(h.data)); await hydrated.store.hydrate();
+    assert.equal(hydrated.store.getSchedulerState().runnableQueued.length, 0);
+    await h.mutate({ type: "clear-settings-terminal" });
+    assert.deepEqual(h.data.jobs.map((job) => job.id), ["unknown-0", "unknown-1"]);
+  });
+}

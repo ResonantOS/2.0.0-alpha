@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createBrowserJobStore, normalizeBrowserJob } from "../resonantos-side-panel-extension/src/lib/browser-job-store.js";
 import { JSDOM } from "jsdom";
 import { renderBrowserControlSection } from "../resonantos-side-panel-extension/src/lib/settings/browser-control-section.js";
 
@@ -28,7 +29,7 @@ function setup(t, options) {
   };
 }
 
-for (const failure of ["read", "malformed", "write"]) {
+for (const failure of ["read", "malformed", "missing", "write"]) {
   test(`clearing history preserves records on ${failure} failure and supports retry`, async (t) => {
     const original = [{ id: "active", status: "running" }, { id: "done", status: "completed" }];
     let records = structuredClone(original);
@@ -39,6 +40,7 @@ for (const failure of ["read", "malformed", "write"]) {
       storage: {
         async get() {
           if (failing && failure === "read") throw new Error("Cannot read jobs");
+          if (failing && failure === "missing") return {};
           return { jobs: failing && failure === "malformed" ? { unexpected: true } : structuredClone(records) };
         },
         async set(value) {
@@ -58,10 +60,34 @@ for (const failure of ["read", "malformed", "write"]) {
     failing = false;
     ui.button("Clear Completed Browser Jobs").click();
     await until(() => !ui.button("Clear Completed Browser Jobs").disabled);
-    assert.deepEqual(records, [original[0]]);
+    assert.deepEqual(records, [normalizeBrowserJob(original[0], { now: () => records[0].updatedAt })]);
     assert.equal(ui.status.dataset.tone, "success");
   });
 }
+
+test("Settings clear with a single-key adapter preserves running records and focus", async (t) => {
+  const running = normalizeBrowserJob({ id: "running", status: "running" }, {
+    now: () => "2026-05-26T10:00:00.000Z"
+  });
+  const data = { jobs: [running], active: "running" };
+  const ui = setup(t, {
+    storageKeys: { browserJobs: "jobs", activeBrowserJob: "active" },
+    storage: {
+      async get(key) { return { [key]: structuredClone(data[key]) }; },
+      async set(value) { Object.assign(data, structuredClone(value)); }
+    }
+  });
+  await until(() => ui.status.dataset.tone === "success");
+  const clear = async () => {
+    ui.button("Clear Completed Browser Jobs").click();
+    await until(() => !ui.button("Clear Completed Browser Jobs").disabled);
+    assert.deepEqual(data, { jobs: [running], active: "running" });
+    assert.equal(ui.status.dataset.tone, "success");
+  };
+  await clear();
+  data.jobs.push({ id: "completed", status: "completed" });
+  await clear();
+});
 
 test("only terminal records are removed and duplicate pending clears are ignored", async (t) => {
   const statuses = ["running", "queued", "waiting-approval", "unknown", "completed", "blocked", "denied", "cancelled", "failed"];
@@ -90,7 +116,8 @@ test("only terminal records are removed and duplicate pending clears are ignored
   pending = false;
   release();
   await until(() => !button.disabled);
-  assert.deepEqual(records.map((job) => job.status), statuses.slice(0, 4));
+  assert.deepEqual(records.map((job) => job.id), statuses.slice(0, 4));
+  assert.deepEqual(records.map((job) => job.status), ["running", "queued", "paused", "paused"]);
 });
 
 test("missing storage cannot report a successful clear", async (t) => {
@@ -99,4 +126,37 @@ test("missing storage cannot report a successful clear", async (t) => {
   ui.button("Clear Completed Browser Jobs").click();
   await until(() => !ui.button("Clear Completed Browser Jobs").disabled);
   assert.equal(ui.status.dataset.tone, "error");
+});
+
+test("Settings clear selects five original terminal statuses and sanitizes fresh survivors", async (t) => {
+  const data = { jobs: [{ id: "displayed", status: "running" }], active: "displayed" }; const writes = [];
+  const storageKeys = { browserJobs: "jobs", activeBrowserJob: "active", jobMonitorCollapsed: "collapsed" };
+  const storage = { async get() { return structuredClone(data); }, async set(value) {
+    writes.push(value); Object.assign(data, structuredClone(value));
+  } };
+  const ui = setup(t, { storage, storageKeys });
+  await until(() => ui.status.dataset.tone === "success");
+  const statuses = ["completed", "blocked", "denied", "cancelled", "failed", "running", "unknown"];
+  data.jobs = statuses.map((status) => ({ id: status, status, goal: 'client_secret="private"' }));
+  const boundaryPrefix = "ordinary ".repeat(33).slice(0, 291) + " ";
+  data.jobs.find((job) => job.id === "running").goal = boundaryPrefix + "ghp_" + "x".repeat(24);
+  data.active = "completed";
+  ui.button("Clear Completed Browser Jobs").click();
+  await until(() => !ui.button("Clear Completed Browser Jobs").disabled);
+  assert.deepEqual(data.jobs.map((job) => job.id), ["running", "unknown"]);
+  assert.deepEqual(data.jobs.map((job) => job.status), ["running", "paused"]);
+  assert.equal(data.active, null); assert.equal(writes.length, 1);
+  assert.equal(data.jobs[0].goal, boundaryPrefix + "[REDACTE");
+  assert.equal(data.jobs[1].goal, 'client_secret="REDACTED"');
+  assert.match(ui.container.textContent, /completed, blocked, denied, cancelled, and failed/);
+  data.active = "running";
+  ui.button("Clear Completed Browser Jobs").click();
+  await until(() => !ui.button("Clear Completed Browser Jobs").disabled);
+  assert.equal(data.active, "running"); assert.equal(Object.hasOwn(writes.at(-1), "active"), false);
+
+  data.jobs = statuses.slice(0, 5).map((status) => ({ id: status, status })); data.active = "completed";
+  const store = createBrowserJobStore({ storage, storageKeys }); await store.hydrate();
+  await store.clearCompletedJobs();
+  assert.deepEqual(store.getJobs().map((job) => job.id), ["completed", "blocked", "failed"],
+    "side-panel clear preserves focused, blocked and failed jobs");
 });

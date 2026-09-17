@@ -18,6 +18,7 @@ The [Alpha runtime boundary](ALPHA_RUNTIME_BOUNDARY.md) defines what ships. The
 | `browser-first/resonantos-side-panel-extension/src/content.js` and `src/lib/content-*.js` | Page observation and bounded in-page interaction | Current page DOM and approved frame context | Page controls allowed by field safety and approval policy | Bridge secrets, provider credentials, wallet signing, login credentials, or unrestricted page execution |
 | `browser-first/resonantos-side-panel-extension/src/side-panel.js` and `src/lib/side-panel-*.js` | Side-panel composition, conversation, command routing, browser jobs, and approvals | Extension session state, page observations, bounded bridge results | Browser-side UI/session/job state and approved Chrome actions | Host filesystem/process/provider state |
 | `browser-first/resonantos-side-panel-extension/src/main-workspace.js` and `src/lib/main-workspace-*.js` | New-tab workspace composition and feature presentation | Bounded bridge results and extension state | Workspace UI state and explicit user intents | Privileged local mutations except through named bridge routes |
+| `browser-first/resonantos-side-panel-extension/src/lib/browser-job-store.js` | Durable browser-job sanitation, identity handling, and external mutation coordination | Stored jobs and active identity; explicit controller intents | Sanitized job history, repaired focus, and validated routed prompts | Browser action execution or UI presentation |
 | `browser-first/resonantos-side-panel-extension/src/lib/bridge-client.js` | Bridge request transport and scoped capability-token acquisition | Generated bridge config and in-memory scoped tokens | Request headers and in-memory token cache | Route policy, provider secrets, or filesystem access |
 | `browser-first/resonantos-side-panel-extension/src/lib/browser-page-actions.js` and `src/lib/control-*.js` | Governed browser observation, planning flow, consent, action execution, and verification | Active tab/page snapshots, site/task consent, bounded plans | Chrome/page state allowed by approval policy | Wallet/payment/login/credential/public-submit authority or host privileges |
 | `browser-first/host/run-bridge-minimal.mjs` | Bridge composition root, route-service wiring, token creation, startup, and shutdown | Service constructors and environment configuration | Listener lifecycle and generated bridge config | Domain route behavior that belongs in a service |
@@ -32,6 +33,17 @@ The [Alpha runtime boundary](ALPHA_RUNTIME_BOUNDARY.md) defines what ships. The
 | `browser-first/host/browser-diagnostics-host-service.mjs` and `browser-diagnostics-service.mjs` | Redacted status, inspection, report export, and approved download open/reveal actions | Runtime metadata, bounded local diagnostics, and fixed platform executable roots | Capability-gated redacted reports and direct non-shell download actions | Secrets, ambient command lookup, unrestricted home paths, or provider/model execution |
 | `browser-first/host/extension-prefs-host-service.mjs` | External user-state persistence for extension preferences | Stored preference document | Validated preference state | Provider credentials, route capabilities, or unrelated user files |
 | `browser-first/test/` | Extension/bridge behavioral contracts and Alpha scope proof | Runtime modules and fixtures | Test-local state only | Product behavior |
+
+Workspace and Settings controllers supply browser-job mutation intents to the
+store module. The external helper coordinates read/prepare/write operations only
+within one storage adapter, jobs key, and JavaScript realm. Each live store keeps
+its own queue and failed-read guard; this is not cross-page atomicity or shared
+serialization with store writes.
+
+The clear policies intentionally differ: Settings removes completed, blocked,
+denied, cancelled, and failed jobs, including focused terminal jobs. Side-panel
+“Clear done” removes only completed, cancelled, and denied jobs and preserves the
+focused job. Both paths use the store module's durable sanitation boundary.
 
 ## Shared Source Ownership
 

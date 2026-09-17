@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { normalizeBrowserJob } from "../resonantos-side-panel-extension/src/lib/browser-job-store.js";
 import { createMainWorkspaceBrowserJobController } from "../resonantos-side-panel-extension/src/lib/main-workspace-browser-job-controller.js";
 
 const storageKeys = {
@@ -43,7 +44,7 @@ test("main workspace browser job controller opens the full monitor through sideb
 });
 
 test("main workspace browser job controller focuses a durable browser job", async () => {
-  const storage = createMemoryStorage();
+  const storage = createMemoryStorage({ browserJobs: [{ id: "job-123", status: "running" }] });
   const events = [];
   const controller = createMainWorkspaceBrowserJobController({
     afterChange: () => events.push("render"),
@@ -65,7 +66,7 @@ test("main workspace browser job controller focuses a durable browser job", asyn
 });
 
 test("main workspace browser job controller routes pause and continue through side-panel authority", async () => {
-  const storage = createMemoryStorage();
+  const storage = createMemoryStorage({ browserJobs: [{ id: "job-123", status: "running" }] });
   const events = [];
   const controller = createMainWorkspaceBrowserJobController({
     afterChange: () => events.push("render"),
@@ -128,14 +129,14 @@ test("main workspace browser job controller cancels non-terminal jobs and releas
 
   assert.equal(result, true);
   assert.equal(storage.data.activeBrowserJob, "job-a");
-  assert.deepEqual(storage.data.browserJobs[0], {
+  assert.deepEqual(storage.data.browserJobs[0], normalizeBrowserJob({
     id: "job-a",
     goal: "Search for news",
     completedAt: "2026-05-31T10:02:00.000Z",
     pageLock: null,
     status: "cancelled",
     updatedAt: "2026-05-31T10:02:00.000Z"
-  });
+  }));
   assert.deepEqual(events, [
     ["system", "Stopped browser job job-a: Search for news"],
     ["render"]
@@ -164,4 +165,58 @@ test("main workspace browser job controller does not rewrite terminal jobs", asy
   assert.equal(result, false);
   assert.equal(storage.data.browserJobs[0].status, "blocked");
   assert.deepEqual(events, []);
+});
+
+const focusRefusal = "This saved browser job cannot be focused safely. Reopen the side panel to reload and repair browser job history.";
+test("cancel uses fresh sanitized history and reports only committed success", async () => {
+  const storage = createMemoryStorage({ browserJobs: [{ id: "target", status: "running", goal: "old" }] });
+  const events = []; const messages = [];
+  const controller = createMainWorkspaceBrowserJobController({ storage, storageKeys,
+    afterChange: () => events.push("render"), openSidebar: async () => events.push("sidebar"),
+    addSystemMessage: async (message) => messages.push(message) });
+  const displayed = (await controller.readJobs()).jobs[0];
+  storage.data.browserJobs = [{ id: "target", status: "running", goal: 'client_secret="private"' },
+    { id: "sibling", status: "paused", summary: 'client_secret="private"' }];
+  assert.equal(await controller.cancelJob(displayed), true);
+  assert.equal(messages[0], 'Stopped browser job target: client_secret="REDACTED"');
+  assert.equal(storage.data.browserJobs[1].summary, 'client_secret="REDACTED"');
+  assert.equal(storage.data.activeBrowserJob, "target"); assert.deepEqual(events, ["render"]);
+  assert.equal(await controller.cancelJob(displayed), false, "fresh terminal target is a quiet no-op");
+  assert.equal(messages.length, 1);
+  for (const failure of ["get", "set"]) {
+    const broken = createMemoryStorage({ browserJobs: [{ id: "target", status: "running" }] });
+    broken[failure] = async () => { throw new Error("private failure"); };
+    const effects = []; const notices = [];
+    const failing = createMainWorkspaceBrowserJobController({ storage: broken, storageKeys,
+      afterChange: () => effects.push("render"), openSidebar: async () => effects.push("sidebar"),
+      addSystemMessage: async (message) => notices.push(message) });
+    for (const action of ["cancelJob", "focusJob", "pauseJob", "continueJob"]) {
+      assert.equal(await failing[action]({ id: "target" }), false);
+    }
+    assert.deepEqual(effects, []); assert.equal(notices.length, 4);
+    for (const notice of notices) {
+      assert.match(notice, /could not/i); assert.doesNotMatch(notice, /private|Stopped browser job/);
+    }
+  }
+});
+
+test("focus pause and continue validate stored identity without rewriting history", async () => {
+  for (const action of ["focusJob", "pauseJob", "continueJob"]) {
+    for (const id of [undefined, null, "", 42, "safe", "absent", "duplicate", "token=private", "two words", "line\nbreak", "control\u0000char"]) {
+      const jobs = ["safe", "duplicate", "duplicate", "token=private", "two words", "line\nbreak", "control\u0000char"]
+        .map((id) => ({ id, status: "running", goal: "original" }));
+      const storage = createMemoryStorage({ browserJobs: jobs }); const writes = []; const messages = [];
+      const save = storage.set; storage.set = async (value) => { writes.push(value); await save(value); };
+      const controller = createMainWorkspaceBrowserJobController({ storage, storageKeys,
+        addSystemMessage: async (message) => messages.push(message) });
+      assert.equal(await controller[action]({ id }), id === "safe", `${action}: ${id}`);
+      assert.equal(writes.length, id === "safe" ? 1 : 0);
+      assert.deepEqual(storage.data.browserJobs, jobs);
+      if (id === "safe") {
+        assert.deepEqual(Object.keys(writes[0]).sort(), ["activeBrowserJob", "pendingSidebarPrompt"]);
+        const command = { focusJob: "jobs focus", pauseJob: "pause", continueJob: "continue" }[action];
+        assert.equal(writes[0].pendingSidebarPrompt.prompt, `/${command} safe`);
+      } else assert.deepEqual(messages, [focusRefusal]);
+    }
+  }
 });
