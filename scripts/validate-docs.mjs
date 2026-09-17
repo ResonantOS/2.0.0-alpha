@@ -38,6 +38,9 @@ const IMPLICIT_DOCUMENT_CONSUMERS = new Set([
   "browser-first/resonantos-side-panel-extension/src/main-workspace.html",
   "browser-first/resonantos-side-panel-extension/src/side-panel.html",
 ]);
+const EVIDENCE_DOCUMENTS = new Set([
+  "docs/augmentor-future-list-acceptance-matrix.md",
+]);
 const DOCUMENTATION_PATH = /\.(?:md|markdown|mdx|txt|html|pdf|docx)$/i;
 
 const NORMATIVE_DOCUMENTS = new Set([
@@ -1857,6 +1860,70 @@ function validateNodeVersions(context) {
   return findings;
 }
 
+// Evidence targets deliberately use a stricter inventory than document discovery:
+// only indexed files qualify, including staged files in a repository with no commit.
+function validateEvidenceCitations(context) {
+  const documents = context.documents.filter((doc) => EVIDENCE_DOCUMENTS.has(doc.path));
+  if (documents.length === 0) return [];
+
+  let inventory;
+  try {
+    inventory = context.trackedFiles ?? execFileSync(
+      "git", ["-C", context.root, "ls-files", "--cached", "-z"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+    ).split("\0").filter(Boolean);
+  } catch {
+    return documents.map((doc) => createFinding(doc.path, 1,
+      "evidence citation inventory unavailable: cannot obtain tracked files from Git; supply trackedFiles explicitly"));
+  }
+
+  const tracked = new Set([...inventory].sort());
+  const byBasename = new Map();
+  for (const path of tracked) {
+    const basename = path.split("/").at(-1);
+    const candidates = byBasename.get(basename) ?? [];
+    candidates.push(path);
+    byBasename.set(basename, candidates);
+  }
+  const repositoryRoot = realpathSync(context.root);
+  const findings = [];
+  for (const doc of documents) {
+    const tree = markdownParser.parse(doc.content);
+    walkMarkdown(tree, (node) => {
+      if (node.type !== "inlineCode") return;
+      const token = node.value.trim();
+      if (/^[a-z][a-z\d+.-]*:/i.test(token)
+        || /^(?:npm|npx|node|git|bash|sh|python3?|rg|gh)\s/.test(token)) return;
+      const fileLike = token.includes("/")
+        || /\.[a-z][a-z\d_-]*$/i.test(token)
+        || /^(?:README|LICENSE|Makefile|Dockerfile|\.nvmrc)$/.test(token);
+      if (!fileLike) return;
+
+      const candidates = tracked.has(token)
+        ? [token]
+        : token.includes("/") ? [] : byBasename.get(token) ?? [];
+      let reason;
+      if (candidates.length === 0) {
+        reason = "does not resolve to a tracked file";
+      } else if (candidates.length > 1) {
+        reason = `is ambiguous: ${candidates.join(", ")}`;
+      } else {
+        try {
+          const target = realpathSync(resolve(context.root, candidates[0]));
+          if (!isPathInside(repositoryRoot, target) || !lstatSync(target).isFile()) {
+            reason = "does not exist as a file inside the repository";
+          }
+        } catch {
+          reason = "does not exist as a file inside the repository";
+        }
+      }
+      if (reason) findings.push(createFinding(doc.path, node.position.start.line,
+        `evidence citation "${token}" ${reason}`));
+    });
+  }
+  return findings;
+}
+
 function buildContext(root, options = {}) {
   const resolvedRoot = resolve(root);
   const files = options.files ?? walkFiles(resolvedRoot);
@@ -1872,6 +1939,7 @@ export function validateRepositoryDocs(root, options = {}) {
   const context = buildContext(root, options);
   const findings = [
     ...validateMarkdownLinks(context),
+    ...validateEvidenceCitations(context),
     ...validateNpmScripts(context),
     ...validateCanonicalClaims(context),
     ...validateEntrypoints(context),
