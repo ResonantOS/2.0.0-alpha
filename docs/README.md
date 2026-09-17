@@ -118,3 +118,17 @@ the exact commands and live Chrome checks performed.
 Use the [ADR Index](architecture/README.md). An ADR's decision status and its
 applicability to the current Alpha are separate facts; historical and deferred
 records do not redefine the runtime boundary.
+
+## Planning And Future Architecture
+
+The post-consolidation architecture and SDK/DAO governance program is planned in
+[Planning & Architecture Governance](planning/README.md). It contains the
+[project state review](planning/00-project-state-review.md), the
+[post-consolidation architecture roadmap](planning/01-post-consolidation-architecture-roadmap.md),
+the [SDK + DAO governance roadmap](planning/02-sdk-dao-governance-roadmap.md), the
+[master implementation plan](planning/03-master-implementation-plan.md), the
+[roadmap review](planning/04-roadmap-review.md), the
+[Tom report](planning/05-tom-report-ros-sdk-demo-and-buildout.md), the
+[SDK demo test results](planning/06-sdk-demo-test-results.md), and the
+[daily summary protocol](planning/daily/README.md). These are proposals and
+schedules, not shipped runtime facts.
