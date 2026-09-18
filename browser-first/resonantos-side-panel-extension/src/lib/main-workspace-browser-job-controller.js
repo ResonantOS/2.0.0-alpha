@@ -12,15 +12,32 @@ export function createMainWorkspaceBrowserJobController({
   const activeBrowserJobKey = storageKeys?.activeBrowserJob ?? "augmentorActiveBrowserJob";
   const pendingSidebarPromptKey = storageKeys?.pendingSidebarPrompt ?? "augmentorPendingSidebarPrompt";
 
-  const readJobs = async () => {
-    const stored = await storage?.get?.([
-      browserJobsKey,
-      activeBrowserJobKey
-    ]).catch(() => ({}));
-    return {
-      activeJobId: String(stored?.[activeBrowserJobKey] ?? ""),
-      jobs: Array.isArray(stored?.[browserJobsKey]) ? stored[browserJobsKey] : []
-    };
+  let lastGoodHistory = { jobs: [], activeJobId: "" };
+  let historyRead = null;
+  const isRecord = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+
+  const readJobs = () => {
+    if (!historyRead) {
+      historyRead = Promise.resolve().then(async () => {
+        try {
+          if (typeof storage?.get !== "function") throw new Error("History storage unavailable.");
+          const stored = await storage.get([browserJobsKey, activeBrowserJobKey]);
+          const jobs = stored?.[browserJobsKey];
+          const activeJobId = stored?.[activeBrowserJobKey];
+          if (!isRecord(stored) ||
+              (jobs !== undefined && (!Array.isArray(jobs) || !jobs.every(isRecord))) ||
+              (activeJobId != null && typeof activeJobId !== "string")) {
+            throw new Error("Invalid browser job history.");
+          }
+          lastGoodHistory = structuredClone({ jobs: jobs ?? [], activeJobId: activeJobId ?? "" });
+          return { ...lastGoodHistory, historyState: "ready" };
+        } catch {
+          return { ...lastGoodHistory, historyState: "error" };
+        }
+      }).finally(() => { historyRead = null; });
+    }
+    // Callers and storage must not be able to change the retained snapshot.
+    return historyRead.then((snapshot) => structuredClone(snapshot));
   };
 
   const openMonitor = async () => {

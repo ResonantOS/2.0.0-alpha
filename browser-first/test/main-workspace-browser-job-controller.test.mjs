@@ -220,3 +220,48 @@ test("focus pause and continue validate stored identity without rewriting histor
     }
   }
 });
+
+test("history reads expose failure retain last good data and recover without writes", { timeout: 2000 }, async (t) => {
+  let value = {};
+  let failure = true;
+  let pending;
+  let reads = 0;
+  let writes = 0;
+  const storage = {
+    get() { reads++; if (failure) throw new Error("private read error"); return pending?.promise ?? Promise.resolve(value); },
+    async set() { writes++; }
+  };
+  const controller = createMainWorkspaceBrowserJobController({ storage, storageKeys });
+  assert.deepEqual(await controller.readJobs(), { jobs: [], activeJobId: "", historyState: "error" });
+  failure = false;
+  value = { browserJobs: [{ id: "saved", status: "paused", steps: [{ label: "original" }] }], activeBrowserJob: "saved" };
+  const ready = await controller.readJobs();
+  assert.equal(ready.historyState, "ready");
+  ready.jobs[0].steps[0].label = "caller mutation";
+  value.browserJobs[0].steps[0].label = "storage mutation";
+  for (const malformed of [null, [], { browserJobs: null }, { browserJobs: {} }, { browserJobs: [null] }, { browserJobs: [[]] }, { activeBrowserJob: {} }]) {
+    value = malformed;
+    const failed = await controller.readJobs();
+    assert.equal(failed.historyState, "error");
+    assert.equal(failed.activeJobId, "saved");
+    assert.equal(failed.jobs[0].steps[0].label, "original");
+    failed.jobs.length = 0;
+  }
+  pending = Promise.withResolvers();
+  t.after(() => pending?.resolve({}));
+  const before = reads;
+  const first = controller.readJobs();
+  const second = controller.readJobs();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(reads, before + 1, "pending reads coalesce");
+  pending.resolve({});
+  const [a, b] = await Promise.all([first, second]);
+  assert.deepEqual(a, { jobs: [], activeJobId: "", historyState: "ready" });
+  a.jobs.push({ id: "caller" });
+  assert.deepEqual(b.jobs, [], "each reader gets a detached snapshot");
+  pending = null;
+  value = {};
+  assert.equal((await controller.readJobs()).historyState, "ready");
+  assert.equal(reads, before + 2, "settled reads permit another refresh");
+  assert.equal(writes, 0);
+});
