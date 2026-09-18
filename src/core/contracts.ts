@@ -2602,6 +2602,15 @@ export interface StrategistIdentity {
   trustNote: string;
 }
 
+// Source data is framed by the host; provenance never grants instruction authority.
+export type UntrustedChatContext = {
+  source: "living-archive" | "system-memory" | "conversation-memory" | "archive-workspace";
+  kind: "page" | "raw-source" | "status" | "compact" | "workspace";
+  title: string;
+  path: string;
+  text: string;
+};
+
 export interface ConversationMessage {
   id: string;
   threadId: string;

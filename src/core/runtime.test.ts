@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AddOnManifest, InstallationStatus, ResonantShellState } from "./contracts";
 import { buildDefaultState } from "./defaults";
-import { applyProviderCredentialStatuses, normalizeState, rebaseStateOnManifests, requestProviderSmokeTest } from "./runtime";
+import { applyProviderCredentialStatuses, normalizeState, rebaseStateOnManifests, requestProviderSmokeTest, requestProviderServiceChatCompletion, requestProviderServiceChatCompletionStream } from "./runtime";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -530,3 +530,17 @@ describe("runtime state migration", () => {
     });
   });
 });
+
+ it.each([false, true])("completion and stream preserve structured context through web transport (stream=%s)", async (stream) => {
+  vi.stubGlobal("__RESONANTOS_BRIDGE_CONFIG__", { bridgeUrl: "http://127.0.0.1:47773" });
+  const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true, reply: "reply" })));
+  vi.stubGlobal("fetch", fetchMock);
+  const input = { runId: "run", providerId: "test", providerType: "openai-compatible" as const, model: "test", reasoningEffort: "high" as const,
+    systemPrompt: "trusted", messages: [{ id: "m", threadId: "t", channelId: "c", author: "You", createdAt: "now", role: "user" as const, content: "hello" }],
+    contextSources: [{ source: "living-archive" as const, kind: "page" as const, title: "title", path: "path", text: "SECRET" }] };
+  const events = vi.fn();
+  expect(await (stream ? requestProviderServiceChatCompletionStream(input, events) : requestProviderServiceChatCompletion(input))).toBe("reply");
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ workload: "augmentor-chat", surface: "react-shell", model: "test", thinkingDepth: "high", systemPrompt: "trusted", messages: input.messages, contextSources: input.contextSources });
+  expect(events.mock.calls).toEqual(stream ? [[{ runId: "run", type: "chunk", content: "reply" }], [{ runId: "run", type: "completed", content: "" }]] : []);
+ });

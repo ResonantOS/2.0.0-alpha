@@ -9,6 +9,7 @@ import type {
   ArchiveQueuedIngestRequest,
   ArchiveReviewArtifact,
   ConversationMessage,
+  UntrustedChatContext,
   ProviderProfile,
   ResonantShellState,
 } from "./core/contracts";
@@ -1470,10 +1471,11 @@ const openChatHistory = async () => {
   await screen.findByLabelText("Chat history");
 };
 
-const providerStreamInputs = (): Array<{ systemPrompt: string; messages: ConversationMessage[] }> =>
+const providerStreamInputs = (): Array<{ systemPrompt: string; messages: ConversationMessage[]; contextSources?: UntrustedChatContext[] }> =>
   requestProviderServiceChatCompletionStreamMock.mock.calls.map((call) => call[0]) as Array<{
     systemPrompt: string;
     messages: ConversationMessage[];
+    contextSources?: UntrustedChatContext[];
   }>;
 
 describe("App boot flow", () => {
@@ -3979,13 +3981,15 @@ describe("App boot flow", () => {
     expect(requestArchiveDocumentMock).toHaveBeenCalledWith("WIKI/concepts/provider-fabric.md");
     expect(requestProviderServiceChatCompletionStreamMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        systemPrompt: expect.stringContaining("Living Archive context retrieved for this turn."),
+        contextSources: expect.arrayContaining([expect.objectContaining({ source: "living-archive", kind: "status" })]),
+        systemPrompt: expect.not.stringContaining("Living Archive context retrieved for this turn."),
       }),
       expect.any(Function),
     );
     expect(requestProviderServiceChatCompletionStreamMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        systemPrompt: expect.stringContaining("Provider routing belongs to ResonantOS"),
+        contextSources: expect.arrayContaining([expect.objectContaining({ source: "living-archive", kind: "page", path: "WIKI/concepts/provider-fabric.md", text: expect.stringContaining("Provider routing belongs to ResonantOS") })]),
+        systemPrompt: expect.not.stringContaining("Provider routing belongs to ResonantOS"),
       }),
       expect.any(Function),
     );
@@ -4207,8 +4211,12 @@ describe("App boot flow", () => {
 
     expect(await screen.findByText("This is a live Strategist test reply from MiniMax-M3.")).toBeTruthy();
     const providerCall = providerStreamInputs().at(-1);
-    expect(providerCall?.systemPrompt).toContain("ResonantOS compacted conversation memory:");
-    expect(providerCall?.systemPrompt).toContain("Edited why: preserve the user's intent across compaction.");
+    const compactRecord = providerCall?.contextSources?.find(record => record.kind === "compact");
+    expect(compactRecord).toMatchObject({ source: "conversation-memory", title: "ResonantOS compacted conversation memory", path: providerCall?.messages.at(-1)?.threadId });
+    expect(JSON.parse(compactRecord!.text).threadId).toBe(providerCall?.messages.at(-1)?.threadId);
+    expect(providerCall?.systemPrompt).not.toContain("ResonantOS compacted conversation memory:");
+    expect(compactRecord?.text).toContain("Edited why: preserve the user's intent across compaction.");
+    expect(providerCall?.systemPrompt).not.toContain("Edited why: preserve the user's intent across compaction.");
     expect(providerCall?.messages.map((message) => message.id)).not.toContain("thread-main-desktop:m1");
     expect(providerCall?.messages.map((message) => message.id)).toContain("thread-main-desktop:m12");
     expect(providerCall?.messages.at(-1)?.content).toBe("Continue after compacting the chat.");
@@ -4255,8 +4263,12 @@ describe("App boot flow", () => {
     expect(await screen.findByText(/automatic compaction threshold/i)).toBeTruthy();
     expect(await screen.findByText("This is a live Strategist test reply from MiniMax-M3.")).toBeTruthy();
     const providerCall = providerStreamInputs().at(-1);
-    expect(providerCall?.systemPrompt).toContain("ResonantOS compacted conversation memory:");
-    expect(providerCall?.systemPrompt).toContain("automatic compaction protects long chat continuity");
+    const compactRecord = providerCall?.contextSources?.find(record => record.kind === "compact");
+    expect(compactRecord).toMatchObject({ source: "conversation-memory", title: "ResonantOS compacted conversation memory", path: providerCall?.messages.at(-1)?.threadId });
+    expect(JSON.parse(compactRecord!.text).threadId).toBe(providerCall?.messages.at(-1)?.threadId);
+    expect(providerCall?.systemPrompt).not.toContain("ResonantOS compacted conversation memory:");
+    expect(compactRecord?.text).toContain("automatic compaction protects long chat continuity");
+    expect(providerCall?.systemPrompt).not.toContain("automatic compaction protects long chat continuity");
     expect(providerCall?.messages.map((message) => message.id)).not.toContain("thread-main-desktop:m1");
     expect(providerCall?.messages.at(-1)?.content).toBe("Send after auto compaction threshold.");
   });
@@ -4303,8 +4315,12 @@ describe("App boot flow", () => {
 
     expect(await screen.findByText("This is a live Strategist test reply from MiniMax-M3.")).toBeTruthy();
     const providerCall = providerStreamInputs().at(-1);
-    expect(providerCall?.systemPrompt).toContain("ResonantOS compacted conversation memory:");
-    expect(providerCall?.systemPrompt).toContain("avoid amnesia when exploring alternatives");
+    const compactRecord = providerCall?.contextSources?.find(record => record.kind === "compact");
+    expect(compactRecord).toMatchObject({ source: "conversation-memory", title: "ResonantOS compacted conversation memory", path: providerCall?.messages.at(-1)?.threadId });
+    expect(JSON.parse(compactRecord!.text).threadId).toBe(providerCall?.messages.at(-1)?.threadId);
+    expect(providerCall?.systemPrompt).not.toContain("ResonantOS compacted conversation memory:");
+    expect(compactRecord?.text).toContain("avoid amnesia when exploring alternatives");
+    expect(providerCall?.systemPrompt).not.toContain("avoid amnesia when exploring alternatives");
     expect(providerCall?.messages.at(-1)?.threadId).toMatch(/^thread-fork-/);
     expect(providerCall?.messages.at(-1)?.content).toBe("Continue from this branched compacted thread.");
   });
@@ -5283,7 +5299,8 @@ describe("App boot flow", () => {
     const request = requestProviderServiceChatCompletionStreamMock.mock.calls.at(-1)?.[0];
     expect(request?.threadId).toBe("thread-living-archive-agent");
     expect(request?.messages.at(-1)?.content).toBe("Fix the Living Archive setup without moving this conversation to the sidebar.");
-    expect(request?.systemPrompt).toContain("This conversation is happening inside the Living Archive workspace");
+    expect(request?.contextSources?.find((record: UntrustedChatContext) => record.source === "archive-workspace")?.text).toContain("This conversation is happening inside the Living Archive workspace");
+    expect(request?.systemPrompt).not.toContain("This conversation is happening inside the Living Archive workspace");
 
     const dialogue = document.querySelector(".archive-agent-dialogue");
     expect(dialogue?.textContent).toContain("Fix the Living Archive setup");
@@ -5422,9 +5439,12 @@ describe("App boot flow", () => {
     );
     expect(requestArchiveLibraryPreflightMock).toHaveBeenCalledWith("/Users/augmentor/Documents/RESONANT_OS_BASE");
     const request = requestProviderServiceChatCompletionStreamMock.mock.calls.at(-1)?.[0];
-    expect(request?.systemPrompt).toContain("Host archive coverage inspection already ran for this turn");
-    expect(request?.systemPrompt).toContain("Managed folders with supported files but no manifest record");
-    expect(request?.systemPrompt).toContain("02_PROTOCOL_LIBRARY");
+    expect(request?.contextSources?.find((record: UntrustedChatContext) => record.source === "archive-workspace")?.text).toContain("Host archive coverage inspection already ran for this turn");
+    expect(request?.systemPrompt).not.toContain("Host archive coverage inspection already ran for this turn");
+    expect(request?.contextSources?.find((record: UntrustedChatContext) => record.source === "archive-workspace")?.text).toContain("Managed folders with supported files but no manifest record");
+    expect(request?.systemPrompt).not.toContain("Managed folders with supported files but no manifest record");
+    expect(request?.contextSources?.find((record: UntrustedChatContext) => record.source === "archive-workspace")?.text).toContain("02_PROTOCOL_LIBRARY");
+    expect(request?.systemPrompt).not.toContain("02_PROTOCOL_LIBRARY");
   });
 
   it("opens a host-owned mixed library classification review from the source registry", async () => {

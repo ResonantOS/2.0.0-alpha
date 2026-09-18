@@ -8,7 +8,11 @@ import { createProviderBridgeService } from "../host/provider-bridge-service.mjs
 const PROVIDER_ENV = ["MINIMAX_API_KEY", "OPENAI_API_KEY", "ZAI_API_KEY", "GLM_API_KEY", "ZHIPUAI_API_KEY",
   "RESONANTOS_PROVIDER_SECRETS_JSON", "RESONANTOS_LOCAL_RUNTIME_URL", "RESONANTOS_PROVIDER_ALLOW_LOCAL_ENDPOINTS"];
 const credential = "context-test-credential";
+const contextSources = [
+  ["living-archive", "page"], ["system-memory", "page"], ["conversation-memory", "compact"], ["archive-workspace", "workspace"],
+].map(([source, kind]) => ({ source, kind, title: `${source}_TITLE`, path: `${source}_PATH`, text: `${source}_SECRET` }));
 const payload = {
+  contextSources,
   workload: "augmentor-chat", thinkingDepth: "high",
   pageContext: "Title: Page sentinel\nURL: https://page.test/\nPAGE_SECRET",
   tabContexts: [{ title: "Tab sentinel", url: "https://tab.test/", text: "TAB_SECRET" }],
@@ -19,7 +23,8 @@ const payload = {
 const expectedRecords = [
   { source: "current-page", title: "Page sentinel", url: "https://page.test/", text: payload.pageContext },
   { source: "referenced-tab", index: 1, title: "Tab sentinel", url: "https://tab.test/", text: "TAB_SECRET" },
-  { source: "runtime-context", title: "Composer attachments", url: "unknown", text: payload.runtimeContext }
+  { source: "runtime-context", title: "Composer attachments", url: "unknown", text: payload.runtimeContext },
+  ...contextSources
 ];
 function reply(content = "context reply") {
   return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content } }], usage: null }) };
@@ -57,7 +62,7 @@ async function withService(run) {
   }
 }
 function assertSafe(messages) {
-  for (const sentinel of ["PAGE_SECRET", "TAB_SECRET", "ATTACHMENT_SECRET", "Page sentinel", "Tab sentinel", "https://page.test/", "https://tab.test/", "file.txt"]) {
+  for (const sentinel of ["PAGE_SECRET", "TAB_SECRET", "ATTACHMENT_SECRET", "Page sentinel", "Tab sentinel", "https://page.test/", "https://tab.test/", "file.txt", ...contextSources.flatMap(record => [record.title, record.path, record.text])]) {
     assert.ok(!messages[0].content.includes(sentinel), `system must exclude ${sentinel}`);
   }
   assert.deepEqual(messages.map(message => message.role), ["system", "user", "assistant", "user"]);
@@ -131,8 +136,8 @@ test("invalid contextual history makes no provider request", async () => withSer
     [[{ role: "assistant", content: "answer" }], "Context requires a user message."],
     [[{ role: "user", content: "question" }, { role: "assistant", content: "answer" }], "Contextual chat must end with a user message."]
   ];
-  for (const [messages, message] of histories) {
-    const result = await svc.executeBridgeChat({ ...payload, model: "gpt-5.5", messages }).then(() => null, error => error);
+  for (const [messages, message] of histories) for (const context of [payload, { contextSources }]) {
+    const result = await svc.executeBridgeChat({ ...context, model: "gpt-5.5", messages }).then(() => null, error => error);
     assert.equal(captured.length, 0, "invalid contextual history must make zero provider requests");
     assert.equal(result?.message, message);
   }

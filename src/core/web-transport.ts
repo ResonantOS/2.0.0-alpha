@@ -26,6 +26,7 @@ const commandRouteMap: Record<string, CommandRoute> = {
       thinkingDepth: args.reasoningEffort,
       systemPrompt: args.systemPrompt,
       messages: args.messages,
+      ...(args.contextSources === undefined ? {} : { contextSources: args.contextSources }),
     }),
     result: (payload) => payload.reply,
   },
