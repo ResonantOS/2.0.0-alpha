@@ -267,8 +267,8 @@ Checkboxes reflect the plan at re-baseline. Update them daily through the
 ### Phase 1 — Lock Guardian architecture
 
 - [x] Ratify the Guardian ADR — done: ADR-038 (deterministic restart/roll-back service).
-- [ ] Ratify the Ground-0 contract ADR.
-- [ ] Ratify the Authority Plane invariants ADR.
+- [ ] Ratify the Ground-0 contract ADR — **drafted**: ADR-039 (`docs/architecture/ADR-039-ground0-recovery-contract.md`), pending ratification.
+- [ ] Ratify the Authority Plane invariants ADR — **drafted**: ADR-040 (`docs/architecture/ADR-040-authority-plane-invariants.md`), pending ratification.
 - [x] Record the Augmentor de-fusion boundary — done: Manolo's DeepSeek Harness Augmentor (`apps/augmentor`).
 
 ### Phase 2 — Reconstruct REF/SDK
