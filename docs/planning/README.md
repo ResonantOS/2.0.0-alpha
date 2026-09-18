@@ -47,6 +47,7 @@ Verbatim Markdown conversions of the original source documents live in
 - [SDK + DAO governance roadmap (PDF → MD)](source/ResonantOS_SDK_DAO_Governance_Roadmap_Guardian_Engineer_2026-09-14_v2.md)
 - [Augmentor sync report, 16 Sep (PDF → MD, authoritative)](source/Augmentor_Sync_Report_2026-09-16.md)
 - [Repository settings for Manolo, 15 Sep (PDF → MD, authoritative)](source/ResonantOS_Settings_for_Manolo_2026-09-15.md)
+- [Augmentor status update, 17 Sep (PDF → MD, authoritative)](source/Augmentor_Status_2026-09-17.md)
 
 ## Prototype SDK
 

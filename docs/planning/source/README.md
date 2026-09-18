@@ -11,6 +11,7 @@ kept in the repository.
 | [ResonantOS_SDK_DAO_Governance_Roadmap_Guardian_Engineer_2026-09-14_v2.md](ResonantOS_SDK_DAO_Governance_Roadmap_Guardian_Engineer_2026-09-14_v2.md) | `ResonantOS_SDK_DAO_Governance_Roadmap_Guardian_Engineer_2026-09-14_v2.pdf` | Andrew | superseded in part |
 | [Augmentor_Sync_Report_2026-09-16.md](Augmentor_Sync_Report_2026-09-16.md)                                                                           | `Augmentor-Sync-Report 9.16.2026.pdf`                                       | Tom    | **authoritative**  |
 | [ResonantOS_Settings_for_Manolo_2026-09-15.md](ResonantOS_Settings_for_Manolo_2026-09-15.md)                                                         | `ResonantOS-Settings-for-Manolo.pdf`                                        | Tom    | **authoritative**  |
+| [Augmentor_Status_2026-09-17.md](Augmentor_Status_2026-09-17.md)                                                                                     | `Augmentor-Status-2026-09-17.pdf`                                           | Tom    | **authoritative**  |
 
 ## Relationship to the working documents
 
@@ -26,8 +27,9 @@ The PDF v2 supersedes the DOCX on the Augmentor identity (Guardian/Engineer mode
 replaces the "Fused Augmentor" framing); that reconciliation is documented in the
 master implementation plan, not re-edited into these verbatim conversions.
 
-The two Tom documents (16 Sep and 15 Sep) are the **current authoritative
-direction**. They record the One Augmentor / ResonantOS-wraps-it decision, the
-ADR-038 Guardian definition, the SDK relocation to `packages/addon-sdk`, the Node
-24.21.0 move, and the repository-access hardening steps. The working documents
+The two Tom documents (16 Sep and 15 Sep) plus the 17 Sep status update are the
+**current authoritative direction**. They record the One Augmentor /
+ResonantOS-wraps-it decision, the ADR-038 Guardian definition, the SDK relocation
+to `packages/addon-sdk`, the Node 24.21.0 move, the repository-access hardening
+steps, and Tom's PR #453 review (approve with changes). The working documents
 `00`, `03`, `04`, and `05` are aligned to them.
