@@ -38,8 +38,9 @@ recipe with three uses:
 
 It is **harness-agnostic** — any AI-agent harness (OpenAI Codex, Manolo's
 DeepSeek-harness, oh-my-pi-harness, or equivalent) can run it — and
-**provider-agnostic**: the target provider is a `<slug>` placeholder, with
-DeepSeek and Grok-Build as the two worked examples.
+**provider-agnostic**: the target provider is a `<slug>` placeholder. The
+preinstalled first-party add-on is the **Augmentor** (Manolo's DeepSeek Harness);
+**Grok-Build** is the worked third-party example.
 
 ## 3. Grok-Build test (prototype SDK)
 
@@ -54,10 +55,10 @@ plugin for Resonant-OS." The result was independently verified against the repo:
 | Capability model   | Correct — `providers` is Privileged and gated; no Core-only capability requested                      |
 | Prepare-not-commit | `run_task` calls `context.propose(...)` and returns `status: "proposed"`                              |
 | Offline            | Simulated loopback (`http://127.0.0.1:3080`); no live calls or credentials                            |
-| Tests              | `node --test examples/sdk-prototype/sdk.test.mjs` → **11 / 11 pass**                                  |
+| Tests              | `node --test examples/sdk-prototype/sdk.test.mjs` → **9 / 9 pass**                                    |
 | Grant scenarios    | deny-by-default, Public-only, and reviewed-grants all behave correctly                                |
 
-**What this proves:** the prompt generalizes beyond its original DeepSeek example —
+**What this proves:** the prompt generalizes beyond the preinstalled Augmentor —
 the harness correctly derived the entire naming and capability chain from the
 single "Grok-Build" input.
 

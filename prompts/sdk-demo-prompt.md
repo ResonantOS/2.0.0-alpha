@@ -9,23 +9,24 @@ This prompt supports three uses, in order:
 
 1. **Verify the demo works** (Tom) — run the prebuilt demo and its tests, and
    confirm the capability model is enforced.
-2. **Present the demo** (Manolo, community leader) — run the two scenarios as a
+2. **Present the demo** (Manolo, community leader) — run the preinstalled
+   **Augmentor** (Manolo's DeepSeek Harness) and the **Grok-Build** add-on as a
    live walkthrough.
-3. **Build an add-on** (Manolo or any developer) — author a basic harness plugin
-   for any target AI provider (e.g. Grok-Build, DeepSeek) using the same harness.
+3. **Build an add-on** (any developer) — author a basic harness plugin for any
+   target AI provider (the worked example is Grok-Build) using the same harness.
 
 ## 1. Verify the demo works
 
 ```bash
 cd 2.0.0-alpha
 node --test examples/sdk-prototype/sdk.test.mjs
-node examples/sdk-prototype/run-demo.mjs examples/sdk-prototype/plugins/augmentor-chat   # preinstalled Augmentor add-on
-node examples/sdk-prototype/run-demo.mjs                                                  # DeepSeek plugin (agent-built)
+node examples/sdk-prototype/run-demo.mjs examples/sdk-prototype/plugins/augmentor    # preinstalled Augmentor (Manolo's DeepSeek Harness)
+node examples/sdk-prototype/run-demo.mjs examples/sdk-prototype/plugins/grok-build  # third-party add-on (agent-built)
 ```
 
 Confirm:
 
-- **11 / 11 tests pass.**
+- **9 / 9 tests pass.**
 - In each `run-demo` run, deny-by-default holds: ungated tools are blocked,
   Public-only grants let Public tools run while Privileged tools stay blocked,
   and consequential work stops at `propose` (prepare, not commit).
@@ -33,8 +34,8 @@ Confirm:
 ## 2. Present the demo
 
 Run the two `run-demo` commands above as a walkthrough: show the preinstalled
-**Augmentor** add-on, then the **DeepSeek** plugin built through the SDK, and
-point out the three grant scenarios.
+**Augmentor** (Manolo's DeepSeek Harness), then the **Grok-Build** add-on built
+through the SDK, and point out the three grant scenarios.
 
 ## 3. Build an add-on
 
@@ -45,18 +46,18 @@ provider (for example "Grok-Build" or "DeepSeek"); use that name to fill the
 harness with deny-by-default capability enforcement, and it must mirror the
 production harness contract for that provider.
 
-Context: the harness already ships with the original first add-on **Augmentor**
-(`addon.augmentor-chat`) preinstalled and pre-granted. You are adding a new,
-third-party add-on beside it — not replacing it.
+Context: the harness already ships with the one first-party **Augmentor**
+(`addon.augmentor`) — Manolo's DeepSeek Harness — preinstalled and pre-granted.
+You are adding a new, third-party add-on beside it — not replacing it.
 
 ### Provider naming
 
-| Thing       | Pattern                 | Grok-Build example    | DeepSeek example            |
-| ----------- | ----------------------- | --------------------- | --------------------------- |
-| slug        | lowercase kebab         | `grok-build`          | `deepseek-harness`          |
-| plugin `id` | `addon.<slug>`          | `addon.grok-build`    | `addon.deepseek-harness`    |
-| folder      | `plugins/<slug>/`       | `plugins/grok-build/` | `plugins/deepseek-harness/` |
-| tool prefix | `<slug>` with `-` → `_` | `grok_build`          | `deepseek_harness`          |
+| Thing       | Pattern                 | Grok-Build example    | Claude Code example   |
+| ----------- | ----------------------- | --------------------- | --------------------- |
+| slug        | lowercase kebab         | `grok-build`          | `claudecode`          |
+| plugin `id` | `addon.<slug>`          | `addon.grok-build`    | `addon.claudecode`    |
+| folder      | `plugins/<slug>/`       | `plugins/grok-build/` | `plugins/claudecode/` |
+| tool prefix | `<slug>` with `-` → `_` | `grok_build`          | `claudecode`          |
 
 ### Inputs to read first
 
@@ -65,16 +66,14 @@ All paths are relative to the `2.0.0-alpha` repository root.
 1. `examples/sdk-prototype/README.md` — the harness authoring guide and capability
    rules.
 2. `examples/sdk-prototype/sdk.mjs` — the harness runtime API you build against.
-3. `examples/addons/addon.deepseek-harness.json` — an example production harness
-   manifest. Read it as the **shape** for your provider's manifest.
-4. `examples/sdk-prototype/plugins/augmentor-chat/plugin.json` and `plugin.mjs` —
-   the preinstalled first-party add-on; read it for context.
-5. `examples/sdk-prototype/plugins/hello-resonant/plugin.json` and `plugin.mjs` —
+3. `examples/sdk-prototype/plugins/augmentor/plugin.json` and `plugin.mjs` — the
+   preinstalled first-party Augmentor (Manolo's DeepSeek Harness); read it for context.
+4. `examples/sdk-prototype/plugins/hello-resonant/plugin.json` and `plugin.mjs` —
    the **format** to model your manifest and entry module on.
 
 A reference implementation already exists at
-`examples/sdk-prototype/plugins/deepseek-harness/`; reproduce its **structure**
-for your target provider rather than copying it verbatim.
+`examples/sdk-prototype/plugins/grok-build/`; reproduce its **structure** for
+your target provider rather than copying it verbatim.
 
 ### Constraints (non-negotiable)
 

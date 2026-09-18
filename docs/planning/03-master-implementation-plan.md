@@ -128,7 +128,7 @@ portion of it is additionally gated on Tom's open scope decision.
 - Security/CI pipeline — workflow guards, drift checker, hygiene gate, secret
   scanning.
 - **Prototype SDK demo** — `examples/sdk-prototype/` (preinstalled harness +
-  Augmentor add-on + agent-built DeepSeek plugin, 11/11 tests).
+  Augmentor (Manolo's DeepSeek Harness) + agent-built Grok-Build plugin, 9/9 tests).
 
 ### 3.3 Genuinely remaining
 
