@@ -135,6 +135,8 @@ export function renderMainBrowserJobStatus({
   activeJobId = "",
   container,
   jobs = [],
+  historyState = "ready",
+  onRetryHistory,
   maxConcurrent = 2,
   onCancelFocused,
   onContinueFocused,
@@ -142,13 +144,39 @@ export function renderMainBrowserJobStatus({
   onOpenMonitor,
   onPauseFocused
 } = {}) {
+  if (historyState !== "ready") {
+    const snapshot = mainBrowserJobSnapshot();
+    if (!container) return snapshot;
+    const documentRef = container.ownerDocument;
+    container.replaceChildren();
+    container.hidden = false;
+    container.dataset.status = "blocked";
+    const copy = documentRef.createElement("div");
+    copy.className = "main-browser-jobs-copy";
+    copy.dataset.status = "blocked";
+    const title = documentRef.createElement("strong");
+    title.textContent = historyState === "loading"
+      ? "Loading browser job history…"
+      : "Browser job history could not be loaded.";
+    copy.append(title);
+    const actions = documentRef.createElement("div");
+    actions.className = "main-browser-jobs-actions";
+    const retry = createButton(documentRef, "Retry", "Reload browser job history", () => onRetryHistory?.());
+    retry.disabled = historyState === "loading";
+    actions.append(retry);
+    container.append(copy, actions);
+    return snapshot;
+  }
   if (!container) return mainBrowserJobSnapshot({ activeJobId, jobs, maxConcurrent });
   const snapshot = mainBrowserJobSnapshot({ activeJobId, jobs, maxConcurrent });
   const documentRef = container.ownerDocument;
   const { activeCount, approvalJobs, blocked, focusedJob, scheduler } = snapshot;
   container.replaceChildren();
   container.hidden = activeCount === 0 && !focusedJob;
-  if (container.hidden) return snapshot;
+  if (container.hidden) {
+    delete container.dataset.status;
+    return snapshot;
+  }
 
   container.dataset.status = focusedJob?.status ?? "idle";
   const copy = documentRef.createElement("div");

@@ -707,3 +707,117 @@ test("monitor renderers show permission manager across sites and grants", async 
   await harness.renderers.renderPermissionManager();
   assert.equal(panel.hidden, true);
 });
+
+test("history failure stays reachable while empty or collapsed and retry restores controls", { timeout: 2000 }, async (t) => {
+  const { createBrowserJobStore, normalizeBrowserJob } = await import("../resonantos-side-panel-extension/src/lib/browser-job-store.js");
+  const { createSidePanelBrowserJobController } = await import("../resonantos-side-panel-extension/src/lib/side-panel-browser-job-controller.js");
+  const dom = new JSDOM('<section id="jobs"><strong></strong><button id="clear">Clear done</button><button id="toggle">Show</button><ul></ul></section>');
+  const oldDocument = globalThis.document; globalThis.document = dom.window.document;
+  t.after(() => { globalThis.document = oldDocument; dom.window.close(); });
+  const document = dom.window.document;
+  const monitor = document.querySelector("section");
+  const clear = document.querySelector("#clear");
+  const toggle = document.querySelector("#toggle");
+  const list = document.querySelector("ul");
+  const now = () => "2026-05-26T10:00:00.000Z";
+  const saved = normalizeBrowserJob({ id: "saved", goal: "Saved task", status: "paused" }, { now });
+  let value = { jobs: [saved], active: "saved", collapsed: true };
+  let failure = false;
+  let pending;
+  let reads = 0;
+  const writes = [];
+  const store = createBrowserJobStore({ now,
+    storageKeys: { browserJobs: "jobs", activeBrowserJob: "active", jobMonitorCollapsed: "collapsed" },
+    storage: { async get() { reads++; if (pending) await pending.promise; if (failure) throw Error("private"); return structuredClone(value); },
+      async set(data) { writes.push(data); value = structuredClone(data); } }
+  });
+  let renderer;
+  const controller = createSidePanelBrowserJobController({ browserJobStore: store, renderJobMonitor: () => renderer.renderJobMonitor() });
+  renderer = createMonitorRenderers({
+    elements: { jobMonitor: monitor, jobMonitorTitle: monitor.querySelector("strong"), jobMonitorToggle: toggle, jobMonitorClear: clear, jobList: list },
+    getBrowserJobs: () => store.getJobs(), getJobMonitorCollapsed: () => store.getMonitorCollapsed(),
+    getContextDockExpanded: () => false, getHistoryLoadState: controller.getHistoryLoadState,
+    onRetryHistory: controller.loadBrowserJobs, updateContextDockVisibility: () => {}
+  });
+  clear.addEventListener("click", () => assert.fail("Clear must be disabled"));
+  toggle.addEventListener("click", () => assert.fail("collapse must be disabled"));
+  await controller.loadBrowserJobs();
+  // A preparation failure preserves live jobs; neither they nor their actions may leak into the error row.
+  const hydrate = store.hydrate;
+  store.hydrate = async () => { throw Error("preparation"); };
+  await controller.loadBrowserJobs();
+  store.hydrate = hydrate;
+  const assertError = () => {
+    assert.equal(monitor.hidden, false);
+    assert.equal(list.hidden, false);
+    assert.match(list.textContent, /Browser job history could not be loaded\./);
+    assert.doesNotMatch(list.textContent, /Saved task/);
+    assert.deepEqual([...list.querySelectorAll("button")].map((b) => b.textContent), ["Retry"]);
+    assert.ok(list.querySelector('[data-status="blocked"]'));
+    assert.equal(clear.disabled, true); assert.equal(toggle.disabled, true);
+    clear.click(); toggle.click();
+  };
+  assertError();
+  failure = true;
+  list.querySelector("button").click(); await controller.loadBrowserJobs(); assertError();
+  const before = reads;
+  pending = Promise.withResolvers(); t.after(() => pending.resolve());
+  const retry = list.querySelector("button");
+  retry.click(); retry.click();
+  const completion = controller.loadBrowserJobs();
+  assert.equal(list.querySelector("button").disabled, true);
+  assert.match(list.textContent, /Loading browser job history/);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(reads, before + 1);
+  failure = false; pending.resolve(); await completion;
+  assert.equal(clear.disabled, false); assert.equal(toggle.disabled, false);
+  assert.equal(store.getMonitorCollapsed(), true);
+  assert.equal(monitor.hidden, true, "normal context visibility returns");
+  assert.equal(writes.length, 0, "Retry on canonical paused history has no extra mutation");
+});
+
+test("side-panel composition owns history notice and wires Retry without collapse mutation", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../resonantos-side-panel-extension/src/side-panel.js", import.meta.url), "utf8");
+  const renderer = source.slice(source.indexOf("monitorRenderers = createMonitorRenderers("), source.indexOf("const renderControlMonitor ="));
+  assert.match(renderer, /jobMonitorClear,/);
+  assert.match(renderer, /getHistoryLoadState:.*browserJobController.getHistoryLoadState/);
+  assert.match(renderer, /onRetryHistory:.*loadBrowserJobs/);
+  assert.match(source, /onHistoryLoadStateChange:/);
+  assert.match(source, /composerNotice\?\.textContent === browserJobHistoryNotice/);
+  const command = source.slice(source.indexOf("const showBrowserJobsCommand"), source.indexOf('controlStopButton.addEventListener'));
+  assert.ok(command.indexOf('getHistoryLoadState() !== "ready"') >= 0);
+  assert.ok(command.indexOf('getHistoryLoadState() !== "ready"') < command.indexOf("setMonitorCollapsed(false)"));
+  assert.match(command, /Browser job history could not be loaded\. Open Jobs to retry\./);
+});
+
+test("composed history notice preserves unrelated notices and unavailable jobs command skips collapse", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const { runInNewContext } = await import("node:vm");
+  const source = await readFile(new URL("../resonantos-side-panel-extension/src/side-panel.js", import.meta.url), "utf8");
+  const noticeCallback = source.match(/onHistoryLoadStateChange: (\(state\) => \{[\s\S]*?\n  \}),/)[1];
+  const composerNotice = { textContent: "" };
+  const context = { composerNotice, browserJobHistoryNotice: "Browser job history could not be loaded. Open Jobs to retry.",
+    setComposerNotice: (text) => { composerNotice.textContent = text; } };
+  const notify = runInNewContext(noticeCallback, context);
+  notify("error"); assert.equal(composerNotice.textContent, context.browserJobHistoryNotice);
+  notify("loading"); assert.equal(composerNotice.textContent, context.browserJobHistoryNotice);
+  composerNotice.textContent = "Unrelated notice"; notify("ready");
+  assert.equal(composerNotice.textContent, "Unrelated notice");
+  notify("error"); notify("ready"); assert.equal(composerNotice.textContent, "");
+  let state = "error";
+  const mutations = [];
+  const commands = [];
+  let renders = 0;
+  const command = source.slice(source.indexOf("const showBrowserJobsCommand"), source.indexOf('controlStopButton.addEventListener'));
+  const show = runInNewContext(command + "\nshowBrowserJobsCommand;", {
+    contextDockExpanded: false, persistContextDockExpanded: async () => {},
+    browserJobController: { getHistoryLoadState: () => state },
+    browserJobStore: { setMonitorCollapsed: async (value) => mutations.push(value) },
+    renderJobMonitor: () => { renders++; }, runJobsCommand: (body) => { commands.push(body); return "normal jobs"; }
+  });
+  for (state of ["error", "loading"]) assert.equal(await show(""), context.browserJobHistoryNotice);
+  assert.deepEqual(mutations, []); assert.deepEqual(commands, []); assert.equal(renders, 2);
+  state = "ready"; assert.equal(await show(""), "normal jobs");
+  assert.deepEqual(mutations, [false]); assert.deepEqual(commands, [""]);
+});

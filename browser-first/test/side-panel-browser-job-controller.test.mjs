@@ -92,7 +92,7 @@ test("side panel browser job controller recovers interrupted jobs and announces 
   const recovered = await harness.controller.loadBrowserJobs();
 
   assert.equal(recovered.length, 2);
-  assert.deepEqual(harness.events[0], ["hydrate"]);
+  assert.deepEqual(harness.events.slice(0, 2), [["render-jobs"], ["hydrate"]]);
   assert.equal(harness.events.some((event) => event[0] === "render-jobs"), true);
   assert.ok(harness.events.some((event) => event[0] === "message" && /Recovered 2 interrupted browser jobs/.test(event[2])));
 });
@@ -261,4 +261,67 @@ test("failed-history approval and completion updates remain fulfilled", async ()
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(h.writes.length, 0, "fulfilled background updates must not attempt storage writes");
   assert.deepEqual(h.backing, before);
+});
+
+test("failed hydration skips recovery and a coalesced retry restores history", { timeout: 2000 }, async (t) => {
+  let failure = true;
+  let preparationFailure = false;
+  let pending;
+  let reads = 0;
+  const writes = [];
+  const now = () => "2026-05-26T10:00:00.000Z";
+  const saved = normalizeBrowserJob({ id: "saved", goal: "Read page", status: "running" }, { now });
+  const backing = { jobs: [saved], active: "saved", collapsed: true };
+  const store = createBrowserJobStore({ now,
+    storageKeys: { browserJobs: "jobs", activeBrowserJob: "active", jobMonitorCollapsed: "collapsed" },
+    storage: {
+      async get() {
+        reads++; if (pending) await pending.promise;
+        if (failure) throw Error("private read failure");
+        if (preparationFailure) return { jobs: [{ get id() { throw Error("private preparation failure"); } }] };
+        return structuredClone(backing);
+      },
+      async set(value) { writes.push(structuredClone(value)); Object.assign(backing, structuredClone(value)); }
+    }
+  });
+  let recoveries = 0;
+  const recover = store.recoverInterruptedJobs;
+  store.recoverInterruptedJobs = (...args) => { recoveries++; return recover(...args); };
+  const states = [];
+  const renders = [];
+  const controller = createSidePanelBrowserJobController({ browserJobStore: store,
+    onHistoryLoadStateChange: (state) => states.push(state),
+    renderJobMonitor: () => renders.push(controller.getHistoryLoadState()) });
+  assert.deepEqual(await controller.loadBrowserJobs(), []);
+  assert.equal(controller.getHistoryLoadState(), "error");
+  assert.deepEqual(states, ["loading", "error"]);
+  assert.deepEqual(renders, ["loading", "error"]);
+  assert.equal(store.isHistoryReadBlocked(), true);
+  assert.equal(recoveries, 0);
+  assert.equal(writes.length, 0);
+  failure = false; preparationFailure = true;
+  assert.deepEqual(await controller.loadBrowserJobs(), []);
+  assert.equal(controller.getHistoryLoadState(), "error");
+  assert.equal(store.isHistoryReadBlocked(), true);
+  assert.equal(recoveries, 0);
+  preparationFailure = false;
+  pending = Promise.withResolvers(); t.after(() => pending.resolve());
+  const before = reads;
+  const first = controller.loadBrowserJobs();
+  const second = controller.loadBrowserJobs();
+  assert.equal(controller.getHistoryLoadState(), "loading");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(reads, before + 1, "overlapping Retry performs one hydration");
+  assert.equal(store.isHistoryReadBlocked(), true, "controller must not clear store latch");
+  pending.resolve();
+  const [a, b] = await Promise.all([first, second]);
+  assert.equal(a.length, 1); assert.equal(b.length, 1);
+  assert.equal(recoveries, 1);
+  assert.equal(controller.getHistoryLoadState(), "ready");
+  assert.equal(store.isHistoryReadBlocked(), false);
+  assert.equal(backing.jobs[0].status, "paused", "normal interrupted recovery is permitted");
+  assert.equal(backing.collapsed, true);
+  assert.equal(writes.length, 1, "only normal recovery writes this canonical fixture");
+  await controller.loadBrowserJobs();
+  assert.equal(reads, before + 2, "inflight reference clears after settlement");
 });
