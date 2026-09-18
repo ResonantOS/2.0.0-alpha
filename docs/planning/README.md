@@ -35,7 +35,7 @@ redefine the Alpha runtime boundary.
    the report for Tom: demo ready to show + projected SDK buildout timeline as
    revisions over time.
 7. [SDK demo test results & alpha integration](06-sdk-demo-test-results.md) —
-   the Grok-Build test (prototype 11/11) + production-SDK validation (41/41) +
+   the Grok-Build test (prototype 9/9) + production-SDK validation (41/41) +
    the self-contained offline loopback demo (PASS).
 
 ## Source conversions

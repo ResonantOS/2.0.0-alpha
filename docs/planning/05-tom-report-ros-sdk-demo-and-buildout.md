@@ -11,27 +11,20 @@ demo's add-on arrangement must be reworked before a demo date is set.
 ## 1. Summary
 
 An SDK demo exists and its **capability model is validated** (deny-by-default,
-prepare-is-not-commit, Public / Privileged / Core-only). But it is **not ready to
-show** yet: it currently presents the **old Augmentor Chat** as "the Augmentor"
-with a DeepSeek add-on beside it — the arrangement the One Augmentor decision
-replaced. It must be reworked so **Manolo's DeepSeek Harness** is the Augmentor
-before a demo date is set.
+prepare-is-not-commit, Public / Privileged / Core-only). The demo now shows
+**Manolo's DeepSeek Harness as the Augmentor** (`addon.augmentor`) — the One
+Augmentor arrangement — with **Grok-Build** as the worked third-party add-on.
+A demo date can be booked once this rework is reviewed.
 
 ## 2. What is ready to show
 
 ### The demo
 
-> **Status (2026-09-17):** the current prototype still shows the **old Augmentor
-> Chat** add-on as "the Augmentor" with DeepSeek beside it. This is the
-> arrangement One Augmentor replaced. The demo is therefore **on hold** until it
-> is reworked so Manolo's DeepSeek Harness **is** the Augmentor.
-
-| Piece                                        | What it is                                                                                                                                                                           |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Preinstalled add-on harness**              | `examples/sdk-prototype/sdk.mjs` — loads, validates, and runs add-on plugins; mirrors the production SDK (`packages/addon-sdk`, ADR-018).                                            |
-| **Augmentor (needs rework)**                 | `plugins/augmentor-chat/` — the **old** first add-on; must be replaced by Manolo's DeepSeek Harness as the Augmentor.                                                                |
-| **DeepSeek plugin (community-leader build)** | `plugins/deepseek-harness/` — mirrors the production `addon.deepseek-harness` contract; built through the SDK by the agent.                                                          |
-| **Grok-Build plugin (second provider)**      | `plugins/grok-build/` — same prompt, different `<slug>`; proves the recipe is provider-agnostic. Full alpha results in [`06-sdk-demo-test-results.md`](06-sdk-demo-test-results.md). |
+| Piece                                     | What it is                                                                                                                                                                                    |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Preinstalled add-on harness**           | `examples/sdk-prototype/sdk.mjs` — loads, validates, and runs add-on plugins; mirrors the production SDK (`packages/addon-sdk`, ADR-018).                                                     |
+| **Augmentor (preinstalled first-party)**  | `plugins/augmentor/` — **Manolo's DeepSeek Harness**, `addon.augmentor` (mirrors production `addon.deepseek-harness`, imported into `apps/augmentor`, #448).                                  |
+| **Grok-Build plugin (third-party build)** | `plugins/grok-build/` — the worked example built through the SDK; proves the recipe is provider-agnostic. Full alpha results in [`06-sdk-demo-test-results.md`](06-sdk-demo-test-results.md). |
 
 ### What it demonstrates
 
@@ -53,14 +46,14 @@ before a demo date is set.
 
 ```bash
 cd 2.0.0-alpha
-node examples/sdk-prototype/run-demo.mjs examples/sdk-prototype/plugins/augmentor-chat   # preinstalled add-on
-node examples/sdk-prototype/run-demo.mjs                                                  # DeepSeek (agent-built)
+node examples/sdk-prototype/run-demo.mjs examples/sdk-prototype/plugins/augmentor    # preinstalled Augmentor (Manolo's DeepSeek Harness)
+node examples/sdk-prototype/run-demo.mjs examples/sdk-prototype/plugins/grok-build  # third-party add-on (agent-built)
 node --test examples/sdk-prototype/sdk.test.mjs
 ```
 
 ### Validation (all green)
 
-- Prototype SDK tests: **11 / 11 pass**.
+- Prototype SDK tests: **9 / 9 pass**.
 - Demo runs correctly across the three grant scenarios.
 - Repository hygiene check passes (`npm run repo:hygiene`).
 
