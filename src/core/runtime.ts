@@ -2,6 +2,7 @@
 // Intent citation: docs/architecture/ADR-006-addon-runtime-sdk.md
 
 import type {
+  UntrustedChatContext,
   AddOnManifest,
   ArchiveAiMemoryBuildJobSummary,
   ArchiveAiMemoryBuildResult,
@@ -263,6 +264,7 @@ export const requestProviderServiceChatCompletion = async (input: {
   reasoningEffort: "minimal" | "medium" | "high";
   systemPrompt: string;
   messages: ConversationMessage[];
+  contextSources?: UntrustedChatContext[];
 }): Promise<string> => {
   return (await invoke("provider_service_chat_completion", input)) as string;
 };
@@ -292,6 +294,7 @@ export const requestProviderServiceChatCompletionStream = async (
     reasoningEffort: "minimal" | "medium" | "high";
     systemPrompt: string;
     messages: ConversationMessage[];
+    contextSources?: UntrustedChatContext[];
   },
   onEvent: (event: ProviderChatStreamEvent) => void,
 ): Promise<string> => {
@@ -381,6 +384,7 @@ export const requestEngineerRecoveryTurn = async (input: {
   model: string;
   systemPrompt: string;
   messages: ConversationMessage[];
+  contextSources?: UntrustedChatContext[];
   runtimeNodeEndpoint?: string;
   authTier?: string;
 }): Promise<EngineerRecoveryTurnResult> => {

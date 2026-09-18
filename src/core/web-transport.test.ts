@@ -285,3 +285,11 @@ describe("web-mode capability transport", () => {
     expect(headers(routeCalls()[2]).get(capabilityHeader)).toBe(issuedTokens["provider-diagnostics-read"]);
   });
 });
+
+ it("forwards structured context separately from prompt and messages", async () => {
+  const contextSources = [{ source: "living-archive", kind: "page", title: "title", path: "path", text: "SECRET" }];
+  const args = { model: "test", reasoningEffort: "high", systemPrompt: "trusted", messages: [{ role: "user", content: "hello" }], contextSources };
+  await transport.webInvoke(chat, args);
+  expect(routeCalls()).toHaveLength(1);
+  expect(JSON.parse(String(routeCalls()[0][1]?.body))).toEqual({ workload: "augmentor-chat", surface: "react-shell", model: "test", thinkingDepth: "high", systemPrompt: "trusted", messages: args.messages, contextSources });
+ });
