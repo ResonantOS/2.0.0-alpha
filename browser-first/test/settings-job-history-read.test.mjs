@@ -154,7 +154,15 @@ test("Settings clear selects five original terminal statuses and sanitizes fresh
   await until(() => !ui.button("Clear Completed Browser Jobs").disabled);
   assert.equal(data.active, "running"); assert.equal(Object.hasOwn(writes.at(-1), "active"), false);
 
-  data.jobs = statuses.slice(0, 5).map((status) => ({ id: status, status })); data.active = "completed";
+  // Explicit, descending updatedAt values: hydration sorts newest first, so the
+  // surviving order below is deterministic instead of depending on how many
+  // milliseconds the seeding loop happens to straddle.
+  data.jobs = statuses.slice(0, 5).map((status, index) => ({
+    id: status,
+    status,
+    updatedAt: new Date(Date.UTC(2026, 8, 17, 12, 0, 30 - index)).toISOString()
+  }));
+  data.active = "completed";
   const store = createBrowserJobStore({ storage, storageKeys }); await store.hydrate();
   await store.clearCompletedJobs();
   assert.deepEqual(store.getJobs().map((job) => job.id), ["completed", "blocked", "failed"],
