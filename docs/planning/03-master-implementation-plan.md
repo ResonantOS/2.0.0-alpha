@@ -1,9 +1,9 @@
 # ResonantOS Master Implementation Plan
 
-**Date:** 2026-09-16
+**Date:** 2026-09-16 (updated 2026-09-17 after Tom's PR #453 review)
 **Status:** Proposed plan — for review and ratification by the development team.
-**Horizon:** ~12 weeks (2026-09-14 → 2026-12-04), revised down from the original
-26-week estimate.
+**Horizon:** ~12 weeks (2026-09-14 → 2026-12-04) is the **team's proposal**, not a
+ratified schedule. Revised down from the original 26-week estimate.
 
 This is the reconciled execution plan derived from the two 2026-09-14 source
 documents, re-based against the repository's actual development velocity.
@@ -37,6 +37,10 @@ sharpen or update this plan:
   not yet applied.
 - **Demo is on hold** pending a shared demo scope + code location (the prototype
   SDK in `examples/sdk-prototype/`).
+- **Scope decision (Tom, 2026-09-17, open)** — whether DAO, NFT, and marketplace
+  work is **in or out** is undecided. Phases 6–11 and decisions R3–R10 are
+  **undecided proposals, not scheduled work** until Tom settles this. Certification
+  substrate (Phase 6) and marketplace (Phases 7/11) are part of that open scope.
 
 ---
 
@@ -86,7 +90,9 @@ cannot silently bypass them.
 
 The first draft scheduled **26 weeks** (to 2027-03-12) and treated the SDK as
 largely greenfield. Reviewing the repository history showed that assumption was
-wrong, so the timeline is re-based to **~12 weeks** (to 2026-12-04).
+wrong, so the team **proposes** ~12 weeks (to 2026-12-04). This ~12-week figure
+is the team's proposal and is not yet ratified by Tom; the DAO/NFT/marketplace
+portion of it is additionally gated on Tom's open scope decision.
 
 ### 3.1 Velocity evidence
 
@@ -116,7 +122,9 @@ wrong, so the timeline is re-based to **~12 weeks** (to 2026-12-04).
 - Default-deny routes (#373).
 - Host-held credentials — session-only provider creds, provider fabric routing.
 - Caller-attributed tokens — already spiked (`pre-rebase/spike/caller-attributed-tokens`).
-- Browser field safety — `content-field-safety.js` already in the extension.
+- Browser field safety — `content-field-safety.js` already in the extension; this
+  ships the **unrecognised-controls-human-only** rule (#451), **not** the live-element
+  field classifier (which is still open, pending §13.2 / Manolo's executor).
 - Security/CI pipeline — workflow guards, drift checker, hygiene gate, secret
   scanning.
 - **Prototype SDK demo** — `examples/sdk-prototype/` (preinstalled harness +
@@ -133,12 +141,15 @@ wrong, so the timeline is re-based to **~12 weeks** (to 2026-12-04).
 
 ### 3.4 Revised timeline (revisions over time)
 
-| Revision                       | Focus                                                                                            | Phases | Target window                |
-| ------------------------------ | ------------------------------------------------------------------------------------------------ | ------ | ---------------------------- |
-| **R1 — SDK to production**     | Finish capability classes, caller attribution, commit broker, browser policy, Ground-0 recovery  | 0–5    | Weeks 1–4 (by ~2026-10-09)   |
-| **R2 — Governed distribution** | Certification substrate + marketplace MVP                                                        | 6–7    | Weeks 4–6 (by ~2026-10-23)   |
-| **R3 — DAO governance pilot**  | DAO constitution, NFT testnet prototype, governance–certification integration, marketplace pilot | 8–11   | Weeks 6–10 (by ~2026-11-20)  |
-| **R4 — Hardening**             | Kernel governance + production hardening                                                         | 12–13  | Weeks 10–12 (by ~2026-12-04) |
+Revisions R2–R4 are **undecided proposals** pending Tom's scope decision
+(DAO/NFT/marketplace in or out); only R1 is agreed in-scope work.
+
+| Revision                       | Focus                                                                                                                            | Phases | Target window                |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- | ------ | ---------------------------- |
+| **R1 — SDK to production**     | Finish capability classes, caller attribution, commit broker, browser policy, Ground-0 recovery                                  | 0–5    | Weeks 1–4 (by ~2026-10-09)   |
+| **R2 — Governed distribution** | Certification substrate + marketplace MVP **(undecided — scope pending)**                                                        | 6–7    | Weeks 4–6 (by ~2026-10-23)   |
+| **R3 — DAO governance pilot**  | DAO constitution, NFT testnet prototype, governance–certification integration, marketplace pilot **(undecided — scope pending)** | 8–11   | Weeks 6–10 (by ~2026-11-20)  |
+| **R4 — Hardening**             | Kernel governance + production hardening **(undecided — scope pending)**                                                         | 12–13  | Weeks 10–12 (by ~2026-12-04) |
 
 ---
 
@@ -147,22 +158,22 @@ wrong, so the timeline is re-based to **~12 weeks** (to 2026-12-04).
 Phases are numbered `0–13`. Each row records the source mapping, the build state,
 and the exit gate.
 
-| #   | Phase                                | Source                 | Build state                            | Exit gate                                                                             |
-| --- | ------------------------------------ | ---------------------- | -------------------------------------- | ------------------------------------------------------------------------------------- |
-| 0   | Consolidate & secure                 | DOCX P0 + fork-cleanup | In progress                            | Clean fork on `upstream/dev`; CI owns the release path                                |
-| 1   | Lock Guardian architecture           | PDF A + DOCX P1        | Done (ADR-038 merged)                  | Guardian decided (ADR-038); Ground-0 contract + Authority Plane ADRs accepted         |
-| 2   | Reconstruct REF/SDK                  | PDF B + DOCX P3/P4/P5  | Refinement (SDK at packages/addon-sdk) | Capability classes, caller attribution, commit broker tested against consolidated dev |
-| 3   | Harden browser edge                  | DOCX P2                | Refinement (field safety exists)       | `BrowserActionPolicy` fails closed on unsafe live context                             |
-| 4   | Credential & provenance              | DOCX P6                | Refinement (host-held creds exist)     | No raw-secret path; content cannot become authority                                   |
-| 5   | Ground-0 recovery proof              | PDF C + DOCX P8        | New                                    | User retains a working relationship under subsystem failure                           |
-| 6   | Certification substrate              | PDF D + DOCX P7        | New                                    | Certification is bound to a specific release                                          |
-| 7   | Marketplace registry                 | PDF E                  | New                                    | Registry accepts only validated releases                                              |
-| 8   | DAO constitution                     | PDF F                  | New                                    | Governance roles and thresholds ratified                                              |
-| 9   | Developer NFT prototype              | PDF G                  | New                                    | NFT roles work on testnet without runtime authority                                   |
-| 10  | Governance–certification integration | PDF H                  | New                                    | Eligibility and attestation enforced end-to-end                                       |
-| 11  | Marketplace pilot                    | PDF I                  | New                                    | Certified add-ons operate within capability ceilings                                  |
-| 12  | Kernel governance integration        | PDF J                  | New                                    | Kernel-class changes require the protected path                                       |
-| 13  | Production hardening                 | PDF K                  | New                                    | Production-ready                                                                      |
+| #   | Phase                                | Source                 | Build state                                                                                 | Exit gate                                                                             |
+| --- | ------------------------------------ | ---------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| 0   | Consolidate & secure                 | DOCX P0 + fork-cleanup | In progress                                                                                 | Clean fork on `upstream/dev`; CI owns the release path                                |
+| 1   | Lock Guardian architecture           | PDF A + DOCX P1        | In progress (ADR-038 merged; Ground-0 + Authority Plane ADRs pending)                       | Guardian decided (ADR-038); Ground-0 contract + Authority Plane ADRs accepted         |
+| 2   | Reconstruct REF/SDK                  | PDF B + DOCX P3/P4/P5  | Refinement (SDK at packages/addon-sdk)                                                      | Capability classes, caller attribution, commit broker tested against consolidated dev |
+| 3   | Harden browser edge                  | DOCX P2                | Open (unrecognised controls human-only, #451; classifier into Manolo's executor still open) | `BrowserActionPolicy` fails closed on unsafe live context                             |
+| 4   | Credential & provenance              | DOCX P6                | Refinement (host-held creds exist)                                                          | No raw-secret path; content cannot become authority                                   |
+| 5   | Ground-0 recovery proof              | PDF C + DOCX P8        | New                                                                                         | User retains a working relationship under subsystem failure                           |
+| 6   | Certification substrate              | PDF D + DOCX P7        | Undecided proposal (scope pending)                                                          | Certification is bound to a specific release                                          |
+| 7   | Marketplace registry                 | PDF E                  | Undecided proposal (scope pending)                                                          | Registry accepts only validated releases                                              |
+| 8   | DAO constitution                     | PDF F                  | Undecided proposal (scope pending)                                                          | Governance roles and thresholds ratified                                              |
+| 9   | Developer NFT prototype              | PDF G                  | Undecided proposal (scope pending)                                                          | NFT roles work on testnet without runtime authority                                   |
+| 10  | Governance–certification integration | PDF H                  | Undecided proposal (scope pending)                                                          | Eligibility and attestation enforced end-to-end                                       |
+| 11  | Marketplace pilot                    | PDF I                  | Undecided proposal (scope pending)                                                          | Certified add-ons operate within capability ceilings                                  |
+| 12  | Kernel governance integration        | PDF J                  | New                                                                                         | Kernel-class changes require the protected path                                       |
+| 13  | Production hardening                 | PDF K                  | New                                                                                         | Production-ready                                                                      |
 
 In the `Source` column: `DOCX P#` refers to the DOCX roadmap **phase** number
 (§9), distinct from the principles P1–P7 in §2; `PDF A–K` refers to the PDF v2
@@ -199,12 +210,12 @@ Kickoff is **Monday 2026-09-14** (Week 1). The re-based plan runs **~12 weeks**
 to **Friday 2026-12-04**. Windows below are the planned start/end weeks; adjacent
 revisions intentionally overlap.
 
-| Revision                   | Weeks | Target window           |
-| -------------------------- | ----- | ----------------------- |
-| R1 — SDK to production     | 1–4   | 2026-09-14 → 2026-10-09 |
-| R2 — Governed distribution | 4–6   | 2026-10-05 → 2026-10-23 |
-| R3 — DAO governance pilot  | 6–10  | 2026-10-19 → 2026-11-20 |
-| R4 — Hardening             | 10–12 | 2026-11-16 → 2026-12-04 |
+| Revision                   | Weeks | Target window                                       |
+| -------------------------- | ----- | --------------------------------------------------- |
+| R1 — SDK to production     | 1–4   | 2026-09-14 → 2026-10-09                             |
+| R2 — Governed distribution | 4–6   | 2026-10-05 → 2026-10-23 (undecided — scope pending) |
+| R3 — DAO governance pilot  | 6–10  | 2026-10-19 → 2026-11-20 (undecided — scope pending) |
+| R4 — Hardening             | 10–12 | 2026-11-16 → 2026-12-04 (undecided — scope pending) |
 
 ### Critical path
 
@@ -231,11 +242,11 @@ A checkpoint is a dated milestone with a concrete, verifiable exit condition.
 | CP-0       | 2026-09-25 | Fork resubmission clean; consolidation/release bridge landed; npm maintainer redundancy confirmed; CI owns the release path; prototype SDK demo committed. |
 | CP-1       | 2026-10-02 | Ground-0 contract + Authority Plane ADRs ratified (Guardian already decided: ADR-038).                                                                     |
 | CP-2       | 2026-10-09 | **R1 done** — capability classes, caller attribution, commit broker, browser policy, and Ground-0 recovery green.                                          |
-| CP-3       | 2026-10-16 | Certification substrate enforces version/hash-bound trust.                                                                                                 |
-| CP-4       | 2026-10-23 | **R2 done** — marketplace MVP verifies signatures, hashes, and certification.                                                                              |
-| CP-5       | 2026-11-06 | DAO constitution ratified (roles, thresholds, conflicts, emergency powers).                                                                                |
-| CP-6       | 2026-11-13 | Developer NFT prototype on testnet; role credentials and transfer restrictions.                                                                            |
-| CP-7       | 2026-11-20 | **R3 done** — governance–certification integration and marketplace pilot green.                                                                            |
+| CP-3       | 2026-10-16 | (Undecided — scope pending) Certification substrate enforces version/hash-bound trust.                                                                     |
+| CP-4       | 2026-10-23 | (Undecided — scope pending) **R2 done** — marketplace MVP verifies signatures, hashes, and certification.                                                  |
+| CP-5       | 2026-11-06 | (Undecided — scope pending) DAO constitution ratified (roles, thresholds, conflicts, emergency powers).                                                    |
+| CP-6       | 2026-11-13 | (Undecided — scope pending) Developer NFT prototype on testnet; role credentials and transfer restrictions.                                                |
+| CP-7       | 2026-11-20 | (Undecided — scope pending) **R3 done** — governance–certification integration and marketplace pilot green.                                                |
 | CP-8       | 2026-11-27 | Kernel governance integration: protected Guardian/kernel release workflow.                                                                                 |
 | CP-9       | 2026-12-04 | **R4 done** — production hardening complete; playbooks and attack simulations done.                                                                        |
 
@@ -347,37 +358,39 @@ Checkboxes reflect the plan at re-baseline. Update them daily through the
 ## 8. Decisions register
 
 Resolved (2026-09-16): **D1** — Manolo's DeepSeek Harness Augmentor, de-fused;
-**D2** — field classifier shipped (#451); **R1** — ADR-038 (Guardian = deterministic
-service, restart/roll-back only; Engineer AI advisory). Open items now have owners
-and deadlines in the tables below (R6/R7 gate Phases 7–10 at CP-4).
+**R1** — ADR-038 (Guardian = deterministic service, restart/roll-back only;
+Engineer AI advisory). **D2 (field classifier) is NOT done** — #451 shipped only
+"unrecognised controls stay human-only"; moving the classifier into Manolo's
+executor is still open. Open items now have owners and deadlines in the tables
+below; R3–R10 (DAO/NFT/marketplace) are **undecided proposals**, not scheduled work.
 
 ### 8.1 Near-term decisions (from the DOCX)
 
-| ID  | Decision                                                               | Target phase   | Owner                                          | Deadline          |
-| --- | ---------------------------------------------------------------------- | -------------- | ---------------------------------------------- | ----------------- |
-| D1  | Approve the Augmentor role (governed, not fused, not root)             | Phase 1 (done) | Maintainers (Tom) — resolved 2026-09-16 (#448) | Met 2026-09-16    |
-| D2  | Accept the field classifier upstream as the browser enforcement policy | Phase 3 (done) | Browser lead — resolved 2026-09-16 (#451)      | Met 2026-09-16    |
-| D3  | Promote capability separation (Public/Privileged/Core-only)            | Phase 2        | SDK lead                                       | CP-2 (2026-10-09) |
-| D4  | Make caller attribution mandatory                                      | Phase 2        | SDK lead                                       | CP-2 (2026-10-09) |
-| D5  | Adopt the commit boundary (prepare/propose/commit)                     | Phase 2        | SDK lead                                       | CP-2 (2026-10-09) |
-| D6  | Keep credentials host-held                                             | Phase 4        | Security lead                                  | CP-2 (2026-10-09) |
-| D7  | Reconstruct rather than resurrect the earlier REF/SDK stack            | Phase 2        | SDK lead                                       | CP-2 (2026-10-09) |
-| D8  | Define Ground-0 acceptance tests                                       | Phase 5        | Security lead                                  | CP-2 (2026-10-09) |
+| ID  | Decision                                                               | Target phase   | Owner                                                         | Deadline          |
+| --- | ---------------------------------------------------------------------- | -------------- | ------------------------------------------------------------- | ----------------- |
+| D1  | Approve the Augmentor role (governed, not fused, not root)             | Phase 1 (done) | Maintainers (Tom) — resolved 2026-09-16 (#448)                | Met 2026-09-16    |
+| D2  | Accept the field classifier upstream as the browser enforcement policy | Phase 3        | Browser lead — open (#451 covered unrecognised controls only) | CP-2 (2026-10-09) |
+| D3  | Promote capability separation (Public/Privileged/Core-only)            | Phase 2        | SDK lead                                                      | CP-2 (2026-10-09) |
+| D4  | Make caller attribution mandatory                                      | Phase 2        | SDK lead                                                      | CP-2 (2026-10-09) |
+| D5  | Adopt the commit boundary (prepare/propose/commit)                     | Phase 2        | SDK lead                                                      | CP-2 (2026-10-09) |
+| D6  | Keep credentials host-held                                             | Phase 4        | Security lead                                                 | CP-2 (2026-10-09) |
+| D7  | Reconstruct rather than resurrect the earlier REF/SDK stack            | Phase 2        | SDK lead                                                      | CP-2 (2026-10-09) |
+| D8  | Define Ground-0 acceptance tests                                       | Phase 5        | Security lead                                                 | CP-2 (2026-10-09) |
 
 ### 8.2 Ratification decisions (from the PDF v2)
 
-| #   | Decision                                                                                                                            | Target phase   | Owner                        | Deadline                              |
-| --- | ----------------------------------------------------------------------------------------------------------------------------------- | -------------- | ---------------------------- | ------------------------------------- |
-| R1  | Guardian implementation boundary — **resolved 2026-09-16 (ADR-038)**: deterministic restart/roll-back service; Engineer AI advisory | Phase 1 (done) | Architecture lead            | Met 2026-09-16                        |
-| R2  | Which Augmentor functions remain first-party privileged vs. public extension                                                        | Phase 1        | Architecture lead + Manolo   | CP-1 (2026-10-02); §13.2 needs Manolo |
-| R3  | NFT level names, promotion criteria, term/expiry, transferability, Tom's L4 nature                                                  | Phase 8        | Governance lead (Tom)        | CP-5 (2026-11-06)                     |
-| R4  | Voting thresholds and quorum per decision class                                                                                     | Phase 8        | Governance lead              | CP-5 (2026-11-06)                     |
-| R5  | Conflict-of-interest and self-certification rules                                                                                   | Phase 8        | Governance lead              | CP-5 (2026-11-06)                     |
-| R6  | On-chain vs. signed off-chain records and the DAO network                                                                           | Phase 8        | Governance lead (Tom)        | CP-4 (2026-10-23) — gates Phases 7–10 |
-| R7  | Marketplace signing-key custody, rotation, recovery, multisig                                                                       | Phase 7        | Release/Security lead        | CP-4 (2026-10-23) — gates Phases 7–10 |
-| R8  | Developer identity mapping (wallet, repo, publisher, certification)                                                                 | Phase 9        | Governance lead              | CP-6 (2026-11-13)                     |
-| R9  | Appeal, suspension, revocation, and recertification procedures                                                                      | Phase 10       | Governance lead              | CP-7 (2026-11-20)                     |
-| R10 | Constitutional mechanism to change Core-only invariants                                                                             | Phase 12       | Maintainers (constitutional) | CP-8 (2026-11-27)                     |
+| #   | Decision                                                                                                                            | Target phase          | Owner                        | Deadline                              |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------- | --------------------- | ---------------------------- | ------------------------------------- |
+| R1  | Guardian implementation boundary — **resolved 2026-09-16 (ADR-038)**: deterministic restart/roll-back service; Engineer AI advisory | Phase 1 (in progress) | Architecture lead            | Met 2026-09-16                        |
+| R2  | Which Augmentor functions remain first-party privileged vs. public extension                                                        | Phase 1               | Architecture lead + Manolo   | CP-1 (2026-10-02); §13.2 needs Manolo |
+| R3  | NFT level names, promotion criteria, term/expiry, transferability, Tom's L4 nature                                                  | Phase 8               | Governance lead (Tom)        | Undecided — scope pending             |
+| R4  | Voting thresholds and quorum per decision class                                                                                     | Phase 8               | Governance lead              | Undecided — scope pending             |
+| R5  | Conflict-of-interest and self-certification rules                                                                                   | Phase 8               | Governance lead              | Undecided — scope pending             |
+| R6  | On-chain vs. signed off-chain records and the DAO network                                                                           | Phase 8               | Governance lead (Tom)        | Undecided — scope pending             |
+| R7  | Marketplace signing-key custody, rotation, recovery, multisig                                                                       | Phase 7               | Release/Security lead        | Undecided — scope pending             |
+| R8  | Developer identity mapping (wallet, repo, publisher, certification)                                                                 | Phase 9               | Governance lead              | Undecided — scope pending             |
+| R9  | Appeal, suspension, revocation, and recertification procedures                                                                      | Phase 10              | Governance lead              | Undecided — scope pending             |
+| R10 | Constitutional mechanism to change Core-only invariants                                                                             | Phase 12              | Maintainers (constitutional) | Undecided — scope pending             |
 
 ---
 
