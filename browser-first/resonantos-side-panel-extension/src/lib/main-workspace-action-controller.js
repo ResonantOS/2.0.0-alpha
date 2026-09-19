@@ -14,6 +14,7 @@ import {
   runtimeContextForAttachments
 } from "./chat-turn-controller.js";
 import { runReviewableCapture } from "./main-workspace-review-handoff.js";
+import { redactTraceText } from "./trace-redaction.js";
 import {
   mainWorkspaceRequestMessage,
   regenerationMessage
@@ -97,10 +98,13 @@ export function createMainWorkspaceActionController({
     const amazon = parseAmazonShoppingTask(goal);
     const browserIntent = parseNaturalBrowserIntent(goal);
     const target = amazon?.url || browserIntent?.target || "";
+    const originalPrompt = `/control ${goal}`.trim();
+    const storedPrompt = redactTraceText(originalPrompt);
     await chromeApi.storage.local.set({
       augmentorPendingSidebarPrompt: {
-        prompt: `/control ${goal}`.trim(),
-        createdAt: new Date().toISOString()
+        prompt: storedPrompt,
+        createdAt: new Date().toISOString(),
+        ...(storedPrompt !== originalPrompt ? { requiresReentry: true } : {})
       }
     });
     await addMessage("system", "Moving this task into browser control mode. Augmentor will continue from the sidebar while the page stays in the main browser workspace.");

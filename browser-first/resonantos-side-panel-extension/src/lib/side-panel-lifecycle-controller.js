@@ -76,9 +76,14 @@ export function createSidePanelLifecycleController({
     const payload = await storage?.get?.(pendingSidebarPromptKey).catch(() => ({}));
     const pending = payload?.[pendingSidebarPromptKey];
     const prompt = String(pending?.prompt ?? "").trim();
-    if (!prompt) return false;
+    if (!prompt && !pending?.requiresReentry) return false;
     if (getTurnBusy()) return false;
     await storage?.remove?.(pendingSidebarPromptKey).catch(() => undefined);
+    // A redacted preview is lossy storage content, never an executable command.
+    if (pending?.requiresReentry) {
+      await addMessage("system", "Sensitive text was removed from this handoff. Enter the command directly in the sidebar to continue.");
+      return true;
+    }
     setTurnBusy(true);
     try {
       await addMessage("user", prompt);
