@@ -143,3 +143,25 @@ test("Settings Push leaves the pending message for failure and successful recove
   await tick();
   assert.equal(card.querySelector(".settings-status").textContent, "Preferences pushed to bridge.");
 });
+
+test("default preference sync sends the exact preference body without saved bridge credentials", async (t) => {
+  const { createBridgeClient } = await import("../resonantos-side-panel-extension/src/lib/bridge-client.js");
+  const saved = { bridgeUrl: "https://sync.test", bridgeToken: "Bearer synthetic-sync-fixture", capabilityBootstrapToken: "token=synthetic-sync-bootstrap" };
+  const calls = [];
+  t.mock.method(Date, "now", () => 123456);
+  const sync = createPrefsSync({
+    storage: { get: async () => ({ bridgeTargetOverride: saved, augmentorModel: "fixture-model", capabilityBootstrapToken: saved.capabilityBootstrapToken, bridgeToken: saved.bridgeToken }) },
+    bridgeRequest: createBridgeClient({ ...saved, fetchImpl: async (target, options) => {
+      calls.push({ target, ...options });
+      return { ok: true, status: 200, json: async () => ({ ok: true }) };
+    } }),
+  });
+  t.after(() => sync.teardown());
+  await sync.flush();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].target, "https://sync.test/settings/extension-prefs");
+  assert.equal(calls[0].method, "POST");
+  assert.deepEqual(JSON.parse(calls[0].body), { prefs: { augmentorModel: "fixture-model", _meta: { pushedAt: 123456, version: 1 } } });
+  assert.equal(calls[0].headers["X-ResonantOS-Bridge-Token"], saved.bridgeToken);
+  assert.ok(!calls[0].body.includes(saved.bridgeToken) && !calls[0].body.includes(saved.capabilityBootstrapToken));
+});

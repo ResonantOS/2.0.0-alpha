@@ -37,6 +37,13 @@ human-only according to the capability contract.
 Provider secrets and trusted memory writes are host-owned. Do not place secrets
 in extension source, generated config, Chrome storage, fixtures, or diagnostics.
 
+The operator-configured bridge override is the narrow local-storage exception:
+its two authentication credentials survive restarts verbatim after input
+trimming. Override URLs pass a conservative shared policy; rejected legacy
+records remain stored but unused until explicitly repaired or cleared. See the
+[bridge target credential contract](docs/bridge-target-credential-contract.md)
+for the URL limitations and bounded sync/diagnostics consumer audit.
+
 OpenCode session HTTP and events use capability-scoped bridge routes. The extension receives session identifiers, never the OpenCode server URL or Basic credential. Turning OpenCode local execution off revokes active requests and event streams. The existing session panel displays only its selected session's events with Governed or External source labels. The full cockpit remains disabled.
 
 ## Context Session Persistence
