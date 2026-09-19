@@ -15,6 +15,8 @@
 // generated/default. Most callers should use `await resolveBridgeConfig()`
 // and pass the result, so the chrome.storage override is honored.
 
+import { redactTraceText } from "./trace-redaction.js";
+
 const DEFAULT_BRIDGE_URL = "http://127.0.0.1:47773";
 const STORAGE_OVERRIDE_KEY = "bridgeTargetOverride";
 const GENERATED_CONFIG_PATH = "src/bridge-config.generated.js";
@@ -133,11 +135,52 @@ export function capabilityForBridgeRoute(route, method = "GET") {
   return BRIDGE_ROUTE_CAPABILITIES[routeCapabilityKey(method, route)] ?? "";
 }
 
+export const BRIDGE_TARGET_URL_ERROR = "Bridge URL must be an absolute HTTP(S) URL without userinfo, query, or fragment. Conservative secret detection may reject a benign host or path; choose another endpoint.";
+
+const BRIDGE_URL_CONTROLS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
+const MAX_BRIDGE_URL_DECODE_PASSES = 16;
+
+function hasSafeBridgeUrlComponents(url) {
+  let decoded = url;
+  for (let pass = 0; pass < MAX_BRIDGE_URL_DECODE_PASSES; pass += 1) {
+    if (/[?#&]/.test(decoded) || BRIDGE_URL_CONTROLS.test(decoded)) return false;
+    // Escape bare percent signs only for inspection, preserving legitimate paths.
+    // Decode all components, independent of parameter names and hex letter case.
+    const next = decodeURIComponent(decoded.replace(/%(?![0-9a-f]{2})/gi, "%25"));
+    if (next === decoded) return true;
+    decoded = next;
+  }
+  // Never accept an endpoint whose remaining encoding has not been inspected.
+  return false;
+}
+
+// Reject altered endpoints instead of silently turning them into a different target.
+// Credentials are operational secrets and must never pass through this policy.
+export function validateBridgeTargetUrl(candidate) {
+  const url = typeof candidate === "string" ? candidate.trim() : "";
+  const rejected = { ok: false, error: BRIDGE_TARGET_URL_ERROR };
+  try {
+    // Check the original input before trim()/URL can discard control characters.
+    if (typeof candidate !== "string" || BRIDGE_URL_CONTROLS.test(candidate) || !hasSafeBridgeUrlComponents(url)) return rejected;
+    const authority = url.match(/^https?:\/\/([^/\\?#]*)/i)?.[1];
+    if (!authority?.trim()) return rejected;
+    const parsed = new URL(url);
+    if (!["http:", "https:"].includes(parsed.protocol) || !parsed.hostname) return rejected;
+    // URL.username/password omit empty userinfo, so also inspect the authority.
+    if (parsed.username || parsed.password || authority.includes("@")) return rejected;
+    const cleanUrl = redactTraceText(url, { replacement: "REDACTED", tokenReplacement: "[REDACTED-TOKEN]" });
+    if (cleanUrl !== url) return rejected;
+    return { ok: true, url: cleanUrl };
+  } catch {
+    return rejected;
+  }
+}
+
 function normalizeBridgeTarget(value) {
   if (!value || typeof value !== "object") return null;
-  const url = typeof value.bridgeUrl === "string" ? value.bridgeUrl.trim() : "";
-  if (!url) return null;
-  if (!/^https?:\/\//i.test(url)) return null;
+  const validated = validateBridgeTargetUrl(value.bridgeUrl);
+  if (!validated.ok) return null;
+  const url = validated.url;
   const token = typeof value.bridgeToken === "string" && value.bridgeToken.trim()
     ? value.bridgeToken.trim()
     : null;

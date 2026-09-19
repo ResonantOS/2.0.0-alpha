@@ -15,19 +15,18 @@
 
 import { bridgeAuthMessage } from "../runtime-error-messages.js";
 import { metricCard, noteCard, safeErrorMessage, setStatus, settingsHeader } from "./settings-common.js";
-import { BRIDGE_STORAGE_OVERRIDE_KEY, detectLoopbackBridge, isCapabilityScopedBridgeReply, resolveBridgeConfig } from "../bridge-client.js";
+import { BRIDGE_STORAGE_OVERRIDE_KEY, detectLoopbackBridge, isCapabilityScopedBridgeReply, resolveBridgeConfig, validateBridgeTargetUrl } from "../bridge-client.js";
 
 const STATUS_KEYS = [BRIDGE_STORAGE_OVERRIDE_KEY];
+const SAVED_OVERRIDE_WARNING = "Saved override needs correction. It is retained locally but will not be used. Save a valid replacement or choose Use generated.";
 
 function parseOverrideFromForm(form) {
-  const url = String(form.elements["bridge-url"]?.value ?? "").trim();
+  const url = String(form.elements["bridge-url"]?.value ?? "");
   const token = String(form.elements["bridge-token"]?.value ?? "").trim();
   const capabilityBootstrapToken = String(form.elements["bridge-capability-bootstrap-token"]?.value ?? "").trim();
-  if (!url) return { ok: false, error: "Bridge URL is required." };
-  if (!/^https?:\/\//i.test(url)) {
-    return { ok: false, error: "Bridge URL must start with http:// or https://" };
-  }
-  return { ok: true, override: { bridgeUrl: url, bridgeToken: token, capabilityBootstrapToken } };
+  const validated = validateBridgeTargetUrl(url);
+  if (!validated.ok) return validated;
+  return { ok: true, override: { bridgeUrl: validated.url, bridgeToken: token, capabilityBootstrapToken } };
 }
 
 function setOverridePayload(override) {
@@ -49,16 +48,20 @@ async function clearOverride() {
 }
 
 async function saveOverride(override) {
+  const validated = validateBridgeTargetUrl(override?.bridgeUrl);
+  if (!validated.ok) throw new Error(validated.error);
   if (typeof chrome === "undefined" || !chrome?.storage?.local?.set) return;
-  await chrome.storage.local.set(setOverridePayload(override));
+  await chrome.storage.local.set(setOverridePayload({ ...override, bridgeUrl: validated.url }));
 }
 
 async function loadStoredOverride() {
   if (typeof chrome === "undefined" || !chrome?.storage?.local?.get) return null;
   const result = await chrome.storage.local.get([BRIDGE_STORAGE_OVERRIDE_KEY]).catch(() => ({}));
   const value = result?.[BRIDGE_STORAGE_OVERRIDE_KEY];
-  if (!value || typeof value !== "object" || !value.bridgeUrl) return null;
-  return value;
+  if (value == null) return null;
+  const validated = validateBridgeTargetUrl(value?.bridgeUrl);
+  if (!validated.ok) return { needsCorrection: true };
+  return { override: { ...value, bridgeUrl: validated.url }, needsCorrection: false };
 }
 
 async function probeBridge(url, token) {
@@ -235,7 +238,7 @@ export function renderBridgeTargetSection(container, { bridgeRequest, onBridgeCo
   const formHint = document.createElement("p");
   formHint.className = "settings-provider-help";
   formHint.textContent =
-    "Set a different bridge URL, bridge token, and capability-bootstrap token to point this browser at a different host. Leave token fields blank only when the generated config still targets that bridge.";
+    "Set a different bridge URL, bridge token, and capability-bootstrap token to point this browser at a different host. Leave token fields blank only when the generated config still targets that bridge. URLs must be absolute HTTP(S), without userinfo, query, or fragment. Conservative secret detection can reject a benign host or path; use another endpoint. Invalid saved overrides remain on disk until you replace them or choose Use generated.";
   const form = document.createElement("form");
   form.className = "settings-provider-form settings-bridge-target-form";
   form.addEventListener("submit", (event) => event.preventDefault());
@@ -339,11 +342,14 @@ export function renderBridgeTargetSection(container, { bridgeRequest, onBridgeCo
   container.append(generatedCard);
 
   let activeConfig = null;
+  let savedOverrideNeedsCorrection = false;
 
   async function refresh() {
     const resolvedConfig = await resolveBridgeConfig();
     activeConfig = await detectLoopbackBridge(resolvedConfig).catch(() => resolvedConfig);
-    const [storedOverride] = await Promise.all([loadStoredOverride()]);
+    const stored = await loadStoredOverride();
+    savedOverrideNeedsCorrection = stored?.needsCorrection === true;
+    const storedOverride = stored?.override;
     const generated = globalThis.__RESONANTOS_BRIDGE_CONFIG__ ?? {};
     if (storedOverride) {
       urlField.input.value = storedOverride.bridgeUrl ?? "";
@@ -425,6 +431,8 @@ export function renderBridgeTargetSection(container, { bridgeRequest, onBridgeCo
       healthCardEl.querySelector("p").textContent = safeErrorMessage(error);
       healthCardEl.dataset.tone = "error";
       setStatus(statusNode, `Could not reach ${url}: ${safeErrorMessage(error)}`, "error");
+    } finally {
+      if (savedOverrideNeedsCorrection) setStatus(statusNode, SAVED_OVERRIDE_WARNING, "warning");
     }
   }
 
