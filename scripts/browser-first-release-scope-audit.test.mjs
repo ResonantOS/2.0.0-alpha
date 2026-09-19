@@ -411,6 +411,16 @@ test("planning and architecture governance docs are approved release documentati
   assert.equal(classify("docs/planning/daily/2026-09-17.md", "modified").bucket, "include");
 });
 
+test("agent harness prompts are approved release documentation", () => {
+  const classify = requireExport("classify");
+
+  assert.deepEqual(classify("prompts/sdk-demo-prompt.md", "added"), {
+    bucket: "include",
+    reason: "shared agent-harness prompts and authoring guidance",
+  });
+  assert.equal(classify("prompts/agent-test-demo-prompt.md", "modified").bucket, "include");
+});
+
 test("Resonant Extension Framework specification docs are approved release documentation", () => {
   const classify = requireExport("classify");
 

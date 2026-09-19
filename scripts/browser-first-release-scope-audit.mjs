@@ -273,6 +273,12 @@ export function classify(changedPath, state) {
       reason: "planning and architecture governance documentation",
     };
   }
+  if (changedPath.startsWith("prompts/")) {
+    return {
+      bucket: "include",
+      reason: "shared agent-harness prompts and authoring guidance",
+    };
+  }
   if (changedPath.startsWith("docs/addons/resonant-extension-framework/")) {
     return {
       bucket: "include",
