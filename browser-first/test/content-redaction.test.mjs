@@ -129,6 +129,7 @@ async function loadContentScript(html, { asChildFrame = false, loadSdk = false, 
   targetWindow.HTMLElement.prototype.scrollIntoView = function scrollIntoView() {};
   targetWindow.__resonantosControlDwellMs = 0; // no spotlight dwell in tests
   if (loadSdk) {
+    targetWindow.eval(await readFile(path.join(path.dirname(resonantContextScriptPath), "trace-redaction-core.js"), "utf8"));
     targetWindow.eval(await readFile(resonantContextScriptPath, "utf8"));
     targetWindow.eval(await readFile(contextPluginsScriptPath, "utf8"));
     targetWindow.eval(await readFile(resonatorScriptPath, "utf8"));
