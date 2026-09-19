@@ -859,3 +859,19 @@ for (const action of ["typeIntoActivePage", "clickActivePageText"]) {
     assert.equal(harness.events.some((event) => event[0] === "status" && event[1] === "Page action failed"), false);
   });
 }
+
+
+test('recovery injection loads redaction immediately before context, plugins and resonator', async () => {
+  const harness = createHarness({ sendMessage: (calls) => {
+    if (calls === 1) throw new Error('Receiving end does not exist.');
+    return { ok: true, snapshot: { title: 'Example', url: 'https://example.test/', text: 'hello' } };
+  } });
+  await harness.actions.readActivePage({ announce: false });
+  const injections = harness.events.filter(([name]) => name === 'inject');
+  assert.equal(injections.length, 1);
+  assert.deepEqual(injections[0][1].target, { tabId: 1 });
+  assert.deepEqual(injections[0][1].files.slice(0, 4), [
+    'src/lib/trace-redaction-core.js', 'src/lib/resonant-context.js',
+    'src/lib/context-plugins.js', 'src/lib/resonator.js'
+  ]);
+});

@@ -265,6 +265,7 @@ export function createBrowserPageActions(deps) {
   }
 
   const CONTENT_SCRIPT_FILES = [
+    "src/lib/trace-redaction-core.js",
     "src/lib/resonant-context.js",
     "src/lib/context-plugins.js",
     "src/lib/resonator.js",

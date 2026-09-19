@@ -1,7 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { redactTraceText } from "../resonantos-side-panel-extension/src/lib/trace-redaction.js";
+import * as esmApi from "../resonantos-side-panel-extension/src/lib/trace-redaction.js";
+import { readFileSync } from "node:fs";
+import { createContext, runInContext } from "node:vm";
+
+function registerCorpus(test, assert, { redactTraceText, redactTraceValue }) {
 
 test("redactTraceText redacts secret URL query parameters and preserves benign ones", () => {
   const input = "https://example.test/login?token=abc123&email=a@b.com&api_key=sekrit&ref=home";
@@ -124,7 +128,6 @@ for (const options of [{}, { replacement: '[redacted]', tokenReplacement: '[reda
 }
 
 test('recursive trace redaction detaches and safely handles arbitrary JSON', async () => {
-  const { redactTraceValue } = await import('../resonantos-side-panel-extension/src/lib/trace-redaction.js');
   assert.equal(typeof redactTraceValue, 'function', 'recursive redactor exists');
   let reads = 0;
   const input = { nested: [{ password: 'x', pin: 7, client_secret: { private: true }, note: 'token=synthetic-value' }], count: 2, ok: true, empty: null };
@@ -159,4 +162,17 @@ test('quoted names preserve full unquoted comma and semicolon secret coverage', 
   assert.equal(redactTraceText('"token":left,right;end done'), '"token":REDACTED done');
   assert.equal(redactTraceText('{"pin":1234,"view":"wide"}'), '{"pin":REDACTED,"view":"wide"}');
   assert.equal(redactTraceText('{"pin":REDACTED,"view":"wide"}'), '{"pin":REDACTED,"view":"wide"}');
+});
+
+}
+
+registerCorpus((name, fn) => test(`ESM: ${name}`, fn), assert, esmApi);
+test('classic entry point runs the complete strict corpus in its own realm', async (t) => {
+  const realm = createContext({ assert, register: (name, fn) => t.test(name, fn) });
+  runInContext(readFileSync(new URL('../resonantos-side-panel-extension/src/lib/trace-redaction-core.js', import.meta.url), 'utf8'), realm);
+  // Evaluate the corpus in the core's realm, including all recursive fixtures.
+  const pending = [];
+  realm.register = (name, fn) => pending.push(t.test(name, fn));
+  runInContext(`(${registerCorpus.toString()})(register, assert, globalThis.__RESONANTOS_TRACE_REDACTION__)`, realm);
+  await Promise.all(pending);
 });

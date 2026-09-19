@@ -39,6 +39,34 @@ in extension source, generated config, Chrome storage, fixtures, or diagnostics.
 
 OpenCode session HTTP and events use capability-scoped bridge routes. The extension receives session identifiers, never the OpenCode server URL or Basic credential. Turning OpenCode local execution off revokes active requests and event streams. The existing session panel displays only its selected session's events with Governed or External source labels. The full cockpit remains disabled.
 
+## Context Session Persistence
+
+Resonant Context redacts a detached copy of navigation history, click trails,
+and the entry referrer before writing `rc_session` to page `sessionStorage`.
+Live tracker data stays unchanged, including any unredacted legacy data restored
+from storage and returned in live context payloads; this protection applies to
+the storage boundary only. The shared redaction policy lives in
+`src/lib/trace-redaction-core.js` under the extension directory; manifest and
+recovery injection load this classic script immediately before the context SDK.
+ESM consumers retain the `src/lib/trace-redaction.js` entry point.
+
+If that core is missing, incompatible, or throws, the tracker skips the write
+and emits one fixed warning per tracker: session history will not survive
+navigation. The warning includes no payload or exception values. Restored
+historical content is redacted on the next successful write; disabled
+persistence or a session with no subsequent write does not clean old records.
+Redaction uses the existing shared patterns, which do not detect every possible
+sensitive string. Default retention is 20 history entries and 30 clicks;
+configurable limits and restored records mean there is no universal size bound.
+Normal SDK initialization runs only in the top frame. Browser-confirmed reloads
+compare the current redacted path with stored history to avoid duplicates;
+distinct navigations remain separate even if their redacted paths match.
+
+The context storage test suite reports payload sizes and persistence timings for
+20 history entries / 30 clicks and a larger restored record with long text.
+These synthetic measurements include serialization and captured storage writes;
+they are observations, not a universal latency or size guarantee.
+
 ## Opt-in React Shell Development
 
 The React shell served by Vite is an optional development surface. Bridge
