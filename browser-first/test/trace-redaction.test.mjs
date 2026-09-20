@@ -164,6 +164,56 @@ test('quoted names preserve full unquoted comma and semicolon secret coverage', 
   assert.equal(redactTraceText('{"pin":REDACTED,"view":"wide"}'), '{"pin":REDACTED,"view":"wide"}');
 });
 
+test('base58 includes i and o at every supported length without losing legacy l coverage', () => {
+  for (const options of [{}, { replacement: '[redacted]', tokenReplacement: '[redacted]' }]) {
+    const marker = options.tokenReplacement ?? '[REDACTED-TOKEN]';
+    for (let length = 40; length <= 90; length++) {
+      for (const letter of 'io') {
+        for (const position of [0, Math.floor(length / 2), length - 1]) {
+          const token = 'Z'.repeat(position) + letter + 'Z'.repeat(length - position - 1);
+          assert.equal(redactTraceText(`before ${token} after`, options), `before ${marker} after`,
+            `base58 ${letter} at ${position}, length ${length}`);
+        }
+      }
+      for (const alphabet of ['123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz',
+        '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjklmnpqrstuvwxyz']) {
+        const token = alphabet.repeat(2).slice(0, length);
+        assert.equal(redactTraceText(token, options), marker);
+      }
+      assert.equal(redactTraceText('l'.repeat(length), options), marker, 'legacy l remains redacted');
+    }
+  }
+  for (const length of [39, 91]) {
+    for (const letter of 'io') {
+      const text = letter + 'Z'.repeat(length - 1);
+      assert.equal(redactTraceText(text), text);
+    }
+  }
+});
+
+test('base58 alphabet expansion retains benign prose, hex, URLs and paths of 40–90 characters', () => {
+  const benign = [
+    'ordinary information about navigation options and browser history',
+    'pneumonoultramicroscopicsilicovolcanoconiosis',
+    'hex colors #abcdef #012345 #fedcba #987654 are ordinary values',
+    'https://example.test/navigation/options?view=history&ref=home',
+    '/documentation/browser/navigation/options/history/overview.md',
+  ];
+  for (const text of benign) {
+    assert.ok(text.length >= 40 && text.length <= 90, text);
+    assert.equal(redactTraceText(text), text);
+  }
+  // Long contiguous hex was already redacted; it cannot be exempted here.
+  for (const length of [40, 64, 90]) {
+    const hex = '0123456789abcdef'.repeat(6).slice(0, length);
+    assert.equal(redactTraceText(hex), '[REDACTED-TOKEN]');
+  }
+  for (const excluded of '0OIl') {
+    const text = 'Zi' + excluded + 'Z'.repeat(40);
+    assert.equal(redactTraceText(text), text, 'do not broaden to a union alphabet');
+  }
+});
+
 }
 
 registerCorpus((name, fn) => test(`ESM: ${name}`, fn), assert, esmApi);
@@ -175,4 +225,34 @@ test('classic entry point runs the complete strict corpus in its own realm', asy
   realm.register = (name, fn) => pending.push(t.test(name, fn));
   runInContext(`(${registerCorpus.toString()})(register, assert, globalThis.__RESONANTOS_TRACE_REDACTION__)`, realm);
   await Promise.all(pending);
+});
+
+test('differential: existing corpus and new cases preserve every legacy text redaction', async () => {
+  const source = readFileSync(new URL('../resonantos-side-panel-extension/src/lib/trace-redaction-core.js', import.meta.url), 'utf8');
+  // Freeze only the pre-fix heuristic; all other policy remains the same.
+  const legacySource = source.replace(/const BASE58_HEURISTIC_PATTERN = .*;/,
+    String.raw`const BASE58_HEURISTIC_PATTERN = /\b[A-HJ-NP-Za-hj-np-z1-9]{40,90}\b/g;`);
+  const realm = createContext({});
+  runInContext(legacySource, realm);
+  const legacy = realm.__RESONANTOS_TRACE_REDACTION__.redactTraceText;
+  for (const letter of 'io') {
+    const token = letter + 'Z'.repeat(39);
+    assert.equal(legacy(token), token, 'differential baseline must retain the pre-fix omission');
+  }
+  assert.equal(legacy('l'.repeat(40)), '[REDACTED-TOKEN]');
+  const cases = [];
+  let comparisons = 0;
+  registerCorpus((_name, fn) => cases.push(fn), assert, {
+    ...esmApi,
+    redactTraceText(input, options) {
+      const previous = legacy(input, options);
+      const current = esmApi.redactTraceText(input, options);
+      assert.equal(current, esmApi.redactTraceText(previous, options),
+        `legacy redaction must survive: ${String(input)}`);
+      comparisons++;
+      return current;
+    },
+  });
+  for (const runCase of cases) await runCase();
+  assert.ok(comparisons > 1000, 'compare the full corpus, including generated credential and alphabet cases');
 });

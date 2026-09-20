@@ -35,7 +35,10 @@
   );
   const BEARER_PATTERN = /\bBearer\s+[A-Za-z0-9\-._~+/=]+/g;
   const PROVIDER_KEY_PREFIX_PATTERN = /\b(?:sk_live_[A-Za-z0-9]{8,}|AKIA[0-9A-Z]{16}|AIza[A-Za-z0-9_-]{25,39}|gh[pousr]_[A-Za-z0-9]{20,}|xox[abp]-[A-Za-z0-9-]{10,})\b/g;
-  const BASE58_HEURISTIC_PATTERN = /\b[A-HJ-NP-Za-hj-np-z1-9]{40,90}\b/g;
+  // Base58 excludes 0, O, I and l. Keep the legacy alternative (which included
+  // l but omitted i/o) so correcting the alphabet never removes a redaction.
+  // This length/alphabet heuristic can also redact benign identifiers or words.
+  const BASE58_HEURISTIC_PATTERN = /\b(?:[A-HJ-NP-Za-km-z1-9]{40,90}|[A-HJ-NP-Za-hj-np-z1-9]{40,90})\b/g;
   const HEX_TOKEN_PATTERN = /\b[0-9a-fA-F]{32,}\b/g;
 
   function redactTraceText(value, {
