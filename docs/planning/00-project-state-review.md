@@ -122,7 +122,7 @@ material for resubmission.
 
 ## 6. Existing architecture and decision history
 
-The `2.0.0-alpha/docs/architecture/` directory holds ADR-001 through ADR-037 (ADR-038, merged upstream on 16 Sep, is not yet in this checkout),
+The `2.0.0-alpha/docs/architecture/` directory holds ADR-001 through ADR-038 (ADR-038 merged upstream on 16 Sep and now in this checkout),
 each with decision status and Alpha applicability. Key SDK-relevant decisions:
 
 - **ADR-006 (Add-on Runtime & SDK)** — manifest validation, provenance,

@@ -72,13 +72,13 @@ touched.
 
 ### 4.1 Manifest validation (production SDK)
 
-| Check                 | Result                                                                                                  |
-| --------------------- | ------------------------------------------------------------------------------------------------------- |
-| Manifest authored     | `examples/addons/addon.grok-build.json` — full production shape (mirrors `addon.deepseek-harness.json`) |
-| Schema validation     | `validateAddOnManifest` → valid, 0 errors                                                               |
-| Capability check      | all requested capabilities valid; no Core-only capability                                               |
-| Registry registration | `createAddOnRegistrySnapshot` registers `addon.grok-build`, no id collision                             |
-| Regression            | full SDK vitest suite → **41 / 41 pass**, no regressions                                                |
+| Check                 | Result                                                                                                                                                               |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Manifest authored     | `examples/addons/addon.grok-build.json` — full production shape (mirrors `addon.deepseek-harness.json`); lives on the `grok-alpha-test` branch, not this PR or `dev` |
+| Schema validation     | `validateAddOnManifest` → valid, 0 errors                                                                                                                            |
+| Capability check      | all requested capabilities valid; no Core-only capability                                                                                                            |
+| Registry registration | `createAddOnRegistrySnapshot` registers `addon.grok-build`, no id collision                                                                                          |
+| Regression            | full SDK vitest suite → **41 / 41 pass**, no regressions                                                                                                             |
 
 Validation ran through the SDK's canonical functions (`validateAddOnManifest`,
 `createAddOnRegistryEntry`, `createAddOnRegistrySnapshot`) via vitest —

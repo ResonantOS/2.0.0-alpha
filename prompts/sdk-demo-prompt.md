@@ -136,4 +136,4 @@ node examples/sdk-prototype/run-demo.mjs examples/sdk-prototype/plugins/<slug>
 
 - Changing the preinstalled harness itself.
 - Integrating the plugin into the full ResonantOS Alpha runtime (a follow-up
-  against the production SDK in `src/sdk/addons`).
+  against the production SDK in `packages/addon-sdk`).
