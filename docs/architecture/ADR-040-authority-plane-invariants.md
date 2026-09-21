@@ -2,7 +2,7 @@
 
 ## Decision Metadata
 
-- Decision status: Deferred
+- Decision status: Proposed
 - Alpha applicability: Deferred
 - Superseded by: None
 - Owner: Core and add-ons
@@ -13,16 +13,17 @@
 
 ## Context
 
-The post-consolidation roadmap names a **ResonantOS Authority Plane** as the
-runtime software-authority layer: identity, caller attribution, capabilities,
-policy, the commit broker, audit, credentials, and provenance.
-[ADR-038](ADR-038-guardian-engineer-core-only-invariants.md) already fixes two
-parts of this: the **Guardian** protects the baseline with restart/rollback
-authority, and **privilege follows authority** (first-party does not imply
+[ADR-038](ADR-038-guardian-engineer-core-only-invariants.md) defines the
+authority-bearing components — identity, caller attribution, capabilities,
+policy, the commit broker, audit, credentials, and provenance — and fixes two
+parts of them. The **Guardian** protects the baseline with restart/rollback
+authority. And **privilege follows authority**: first-party does not imply
 privileged; only the actuation executor with field classifier, the commit
-broker, credential custody, and the update channel hold authority). This ADR
-states the invariant that holds those pieces together and defines what the
-Authority Plane may and may not do.
+broker, credential custody, and the update channel hold authority. That split is
+recorded in ADR-038 as Tom's position and is **proposed, pending Manolo's
+agreement**. This ADR names that set of authority-holding components the
+**Authority Plane** and states the invariant that holds those pieces together
+and defines what the Authority Plane may and may not do.
 
 ## Decision
 
@@ -34,8 +35,8 @@ authority; the Augmentor and add-ons operate within those boundaries; DAO
 governance cannot silently bypass them.
 ```
 
-The invariant is **authoritative**, not advisory. Each clause is a separate
-checkable claim:
+The invariant is a single checkable claim, and each clause is separately
+checkable:
 
 1. **The Guardian protects the baseline** — restart and rollback only, no
    capability grant, commit approval, policy change, or self-replacement
@@ -49,7 +50,9 @@ checkable claim:
    of authority.
 4. **DAO governance cannot silently bypass them** — a DAO vote or NFT never
    becomes a runtime root credential; governance operates on people and process,
-   not on the machine's authority boundary.
+   not on the machine's authority boundary. _(Conditional on the open
+   DAO/NFT/marketplace scope decision; the clause bounds governance if and when
+   that scope is adopted.)_
 
 ### Information is not authority
 
@@ -78,9 +81,11 @@ recommendation can obtain it. Certification never equals root authority.
 
 ### Enforcement happens at the edge
 
-Browser, filesystem, network, connector, blockchain, and OS boundaries
-revalidate authorization. A capability granted at one layer is not assumed at
-another; each edge re-checks against the Authority Plane.
+Browser, filesystem, network, connector, and OS boundaries revalidate
+authorization. A capability granted at one layer is not assumed at another;
+each edge re-checks against the Authority Plane. A blockchain boundary, if and
+when that scope is adopted, would be another such edge, not a substitute for the
+others.
 
 ### Caller identity survives delegation
 
@@ -98,16 +103,29 @@ cannot act with authority the caller did not hold.
 - A named Authority Plane gives later phases (commit broker, credential custody,
   update channel) a fixed trust position to build against.
 
-## Binding Rules
+## Proposed Rules
 
-- The authority invariant is authoritative. No feature, preset, grant, tier,
-  certification, DAO vote, or Engineer recommendation may contradict it.
+These are proposals and are not in force until this ADR is ratified:
+
+- The authority invariant is the standing rule for the Authority Plane. No
+  feature, preset, grant, tier, certification, DAO vote, or Engineer
+  recommendation may contradict it.
 - The Authority Plane, not the requester, issues and enforces capability grants.
 - External content and model output remain evidence; they never become authority.
 - Core-only capabilities are not requestable through the SDK or any preset.
 - Delegation must preserve the originating caller's identity for authorization.
 - Governance operates on people and process; it must not silently acquire
   runtime authority.
+
+## Migration
+
+Today, slot and authority state live in the React client
+(`activeSystemSlotProviderIds`, `capabilityForSlot`, `surface-routing.ts`),
+which contradicts "authority never lives in a client". Before the Authority
+Plane is treated as real, that state must move to a host-owned location: the
+client may render authority state and route requests, but it must not be the
+source of truth for grants, slots, or capabilities. This ADR records that move
+as a precondition, not a completed fact.
 
 ## Not Decided
 
@@ -118,6 +136,17 @@ cannot act with authority the caller did not hold.
   "Not Decided").
 - DAO/NFT/marketplace scope — that is an open product decision and does not
   affect this invariant either way.
+
+## Protected Paths (extends ADR-038)
+
+This ADR adds its own file to ADR-038's protected-path list, and requires the
+Authority Plane paths (commit broker, credential custody, update channel, caller
+attribution) to be added there before implementation (per ADR-038 "Invariant
+Changes: Working Assumption"):
+
+```text
+/docs/architecture/ADR-040-authority-plane-invariants.md
+```
 
 ## Consequences
 
