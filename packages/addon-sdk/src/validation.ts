@@ -15,10 +15,11 @@ import type {
 import {
   ADDON_CAPABILITIES,
   ADDON_SERVICE_PROTOCOLS,
+  HARNESS_OPERATIONS,
   type AddOnManifestSource,
   type AddOnManifestValidationResult,
   type AddOnValidationIssue,
-} from "./contracts";
+} from "./contracts.ts";
 
 const runtimeTypes: readonly AddOnRuntimeType[] = ["ui-module", "embedded-module", "local-service", "agent-addon", "channel-addon"];
 const categories: readonly AddOnCategory[] = [
@@ -123,6 +124,75 @@ const pushIssue = (
   message: string,
 ) => {
   issues.push({ severity, code, path, message });
+};
+
+const adapterFields = [
+  "adapterVersion", "adapterId", "endpoint", "authScheme", "credentialBinding",
+  "supportedOperations", "contextRoleFidelity", "toolCallbacks",
+] as const;
+const legacyRuntimeFields = [
+  "invocationTool", "chatAuthorLabel", "displayNameSource", "supportsStreaming",
+  "supportsCancellation", "supportsModelSelection", "modelSelection",
+  "outputFiltering", "requiredCapabilities",
+];
+const bindingNamePattern = /^[a-zA-Z][a-zA-Z0-9_-]*(?:\.[a-zA-Z0-9_-]+)*$/;
+
+const validateRuntimeAdapter = (issues: AddOnValidationIssue[], runtime: Record<string, unknown>) => {
+  if (!adapterFields.some(field => Object.hasOwn(runtime, field))) return;
+  const reject = (code: string, field: string, message: string) =>
+    pushIssue(issues, "error", `agent-runtime-${code}`, field ? `agentRuntime.${field}` : "agentRuntime", message);
+  // Reject unknown keys instead of maintaining a bypass-prone list of secret names.
+  if (Object.keys(runtime).some(field => ![...legacyRuntimeFields, ...adapterFields].includes(field))) {
+    reject("adapter-field", "", "Bound runtimes may only declare contract fields; credentials, headers and executable paths are forbidden.");
+  }
+  if (isRecord(runtime.modelSelection) && Object.keys(runtime.modelSelection).some(field =>
+    !["source", "currentModelField", "selectable", "changeTool", "requiredCapabilities", "fallbackPolicy"].includes(field))) {
+    reject("adapter-field", "modelSelection", "Model selection may only declare contract fields.");
+  }
+  if (runtime.adapterVersion !== 1) reject("adapter-version", "adapterVersion", "Only adapter version 1 is supported.");
+  if (typeof runtime.adapterId !== "string" || !/^[a-z][a-z0-9-]{0,63}$/.test(runtime.adapterId)) {
+    reject("adapter-id", "adapterId", "Adapter IDs must be bounded names, never executable paths.");
+  }
+  if (!["none", "dsh-action-token", "bearer"].includes(runtime.authScheme as string)) {
+    reject("auth-scheme", "authScheme", "Unsupported authentication scheme.");
+  }
+  if (runtime.authScheme !== "none" || runtime.credentialBinding !== undefined) {
+    if (typeof runtime.credentialBinding !== "string" || runtime.credentialBinding.length > 128 ||
+        !bindingNamePattern.test(runtime.credentialBinding) || runtime.authScheme === "none") {
+      reject("credential-binding", "credentialBinding", "Authentication requires a binding name; inline credentials and file paths are forbidden.");
+    }
+  }
+  // This validates a proposal, not DNS, approved ports, or binding authorization.
+  if (runtime.authScheme !== "none" || runtime.endpoint !== undefined) {
+    try {
+      if (typeof runtime.endpoint !== "string" || runtime.endpoint.length > 2048 || runtime.endpoint.trim() !== runtime.endpoint) throw new Error();
+      const endpoint = new URL(runtime.endpoint);
+      if (!["http:", "https:"].includes(endpoint.protocol) || endpoint.username || endpoint.password ||
+          endpoint.search || endpoint.hash || endpoint.pathname !== "/") throw new Error();
+    } catch {
+      reject("endpoint", "endpoint", "Endpoint must be an HTTP(S) origin without credentials, query, fragment or file path.");
+    }
+  }
+  const operations = runtime.supportedOperations;
+  if (!Array.isArray(operations) || operations.length > HARNESS_OPERATIONS.length ||
+      operations.some(operation => !HARNESS_OPERATIONS.includes(operation)) ||
+      new Set(operations).size !== operations.length ||
+      !operations.includes("createSession") || !operations.includes("invoke")) {
+    reject("operations", "supportedOperations", "Declare unique supported operations including createSession and invoke.");
+  }
+  if (Array.isArray(operations) && (
+      operations.includes("cancel") !== runtime.supportsCancellation ||
+      operations.includes("selectModel") !== runtime.supportsModelSelection ||
+      (isRecord(runtime.modelSelection) && runtime.modelSelection.selectable !== operations.includes("selectModel")))) {
+    reject("operation-consistency", "supportedOperations", "Supported operations must agree with cancellation and model-selection flags.");
+  }
+  if (!["text-only", "structured-messages"].includes(runtime.contextRoleFidelity as string)) {
+    reject("context-fidelity", "contextRoleFidelity", "Declare the adapter's context role fidelity.");
+  }
+  if (runtime.toolCallbacks !== false) reject("tool-callbacks", "toolCallbacks", "Tool callbacks are unavailable in adapter version 1.");
+  if (!Array.isArray(runtime.requiredCapabilities) || !runtime.requiredCapabilities.includes("agent-runtime")) {
+    reject("capability-required", "requiredCapabilities", "Bound runtimes must require agent-runtime.");
+  }
 };
 
 const validateString = (
@@ -1025,6 +1095,7 @@ export const validateAddOnManifest = (
   }
 
   if (isRecord(candidate.agentRuntime)) {
+    validateRuntimeAdapter(issues, candidate.agentRuntime);
     validateRequiredToolReference(issues, candidate.agentRuntime.invocationTool, "agentRuntime.invocationTool", declaredToolNames);
     validateStringValue(issues, candidate.agentRuntime.chatAuthorLabel, "agentRuntime.chatAuthorLabel");
     validateEnum(issues, candidate.agentRuntime.displayNameSource, ["manifest", "runtime-profile"] as const, "agentRuntime.displayNameSource");

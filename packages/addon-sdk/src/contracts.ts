@@ -71,6 +71,7 @@ export const ADDON_CAPABILITIES: readonly Capability[] = [
   "ui-embedding",
   "browser-control",
   "agent-delegation",
+  "agent-runtime",
   "notifications",
   "device-integration",
 ];
@@ -81,3 +82,9 @@ export const ADDON_SERVICE_PROTOCOLS: readonly AddOnServiceProtocol[] = [
   "websocket-json",
   "host-command",
 ];
+
+export const HARNESS_OPERATIONS = [
+  "createSession", "invoke", "cancel", "history", "status", "modelCatalog", "selectModel",
+] as const satisfies readonly import("../../../src/core/contracts").HarnessOperation[];
+
+export { HARNESS_PUBLIC_ERROR_MESSAGES } from "../../../src/core/contracts.ts";
