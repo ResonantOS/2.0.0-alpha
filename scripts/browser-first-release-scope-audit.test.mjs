@@ -416,3 +416,19 @@ test("recognizes only the vendored Augmentor product scope", () => {
     assert.equal(auditModule.classify(path, "added").bucket, "review");
   }
 });
+
+test('harness documentation is included without widening neighboring scope', () => {
+  const approved = 'docs/addons/harness-adapter-demo.md';
+  assert.equal(auditModule.classify(approved, 'added').bucket, 'include');
+  assert.equal(auditModule.classify('docs/addons/unrelated-harness-note.md', 'added').bucket, 'review');
+  const hashes = ['a'.repeat(40), 'b'.repeat(40)];
+  let output = '';
+  const result = auditModule.main({
+    argv: ['--committed', '--strict'], processRef: {},
+    gitRunner: args => args[0] === 'rev-parse' ? hashes.shift() :
+      ['A', approved, 'M', 'browser-first/README.md', 'M', 'docs/README.md', 'A', 'scripts/harness-swap-demo.mjs', ''].join('\0'),
+    stdout: { write: text => { output += text; } }, stderr: { write: text => { output += text; } },
+  });
+  assert.equal(result, 0);
+  assert.match(output, /Needs manual review: 0/);
+});

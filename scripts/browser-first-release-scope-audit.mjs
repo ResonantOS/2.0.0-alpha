@@ -46,6 +46,7 @@ const includeDocs = new Set([
   "docs/recipes/product-research.md",
   "docs/recipes/travel.md",
   "docs/addons/addon-lifecycle-uninstall-design.md",
+  "docs/addons/harness-adapter-demo.md",
 ]);
 
 function readOptionValue(argv, index, name) {

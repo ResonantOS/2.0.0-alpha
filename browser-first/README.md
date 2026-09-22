@@ -156,6 +156,12 @@ To disable delivery:
    default-deny CORS and rotate credentials.
 3. Close authenticated browser contexts to clear in-memory credentials.
 
+## Harness Adapter Demonstration
+
+The opt-in [harness adapter demo](../docs/addons/harness-adapter-demo.md) covers
+React installation, host-approved bindings, primary-agent swaps, revocation,
+and external evidence receipts. Fixture receipts are never live proof.
+
 ## Validate Changes
 
 ```bash
