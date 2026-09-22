@@ -4,13 +4,14 @@ import type {
   AddOnInstallation,
   AddOnManifest,
   CapabilityGrant,
+  HarnessRegistryProjection,
   ResonantShellState,
   SystemSlotId,
 } from "../../core/contracts";
 
 export type SystemSlotProvider = {
   manifest: AddOnManifest;
-  installation: AddOnInstallation;
+  installation: AddOnInstallation | HarnessRegistryProjection["installations"][string];
 };
 
 export const manifestsForSystemSlot = (manifests: AddOnManifest[], slotId: SystemSlotId): AddOnManifest[] =>
@@ -39,8 +40,14 @@ export const capabilityForSlot = (slotId: SystemSlotId): CapabilityGrant["capabi
   }
 };
 
-export const selectedSystemSlotProviderId = (state: ResonantShellState, slotId: SystemSlotId): string | undefined =>
-  state.activeSystemSlotProviderIds?.[slotId];
+const hostManagesSlot = (projection: HarnessRegistryProjection | null | undefined, slotId: SystemSlotId): boolean =>
+  Boolean(projection && Object.hasOwn(projection.slots, slotId));
+
+export const selectedSystemSlotProviderId = (
+  state: ResonantShellState, slotId: SystemSlotId, projection?: HarnessRegistryProjection | null,
+): string | undefined => hostManagesSlot(projection, slotId)
+  ? projection?.slots[slotId]?.addonId ?? undefined
+  : state.activeSystemSlotProviderIds?.[slotId];
 
 const eligibleSystemSlotProvider = (
   state: ResonantShellState,
@@ -65,7 +72,18 @@ export const activeSystemSlotProvider = (
   state: ResonantShellState,
   manifests: AddOnManifest[],
   slotId: SystemSlotId,
+  projection?: HarnessRegistryProjection | null,
 ): SystemSlotProvider | null => {
+  if (hostManagesSlot(projection, slotId)) {
+    const slot = projection!.slots[slotId];
+    if (!slot?.available || !slot.addonId) return null;
+    // Catalog metadata may describe the host-selected identity; it cannot choose
+    // another owner or contribute any installation/grant state.
+    const manifest = projection!.candidates.find(item => item.id === slot.addonId)
+      ?? manifests.find(item => item.id === slot.addonId);
+    const installation = projection!.installations[slot.addonId];
+    return manifest && installation ? { manifest, installation } : null;
+  }
   const selectedManifestId = selectedSystemSlotProviderId(state, slotId);
   const selectedManifest = selectedManifestId ? manifests.find((manifest) => manifest.id === selectedManifestId) : undefined;
   if (selectedManifest) {
@@ -89,7 +107,11 @@ export const systemSlotAvailable = (
   state: ResonantShellState,
   manifests: AddOnManifest[],
   slotId: SystemSlotId,
+  projection?: HarnessRegistryProjection | null,
 ): boolean => {
+  if (hostManagesSlot(projection, slotId)) {
+    return Boolean(activeSystemSlotProvider(state, manifests, slotId, projection));
+  }
   // Legacy/test manifest sets predate ADR-026 and do not declare replacement slots.
   // In that case the old built-in surfaces remain available until migrated.
   if (!hasSystemSlotManifest(manifests, slotId)) {
