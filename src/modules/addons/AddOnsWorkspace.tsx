@@ -1,6 +1,6 @@
 // Intent citation: docs/architecture/ADR-002-modular-codebase.md
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type {
   AddOnInstallation,
   AddOnHookDefinition,
@@ -14,6 +14,8 @@ import type {
   VerifyAgentReport,
   ShellSectionId,
 } from "../../core/contracts";
+import { HARNESS_PUBLIC_ERROR_MESSAGES, type HarnessPublicErrorCode } from "../../core/contracts";
+import type { createHarnessClient } from "../../core/harness-client";
 import { Panel } from "../../components/Panel";
 import { assessLogicianHookActivation } from "../../core/logician";
 import { requestBrowserEngineStatus, requestBrowserInstallEngine } from "../../core/runtime";
@@ -24,7 +26,10 @@ import { TelegramAddonPanel } from "./TelegramAddonPanel";
 import { addonWorkRegistry, withAddonWork } from "./running-work";
 import type { UninstallAddonBlockReason, UninstallAddonResult } from "./controller";
 
+type HarnessClient = ReturnType<typeof createHarnessClient>;
+
 type AddOnsWorkspaceProps = {
+  harnessClient?: HarnessClient;
   search: string;
   sideloadPath: string;
   filteredManifests: AddOnManifest[];
@@ -158,6 +163,7 @@ const uninstallResultMessage = (manifestName: string, result: UninstallAddonResu
 export function AddOnsWorkspace(props: AddOnsWorkspaceProps) {
   return (
     <>
+      {props.harnessClient && <HarnessManagement client={props.harnessClient} />}
       <Panel
         title="Add-on Workspace"
         subtitle="Curated manifests plus local sideloading, with capability grants instead of blanket trust."
@@ -277,6 +283,198 @@ export function AddOnsWorkspace(props: AddOnsWorkspaceProps) {
         />
       )}
     </>
+  );
+}
+
+// This view owns pending intents only. Governance always comes from the client’s
+// acknowledged host projection; imported JSON is never a display-state source.
+const MANIFEST_BYTE_LIMIT = 256 * 1024;
+// Display labels for features the host does not model as HarnessOperations.
+// These labels confer no capabilities or execution authority.
+const UNAVAILABLE_FEATURES_BY_ADAPTER: Readonly<Record<string, readonly string[]>> = {
+  "dsh-typert-v1": ["Browser tools", "Approval waterfall", "Plugin-only augmentor actions"],
+};
+const publicHarnessMessage = (error: unknown): string => {
+  const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+  return typeof code === "string" && Object.hasOwn(HARNESS_PUBLIC_ERROR_MESSAGES, code)
+    ? HARNESS_PUBLIC_ERROR_MESSAGES[code as HarnessPublicErrorCode]
+    : HARNESS_PUBLIC_ERROR_MESSAGES["runtime-unavailable"];
+};
+
+function HarnessManagement({ client }: { client: HarnessClient }) {
+  const projection = useSyncExternalStore(client.subscribe, client.getSnapshot, client.getSnapshot);
+  const [hasRegistry, setHasRegistry] = useState(false);
+  const [ready, setReady] = useState(false);
+  const [pending, setPending] = useState<string | null>("Load");
+  const [notice, setNotice] = useState("");
+  const [conflict, setConflict] = useState(false);
+  const [file, setFile] = useState<File | null>(null);
+  const busy = useRef(true);
+  const input = useRef<HTMLInputElement>(null);
+  const initialRead = useRef<{
+    client: HarnessClient;
+    promise: ReturnType<HarnessClient["refresh"]>;
+    settled: boolean;
+  } | null>(null);
+  const loaded = ready && projection !== null;
+
+  useEffect(() => {
+    let active = true;
+    busy.current = true;
+    setHasRegistry(false);
+    setReady(false);
+    setPending("Load");
+    // Reuse the initial read when React replays mount effects in StrictMode.
+    if (initialRead.current?.client !== client) {
+      initialRead.current = { client, promise: client.refresh(), settled: false };
+    }
+    const read = initialRead.current;
+    void read.promise.then(value => {
+      if (active) {
+        setHasRegistry(Boolean(value));
+        setReady(Boolean(value));
+      }
+    }).catch(() => {
+      // Older hosts have no harness registry. Leave their shell unchanged.
+    }).finally(() => {
+      if (active) { read.settled = true; busy.current = false; setPending(null); }
+    });
+    return () => { active = false; };
+  }, [client]);
+
+  useEffect(() => {
+    // A later acknowledged projection can enable management without polling.
+    if (initialRead.current?.settled && projection) {
+      setHasRegistry(true);
+      setReady(true);
+    }
+  }, [client, projection]);
+
+  const refreshProjection = async () => {
+    setReady(false);
+    const value = await client.refresh();
+    setReady(Boolean(value));
+    if (value) setConflict(false);
+  };
+
+  const run = async (label: string, operation: () => Promise<unknown>, refresh = false) => {
+    if (busy.current || (!loaded && !refresh)) return;
+    busy.current = true;
+    setPending(label);
+    setNotice("");
+    if (!refresh) setConflict(false);
+    try {
+      await operation();
+    } catch (error) {
+      setNotice(publicHarnessMessage(error));
+      if (error && typeof error === "object" && "code" in error && error.code === "ownership-conflict") {
+        setConflict(true);
+        try { await refreshProjection(); }
+        catch { /* Retain the host refusal; Refresh remains available for retry. */ }
+      }
+    } finally {
+      busy.current = false;
+      setPending(null);
+    }
+  };
+
+  const importManifest = () => run("Install", async () => {
+    if (!file) return;
+    if (file.size > MANIFEST_BYTE_LIMIT) {
+      setNotice("Manifest must be at most 256 KiB.");
+      return;
+    }
+    const text = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(new Error("Manifest read failed."));
+      reader.readAsText(file);
+    });
+    // Bound UTF-8 as sent, including replacement characters from invalid input.
+    if (new TextEncoder().encode(text).byteLength > MANIFEST_BYTE_LIMIT) {
+      setNotice("Manifest must be at most 256 KiB.");
+      return;
+    }
+    let manifest: AddOnManifest;
+    try { manifest = JSON.parse(text) as AddOnManifest; }
+    catch { setNotice("Manifest must be valid JSON."); return; }
+    try {
+      await client.install(manifest, true);
+    } finally {
+      setFile(null);
+      if (input.current) input.current.value = "";
+    }
+  });
+
+  const owner = projection?.slots["primary-agent"];
+  const candidates = projection?.candidates ?? [];
+  const ids = [...new Set([...candidates.map(candidate => candidate.id), ...Object.keys(projection?.installations ?? {})])];
+  const nameFor = (id: string) => candidates.find(candidate => candidate.id === id)?.name ?? id;
+  const disabled = !loaded || pending !== null;
+
+  if (!hasRegistry || !projection) return null;
+
+  return (
+    <Panel title="Harness management" subtitle="Install manifests and review capabilities through the host.">
+      <button type="button" className="button-secondary" disabled={pending !== null}
+        onClick={() => void run("Refresh", refreshProjection, true)}>Refresh harnesses</button>
+      {pending && <p role="status">Pending: {pending}</p>}
+      {conflict && <p role="status">{pending ? "Conflict: refreshing host projection." : "Conflict: review the current host projection before retrying."}</p>}
+      {notice && <p role="alert">{notice}</p>}
+      {projection && <p>Current owner: {owner?.addonId ? nameFor(owner.addonId) : "None"} · {owner?.available ? "Available" : "Unavailable"}</p>}
+      <section aria-label="Import harness manifest" className="sideload-strip">
+        <label>Import JSON manifest
+          <input ref={input} type="file" accept=".json,application/json" disabled={disabled}
+            onChange={event => setFile(event.target.files?.[0] ?? null)} />
+        </label>
+        <button type="button" className="button-primary" disabled={disabled || !file}
+          onClick={() => void importManifest()}>Install</button>
+        <p>Maximum 256 KiB. The host validates the manifest. Installation grants no capabilities.</p>
+      </section>
+      {loaded && candidates.length === 0 && <p>No host candidates.</p>}
+      <div className="addon-grid">
+        {ids.map(id => {
+          const candidate = candidates.find(value => value.id === id);
+          const installation = projection?.installations[id];
+          const installed = installation?.installed;
+          const current = owner?.addonId === id;
+          const adapterId = candidate?.agentRuntime?.adapterId;
+          const unavailable = [
+            ...(adapterId && Object.hasOwn(UNAVAILABLE_FEATURES_BY_ADAPTER, adapterId)
+              ? UNAVAILABLE_FEATURES_BY_ADAPTER[adapterId] : []),
+            ...(installation?.disabledOperations ?? []),
+          ];
+          return <section key={id} aria-label={nameFor(id)} className="addon-card">
+            <h4>{nameFor(id)}</h4>
+            <p>{installed ? "Installed" : "Not installed"}{current ? " · Current owner" : ""}</p>
+            {!installed && candidate && <button type="button" disabled={disabled}
+              onClick={() => void run("Install", () => client.install(candidate, true))}>Install</button>}
+            {installed && <>
+              <p>Review capabilities before granting access:</p>
+              <ul>{installation.grantedCapabilities.map(grant => <li key={grant.capability}>
+                {prettyCapability(grant)} · {grant.scope} · {grant.revocationBehavior} · <span>{grant.granted ? "Granted" : "Not granted"}</span>{" "}
+                {!grant.granted && <button type="button" disabled={disabled}
+                  onClick={() => void run("Grant", () => client.setGrants({
+                    addonId: id, expectedRevision: projection!.revision, consent: true,
+                    grants: installation.grantedCapabilities.map(value => ({ ...value, granted: value.granted || value.capability === grant.capability })),
+                  }))}>Grant</button>}
+              </li>)}</ul>
+              {!current && <button type="button" disabled={disabled}
+                onClick={() => void run(owner?.addonId ? "Replace" : "Make primary", () => client.assignSlot({
+                  slot: "primary-agent", addonId: id, expectedGeneration: owner?.generation ?? 0, replace: Boolean(owner?.addonId),
+                }))}>{owner?.addonId ? "Replace" : "Make primary"}</button>}
+              <button type="button" disabled={disabled}
+                onClick={() => void run("Remove", () => client.remove(id))}>Remove</button>
+            </>}
+            {unavailable.length > 0 && <>
+              <h5>Unavailable harness operations</h5>
+              <ul aria-label="Unavailable harness operations">{unavailable.map(operation =>
+                <li key={operation}>{operation} — Unavailable</li>)}</ul>
+            </>}
+          </section>;
+        })}
+      </div>
+    </Panel>
   );
 }
 

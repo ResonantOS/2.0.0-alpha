@@ -14,7 +14,13 @@ import type {
   ResonantShellState,
 } from "./core/contracts";
 import { buildDefaultState } from "./core/defaults";
+import * as harnessClients from "./core/harness-client";
 import { ArchiveReviewDesk } from "./modules/archive/ArchiveReviewDesk";
+
+const { harnessInvokeMock } = vi.hoisted(() => ({ harnessInvokeMock: vi.fn() }));
+vi.mock("./core/web-transport", async (importOriginal) => ({
+  ...await importOriginal<typeof import("./core/web-transport")>(), webInvoke: harnessInvokeMock,
+}));
 
 const manifests: AddOnManifest[] = [
   createManifest("addon.telegram-channel", "Telegram Channel", "channel"),
@@ -1492,6 +1498,9 @@ describe("App boot flow", () => {
   });
 
   beforeEach(() => {
+    harnessInvokeMock.mockReset().mockResolvedValue({
+      bootEpoch: "app-boot", revision: 0, governanceActivated: false, candidates: [], installations: {}, slots: {},
+    });
     window.history.replaceState({}, "", "/");
     class ResizeObserverMock {
       observe() {}
@@ -3320,6 +3329,68 @@ describe("App boot flow", () => {
 
     expect(await screen.findByLabelText("Browser URL")).toBeTruthy();
     expect(screen.getByLabelText("Browser extension preview")).toBeTruthy();
+  });
+
+  it.each(["permission-denied", "unsupported-operation", "route-unknown", "absent-registry"])(
+    "preserves the shell DOM without harness controls when the host returns %s", async code => {
+      const client = harnessClients.createHarnessClient({ invoke: harnessInvokeMock });
+      const factory = vi.spyOn(harnessClients, "createHarnessClient")
+        .mockReturnValueOnce(undefined as unknown as typeof client)
+        .mockReturnValueOnce(client);
+      const openAddons = async () => {
+        expect((await screen.findAllByText("Launch your AI tools from one workbench.")).length).toBeGreaterThan(0);
+        fireEvent.click(screen.getAllByRole("button", { name: /Add-ons/i })[0]);
+        expect(await screen.findByPlaceholderText("Search add-ons")).toBeTruthy();
+        expect((await screen.findAllByText("Paperclip")).length).toBeGreaterThan(0);
+      };
+      try {
+        const baseline = render(<App />);
+        await openAddons();
+        const baselineDOM = baseline.container.innerHTML;
+        baseline.unmount();
+        const response = deferred<harnessClients.HarnessProjection>();
+        const refresh = vi.spyOn(client, "refresh").mockReturnValueOnce(response.promise);
+        const view = render(<App />);
+        await openAddons();
+        await act(async () => {
+          if (code === "absent-registry") response.resolve(null as unknown as harnessClients.HarnessProjection);
+          else response.reject(Object.assign(new Error("Host route unavailable"), { code }));
+        });
+        expect(screen.queryByText("Harness management")).toBeNull();
+        expect(screen.queryByRole("region", { name: /harness/i })).toBeNull();
+        expect(screen.queryByLabelText("Import JSON manifest")).toBeNull();
+        expect(view.container.innerHTML).toBe(baselineDOM);
+        fireEvent.change(screen.getByPlaceholderText("Search add-ons"), { target: { value: "Paperclip" } });
+        await act(async () => {});
+        expect(refresh).toHaveBeenCalledTimes(1);
+      } finally {
+        factory.mockRestore();
+      }
+    },
+  );
+
+  it("wires host harness management behind the existing Add-ons shell", async () => {
+    const candidate = createManifest("addon.host-harness", "Host Harness", "agent");
+    const snapshot = {
+      bootEpoch: "app-boot", revision: 0, governanceActivated: false,
+      candidates: [candidate], installations: {}, slots: {},
+    };
+    harnessInvokeMock.mockResolvedValueOnce(snapshot);
+    render(<App />);
+    expect((await screen.findAllByText("Launch your AI tools from one workbench.")).length).toBeGreaterThan(0);
+    expect(screen.queryByText("Host Harness")).toBeNull();
+    fireEvent.click(screen.getAllByRole("button", { name: /Add-ons/i })[0]);
+    const region = await screen.findByRole("region", { name: "Host Harness" });
+    expect(screen.getByRole("heading", { name: "Harness management" })).toBeTruthy();
+    expect(harnessInvokeMock).toHaveBeenCalledWith("harness_registry");
+    const pending = deferred<typeof snapshot>();
+    harnessInvokeMock.mockReturnValueOnce(pending.promise);
+    fireEvent.click(within(region).getByRole("button", { name: "Install" }));
+    expect(harnessInvokeMock).toHaveBeenLastCalledWith("harness_install", { manifest: candidate, enabled: true });
+    expect(screen.getByText("Pending: Install")).toBeTruthy();
+    expect(within(region).queryByRole("button", { name: "Remove" })).toBeNull();
+    await act(async () => pending.resolve({ ...snapshot, revision: 1 }));
+    expect(await screen.findByPlaceholderText("Search add-ons")).toBeTruthy();
   });
 
   it("shows Paperclip in the Add-ons catalog before installation", async () => {

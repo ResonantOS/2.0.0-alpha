@@ -68,6 +68,7 @@ required Alpha processes.
 | `src/core/harness-client.ts` | In-memory host projection, monotonic acknowledgements, and session event delivery for React | Reads only authenticated host snapshots/events through `web-transport.ts`; never creates grants, owners, candidates, availability, or persisted governance |
 | `src/core/` | Shared contracts and pure cross-domain policy | No feature-specific UI or privileged process/filesystem behavior |
 | `packages/addon-sdk/src/` and `src/sdk/addons/` compatibility exports | Canonical add-on manifests, capability vocabulary, protocols, and validation shared by Node and browser consumers | SDK contracts do not grant runtime capabilities |
+| `src/modules/addons/AddOnsWorkspace.tsx` | Harness management presentation, bounded manifest import, and pending/conflict feedback | Reads acknowledged `harness-client.ts` projections; sends explicit install/grant/slot/remove commands; never infers grants, ownership, availability, or credential authority |
 | `src/modules/addons/` | Add-on catalog, grants, setup, and workspace entrypoints | Host mutations stay behind add-on routes and SDK capability policy |
 | `src/modules/archive/` | Living Archive UI, intake, review, promotion, and source management | Trusted writes stay behind archive review and promotion routes |
 | `src/modules/browser/` | Shared/legacy browser workspace presentation | Alpha page actions stay in extension controllers |
