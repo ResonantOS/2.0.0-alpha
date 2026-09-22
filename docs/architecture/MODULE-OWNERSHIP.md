@@ -72,6 +72,8 @@ required Alpha processes.
 | `src/modules/addons/` | Add-on catalog, grants, setup, and workspace entrypoints | Host mutations stay behind add-on routes and SDK capability policy |
 | `src/modules/archive/` | Living Archive UI, intake, review, promotion, and source management | Trusted writes stay behind archive review and promotion routes |
 | `src/modules/browser/` | Shared/legacy browser workspace presentation | Alpha page actions stay in extension controllers |
+| `src/modules/chat/harness-turn.ts` | Primary harness session reuse, host history/model selection, attributed streams, and interrupted partial replies | App-owned ephemeral state; all harness calls use `harness-client.ts`; host generations fence output; no provider prerequisites, credentials, governance writes, or browser-tool execution |
+| `src/modules/chat/thread-controller.ts` | Chat/thread actions and Stop dispatch | Cancels only the registered harness session/turn, preserves the interrupted partial, and invalidates the local run before accepting more output |
 | `src/modules/chat/` | Conversation UI, composer, threads, and turn orchestration | Provider credentials and routing stay host-side |
 | `src/modules/compute/` | Deferred Compute Fabric UI model | No privileged execution authority |
 | `src/modules/delegation/` | Delegation monitoring and result review | Runtime execution stays behind host-mediated add-on routes |

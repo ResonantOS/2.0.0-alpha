@@ -2,6 +2,8 @@
 // Intent citation: docs/architecture/ADR-004-chat-rail.md
 
 import type { Dispatch, SetStateAction } from "react";
+import { HARNESS_PUBLIC_ERROR_MESSAGES } from "../../core/contracts";
+import type { HarnessProjection } from "../../core/harness-client";
 import type { BrowserCommandExecutionResult } from "./augmentor-commands";
 import type {
   AddOnManifest,
@@ -68,6 +70,7 @@ import {
   buildChatContextSources,
   buildTrustedChatContextGuidance,
 } from "./archive-context";
+import { executeHarnessTurn, type HarnessChatRuntime } from "./harness-turn";
 import type { ComposerAttachment, ThinkingDepth } from "./types";
 import { attachmentPromptBlock } from "./utils";
 import { buildProviderChatRouteRequest } from "./chat-route-request";
@@ -95,6 +98,7 @@ type ReadyShellSnapshot = {
 
 type ChatTurnControllerInput = {
   snapshot: ReadyShellSnapshot;
+  harnessRuntime?: HarnessChatRuntime;
   activeThread: ConversationThread;
   composer: string;
   attachments: ComposerAttachment[];
@@ -163,8 +167,28 @@ const hermesPromptFromThread = (
     .filter(Boolean)
     .join("\n");
 
+// Shared UI/dispatch predicate. An assigned but unavailable owner is a failure,
+// never permission to silently fall back to provider chat.
+export function primaryHarnessChatRoute({ projection, state, thread, outgoing }: {
+  projection: HarnessProjection | null;
+  state: ResonantShellState;
+  thread: ConversationThread | null;
+  outgoing: string;
+}): "provider" | "harness" | "unavailable" {
+  if (!thread || thread.owningAgentId === state.recoverySession.engineerAgentId || thread.owningAgentId === "hermes.agent") return "provider";
+  const message = outgoing.trim();
+  if (thread.owningAgentId === "strategist.core" && (
+    parseAugmentorCommand(message) || parseNaturalBrowserIntent(message) || parseStartEngineerTaskWorkspaceId(message) ||
+    shouldDelegateToEngineer(message) || shouldDelegateToHermes(message) || shouldDelegateToOpenCode(message)
+  )) return "provider";
+  const owner = projection?.slots["primary-agent"];
+  if (!owner?.addonId) return "provider";
+  return owner.available ? "harness" : "unavailable";
+}
+
 export const executeChatTurn = async ({
   snapshot,
+  harnessRuntime,
   activeThread,
   composer,
   attachments,
@@ -416,6 +440,25 @@ export const executeChatTurn = async ({
     }
 
     const engineerWorkspaceId = activeThread.owningAgentId === "strategist.core" ? parseStartEngineerTaskWorkspaceId(trimmed) : null;
+    // Primary chat bypasses provider prerequisites; explicit delegation and recovery retain their routes.
+    const harnessRoute = primaryHarnessChatRoute({ projection: harnessRuntime?.client.getSnapshot() ?? null,
+      state, thread: activeThread, outgoing: trimmed });
+    if (harnessRoute === "unavailable") {
+      const failure = HARNESS_PUBLIC_ERROR_MESSAGES["runtime-unavailable"];
+      commitReadyState(appendAssistantMessage(cloneState(nextState), activeThread.id, failure, { status: "failed" }));
+      setChatNotice(failure);
+      markProgress("failed", failure);
+      return;
+    }
+    if (harnessRoute === "harness" && harnessRuntime) {
+      await executeHarnessTurn({
+        runtime: harnessRuntime, state: nextState, thread: activeThread,
+        manifests: [...snapshot.bundled, ...snapshot.sideloaded], outgoing: trimmed,
+        attachments: outgoingAttachments, overrideContextPrompt, runToken, isRunCurrent,
+        commitReadyState, setChatRunPhase, setAgentActivityLabel, setChatNotice,
+      });
+      return;
+    }
     if (engineerWorkspaceId) {
       markProgress("tool-running", "Starting the delegated Engineer task workspace.", engineerWorkspaceId);
       const payload = await requestReadTaskWorkspace(engineerWorkspaceId);

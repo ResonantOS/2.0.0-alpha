@@ -3369,6 +3369,112 @@ describe("App boot flow", () => {
     },
   );
 
+  it.each([false, true])("sends through the existing provider route without refreshing (cached projection: %s)", async projected => {
+    const client = harnessClients.createHarnessClient({ invoke: harnessInvokeMock });
+    if (projected) client.applySnapshot({ bootEpoch: "boot", revision: 1, governanceActivated: false,
+      candidates: [], installations: {}, slots: {} });
+    const refresh = vi.spyOn(client, "refresh");
+    const factory = vi.spyOn(harnessClients, "createHarnessClient").mockReturnValue(client);
+    try {
+      render(<App />);
+      const composer = (await screen.findAllByPlaceholderText("Message Augmentor"))[0];
+      refresh.mockClear();
+      fireEvent.change(composer, { target: { value: "Use the existing provider route" } });
+      fireEvent.click(screen.getAllByRole("button", { name: "Send message" })[0]);
+      expect(refresh).not.toHaveBeenCalled();
+      expect(await screen.findByText("This is a live Strategist test reply from MiniMax-M3.")).toBeTruthy();
+      // Existing provider expectations: attempt streaming, then the compatibility completion.
+      expect(requestProviderServiceChatCompletionStreamMock).toHaveBeenCalledTimes(1);
+      expect(requestProviderServiceChatCompletionMock).toHaveBeenCalledTimes(1);
+      expect(requestProviderServiceChatCompletionStreamMock.mock.invocationCallOrder[0])
+        .toBeLessThan(requestProviderServiceChatCompletionMock.mock.invocationCallOrder[0]);
+    } finally { factory.mockRestore(); refresh.mockRestore(); }
+  });
+
+  it("hides the host model selector for /delegate with a projected owner", async () => {
+    const client = harnessClients.createHarnessClient({ invoke: harnessInvokeMock });
+    client.applySnapshot({ bootEpoch: "boot", revision: 1, governanceActivated: true, candidates: [], installations: {},
+      slots: { "primary-agent": { addonId: "addon.dsh", generation: 1, available: true } } });
+    const factory = vi.spyOn(harnessClients, "createHarnessClient").mockReturnValue(client);
+    try {
+      render(<App />);
+      const composer = (await screen.findAllByPlaceholderText("Message Augmentor"))[0];
+      expect(screen.getAllByRole("option", { name: "Choose host model…" }).length).toBeGreaterThan(0);
+      fireEvent.change(composer, { target: { value: "/delegate opencode Implement a deterministic browser bridge" } });
+      expect(screen.queryByRole("option", { name: "Choose host model…" })).toBeNull();
+      expect(screen.queryByRole("option", { name: "Host-selected model" })).toBeNull();
+    } finally { factory.mockRestore(); }
+  });
+
+  it("makes Stop available immediately while the first harness host call is pending", async () => {
+    const pending = deferred<{ session: { addonId: string; sessionId: string; bootEpoch: string; generation: number } }>();
+    const session = { addonId: "addon.dsh", sessionId: "pending-session", bootEpoch: "boot", generation: 1 };
+    const invoke = vi.fn().mockImplementation(() => pending.promise);
+    const client = harnessClients.createHarnessClient({ invoke });
+    client.applySnapshot({ bootEpoch: "boot", revision: 1, governanceActivated: true, candidates: [], installations: {},
+      slots: { "primary-agent": { addonId: "addon.dsh", generation: 1, available: true } } });
+    const factory = vi.spyOn(harnessClients, "createHarnessClient").mockReturnValue(client);
+    try {
+      render(<App />);
+      const composer = (await screen.findAllByPlaceholderText("Message Augmentor"))[0];
+      fireEvent.change(composer, { target: { value: "Start immediately" } });
+      fireEvent.click(screen.getAllByRole("button", { name: "Send message" })[0]);
+      expect(screen.getByRole("button", { name: "Stop response" })).toBeTruthy();
+      expect(invoke).toHaveBeenCalledWith("harness_session", { addonId: "addon.dsh" });
+      fireEvent.click(screen.getByRole("button", { name: "Stop response" }));
+      await act(async () => { pending.resolve({ session }); });
+      expect(invoke.mock.calls.map(([command]) => command)).toEqual(["harness_session"]);
+      expect(screen.getAllByText(/Interrupted/i).length).toBeGreaterThan(0);
+      expect(requestProviderServiceChatCompletionMock).not.toHaveBeenCalled();
+    } finally { pending.resolve({ session }); factory.mockRestore(); }
+  });
+
+  it("wires primary harness chat and Stop without provider credentials", async () => {
+    const session = { addonId: "addon.dsh", sessionId: "app-session", bootEpoch: "app-boot", generation: 1 };
+    const snapshot = { bootEpoch: "app-boot", revision: 1, governanceActivated: true, candidates: [], installations: {},
+      slots: { "primary-agent": { addonId: "addon.dsh", generation: 1, available: true } } };
+    const continueStream = deferred<void>();
+    const invoke = vi.fn(async (command: string) => {
+      if (command === "harness_registry") return snapshot;
+      if (command === "harness_session") return { session };
+      if (command === "harness_history") return { history: { messages: [] } };
+      if (command === "harness_turn") return { turnId: "app-turn" };
+      return {};
+    });
+    const client = harnessClients.createHarnessClient({ invoke: invoke as never, events: async function* () {
+      yield { ...session, turnId: "app-turn", sequence: 1, type: "delta", data: { text: "DSH partial answer" } };
+      await continueStream.promise;
+      yield { ...session, turnId: "app-turn", sequence: 2, type: "final", data: { text: "Late DSH answer" } };
+    } });
+    client.applySnapshot(snapshot);
+    const factory = vi.spyOn(harnessClients, "createHarnessClient").mockImplementation(() => client);
+    const prompt = vi.spyOn(window, "prompt").mockReturnValue("dsh-provider/model-name");
+    const state = buildDefaultState(manifests);
+    state.providers = [];
+    hydrateStateMock.mockResolvedValueOnce(state);
+    try {
+      render(<App />);
+      const composer = (await screen.findAllByPlaceholderText("Message Augmentor"))[0];
+      fireEvent.change(screen.getAllByLabelText("Model and reasoning profile")[0], { target: { value: "Choose host model…" } });
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith("harness_select_model", {
+        session, model: { provider: "dsh-provider", model: "model-name" },
+      }));
+      expect(await screen.findByText("Model selection acknowledged by the host.")).toBeTruthy();
+      fireEvent.change(composer, { target: { value: "Use the primary harness" } });
+      fireEvent.click(screen.getAllByRole("button", { name: "Send message" })[0]);
+      expect(await screen.findByText("DSH partial answer")).toBeTruthy();
+      expect(screen.getAllByText("addon.dsh").length).toBeGreaterThan(0);
+      expect(requestProviderServiceChatCompletionMock).not.toHaveBeenCalled();
+      expect(requestProviderServiceChatCompletionStreamMock).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Stop response" }));
+      expect(invoke).toHaveBeenCalledWith("harness_cancel", { session, turnId: "app-turn" });
+      await act(async () => { continueStream.resolve(); });
+      expect(screen.getByText("DSH partial answer")).toBeTruthy();
+      expect(screen.queryByText("Late DSH answer")).toBeNull();
+      expect(screen.getAllByText(/Interrupted/i).length).toBeGreaterThan(0);
+    } finally { continueStream.resolve(); factory.mockRestore(); prompt.mockRestore(); }
+  });
+
   it("wires host harness management behind the existing Add-ons shell", async () => {
     const candidate = createManifest("addon.host-harness", "Host Harness", "agent");
     const snapshot = {
