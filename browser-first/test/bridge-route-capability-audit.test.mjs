@@ -150,9 +150,12 @@ async function withBridgeRoutes(callback) {
     // Keyed by the exact identifier run-bridge-minimal.mjs spreads into `bridgeRoutes`, so the
     // composition guard below can prove each composed array is actually CONSTRUCTED here — not
     // merely named in a list.
+    const { createHarnessHostService } = await import('../host/harness-host-service.mjs');
+    const harness = await createHarnessHostService({ userRoot: root, providerHost: provider, env: {} });
     const routeArrays = {
+      harnessRoutes: harness.harnessRoutes,
       browserDiagnosticsRoutes: diagnostics.browserDiagnosticsRoutes,
-      providerBridgeRoutes: provider.providerBridgeRoutes,
+      providerBridgeRoutes: harness.composeProviderRoutes(provider.providerBridgeRoutes),
       agentControlRoutes: agent.agentControlRoutes,
       memoryBridgeRoutes: memory.memoryBridgeRoutes,
       addonDelegationRoutes: addon.addonDelegationRoutes,
@@ -161,7 +164,7 @@ async function withBridgeRoutes(callback) {
     };
     const routes = Object.values(routeArrays).flat();
 
-    await callback(routes, routeArrays);
+    try { await callback(routes, routeArrays); } finally { await harness.close(); }
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -218,6 +221,8 @@ test("audit covers every route array composed by run-bridge-minimal", async () =
     "utf8",
   );
   const bridgeRoutesInitializer = /const\s+bridgeRoutes\s*=\s*\[([\s\S]*?)\];/.exec(source)?.[1] ?? "";
+  assert.match(source, /const providerBridgeRoutes = harnessService\.composeProviderRoutes\(legacyProviderBridgeRoutes\)/,
+    'launcher must use the audited compatibility route composition');
   const composedRouteArrays = [...bridgeRoutesInitializer.matchAll(/\.\.\.(\w+)/g)].map((match) => match[1]);
   assert.ok(composedRouteArrays.length >= 7, "expected run-bridge-minimal to compose at least seven route arrays");
 
@@ -228,5 +233,30 @@ test("audit covers every route array composed by run-bridge-minimal", async () =
         `${name} is composed by run-bridge-minimal but this audit does not construct it (add the service to withBridgeRoutes)`,
       );
     }
+  });
+});
+
+
+test("harness routes retain the exact capability and transport boundary", async () => {
+  await withBridgeRoutes(async (_routes, arrays) => {
+    assert.deepEqual(arrays.harnessRoutes.map(route => [bridgeRouteKey(route), route.requiredCapability]), [
+      ["GET /addons/registry", "addon-runtime-read"],
+      ["POST /addons/install", "addon-runtime-control"],
+      ["POST /addons/grants", "addon-runtime-control"],
+      ["POST /addons/remove", "addon-runtime-control"],
+      ["POST /addons/slots/assign", "addon-runtime-control"],
+      ["POST /agent/session", "addon-runtime-control"],
+      ["POST /agent/turn", "addon-runtime-control"],
+      ["POST /agent/cancel", "addon-runtime-control"],
+      ["GET /agent/events", "addon-runtime-read"],
+      ["POST /agent/history", "addon-runtime-read"],
+      ["POST /agent/status", "addon-runtime-read"],
+      ["POST /agent/select-model", "addon-runtime-control"],
+    ]);
+    for (const route of arrays.harnessRoutes) {
+      assert.equal(route.loopbackHostOnly, true);
+      assert.equal(route.errorFamily, "harness");
+    }
+    assert.equal(arrays.harnessRoutes.find(route => route.path === '/agent/events').terminalEventFamily, 'harness');
   });
 });

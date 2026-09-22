@@ -747,3 +747,125 @@ for (const loopbackHostOnly of [false,true]) test(`Host transport guard opt-in: 
   const result=await evaluateBridgeRequestForSelfTest({method:'POST',url:'/transport-fixture',headers:{host:'evil.example:12345','x-resonantos-bridge-token':bridgeToken,'x-resonantos-bridge-capability-token':token},rawHeaders:['Host','evil.example:12345'],listenerPort:12345,bridgeToken,bridgeCapabilityTokens:{read:token},routes:[{method:'POST',path:'/transport-fixture',requiredCapability:'read',loopbackHostOnly,handler:async()=>({})}]});
   assert.deepEqual([result.status,result.payload.code??null],loopbackHostOnly?[403,'OPENCODE_HOST_REJECTED']:[200,null]);
 });
+
+test('harness SSE uses sanitized harness terminal events', async t => {
+  const { createHarnessEventBus } = await import('../host/harness-event-bus.mjs');
+  const { createHarnessBoundary } = await import('../host/harness-boundary.mjs');
+  const identity = { addonId: 'addon.test', sessionId: 'session', bootEpoch: 'boot', generation: 1 };
+  const bus = createHarnessEventBus({ provenance: identity, isCurrent: () => true });
+  // 1F translates the frozen harness iterator to the existing bridge transport seam.
+  const module = await import('../host/harness-host-service.mjs').catch(() => ({}));
+  assert.equal(typeof module.createHarnessStreamSubscription, 'function', 'harness stream composition must exist');
+  let server;
+  server = await startBridgeServer({ port: 0, host: '127.0.0.1', bridgeToken: 'bridge',
+    bridgeCapabilityTokens: { 'addon-runtime-read': 'read' }, extensionOrigin: 'chrome-extension://test',
+    routes: [{ method: 'GET', path: '/agent/events', loopbackHostOnly: true, errorFamily: 'harness', terminalEventFamily: 'harness', requiredCapability: 'addon-runtime-read', responseType: 'sse',
+      handler: () => module.createHarnessStreamSubscription(bus.subscribe()) }],
+  });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const response = await fetch(`http://127.0.0.1:${server.address().port}/agent/events?sessionId=session`, { headers: { 'X-ResonantOS-Bridge-Token': 'bridge', 'X-ResonantOS-Bridge-Capability-Token': 'read' } });
+  bus.publish({ turnId: 'turn', type: 'delta', data: { text: 'partial' } });
+  bus.close('ownership-conflict');
+  const text = await response.text();
+  assert.match(text, /event: harness.close/);
+  assert.match(text, /"code":"ownership-conflict"/);
+  assert.doesNotMatch(text, /opencode|OPENCODE/);
+
+  const auth = { addonId: 'addon.test', slot: 'primary-agent', bootEpoch: 'boot', generation: 1, runtime: { supportedOperations: ['createSession', 'invoke'] } };
+  const boundary = createHarnessBoundary({ registry: { authorize: () => auth, isCurrent: () => true, onFence: () => () => {} },
+    resolveAdapter: () => ({ createSession: async () => ({}), dispose: async () => {}, invoke: async function* () { throw Object.assign(new Error('upstream-private-canary'), { code: 'invalid-event', credential: 'upstream-private-canary' }); } }) });
+  t.after(() => boundary.close());
+  const session = await boundary.createSession({ addonId: auth.addonId });
+  const stream = module.createHarnessStreamSubscription(boundary.events(session));
+  // A second actual HTTP stream exercises the upstream error path.
+  const second = await startBridgeServer({ port: 0, host: '127.0.0.1', bridgeToken: 'bridge', bridgeCapabilityTokens: { 'addon-runtime-read': 'read' },
+    routes: [{ method: 'GET', path: '/agent/events', loopbackHostOnly: true, errorFamily: 'harness', terminalEventFamily: 'harness', requiredCapability: 'addon-runtime-read', responseType: 'sse', handler: () => stream }] });
+  t.after(() => new Promise(resolve => second.close(resolve)));
+  const reply = await fetch(`http://127.0.0.1:${second.address().port}/agent/events?sessionId=${session.sessionId}`, { headers: { 'X-ResonantOS-Bridge-Token': 'bridge', 'X-ResonantOS-Bridge-Capability-Token': 'read' } });
+  await boundary.invoke(session, { messages: [] }).completion;
+  const errorText = await reply.text();
+  assert.match(errorText, /"code":"invalid-event"/);
+  assert.match(errorText, /event: harness.close/);
+  assert.doesNotMatch(errorText, /upstream-private-canary|opencode|OPENCODE|credential/);
+});
+
+test('harness HTTP rejects origin, malformed and oversized bodies before side effects', async t => {
+  let calls = 0;
+  const routes = [{ method: 'POST', path: '/agent/session', loopbackHostOnly: true, errorFamily: 'harness', requiredCapability: 'addon-runtime-control', handler: () => { calls++; return {}; } }];
+  const server = await startBridgeServer({ port: 0, host: '127.0.0.1', bridgeToken: 'bridge', bridgeCapabilityTokens: { 'addon-runtime-control': 'control' }, extensionOrigin: 'chrome-extension://test', routes });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const url = `http://127.0.0.1:${server.address().port}/agent/session`;
+  const headers = { 'X-ResonantOS-Bridge-Token': 'bridge', 'X-ResonantOS-Bridge-Capability-Token': 'control', 'Content-Type': 'application/json' };
+  for (const [body, extra, status, code] of [['{', {}, 400, 'invalid-event'], ['"' + 'x'.repeat(1048576) + '"', {}, 400, 'invalid-event'], ['{}', { Origin: 'https://evil.test' }, 403, 'permission-denied']]) {
+    const result = await fetch(url, { method: 'POST', headers: { ...headers, ...extra }, body });
+    assert.equal(result.status, status);
+    assert.equal((await result.json()).code, code);
+  }
+  assert.equal(calls, 0);
+  const allowed = await fetch(url, { method: 'POST', headers: { ...headers, Origin: 'chrome-extension://test' }, body: '{}' });
+  assert.equal(allowed.status, 200);
+  assert.equal(calls, 1);
+});
+
+test('host-selected harness serializer closes safely and preserves exact OpenCode default bytes', async () => {
+  const { Writable } = await import('node:stream');
+  const { writeBridgeEventStream } = await import('../host/bridge-server.mjs');
+  const { createHarnessStreamSubscription } = await import('../host/harness-host-service.mjs');
+  for (const family of ['harness', undefined]) {
+    let text = '';
+    const response = new Writable({ write(chunk, _encoding, done) { text += chunk; done(); } });
+    response.writeHead = () => { response.headersSent = true; };
+    response.flushHeaders = () => {};
+    const reader = (async function* () { yield { type: 'error', data: { code: 'ownership-conflict', message: 'private-upstream-canary', token: 'private-upstream-canary' } }; })();
+    const sub = createHarnessStreamSubscription(reader);
+    if (family === undefined) await sub.close('runtime-unavailable');
+    await writeBridgeEventStream(response, { url: '/agent/events?sessionId=session', headers: {} }, sub, { terminalEventFamily: family });
+    if (family === 'harness') {
+      assert.match(text, /event: harness.close/);
+      assert.match(text, /"code":"ownership-conflict"/);
+      assert.doesNotMatch(text, /private-upstream-canary|token|OPENCODE|opencode/);
+    } else {
+      assert.equal(text, 'event: opencode.close\ndata: {"version":1,"sessionId":"session","source":"governed","event":{"type":"bridge.closed","properties":{"code":"OPENCODE_INTERNAL","error":"OpenCode boundary request failed."}}}\n\n');
+    }
+  }
+});
+
+test('harness origin denial and malformed HTTP bodies are side-effect free without sockets', async () => {
+  const { Writable, Readable } = await import('node:stream');
+  const { createBridgeRequestHandler } = await import('../host/bridge-server.mjs');
+  let calls = 0;
+  const handler = createBridgeRequestHandler({ bridgeToken: 'bridge', bridgeCapabilityTokens: { 'addon-runtime-control': 'control' }, extensionOrigin: 'chrome-extension://test',
+    routes: [{ method: 'POST', path: '/agent/session', loopbackHostOnly: true, errorFamily: 'harness', requiredCapability: 'addon-runtime-control', handler: () => { calls++; return {}; } }] });
+  for (const [body, origin, expectedStatus, code] of [['{', undefined, 400, 'invalid-event'], ['"' + 'x'.repeat(1048576) + '"', undefined, 400, 'invalid-event'], ['{}', 'https://evil.test', 403, 'permission-denied'], ['{}', 'chrome-extension://test', 200, undefined]]) {
+    const request = Readable.from([body]);
+    Object.assign(request, { method: 'POST', url: '/agent/session', socket: { localPort: 47773 }, rawHeaders: ['Host', '127.0.0.1:47773'], headers: { host: '127.0.0.1:47773', origin, 'x-resonantos-bridge-token': 'bridge', 'x-resonantos-bridge-capability-token': 'control' } });
+    let text = '', status;
+    const response = new Writable({ write(chunk, _encoding, done) { text += chunk; done(); } });
+    response.writeHead = value => { status = value; response.headersSent = true; };
+    await handler(request, response);
+    assert.equal(status, expectedStatus);
+    assert.equal(JSON.parse(text).code, code);
+  }
+  assert.equal(calls, 1);
+});
+
+test('harness GET bodies are rejected before registry or stream side effects', async () => {
+  const { Writable, Readable } = await import('node:stream');
+  const { createBridgeRequestHandler } = await import('../host/bridge-server.mjs');
+  let calls = 0;
+  const handler = createBridgeRequestHandler({ bridgeToken: 'bridge', bridgeCapabilityTokens: { 'addon-runtime-read': 'read' },
+    routes: ['/addons/registry', '/agent/events'].map(path => ({ method: 'GET', path, loopbackHostOnly: true, errorFamily: 'harness', requiredCapability: 'addon-runtime-read', handler: () => { calls++; return {}; } })) });
+  for (const url of ['/addons/registry', '/agent/events']) {
+    for (const framing of [{ 'content-length': '2' }, { 'transfer-encoding': 'chunked' }]) {
+      const request = Readable.from(['{}']);
+      Object.assign(request, { method: 'GET', url, socket: { localPort: 47773 }, rawHeaders: ['Host', '127.0.0.1:47773'], headers: { ...framing, host: '127.0.0.1:47773', 'x-resonantos-bridge-token': 'bridge', 'x-resonantos-bridge-capability-token': 'read' } });
+      let status, text = '';
+      const response = new Writable({ write(chunk, _encoding, done) { text += chunk; done(); } });
+      response.writeHead = value => { status = value; };
+      await handler(request, response);
+      assert.equal(status, 400, `${url} must refuse GET bodies`);
+      assert.equal(JSON.parse(text).code, 'invalid-event');
+    }
+  }
+  assert.equal(calls, 0);
+});
