@@ -13,6 +13,7 @@ export type Capability =
   | "ui-embedding"
   | "browser-control"
   | "agent-delegation"
+  | "agent-runtime"
   | "notifications"
   | "device-integration";
 
@@ -515,7 +516,80 @@ export interface AddOnMemoryAccessContract {
   directKnowledgeWriteAllowed: false;
 }
 
-export interface AddOnAgentRuntimeContract {
+export type HarnessOperation = "createSession" | "invoke" | "cancel" | "history" | "status" | "modelCatalog" | "selectModel";
+
+// Declarative proposals only: reviewed host adapters and bindings supply authority.
+export interface AddOnAgentRuntimeAdapterContract {
+  adapterVersion: 1;
+  adapterId: string;
+  endpoint?: string;
+  authScheme: "none" | "dsh-action-token" | "bearer";
+  credentialBinding?: string;
+  supportedOperations: HarnessOperation[];
+  contextRoleFidelity: "text-only" | "structured-messages";
+  toolCallbacks: false;
+}
+
+// One fixed vocabulary for public error types and runtime sanitization.
+export const HARNESS_PUBLIC_ERROR_MESSAGES = Object.freeze({
+  "invalid-manifest": "Invalid harness manifest.",
+  "unsupported-operation": "Operation unavailable.",
+  "invalid-event": "Invalid runtime event.",
+  "runtime-unavailable": "Runtime unavailable.",
+  "permission-denied": "Runtime permission denied.",
+  "ownership-conflict": "Runtime ownership changed.",
+  "session-not-found": "Runtime session unavailable.",
+  cancelled: "Runtime operation cancelled.",
+  "deadline-exceeded": "Runtime deadline exceeded.",
+} as const);
+
+export type HarnessPublicErrorCode = keyof typeof HARNESS_PUBLIC_ERROR_MESSAGES;
+
+export type HarnessPublicError = {
+  [Code in HarnessPublicErrorCode]: {
+    code: Code;
+    message: (typeof HARNESS_PUBLIC_ERROR_MESSAGES)[Code];
+  };
+}[HarnessPublicErrorCode];
+
+export interface HarnessProvenance {
+  addonId: string;
+  sessionId: string;
+  turnId: string;
+  bootEpoch: string;
+  generation: number;
+  sequence: number;
+}
+
+export type HarnessEvent = HarnessProvenance & (
+  | { type: "delta" | "final"; data: { text: string } }
+  | { type: "status"; data: { status: "starting" | "running" | "idle" | "unavailable" } }
+  | { type: "cancelled"; data: Record<string, never> }
+  | { type: "error"; data: HarnessPublicError }
+);
+
+// Read-only acknowledgement from the host; client storage is not governance.
+export interface HarnessRegistryProjection {
+  bootEpoch: string;
+  revision: number;
+  governanceActivated: boolean;
+  candidates: readonly AddOnManifest[];
+  installations: Readonly<Record<string, {
+    addonId: string;
+    installed: boolean;
+    enabled: boolean;
+    grantedCapabilities: readonly CapabilityGrant[];
+    disabledOperations: readonly HarnessOperation[];
+    hiddenSurfaceIds: readonly string[];
+  }>>;
+  slots: Readonly<Partial<Record<SystemSlotId, {
+    addonId: string | null;
+    generation: number;
+    available: boolean;
+  }>>>;
+}
+
+interface AddOnLegacyAgentRuntimeContract {
   invocationTool: string;
   chatAuthorLabel: string;
   displayNameSource: "manifest" | "runtime-profile";
@@ -526,6 +600,12 @@ export interface AddOnAgentRuntimeContract {
   outputFiltering: AddOnOutputFilteringMode;
   requiredCapabilities: Capability[];
 }
+
+// All adapter fields are present together, or absent for legacy runtimes.
+export type AddOnAgentRuntimeContract = AddOnLegacyAgentRuntimeContract & (
+  | AddOnAgentRuntimeAdapterContract
+  | { [Field in keyof AddOnAgentRuntimeAdapterContract]?: never }
+);
 
 export interface AddOnDeterministicSmokeTest {
   id: string;
