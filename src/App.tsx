@@ -1,8 +1,9 @@
 // Intent citation: docs/architecture/ADR-002-modular-codebase.md
 // Intent citation: docs/architecture/ADR-003-engineering-standards.md
 
-import { Suspense, lazy, startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
+import { Suspense, lazy, startTransition, useDeferredValue, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createHarnessClient } from "./core/harness-client";
+import { createHarnessChatRuntime, selectHarnessModel } from "./modules/chat/harness-turn";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import type {
   AddOnManifest,
@@ -105,7 +106,7 @@ import {
   toggleComposerDictation,
 } from "./modules/chat/composer-controller";
 import { saveChatMessageToArchiveIntake } from "./modules/chat/archive-intake-controller";
-import { executeChatTurn } from "./modules/chat/controller";
+import { executeChatTurn, primaryHarnessChatRoute } from "./modules/chat/controller";
 import { claimChatRun, releaseChatRun } from "./modules/chat/run-guard";
 import { StrategistChatRail } from "./modules/chat/StrategistChatRail";
 import { appendTranscriptEvent } from "./core/context-memory";
@@ -288,6 +289,10 @@ const errorMessageOf = (error: unknown, fallback: string): string =>
 
 export function App() {
   const [harnessClient] = useState(createHarnessClient);
+  const [harnessRuntime] = useState(() => harnessClient ? createHarnessChatRuntime(harnessClient) : undefined);
+  const harnessProjection = useSyncExternalStore(
+    harnessClient?.subscribe ?? (() => () => {}), harnessClient?.getSnapshot ?? (() => null),
+  );
   const surfaceMode = appSurfaceMode();
   const isFloatingChatSurface = surfaceMode === "floating-chat";
   const [loadState, setLoadState] = useState<LoadState>({ phase: "loading" });
@@ -655,6 +660,8 @@ export function App() {
     attachments,
     selectedChatModel,
   });
+  const harnessChatActive = primaryHarnessChatRoute({ projection: harnessProjection, state, thread: activeThread,
+    outgoing: composer }) === "harness";
   const chatSlotAvailable = systemSlotAvailable(state, allManifests, "chat-interface");
   const engineerSettingsConsoleActive = !recoveryModeActive && !chatSlotAvailable && currentSection === "settings";
   const chatInterfaceAvailable = recoveryModeActive || chatSlotAvailable || engineerSettingsConsoleActive;
@@ -1246,6 +1253,7 @@ export function App() {
     }
     try {
       await executeChatTurn({
+        harnessRuntime,
         snapshot: { state, bundled, sideloaded },
         activeThread,
         composer,
@@ -1335,6 +1343,7 @@ export function App() {
 
     try {
       await executeChatTurn({
+        harnessRuntime,
         snapshot: { state: stateWithThread, bundled, sideloaded },
         activeThread: thread,
         composer: "",
@@ -1424,6 +1433,7 @@ export function App() {
     }
     try {
       await executeChatTurn({
+        harnessRuntime,
         snapshot: { state: nextState, bundled, sideloaded },
         activeThread: thread,
         composer: "",
@@ -1880,6 +1890,15 @@ export function App() {
     });
   };
   const handleChatModelChange = (model: string) => {
+    if (harnessChatActive && activeThread && harnessRuntime) {
+      if (model === "Choose host model…") {
+        const choice = window.prompt("Enter the harness provider/model. Availability is checked by the host.");
+        if (choice) void selectHarnessModel(harnessRuntime, activeThread.id, choice)
+          .then(() => setChatNotice("Model selection acknowledged by the host."))
+          .catch(() => setChatNotice("Host model selection unavailable."));
+      }
+      return;
+    }
     setSelectedChatModel(model);
     if (activeThread?.owningAgentId === "hermes.agent") {
       updateHermesModelMetadata(model, selectableChatModels);
@@ -2576,7 +2595,7 @@ export function App() {
         channels={state.channels}
         chatBusy={chatBusy}
         chatCanStop={chatRunPhase !== "idle"}
-        chatSupportsAbort={activeRoute.executionAdapter?.supportsAbort === true}
+        chatSupportsAbort={harnessChatActive || activeRoute.executionAdapter?.supportsAbort === true}
         chatRunPhase={chatRunPhase}
         chatRunEvents={chatRunEvents}
         chatNotice={chatNotice}
@@ -2584,8 +2603,8 @@ export function App() {
         attachments={attachments}
         dictating={dictating}
         dictationAvailable={dictationAvailable}
-        activeChatModel={activeChatModel}
-        availableModels={selectableChatModels.length ? selectableChatModels : activeProvider?.allowedModels ?? []}
+        activeChatModel={harnessChatActive ? "Host-selected model" : activeChatModel}
+        availableModels={harnessChatActive ? ["Host-selected model", "Choose host model…"] : selectableChatModels.length ? selectableChatModels : activeProvider?.allowedModels ?? []}
         thinkingDepth={thinkingDepth}
         contextUsageLabel={contextUsageLabel}
         contextUsageRatio={contextUsageRatio}
@@ -2705,6 +2724,7 @@ export function App() {
         onSend={() => void sendStrategistMessage()}
         onStopGeneration={() => {
           stopChatGenerationAction({
+            harnessRuntime,
             chatBusy,
             activeThread,
             activeChatRunTokenRef,

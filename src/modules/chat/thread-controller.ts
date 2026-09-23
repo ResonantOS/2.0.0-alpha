@@ -18,6 +18,7 @@ import {
 } from "../../core/context-memory";
 import { abortProviderServiceChatCompletion } from "../../core/runtime";
 import { activateChatThread } from "../strategist/controller";
+import { cancelRegisteredHarnessTurn, type HarnessChatRuntime } from "./harness-turn";
 import type { ComposerAttachment } from "./types";
 
 type RuntimeStateUpdater = (updater: (current: ResonantShellState) => ResonantShellState) => void;
@@ -708,6 +709,7 @@ export function selectChatAgentAction({
 
 export function stopChatGenerationAction({
   chatBusy,
+  harnessRuntime,
   activeThread,
   activeChatRunTokenRef,
   updateRuntimeState,
@@ -717,6 +719,7 @@ export function stopChatGenerationAction({
   setChatNotice,
 }: {
   chatBusy: boolean;
+  harnessRuntime?: HarnessChatRuntime;
   activeThread: ConversationThread | null;
   activeChatRunTokenRef: MutableRefObject<string | null>;
   updateRuntimeState: RuntimeStateUpdater;
@@ -731,6 +734,18 @@ export function stopChatGenerationAction({
 
   const stoppedRunToken = activeChatRunTokenRef.current;
   activeChatRunTokenRef.current = null;
+  const harnessTurn = harnessRuntime?.active;
+  if (harnessRuntime && harnessTurn && harnessTurn.runToken === stoppedRunToken) {
+    harnessTurn.interrupt();
+    harnessTurn.interrupted = true;
+    harnessTurn.abort.abort();
+    cancelRegisteredHarnessTurn(harnessRuntime, harnessTurn);
+    setChatBusy(false);
+    setChatRunPhase("interrupted");
+    setAgentActivityLabel("Response interrupted. You can send the correction now.");
+    setChatNotice("Response interrupted. Partial assistant message kept in the chat.");
+    return;
+  }
   if (stoppedRunToken) {
     void abortProviderServiceChatCompletion(stoppedRunToken);
   }
