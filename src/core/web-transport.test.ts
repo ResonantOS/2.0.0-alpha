@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as transport from "./web-transport";
+import { createHarnessClient } from "./harness-client";
+import { HARNESS_PUBLIC_ERROR_MESSAGES } from "./contracts";
 
 const baseUrl = "http://127.0.0.1:47773";
 const diagnostics = "provider_diagnostics";
@@ -9,6 +11,8 @@ const capabilityError = "Bridge route requires provider-diagnostics-read capabil
 const issuedTokens = {
   "provider-diagnostics-read": "diagnostics-token-test",
   "provider-model-invoke": "model-token-test",
+  "addon-runtime-read": "harness-read-token-test",
+  "addon-runtime-control": "harness-control-token-test",
 };
 const secrets = ["bridge-token-test", "bootstrap-token-test", ...Object.values(issuedTokens), "fresh-token-test"];
 type Config = { bridgeUrl?: string; httpsBridgeUrl?: string; bridgeToken?: string; capabilityBootstrapToken?: string };
@@ -125,12 +129,13 @@ describe("web-mode capability transport", () => {
   });
 
   it("D9 derives sorted unique capabilities from a copied route map", () => {
-    expect(transport.WEB_TRANSPORT_CAPABILITIES).toEqual(["provider-diagnostics-read", "provider-model-invoke"]);
+    expect(transport.WEB_TRANSPORT_CAPABILITIES).toEqual(["addon-runtime-control", "addon-runtime-read", "provider-diagnostics-read", "provider-model-invoke"]);
     const routes = transport.__webTransportRoutesForTests();
     expect(transport.WEB_TRANSPORT_CAPABILITIES).toEqual([...new Set(routes.map((route) => route.capability))].sort());
     expect(routes).toEqual([
       { command: diagnostics, method: "GET", path: "/providers/status", capability: "provider-diagnostics-read" },
       { command: chat, method: "POST", path: "/augmentor/chat", capability: "provider-model-invoke" },
+      ...harnessRoutes.map(([command, method, path, capability]) => ({ command, method, path, capability })),
     ]);
     routes[0].capability = "changed-copy";
     expect(transport.__webTransportRoutesForTests()[0].capability).toBe("provider-diagnostics-read");
@@ -293,3 +298,152 @@ describe("web-mode capability transport", () => {
   expect(routeCalls()).toHaveLength(1);
   expect(JSON.parse(String(routeCalls()[0][1]?.body))).toEqual({ workload: "augmentor-chat", surface: "react-shell", model: "test", thinkingDepth: "high", systemPrompt: "trusted", messages: args.messages, contextSources });
  });
+
+const harnessRoutes = [
+  ["harness_registry", "GET", "/addons/registry", "addon-runtime-read"],
+  ["harness_install", "POST", "/addons/install", "addon-runtime-control"],
+  ["harness_grants", "POST", "/addons/grants", "addon-runtime-control"],
+  ["harness_remove", "POST", "/addons/remove", "addon-runtime-control"],
+  ["harness_assign_slot", "POST", "/addons/slots/assign", "addon-runtime-control"],
+  ["harness_session", "POST", "/agent/session", "addon-runtime-control"],
+  ["harness_turn", "POST", "/agent/turn", "addon-runtime-control"],
+  ["harness_cancel", "POST", "/agent/cancel", "addon-runtime-control"],
+  ["harness_events", "GET", "/agent/events", "addon-runtime-read"],
+  ["harness_history", "POST", "/agent/history", "addon-runtime-read"],
+  ["harness_status", "POST", "/agent/status", "addon-runtime-read"],
+  ["harness_select_model", "POST", "/agent/select-model", "addon-runtime-control"],
+];
+const session = { addonId: "addon.demo", sessionId: "session-1", bootEpoch: "boot-1", generation: 2 };
+
+describe("harness transport", () => {
+  it("commands use scoped headers and never persist or put credentials in URLs", async () => {
+    const storage = vi.fn();
+    vi.stubGlobal("localStorage", { setItem: storage });
+    vi.stubGlobal("sessionStorage", { setItem: storage });
+    const database = vi.fn();
+    vi.stubGlobal("indexedDB", { open: database });
+    const log = vi.spyOn(console, "log");
+    try {
+      for (const [command, method, path, capability] of harnessRoutes.filter(([name]) => name !== "harness_events")) {
+        const args = { addonId: "addon.demo", expectedRevision: 7 };
+        await transport.webInvoke(command, args);
+        const call = routeCalls().at(-1)!;
+        expect(call[0]).toBe(`${baseUrl}${path}`);
+        expect(call[1]?.method).toBe(method);
+        expect(headers(call).get(capabilityHeader)).toBe(issuedTokens[capability as keyof typeof issuedTokens]);
+        expect(headers(call).get("X-ResonantOS-Bridge-Token")).toBe("bridge-token-test");
+        expect(call[1]?.body).toBe(method === "POST" ? JSON.stringify(args) : undefined);
+        expect(call[1]?.redirect).toBe("error");
+      }
+      expect(storage).not.toHaveBeenCalled();
+      expect(database).not.toHaveBeenCalled();
+      expect(log).not.toHaveBeenCalled();
+    } finally { log.mockRestore(); }
+  });
+
+  it("reads split UTF-8 SSE with header authentication and cancels the reader on early exit", async () => {
+    const storage = vi.fn();
+    vi.stubGlobal("localStorage", { setItem: storage });
+    vi.stubGlobal("sessionStorage", { setItem: storage });
+    const database = vi.fn();
+    vi.stubGlobal("indexedDB", { open: database });
+    const event = { ...session, turnId: "turn-1", sequence: 1, type: "delta", data: { text: "héllo" } };
+    const bytes = new TextEncoder().encode(`: heartbeat\r\ndata: ${JSON.stringify(event)}\r\n\r\n`);
+    const cancel = vi.fn();
+    fetchMock.mockImplementation(async (url) => String(url).endsWith("/api/capability-tokens") ? bootstrap() :
+      new Response(new ReadableStream({ start(controller) {
+        for (const byte of bytes) controller.enqueue(new Uint8Array([byte]));
+      }, cancel }), { headers: { "Content-Type": "text/event-stream" } }));
+    const abort = new AbortController();
+    for await (const frame of transport.webHarnessEvents(session, { signal: abort.signal })) {
+      expect(frame).toEqual(event);
+      break;
+    }
+    const call = routeCalls()[0];
+    expect(new URL(String(call[0])).pathname).toBe("/agent/events");
+    expect(Object.fromEntries(new URL(String(call[0])).searchParams)).toEqual({ ...session, generation: "2" });
+    for (const secret of secrets) expect(String(call[0])).not.toContain(secret);
+    expect(headers(call).get(capabilityHeader)).toBe(issuedTokens["addon-runtime-read"]);
+    expect(headers(call).get("X-ResonantOS-Bridge-Token")).toBe("bridge-token-test");
+    expect(call[1]?.signal).toBe(abort.signal);
+    expect(call[1]?.redirect).toBe("error");
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(storage).not.toHaveBeenCalled();
+    expect(database).not.toHaveBeenCalled();
+  });
+
+  it("preserves public harness HTTP and terminal SSE errors without retry", async () => {
+    const error = { code: "ownership-conflict", error: "Runtime ownership changed." };
+    fetchMock.mockImplementation(async (url) => String(url).endsWith("/api/capability-tokens") ? bootstrap() : response({ ok: false, ...error }, 409));
+    await expect(transport.webInvoke("harness_assign_slot")).rejects.toMatchObject({ code: error.code, message: error.error });
+    expect(routeCalls()).toHaveLength(1);
+    await expect((async () => { for await (const _ of transport.webHarnessEvents(session)) { /* empty */ } })())
+      .rejects.toMatchObject({ code: error.code, message: error.error });
+    fetchMock.mockImplementation(async () => new Response(`event: harness.close\ndata: ${JSON.stringify({ sessionId: session.sessionId, ...error })}\n\n`));
+    await expect((async () => { for await (const _ of transport.webHarnessEvents(session)) { /* empty */ } })())
+      .rejects.toMatchObject({ code: error.code, message: error.error });
+  });
+});
+
+
+describe("harness review regressions", () => {
+  const frame = { ...session, turnId: "turn-1", sequence: 1, type: "delta", data: { text: "hello" } };
+  const collect = async () => {
+    const frames = [];
+    for await (const item of transport.webHarnessEvents(session)) frames.push(item);
+    return frames;
+  };
+
+  it("composes the default client with the bridge envelope without projecting ok", async () => {
+    const projected = { bootEpoch: "boot-1", revision: 1, governanceActivated: true,
+      candidates: [], installations: {}, slots: {} };
+    fetchMock.mockImplementation(async url => String(url).endsWith("/api/capability-tokens")
+      ? bootstrap() : response({ ok: true, ...projected }));
+    const client = createHarnessClient();
+    expect(await client.refresh()).toEqual(projected);
+    expect(client.getSnapshot()).toEqual(projected);
+  });
+
+  it.each([
+    { ...frame, extra: "unexpected" },
+    { ...frame, data: { text: "hello", extra: "unexpected" } },
+    { ...frame, type: "cancelled", data: { text: "unexpected" } },
+    { ...frame, type: "status", data: { status: "running", extra: true } },
+    { ...frame, type: "error", data: { code: "permission-denied", message: HARNESS_PUBLIC_ERROR_MESSAGES["permission-denied"], extra: true } },
+    { ...frame, sessionId: "" },
+    { ...frame, addonId: "not-an-addon" },
+    { ...frame, data: { text: "é".repeat(32769) } },
+  ])("rejects frames outside the host event schema (%#)", async invalid => {
+    fetchMock.mockImplementation(async url => String(url).endsWith("/api/capability-tokens")
+      ? bootstrap() : new Response(`data: ${JSON.stringify(invalid)}\n\n`));
+    await expect(collect()).rejects.toMatchObject({ code: "invalid-event" });
+  });
+
+  it("accepts every host event type with exact public error messages", async () => {
+    const frames = [frame, { ...frame, type: "final" }, { ...frame, type: "cancelled", data: {} },
+      { ...frame, type: "status", data: { status: "running" } },
+      ...Object.entries(HARNESS_PUBLIC_ERROR_MESSAGES).map(([code, message]) => ({ ...frame, type: "error", data: { code, message } }))];
+    fetchMock.mockImplementation(async url => String(url).endsWith("/api/capability-tokens")
+      ? bootstrap() : new Response(frames.map(item => `data: ${JSON.stringify(item)}\n\n`).join("")));
+    expect(await collect()).toEqual(frames);
+  });
+
+  it("recovers a harness capability rotation with one retry only after the token changes", async () => {
+    fetchMock.mockResolvedValueOnce(bootstrap())
+      .mockResolvedValueOnce(response({ ok: false, code: "permission-denied", error: HARNESS_PUBLIC_ERROR_MESSAGES["permission-denied"] }, 403))
+      .mockResolvedValueOnce(bootstrap({ ...issuedTokens, "addon-runtime-control": "fresh-token-test" }))
+      .mockResolvedValueOnce(response({ ok: true, turnId: "turn-1" }));
+    expect(await transport.webInvoke("harness_turn", { session, input: {} })).toEqual({ turnId: "turn-1" });
+    expect(bootstrapCalls()).toHaveLength(2);
+    expect(routeCalls()).toHaveLength(2);
+    expect(headers(routeCalls()[1]).get(capabilityHeader)).toBe("fresh-token-test");
+  });
+
+  it("does not replay a harness denial when the scoped token did not change", async () => {
+    fetchMock.mockImplementation(async url => String(url).endsWith("/api/capability-tokens")
+      ? bootstrap() : response({ ok: false, code: "permission-denied", error: HARNESS_PUBLIC_ERROR_MESSAGES["permission-denied"] }, 403));
+    await expect(transport.webInvoke("harness_turn")).rejects.toMatchObject({ code: "permission-denied" });
+    expect(bootstrapCalls()).toHaveLength(2);
+    expect(routeCalls()).toHaveLength(1);
+  });
+});

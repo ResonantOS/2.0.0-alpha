@@ -1,7 +1,7 @@
 // Intent citation: docs/architecture/ADR-026-minimal-kernel-replaceable-default-addons.md
 
 import { describe, expect, it } from "vitest";
-import type { AddOnManifest, CapabilityGrant, SystemSlotId } from "../../core/contracts";
+import type { AddOnManifest, CapabilityGrant, HarnessRegistryProjection, SystemSlotId } from "../../core/contracts";
 import { buildDefaultState } from "../../core/defaults";
 import { applyFirstRunRecommendedAddOns } from "./controller";
 import { activeSystemSlotProvider, selectedSystemSlotProviderId, systemSlotAvailable } from "./system-slots";
@@ -225,5 +225,54 @@ describe("system slot replacement runtime", () => {
     };
 
     expect(activeSystemSlotProvider(state, [first, selected], "memory-system")?.manifest.id).toBe(first.id);
+  });
+});
+
+const projectionFor = (slots: HarnessRegistryProjection["slots"]): HarnessRegistryProjection => ({
+  bootEpoch: "boot-1", revision: 4, governanceActivated: true, candidates: [], installations: {}, slots,
+});
+
+describe("host-managed system slots", () => {
+  it.each([
+    { addonId: null, available: false, generation: 1 },
+    { addonId: "addon.local", available: false, generation: 2 },
+  ])("managed vacancy overrides eligible local defaults: %j", (slot) => {
+    const manifest = manifestForSlot("addon.local", "chat-interface", "chat-interface");
+    const state = applyFirstRunRecommendedAddOns(buildDefaultState([manifest]), [manifest], [manifest.id]);
+    const projection = projectionFor({ "chat-interface": slot });
+    expect(activeSystemSlotProvider(state, [manifest], "chat-interface", projection)).toBeNull();
+    expect(systemSlotAvailable(state, [manifest], "chat-interface", projection)).toBe(false);
+    expect(systemSlotAvailable(state, [], "chat-interface", projection)).toBe(false);
+    expect(systemSlotAvailable(state, [manifest], "memory-system", projection)).toBe(true);
+    expect(activeSystemSlotProvider(state, [manifest], "chat-interface", projectionFor({}))?.manifest.id).toBe(manifest.id);
+  });
+
+  it("requires host-owner metadata and installation before reporting a usable provider", () => {
+    const host = manifestForSlot("addon.host", "primary-agent", "agent-runtime");
+    const local = manifestForSlot("addon.local", "primary-agent", "agent-delegation");
+    const state = applyFirstRunRecommendedAddOns(buildDefaultState([local]), [local], [local.id]);
+    const projection = { ...projectionFor({ "primary-agent": { addonId: host.id, generation: 2, available: true } }),
+      installations: { [host.id]: { addonId: host.id, installed: true, enabled: true,
+        grantedCapabilities: [], disabledOperations: [], hiddenSurfaceIds: [] } } };
+    expect(selectedSystemSlotProviderId(state, "primary-agent", projection)).toBe(host.id);
+    expect(activeSystemSlotProvider(state, [local], "primary-agent", projection)).toBeNull();
+    expect(systemSlotAvailable(state, [local], "primary-agent", projection)).toBe(false);
+    expect(systemSlotAvailable(state, [local], "primary-agent", { ...projection, candidates: [host] })).toBe(true);
+    expect(systemSlotAvailable(state, [host], "primary-agent", projection)).toBe(true);
+    expect(systemSlotAvailable(state, [host], "primary-agent", { ...projection, installations: {} })).toBe(false);
+  });
+
+  it("uses only the projected owner and installation despite stale local grants or selection", () => {
+    const local = manifestForSlot("addon.local", "primary-agent", "agent-delegation");
+    const host = manifestForSlot("addon.host", "primary-agent", "agent-runtime");
+    const state = applyFirstRunRecommendedAddOns(buildDefaultState([local]), [local], [local.id]);
+    const installation = { addonId: host.id, installed: true, enabled: true,
+      grantedCapabilities: [{ ...grant("agent-runtime"), granted: true }], disabledOperations: [], hiddenSurfaceIds: [] };
+    const projection = { ...projectionFor({ "primary-agent": { addonId: host.id, generation: 4, available: true } }),
+      candidates: [host], installations: { [host.id]: installation } };
+    expect(selectedSystemSlotProviderId(state, "primary-agent", projection)).toBe(host.id);
+    expect(activeSystemSlotProvider(state, [local], "primary-agent", projection)).toEqual({ manifest: host, installation });
+    expect(systemSlotAvailable(state, [], "primary-agent", projection)).toBe(true);
+    expect(selectedSystemSlotProviderId(state, "primary-agent", projectionFor({ "primary-agent": { addonId: null, generation: 5, available: false } }))).toBeUndefined();
   });
 });
