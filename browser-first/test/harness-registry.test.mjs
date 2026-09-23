@@ -231,3 +231,69 @@ test('unreadable and malformed durable state fail closed instead of resetting co
     await assert.rejects(registry.install(manifest(), { enabled: true }), { code: 'runtime-unavailable' });
   }
 });
+
+test('legacy import creates consent candidates only', async () => {
+  const registry = await open(memoryStore()), value = manifest();
+  assert.equal(typeof registry.importLegacy, 'function', 'registry must import legacy records as candidates');
+  await registry.importLegacy([{ manifest: value, enabled: true, grantedCapabilities: value.requestedCapabilities }]);
+  const candidate = registry.snapshot().installations[value.id];
+  assert.equal(candidate.enabled, false);
+  assert.ok(candidate.grantedCapabilities.every(grant => !grant.granted));
+  await assert.rejects(assign(registry), { code: 'permission-denied' });
+  await registry.setEnabled(value.id, true, { expectedRevision: registry.snapshot().revision });
+  await assert.rejects(assign(registry), { code: 'permission-denied' });
+  await registry.setGrants(value.id, value.requestedCapabilities, { consent: true, expectedRevision: registry.snapshot().revision });
+  await assign(registry);
+  assert.equal(registry.authorize('primary-agent', value.id).addonId, value.id);
+});
+
+test('selected add-on grant batches are atomic, including invalid and stale batches', async () => {
+  const registry = await open(memoryStore()), value = manifest();
+  await registry.install(value, { enabled: true });
+  const before = registry.snapshot();
+  const grants = value.requestedCapabilities.slice(0, 2).map(g => ({ ...g, granted: true }));
+  await assert.rejects(registry.setGrants(value.id, [...grants, { ...grants[0], capability: 'undeclared' }], { consent: true, expectedRevision: before.revision }), { code: 'permission-denied' });
+  assert.deepEqual(registry.snapshot(), before, 'invalid batch grants nothing');
+  await assert.rejects(registry.setGrants(value.id, grants, { consent: true, expectedRevision: 0 }), { code: 'ownership-conflict' });
+  assert.deepEqual(registry.snapshot(), before, 'stale batch grants nothing');
+  await registry.setGrants(value.id, grants, { consent: true, expectedRevision: before.revision });
+  assert.equal(registry.snapshot().revision, before.revision + 1);
+  assert.deepEqual(registry.snapshot().installations[value.id].grantedCapabilities.filter(g => g.granted), grants);
+});
+
+test('ordinary add-ons can install, disable, enable, grant and remove without runtime bindings', async () => {
+  for (const name of ['browser', 'hermes']) {
+    const value = JSON.parse(await readFile(new URL(`../../public/addons/${name}.json`, import.meta.url)));
+    const registry = await open(memoryStore());
+    await registry.install(value, { enabled: true });
+    await registry.setEnabled(value.id, false, { expectedRevision: 1 });
+    assert.equal(registry.snapshot().installations[value.id].enabled, false);
+    await registry.setEnabled(value.id, true, { expectedRevision: 2 });
+    await registry.setGrants(value.id, value.requestedCapabilities.map(g => ({ ...g, granted: true })), { consent: true, expectedRevision: 3 });
+    assert.ok(registry.snapshot().installations[value.id].grantedCapabilities.every(g => g.granted));
+    await registry.remove(value.id);
+    assert.equal(registry.snapshot().installations[value.id], undefined);
+  }
+});
+
+test('legacy import never overwrites host consent or ownership and survives restart without grants', async () => {
+  const store = memoryStore(), registry = await open(store), value = manifest();
+  await registry.importLegacy([{ manifest: value, enabled: true, grantedCapabilities: value.requestedCapabilities }]);
+  const restored = await open(store);
+  assert.equal(restored.snapshot().installations[value.id].enabled, false);
+  assert.ok(restored.snapshot().installations[value.id].grantedCapabilities.every(g => !g.granted));
+  await installGranted(restored, value);
+  await assign(restored);
+  const before = restored.snapshot();
+  await restored.importLegacy([{ manifest: value, enabled: false, grantedCapabilities: [] }]);
+  assert.deepEqual(restored.snapshot().installations, before.installations);
+  assert.deepEqual(restored.snapshot().slots, before.slots);
+});
+
+test('failed persistence cannot partially commit a grant batch', async () => {
+  const store = memoryStore(), registry = await open(store), value = manifest();
+  await registry.install(value, { enabled: true });
+  store.write = async () => { throw new Error('disk unavailable'); };
+  await assert.rejects(registry.setGrants(value.id, value.requestedCapabilities, { consent: true, expectedRevision: 1 }), { code: 'runtime-unavailable' });
+  assert.ok(registry.snapshot().installations[value.id].grantedCapabilities.every(g => !g.granted));
+});

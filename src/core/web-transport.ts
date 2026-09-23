@@ -36,6 +36,7 @@ const commandRouteMap: Record<string, CommandRoute> = {
   harness_registry: { method: "GET", path: "/addons/registry", capability: "addon-runtime-read" },
   harness_install: { method: "POST", path: "/addons/install", capability: "addon-runtime-control" },
   harness_grants: { method: "POST", path: "/addons/grants", capability: "addon-runtime-control" },
+  harness_enabled: { method: "POST", path: "/addons/enabled", capability: "addon-runtime-control" },
   harness_remove: { method: "POST", path: "/addons/remove", capability: "addon-runtime-control" },
   harness_assign_slot: { method: "POST", path: "/addons/slots/assign", capability: "addon-runtime-control" },
   harness_session: { method: "POST", path: "/agent/session", capability: "addon-runtime-control" },

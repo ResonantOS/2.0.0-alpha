@@ -51,6 +51,7 @@ const requests = async () => [
   ['/addons/registry', {}],
   ['/addons/install', { manifest: await example('provider-chat-demo'), enabled: true }],
   ['/addons/grants', { addonId: ref.addonId, grants: [], consent: true, expectedRevision: 0 }],
+  ['/addons/enabled', { addonId: ref.addonId, enabled: false, expectedRevision: 0 }],
   ['/addons/remove', { addonId: ref.addonId }],
   ['/addons/slots/assign', { slot: 'primary-agent', addonId: ref.addonId, expectedGeneration: 0 }],
   ['/agent/session', { addonId: ref.addonId }],
@@ -60,6 +61,38 @@ const requests = async () => [
   ['/agent/history', { session: ref }], ['/agent/status', { session: ref }],
   ['/agent/select-model', { session: ref, model: { provider: 'test', model: 'test' } }],
 ];
+
+test('ordinary add-ons without agentRuntime have a host acknowledgement projection', async t => {
+  const manifest = JSON.parse(await readFile(new URL('../../public/addons/browser.json', import.meta.url)));
+  assert.equal(manifest.agentRuntime, undefined);
+  // Seed a committed host installation to isolate projection from the registry
+  // install eligibility change required by 2B-a. This is not a legacy import.
+  const f = await fixture(t, { store: {
+    read: async () => ({ version: 1, phase: 'committed', state: {
+      revision: 1, governanceActivated: false, slots: {},
+      installations: { [manifest.id]: {
+        manifest, enabled: true,
+        grants: manifest.requestedCapabilities.map(grant => ({ ...grant, granted: false })),
+      } },
+    } }),
+    write: async () => {},
+  } });
+  assert.equal(f.host.registry.snapshot().installations[manifest.id].enabled, true);
+  const result = await f.call('/addons/registry');
+  assert.equal(result.status, 200, 'ordinary add-ons must be readable through the shared host acknowledgement projection');
+  assert.deepEqual(result.payload.installations[manifest.id].supportedOperations, []);
+  assert.ok(result.payload.installations[manifest.id].grantedCapabilities.every(grant => !grant.granted));
+  const disabled = await f.call('/addons/enabled', { addonId: manifest.id, enabled: false, expectedRevision: 1 });
+  assert.equal(disabled.status, 200);
+  assert.deepEqual(disabled.payload.installations[manifest.id].disabledOperations, []);
+  const enabled = await f.call('/addons/enabled', { addonId: manifest.id, enabled: true, expectedRevision: 2 });
+  assert.equal(enabled.status, 200);
+  const granted = await f.call('/addons/grants', { addonId: manifest.id, grants: manifest.requestedCapabilities.map(g => ({ ...g, granted: true })), consent: true, expectedRevision: 3 });
+  assert.equal(granted.status, 200);
+  assert.ok(granted.payload.installations[manifest.id].grantedCapabilities.every(g => g.granted));
+  assert.equal((await f.call('/addons/remove', { addonId: manifest.id })).status, 200);
+  assert.equal((await f.call('/addons/install', { manifest, enabled: false })).status, 200);
+});
 
 test('all harness routes enforce transport and add-on authority', async t => {
   const f = await fixture(t);
@@ -435,4 +468,22 @@ test('approved DSH composition exposes authorized operations and rejects malform
   assert.equal((await f.call('/addons/remove', { addonId: manifest.id })).payload.code, 'ownership-conflict');
   assert.equal((await f.call('/addons/slots/assign', { slot: 'primary-agent', addonId: null, expectedGeneration: 1, replace: true })).status, 200);
   assert.equal((await f.call('/addons/remove', { addonId: manifest.id })).status, 200);
+});
+
+test('enabled route validates shape and revision before changing state', async t => {
+  const f = await fixture(t), manifest = await installed(f, false);
+  const before = f.host.registry.snapshot();
+  for (const body of [
+    { addonId: manifest.id, enabled: false },
+    { addonId: manifest.id, enabled: 'false', expectedRevision: 1 },
+    { addonId: manifest.id, enabled: false, expectedRevision: -1 },
+    { addonId: manifest.id, enabled: false, expectedRevision: 0 },
+  ]) {
+    const result = await f.call('/addons/enabled', body);
+    assert.ok([400, 409].includes(result.status), 'invalid enable command must fail validation');
+    assert.deepEqual(f.host.registry.snapshot(), before);
+  }
+  const result = await f.call('/addons/enabled', { addonId: manifest.id, enabled: false, expectedRevision: 1 });
+  assert.equal(result.status, 200);
+  assert.equal(result.payload.installations[manifest.id].enabled, false);
 });

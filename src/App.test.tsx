@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AddOnCategory,
+  CapabilityGrant,
   AddOnManifest,
   ArchiveAiMemoryBuildJobSummary,
   ArchiveQueuedIngestRequest,
@@ -14,6 +15,7 @@ import type {
   ResonantShellState,
 } from "./core/contracts";
 import { buildDefaultState } from "./core/defaults";
+import * as runtimeModule from "./core/runtime";
 import * as harnessClients from "./core/harness-client";
 import { ArchiveReviewDesk } from "./modules/archive/ArchiveReviewDesk";
 
@@ -1498,8 +1500,23 @@ describe("App boot flow", () => {
   });
 
   beforeEach(() => {
-    harnessInvokeMock.mockReset().mockResolvedValue({
+    let hostState: harnessClients.HarnessProjection = {
       bootEpoch: "app-boot", revision: 0, governanceActivated: false, candidates: [], installations: {}, slots: {},
+    };
+    harnessInvokeMock.mockReset().mockImplementation(async (command, args) => {
+      const next = structuredClone(hostState);
+      if (command === "harness_install") next.installations = { ...next.installations, [args.manifest.id]: {
+        addonId: args.manifest.id, installed: true, enabled: args.enabled,
+        grantedCapabilities: args.manifest.requestedCapabilities.map((g: CapabilityGrant) => ({ ...g, granted: false })), disabledOperations: [], hiddenSurfaceIds: [],
+      } };
+      if (command === "harness_enabled") next.installations = { ...next.installations, [args.addonId]: { ...next.installations[args.addonId], enabled: args.enabled } };
+      if (command === "harness_grants") next.installations = { ...next.installations, [args.addonId]: {
+        ...next.installations[args.addonId], grantedCapabilities: next.installations[args.addonId].grantedCapabilities.map(g => args.grants.find((candidate: CapabilityGrant) => candidate.capability === g.capability) ?? g),
+      } };
+      if (command === "harness_remove") next.installations = Object.fromEntries(Object.entries(next.installations).filter(([id]) => id !== args.addonId));
+      if (command !== "harness_registry") next.revision++;
+      hostState = next;
+      return next;
     });
     window.history.replaceState({}, "", "/");
     class ResizeObserverMock {
@@ -3273,6 +3290,95 @@ describe("App boot flow", () => {
     expect(requestBrowserVisibleHostCommandMock).not.toHaveBeenCalledWith(expect.objectContaining({ type: "open_url" }));
     expect(removedExtensionFolderSelectionMock).not.toHaveBeenCalled();
     expect(removedBrowserProbeMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["install", "disable", "enable", "grant", "batch", "remove"] as const)(
+    "rendered add-on %s denial changes no displayed consent", async action => {
+      const state = buildDefaultState(manifests);
+      state.uiPreferences.activeSection = "addons";
+      const addonId = action === "batch" ? "addon.browser" : "addon.obsidian";
+      const manifest = manifests.find(item => item.id === addonId)!;
+      const installation = state.installations[addonId];
+      installation.installed = action !== "install";
+      installation.enabled = action !== "install" && action !== "enable";
+      installation.status = action === "install" ? "available" : action === "enable" ? "disabled" : "enabled";
+      installation.grantedCapabilities = installation.grantedCapabilities.map(g => ({ ...g, granted: false }));
+      const snapshot: harnessClients.HarnessProjection = { bootEpoch: "app-boot", revision: 3, governanceActivated: false, candidates: [], slots: {}, installations:
+        action === "install" ? {} : { [addonId]: { ...installation, disabledOperations: [], hiddenSurfaceIds: [] } } };
+      const pending = deferred<harnessClients.HarnessProjection>();
+      harnessInvokeMock.mockImplementation(command => command === "harness_registry" ? Promise.resolve(snapshot) : pending.promise);
+      hydrateStateMock.mockResolvedValueOnce(state);
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+      try {
+        const { container } = render(<App />);
+        await screen.findAllByText(manifest.name);
+        const card = Array.from(container.querySelectorAll(".addon-card")).find(element => element.textContent?.includes(manifest.name))! as HTMLElement;
+        fireEvent.click(card);
+        const displayed = () => ({ card: card.textContent, grants: Array.from(container.querySelectorAll(".grant-chip")).map(element => ({ text: element.textContent, granted: element.classList.contains("granted") })) });
+        const before = displayed();
+        if (action === "remove") fireEvent.click(screen.getByRole("button", { name: `Uninstall ${manifest.name}` }));
+        else if (action === "grant") fireEvent.click(container.querySelector(".grant-chip")!);
+        else fireEvent.click(within(card).getByRole("button", { name: action === "batch" ? "Install and grant browser access" : action === "install" ? "Install" : action === "enable" ? "Enable" : "Disable" }));
+        const command = action === "install" ? "harness_install" : action === "remove" ? "harness_remove" : action === "batch" || action === "grant" ? "harness_grants" : "harness_enabled";
+        await waitFor(() => expect(harnessInvokeMock).toHaveBeenCalledWith(command, expect.any(Object)));
+        expect(displayed()).toEqual(before);
+        await act(async () => pending.reject(new Error("Host denied consent")));
+        expect(displayed()).toEqual(before);
+      } finally { confirm.mockRestore(); }
+    },
+  );
+
+  it.each([
+    ["browser", "Install and grant browser access"],
+    ["obsidian", "Connect workspace"],
+    ["opencode", "Grant OpenCode Access"],
+    ["paperclip", "Grant Paperclip Access"],
+    ["hermes", "Grant Hermes Access"],
+  ] as const)("all add-on and quick-grant actions use host transactions: %s denial preserves displayed consent", async (section, button) => {
+    const extra = createManifest("addon.hermes", "Hermes", "agent");
+    extra.requestedCapabilities = ["shell", "ui-embedding"].map(capability => ({ capability, scope: "system", revocationBehavior: "hard-stop", granted: false })) as CapabilityGrant[];
+    const catalog = section === "hermes" ? [...manifests, extra] : manifests;
+    vi.mocked(runtimeModule.loadBundledManifests).mockResolvedValueOnce(catalog);
+    const state = buildDefaultState(catalog);
+    state.uiPreferences.activeSection = section;
+    const addonId = `addon.${section}`;
+    state.installations[addonId].installed = true;
+    state.installations[addonId].enabled = true;
+    state.installations[addonId].grantedCapabilities = state.installations[addonId].grantedCapabilities.map(g => ({ ...g, granted: false }));
+    const snapshot = { bootEpoch: "app-boot", revision: 5, governanceActivated: false, candidates: [], slots: {},
+      installations: { [addonId]: { ...state.installations[addonId], disabledOperations: [], hiddenSurfaceIds: [] } } };
+    const pending = deferred<typeof snapshot>();
+    harnessInvokeMock.mockImplementation(command => command === "harness_registry" ? Promise.resolve(snapshot) : pending.promise);
+    hydrateStateMock.mockResolvedValueOnce(state);
+    render(<App />);
+    if (section === "opencode" || section === "paperclip") {
+      fireEvent.click(await screen.findByRole("button", { name: `${section === "opencode" ? "OpenCode" : "Paperclip"} workspace settings` }));
+    }
+    fireEvent.click(await screen.findByRole("button", { name: button }));
+    await waitFor(() => expect(harnessInvokeMock).toHaveBeenCalledWith("harness_grants", expect.objectContaining({ addonId, consent: true, expectedRevision: 5 })));
+    expect(screen.queryByText("Required grants active")).toBeNull();
+    await act(async () => pending.reject(new Error("Host denied consent")));
+    expect(screen.queryByText("Required grants active")).toBeNull();
+    expect(screen.queryByText("network granted")).toBeNull();
+    expect(screen.queryByText("filesystem granted")).toBeNull();
+    expect(screen.getByRole("button", { name: button })).toBeTruthy();
+    const expectedCapabilities: Record<string, string[]> = {
+      browser: ["network", "ui-embedding", "browser-control", "filesystem"],
+      obsidian: ["filesystem", "ui-embedding"], opencode: ["filesystem", "shell", "ui-embedding"],
+      paperclip: ["network", "ui-embedding", "agent-delegation"], hermes: ["shell", "ui-embedding"],
+    };
+    const grantCalls = harnessInvokeMock.mock.calls.filter(([command]) => command === "harness_grants");
+    expect(grantCalls).toHaveLength(1);
+    expect(grantCalls[0][1].grants.map((g: CapabilityGrant) => g.capability)).toEqual(expectedCapabilities[section]);
+    const acknowledged = structuredClone(snapshot);
+    acknowledged.revision++;
+    acknowledged.installations[addonId].grantedCapabilities = acknowledged.installations[addonId].grantedCapabilities.map(g => ({ ...g, granted: expectedCapabilities[section].includes(g.capability) }));
+    harnessInvokeMock.mockResolvedValueOnce(acknowledged);
+    fireEvent.click(screen.getByRole("button", { name: button }));
+    if (section === "browser") expect(await screen.findByLabelText("Browser URL")).toBeTruthy();
+    else if (section === "opencode" || section === "paperclip") expect(await screen.findByText("Required grants active")).toBeTruthy();
+    else if (section === "hermes") await waitFor(() => expect(screen.queryByText("Hermes workspace access is gated")).toBeNull());
+    else await waitFor(() => expect(screen.queryByText(/Next:.*grant filesystem access/)).toBeNull());
   });
 
   it("grants the Browser controlled access preset from the Add-ons workspace", async () => {
@@ -5104,7 +5210,7 @@ describe("App boot flow", () => {
     expect(screen.getByLabelText("1 changed Obsidian note(s)")).toBeTruthy();
     expect(screen.getByText("2 note(s) ready for review queue")).toBeTruthy();
     fireEvent.click(screen.getAllByRole("button", { name: "Grant intake access" })[0]);
-    fireEvent.click(screen.getByRole("button", { name: "Queue scanned notes" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Queue scanned notes" }));
     expect(await screen.findByText("Review notes before queueing")).toBeTruthy();
     expect(screen.getByText("Architecture Note.md")).toBeTruthy();
     expect(screen.getByText("Fresh Note.md")).toBeTruthy();

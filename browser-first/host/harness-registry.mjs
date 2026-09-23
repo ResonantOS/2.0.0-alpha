@@ -92,7 +92,7 @@ export async function createHarnessRegistry({ store, reviewedAdapterIds = [], bi
   function snapshot() {
     const installations = Object.fromEntries(Object.entries(state.installations).map(([addonId, entry]) => [addonId, {
       addonId, installed: true, enabled: entry.enabled, grantedCapabilities: structuredClone(entry.grants),
-      disabledOperations: disabled || !entry.enabled ? [...entry.manifest.agentRuntime.supportedOperations] : [], hiddenSurfaceIds: [],
+      disabledOperations: disabled || !entry.enabled ? [...(entry.manifest.agentRuntime?.supportedOperations ?? [])] : [], hiddenSurfaceIds: [],
     }]));
     const projection = Object.fromEntries(Object.entries(state.slots).map(([slot, owner]) => [slot, { ...owner,
       available: !disabled && !fenced.has(slot) && !!owner.addonId && eligible(state.installations[owner.addonId], slot),
@@ -147,7 +147,7 @@ export async function createHarnessRegistry({ store, reviewedAdapterIds = [], bi
       const captured = structuredClone(manifest);
       return transact(next => {
         assertValidHarnessManifest(captured);
-        if (typeof enabled !== 'boolean' || !bindingAllowed(captured)) throw fail('permission-denied');
+        if (typeof enabled !== 'boolean' || (captured.agentRuntime?.adapterVersion !== undefined && !bindingAllowed(captured))) throw fail('permission-denied');
         if (Buffer.byteLength(JSON.stringify(captured)) > 262144) throw fail('invalid-manifest');
         if (!Object.hasOwn(next.installations, captured.id) && Object.keys(next.installations).length >= 256) throw fail('runtime-unavailable');
         const changed = ownedSlots(next, captured.id);
@@ -155,6 +155,24 @@ export async function createHarnessRegistry({ store, reviewedAdapterIds = [], bi
         if (changed.length) throw fail('ownership-conflict');
         captured.requestedCapabilities = captured.requestedCapabilities.map(grant => ({ ...grantShape(grant), granted: false }));
         next.installations[captured.id] = { manifest: captured, enabled, grants: structuredClone(captured.requestedCapabilities) };
+        return [];
+      });
+    },
+    importLegacy(records) {
+      const captured = structuredClone(records);
+      return transact(next => {
+        if (!Array.isArray(captured) || captured.length > 256) throw fail('invalid-manifest');
+        for (const record of captured) {
+          const manifest = record?.manifest;
+          assertValidHarnessManifest(manifest);
+          if (Buffer.byteLength(JSON.stringify(manifest)) > 262144) throw fail('invalid-manifest');
+          // Imported booleans and local selections are proposals, never consent.
+          // Existing host records always win over a migration candidate.
+          if (Object.hasOwn(next.installations, manifest.id)) continue;
+          if (Object.keys(next.installations).length >= 256) throw fail('runtime-unavailable');
+          manifest.requestedCapabilities = manifest.requestedCapabilities.map(grant => ({ ...grantShape(grant), granted: false }));
+          next.installations[manifest.id] = { manifest, enabled: false, grants: structuredClone(manifest.requestedCapabilities) };
+        }
         return [];
       });
     },
