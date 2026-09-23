@@ -82,6 +82,10 @@ and [Module Ownership](architecture/MODULE-OWNERSHIP.md). For the separate
 controlled Chromium package, use its
 [component README](../addons/resonant-browser-host/README.md).
 
+The opt-in [Harness Adapter Demo](addons/harness-adapter-demo.md) documents
+host-approved credential bindings, React swaps, governance checks, and the
+separation between fixture receipts and live runtime evidence.
+
 ## Change Documentation
 
 Keep current status in [Status](STATUS.md), future scope in
