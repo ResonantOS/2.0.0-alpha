@@ -1,0 +1,115 @@
+{
+  "id": "addon.provider-chat-demo",
+  "name": "Provider Chat Demo",
+  "version": "0.1.0",
+  "author": "ResonantOS",
+  "category": "agent",
+  "sdkVersion": "0.1.0",
+  "description": "Opt-in harness example. Host installation, explicit consent and slot ownership are required; this manifest grants no authority. Delegation is requested only for transitional SDK compatibility.",
+  "runtimeType": "ui-module",
+  "surfaces": [],
+  "requestedCapabilities": [
+    {
+      "capability": "agent-runtime",
+      "granted": false,
+      "scope": "system",
+      "revocationBehavior": "hard-stop"
+    },
+    {
+      "capability": "providers",
+      "granted": false,
+      "scope": "system",
+      "revocationBehavior": "hard-stop"
+    },
+    {
+      "capability": "chat-interface",
+      "granted": false,
+      "scope": "system",
+      "revocationBehavior": "hard-stop"
+    },
+    {
+      "capability": "agent-delegation",
+      "granted": false,
+      "scope": "system",
+      "revocationBehavior": "hard-stop"
+    }
+  ],
+  "systemSlots": [
+    {
+      "id": "primary-agent",
+      "role": "alternative-provider",
+      "replaceable": true
+    },
+    {
+      "id": "chat-interface",
+      "role": "alternative-provider",
+      "replaceable": true
+    }
+  ],
+  "tools": [
+    {
+      "name": "harness.invoke",
+      "description": "Submit one turn through the selected host-owned runtime.",
+      "requiredCapabilities": [
+        "agent-runtime",
+        "providers",
+        "chat-interface"
+      ],
+      "inputSchema": {
+        "type": "object"
+      },
+      "outputSchema": {
+        "type": "object"
+      },
+      "audit": {
+        "artifactTypes": []
+      }
+    }
+  ],
+  "agentRuntime": {
+    "invocationTool": "harness.invoke",
+    "chatAuthorLabel": "Provider Chat Demo",
+    "displayNameSource": "manifest",
+    "supportsStreaming": false,
+    "supportsCancellation": true,
+    "supportsModelSelection": false,
+    "outputFiltering": "assistant-reply-only",
+    "requiredCapabilities": [
+      "agent-runtime",
+      "providers",
+      "chat-interface"
+    ],
+    "adapterVersion": 1,
+    "adapterId": "provider-fabric-v1",
+    "authScheme": "none",
+    "supportedOperations": [
+      "createSession",
+      "invoke",
+      "cancel"
+    ],
+    "contextRoleFidelity": "structured-messages",
+    "toolCallbacks": false
+  },
+  "providerRequirements": {
+    "sharedProfiles": [],
+    "supportsPrivateCredentials": false
+  },
+  "archiveIntegration": {
+    "readScopes": [],
+    "intakeWriteScopes": [],
+    "canRequestIngest": false,
+    "canWriteKnowledgePages": false
+  },
+  "health": {
+    "strategy": "host-command-ready"
+  },
+  "installHooks": {},
+  "compatibility": {
+    "shellVersion": "^0.1.0",
+    "platforms": [
+      "macOS",
+      "linux",
+      "windows"
+    ]
+  }
+}

@@ -1,0 +1,128 @@
+{
+  "id": "addon.deepseek-harness",
+  "name": "DeepSeek Harness",
+  "version": "0.1.0",
+  "author": "ResonantOS",
+  "category": "agent",
+  "sdkVersion": "0.1.0",
+  "description": "Opt-in harness example. Host installation, explicit consent and slot ownership are required; this manifest grants no authority. Delegation is requested only for transitional SDK compatibility.",
+  "runtimeType": "local-service",
+  "surfaces": [],
+  "requestedCapabilities": [
+    {
+      "capability": "agent-runtime",
+      "granted": false,
+      "scope": "system",
+      "revocationBehavior": "hard-stop"
+    },
+    {
+      "capability": "network",
+      "granted": false,
+      "scope": "system",
+      "revocationBehavior": "hard-stop"
+    },
+    {
+      "capability": "chat-interface",
+      "granted": false,
+      "scope": "system",
+      "revocationBehavior": "hard-stop"
+    },
+    {
+      "capability": "agent-delegation",
+      "granted": false,
+      "scope": "system",
+      "revocationBehavior": "hard-stop"
+    }
+  ],
+  "systemSlots": [
+    {
+      "id": "primary-agent",
+      "role": "alternative-provider",
+      "replaceable": true
+    },
+    {
+      "id": "chat-interface",
+      "role": "alternative-provider",
+      "replaceable": true
+    }
+  ],
+  "tools": [
+    {
+      "name": "harness.invoke",
+      "description": "Submit one turn through the selected host-owned runtime.",
+      "requiredCapabilities": [
+        "agent-runtime",
+        "network",
+        "chat-interface"
+      ],
+      "inputSchema": {
+        "type": "object"
+      },
+      "outputSchema": {
+        "type": "object"
+      },
+      "audit": {
+        "artifactTypes": []
+      }
+    }
+  ],
+  "agentRuntime": {
+    "invocationTool": "harness.invoke",
+    "chatAuthorLabel": "DeepSeek Harness",
+    "displayNameSource": "manifest",
+    "supportsStreaming": false,
+    "supportsCancellation": true,
+    "supportsModelSelection": true,
+    "outputFiltering": "assistant-reply-only",
+    "requiredCapabilities": [
+      "agent-runtime",
+      "network",
+      "chat-interface"
+    ],
+    "adapterVersion": 1,
+    "adapterId": "dsh-typert-v1",
+    "authScheme": "dsh-action-token",
+    "supportedOperations": [
+      "createSession",
+      "invoke",
+      "cancel",
+      "history",
+      "status",
+      "selectModel"
+    ],
+    "contextRoleFidelity": "text-only",
+    "toolCallbacks": false,
+    "endpoint": "http://127.0.0.1:3080",
+    "credentialBinding": "dsh.main",
+    "modelSelection": {
+      "source": "runtime-audit",
+      "currentModelField": "currentModel",
+      "selectable": true,
+      "requiredCapabilities": [
+        "agent-runtime"
+      ]
+    }
+  },
+  "providerRequirements": {
+    "sharedProfiles": [],
+    "supportsPrivateCredentials": false
+  },
+  "archiveIntegration": {
+    "readScopes": [],
+    "intakeWriteScopes": [],
+    "canRequestIngest": false,
+    "canWriteKnowledgePages": false
+  },
+  "health": {
+    "strategy": "host-command-ready"
+  },
+  "installHooks": {},
+  "compatibility": {
+    "shellVersion": "^0.1.0",
+    "platforms": [
+      "macOS",
+      "linux",
+      "windows"
+    ]
+  }
+}
