@@ -4,6 +4,7 @@ import http from "node:http";
 import https from "node:https";
 import net from "node:net";
 import path from "node:path";
+import { publicHarnessError } from "./harness-adapter-contract.mjs";
 
 const bridgeTokenHeader = "x-resonantos-bridge-token";
 export const bridgeTokenHeaderName = "X-ResonantOS-Bridge-Token";
@@ -55,6 +56,30 @@ export function publicOpenCodeError(code) {
     ok: false, code: safeCode, error: "OpenCode boundary request failed.",
   } };
 }
+// Route metadata selects this family; request fields cannot select serializers.
+function publicHarnessTransportError(error, status) {
+  const mapped = {
+    OPENCODE_BRIDGE_UNAUTHORIZED: 'permission-denied', OPENCODE_CAPABILITY_REQUIRED: 'permission-denied',
+    OPENCODE_HOST_REJECTED: 'permission-denied', OPENCODE_INVALID_REQUEST: 'invalid-event',
+  };
+  const safe = publicHarnessError({ code: mapped[error?.code] ?? error?.code });
+  const statuses = { 'invalid-manifest': 400, 'invalid-event': 400, 'permission-denied': 403,
+    'ownership-conflict': 409, 'session-not-found': 404, 'unsupported-operation': 400, 'deadline-exceeded': 504 };
+  return { status: status ?? statuses[safe.code] ?? 503, payload: { ok: false, code: safe.code, error: safe.message } };
+}
+// A mixed legacy/governed handler opts in only after selecting governance.
+// Plain provider errors must retain the legacy status and message.
+export class HarnessTransportError extends Error {
+  constructor(error) {
+    const safe = publicHarnessError(error);
+    super(safe.message);
+    this.name = 'HarnessTransportError';
+    this.code = safe.code;
+  }
+}
+function routeError(error, family) {
+  return family === 'harness' ? publicHarnessTransportError(error) : boundaryError(error);
+}
 export class OpenCodeBoundaryError extends Error {
   constructor(code, status) {
     const mapped = publicOpenCodeError(code);
@@ -88,11 +113,11 @@ export function validateLoopbackHost(request, {listenerPort = request.socket?.lo
 }
 export function authorizeBridgeRoute(request, {
   routes = [], bridgeToken, bridgeCapabilityTokens = {}, capabilityBootstrapToken,
-  listenerPort = request.socket?.localPort, getPublicPort = () => undefined,
+  listenerPort = request.socket?.localPort, getPublicPort = () => undefined, extensionOrigin, allowedOrigins = [],
 } = {}) {
   const route = compileRoutes(routes).get(routeKey(request.method, request.url));
   const owned = boundaryPath(request.url) || route?.loopbackHostOnly;
-  const refuse = (status, code, error) => owned ? publicOpenCodeError(code) : {status, payload:{ok:false,error}};
+  const refuse = (status, code, error) => route?.errorFamily === "harness" ? publicHarnessTransportError({ code }, status) : owned ? publicOpenCodeError(code) : {status, payload:{ok:false,error}};
   if (!isAuthorizedBridgeRequest(request, bridgeToken)) return refuse(401, "OPENCODE_BRIDGE_UNAUTHORIZED", "Unauthorized browser-first bridge request.");
   if (!route) return refuse(404, "OPENCODE_ROUTE_UNKNOWN", "Unknown browser-first bridge route.");
   if (route.requiredCapabilityBootstrap && !isAuthorizedCapabilityBootstrapRequest(request, capabilityBootstrapToken))
@@ -101,7 +126,11 @@ export function authorizeBridgeRoute(request, {
     return refuse(403, "OPENCODE_CAPABILITY_REQUIRED", "Bridge route declares no capability; refused by default.");
   if (route.requiredCapability && !isAuthorizedCapabilityRequest(request, bridgeCapabilityTokens, route.requiredCapability))
     return refuse(403, "OPENCODE_CAPABILITY_REQUIRED", `Bridge route requires ${route.requiredCapability} capability.`);
-  if (route.loopbackHostOnly && !validateLoopbackHost(request, {listenerPort,getPublicPort})) return publicOpenCodeError("OPENCODE_HOST_REJECTED");
+  if (route.loopbackHostOnly && !validateLoopbackHost(request, {listenerPort,getPublicPort})) return refuse(403, "OPENCODE_HOST_REJECTED", "Host rejected.");
+  if (route.errorFamily === 'harness' && request.headers?.origin &&
+      pickAllowedOrigin(request.headers, extensionOrigin, allowedOrigins) !== request.headers.origin) {
+    return refuse(403, "OPENCODE_HOST_REJECTED", "Origin rejected.");
+  }
   return {route};
 }
 
@@ -329,7 +358,10 @@ function writeJson(response, status, payload, extensionOrigin, requestHeaders, a
   response.end(JSON.stringify(payload));
 }
 
-export async function writeBridgeEventStream(response, request, subscription, {extensionOrigin,allowedOrigins} = {}) {
+export async function writeBridgeEventStream(response, request, subscription, {extensionOrigin,allowedOrigins,terminalEventFamily} = {}) {
+  const harness = terminalEventFamily === "harness";
+  const disconnectedCode = harness ? "runtime-unavailable" : "OPENCODE_STREAM_DISCONNECTED";
+  const slowCode = harness ? "runtime-unavailable" : "OPENCODE_SLOW_CONSUMER";
   const MAX_BYTES = 1048576;
   const APPLICATION_BYTES = MAX_BYTES - 4096;
   let terminal = false, blocked = false, timer, detach = () => {}, wakeDrain;
@@ -347,8 +379,10 @@ export async function writeBridgeEventStream(response, request, subscription, {e
     const wasBlocked = blocked;
     resolveTerminal();
     wakeDrain?.();
-    const {payload} = publicOpenCodeError(code);
-    const frame = `event: opencode.close\ndata: ${JSON.stringify({version:1,sessionId,source:"governed",event:{type:"bridge.closed",properties:{code:payload.code,error:payload.error}}})}\n\n`;
+    const {payload} = harness ? publicHarnessTransportError({code}) : publicOpenCodeError(code);
+    const frame = harness
+      ? `event: harness.close\ndata: ${JSON.stringify({sessionId,code:payload.code,error:payload.error})}\n\n`
+      : `event: opencode.close\ndata: ${JSON.stringify({version:1,sessionId,source:"governed",event:{type:"bridge.closed",properties:{code:payload.code,error:payload.error}}})}\n\n`;
     timer = setTimeout(() => response.destroy(), 1000);
     timer.unref?.();
     if (response.destroyed || wasBlocked || response.writableLength + Buffer.byteLength(frame) > MAX_BYTES) {
@@ -370,10 +404,10 @@ export async function writeBridgeEventStream(response, request, subscription, {e
     while (!terminal && !subscription.terminalCode) {
       const next = await Promise.race([iterator.next(),terminated.then(() => ({done:true}))]);
       if (terminal || subscription.terminalCode) break;
-      if (next.done) { await subscription.close("OPENCODE_STREAM_DISCONNECTED"); break; }
+      if (next.done) { await subscription.close(disconnectedCode); break; }
       const frame = `data: ${JSON.stringify(next.value)}\n\n`;
       if (subscription.queuedBytes + response.writableLength + Buffer.byteLength(frame) > APPLICATION_BYTES) {
-        await subscription.close("OPENCODE_SLOW_CONSUMER"); break;
+        await subscription.close(slowCode); break;
       }
       if (!response.write(frame)) {
         blocked = true;
@@ -397,7 +431,7 @@ export async function writeBridgeEventStream(response, request, subscription, {e
     response.off("close", onClose);
     response.off("error", onError);
     // Release pending iterator work without waiting on a detached transport.
-    void subscription.close(subscription.terminalCode ?? "OPENCODE_STREAM_DISCONNECTED");
+    void subscription.close(subscription.terminalCode ?? disconnectedCode);
   }
 }
 
@@ -1204,14 +1238,17 @@ export function scopedCapabilityTokenPayload(requestedCapabilities, bridgeCapabi
 export async function evaluateBridgeRequestForSelfTest({
   method = "GET", url = "/", headers = {}, rawHeaders = [], body = {},
   bridgeToken, bridgeCapabilityTokens = {}, capabilityBootstrapToken, routes = [],
-  listenerPort, getPublicPort = () => undefined, selfTest = true,
+  listenerPort, getPublicPort = () => undefined, selfTest = true, extensionOrigin, allowedOrigins = [],
 } = {}) {
+  let errorFamily;
   let owned = boundaryPath(url) || routes.some(route => route.loopbackHostOnly && route.path === String(url).split("?")[0]);
   try {
+    errorFamily = compileRoutes(routes).get(routeKey(method, url))?.errorFamily;
     const request = {method, url, headers:normalizeHeaders(headers), rawHeaders, selfTest,
-      openCodeTransport:{listenerPort,getPublicPort}};
+      openCodeTransport:{listenerPort,getPublicPort},
+      bridgeTransport:{listenerPort,getPublicPort,extensionOrigin,allowedOrigins}};
     if (method === "OPTIONS") return {status:204,payload:{}};
-    const authorization = authorizeBridgeRoute(request, {routes,bridgeToken,bridgeCapabilityTokens,capabilityBootstrapToken,listenerPort,getPublicPort});
+    const authorization = authorizeBridgeRoute(request, {routes,bridgeToken,bridgeCapabilityTokens,capabilityBootstrapToken,listenerPort,getPublicPort,extensionOrigin,allowedOrigins});
     if (!authorization.route) return authorization;
     const {route} = authorization;
     owned ||= route.loopbackHostOnly;
@@ -1219,7 +1256,8 @@ export async function evaluateBridgeRequestForSelfTest({
     if (route.responseType === "sse" && result?.stream !== true) throw new OpenCodeBoundaryError("OPENCODE_INTERNAL");
     return {status:200,payload:route.responseType === "sse" ? {stream:true} : {ok:true,...result}};
   } catch (error) {
-    return owned ? boundaryError(error) : {status:500,payload:{ok:false,error:error instanceof Error ? error.message : String(error)}};
+    if (error instanceof HarnessTransportError) return publicHarnessTransportError(error);
+    return owned ? routeError(error, errorFamily) : {status:500,payload:{ok:false,error:error instanceof Error ? error.message : String(error)}};
   }
 }
 
@@ -1266,10 +1304,12 @@ export function createBridgeRequestHandler({
       // upstream of this check.
       openPathPrefixes,
     });
-  const subscriptions = new Set();
+  const subscriptions = new Map();
   const handleBridgeRequest = async function handleBridgeRequest(request, response) {
+    let errorFamily;
     let owned = boundaryPath(request.url) || internalRoutes.some(route => route.loopbackHostOnly && route.path === String(request.url).split("?")[0]);
     try {
+      errorFamily = compileRoutes(internalRoutes).get(routeKey(request.method, request.url))?.errorFamily;
       if (request.method === "OPTIONS") {
         drainRefusedRequest(request, response);
         writeJson(response, 204, {}, extensionOrigin, request.headers, allowedOrigins);
@@ -1288,7 +1328,7 @@ export function createBridgeRequestHandler({
       const listenerPort = request.socket?.localPort;
       request.openCodeTransport = {listenerPort,getPublicPort};
       request.selfTest = false;
-      const authorization = authorizeBridgeRoute(request, {routes:internalRoutes,bridgeToken,bridgeCapabilityTokens,capabilityBootstrapToken,listenerPort,getPublicPort});
+      const authorization = authorizeBridgeRoute(request, {routes:internalRoutes,bridgeToken,bridgeCapabilityTokens,capabilityBootstrapToken,listenerPort,getPublicPort,extensionOrigin,allowedOrigins});
       if (!authorization.route) {
         drainRefusedRequest(request, response);
         writeJson(response, authorization.status, authorization.payload, extensionOrigin, request.headers, allowedOrigins);
@@ -1296,10 +1336,14 @@ export function createBridgeRequestHandler({
       }
       const {route} = authorization;
       owned ||= route.loopbackHostOnly;
+      if (route.errorFamily === 'harness' && request.method === 'GET' &&
+          (request.headers['transfer-encoding'] || Number(request.headers['content-length'] ?? 0) !== 0)) {
+        throw new OpenCodeBoundaryError("OPENCODE_INVALID_REQUEST");
+      }
       if (route.responseType === "sse") {
         const subscription = await route.handler({}, request);
-        subscriptions.add(subscription);
-        try { await writeBridgeEventStream(response, request, subscription, {extensionOrigin,allowedOrigins}); }
+        subscriptions.set(subscription, route.terminalEventFamily);
+        try { await writeBridgeEventStream(response, request, subscription, {extensionOrigin,allowedOrigins,terminalEventFamily:route.terminalEventFamily}); }
         finally { subscriptions.delete(subscription); }
         return;
       }
@@ -1308,16 +1352,16 @@ export function createBridgeRequestHandler({
       catch (error) { if (owned) throw new OpenCodeBoundaryError("OPENCODE_INVALID_REQUEST"); throw error; }
       const result = await evaluateBridgeRequestForSelfTest({method:request.method,url:request.url,
         headers:request.headers,rawHeaders:request.rawHeaders,body,bridgeToken,bridgeCapabilityTokens,
-        capabilityBootstrapToken,routes:internalRoutes,listenerPort,getPublicPort,selfTest:false});
+        capabilityBootstrapToken,routes:internalRoutes,listenerPort,getPublicPort,selfTest:false,extensionOrigin,allowedOrigins});
       writeJson(response, result.status, result.payload, extensionOrigin, request.headers, allowedOrigins);
     } catch (error) {
       if (response.headersSent) { response.destroy(); return; }
-      const result = owned ? boundaryError(error) : {status:500,payload:{ok:false,error:error instanceof Error ? error.message : String(error)}};
+      const result = owned ? routeError(error, errorFamily) : {status:500,payload:{ok:false,error:error instanceof Error ? error.message : String(error)}};
       drainRefusedRequest(request, response);
       writeJson(response, result.status, result.payload, extensionOrigin, request.headers, allowedOrigins);
     }
   };
-  handleBridgeRequest.closeStreams = () => Promise.allSettled([...subscriptions].map(sub => sub.close("OPENCODE_UNAVAILABLE")));
+  handleBridgeRequest.closeStreams = () => Promise.allSettled([...subscriptions].map(([sub, family]) => sub.close(family === "harness" ? "runtime-unavailable" : "OPENCODE_UNAVAILABLE")));
   return handleBridgeRequest;
 }
 function closeStreamsWithServer(server, handle) {

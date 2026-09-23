@@ -4,7 +4,7 @@ const fail = code => Object.assign(new Error(publicHarnessError({ code }).messag
 
 // In-process only: credentials and route policy remain in the provider service.
 // The harness boundary supplies authority and validates every published frame.
-export function createProviderFabricAdapter({ executeRawProviderChat } = {}) {
+export function createProviderFabricAdapter({ executeRawProviderChat, readiness } = {}) {
   if (typeof executeRawProviderChat !== 'function') throw new TypeError('Raw provider execution required.');
   const sessions = new WeakMap();
   function active(session) {
@@ -13,7 +13,7 @@ export function createProviderFabricAdapter({ executeRawProviderChat } = {}) {
     return state;
   }
   return {
-    async probe() { return { available: true }; },
+    async probe() { return { available: readiness ? Boolean(await readiness()) : true }; },
     async createSession({ signal } = {}) {
       if (signal?.aborted) throw fail('cancelled');
       const session = {};

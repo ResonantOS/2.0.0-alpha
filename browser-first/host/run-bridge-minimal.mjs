@@ -51,6 +51,7 @@ import {
   hermesHome,
   hermesPythonRuntimeDiagnostics,
 } from "./hermes-runtime.mjs";
+import { createHarnessHostService } from "./harness-host-service.mjs";
 import { createProviderHostService } from "./provider-host-service.mjs";
 import {
   memorySourceMoveHistoryPath as sourceMoveHistoryPath,
@@ -159,11 +160,12 @@ const setAddonRuntimeSelfTestHomeDir = (homeDir) => {
     : null;
 };
 
+const providerHostService = createProviderHostService({ redactDiagnosticText, extractJsonObject });
 const {
   executeProviderStatus,
   extractAssistantContent,
   openAiReasoningEffort,
-  providerBridgeRoutes,
+  providerBridgeRoutes: legacyProviderBridgeRoutes,
   providerRouteForModel,
   allModelCatalog,
   allProviderProfiles,
@@ -171,10 +173,7 @@ const {
   runArchiveIngestWriter,
   runArchiveSemanticVerifier,
   sanitizeAssistantContent,
-} = createProviderHostService({
-  redactDiagnosticText,
-  extractJsonObject,
-});
+} = providerHostService;
 
 const addonDelegationService = createAddonDelegationService({
   browserFirstRoot,
@@ -401,6 +400,16 @@ const { agentControlRoutes } = createAgentControlHostService({
 
 const { extensionPrefsRoutes, flushPendingExtensionPrefs } = createExtensionPrefsHostService({ userRoot });
 
+// Bindings are operator configuration only. Demo manifests never authorize a
+// credential name, endpoint, or port. Invalid host configuration fails startup.
+const harnessService = await createHarnessHostService({
+  userRoot: userRoot(), providerHost: providerHostService,
+  bindings: JSON.parse(process.env.RESONANTOS_HARNESS_BINDINGS ?? "[]"),
+  env: process.env,
+});
+const { harnessRoutes } = harnessService;
+const providerBridgeRoutes = harnessService.composeProviderRoutes(legacyProviderBridgeRoutes);
+
 const bridgeRoutes = [
   ...browserDiagnosticsRoutes,
   ...providerBridgeRoutes,
@@ -409,6 +418,7 @@ const bridgeRoutes = [
   ...addonDelegationRoutes,
   ...opencodeSessionRoutes,
   ...extensionPrefsRoutes,
+  ...harnessRoutes,
 ];
 
 const bridgeToken = args.get("bridge-token") ?? process.env.RESONANTOS_BROWSER_FIRST_BRIDGE_TOKEN ?? createBridgeToken();
@@ -491,6 +501,7 @@ const shutdown = async () => {
   await flushPendingExtensionPrefs().catch(() => undefined);
   try { unsubscribeOpenCodeExecution(); } catch { /* noop */ }
   await openCodeBoundary.dispose().catch(() => undefined);
+  await harnessService.close();
   await new Promise((resolve) => bridgeInfo.server.close(resolve));
 };
 

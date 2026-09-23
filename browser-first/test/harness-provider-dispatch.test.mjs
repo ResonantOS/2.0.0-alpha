@@ -245,3 +245,26 @@ test('example manifests validate and reject paths, unreviewed adapters and unapp
   await assert.rejects(registry.install(unknown, { enabled: true }), { code: 'permission-denied' });
   await assert.rejects(registry.install(manifests[0], { enabled: true }), { code: 'permission-denied' });
 });
+
+test('provider fabric probe uses injected readiness and preserves the default', async () => {
+  const { createProviderFabricAdapter } = await import('../host/agent-adapters/provider-fabric.mjs');
+  let ready = false;
+  const adapter = createProviderFabricAdapter({ executeRawProviderChat: async () => ({}), readiness: async () => ready });
+  assert.deepEqual(await adapter.probe(), { available: false });
+  ready = true;
+  assert.deepEqual(await adapter.probe(), { available: true });
+  assert.deepEqual(await createProviderFabricAdapter({ executeRawProviderChat: async () => ({}) }).probe(), { available: true });
+});
+
+test('single-attempt raw provider body over 1 MB produces a bounded invalid-event', async t => {
+  const svc = await service(t), adapter = await adapterFor(svc);
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async () => { calls++; return Response.json({ choices: [{ message: { content: 'private-body-canary'.repeat(70_000) } }] }); });
+  const f = await governed(t, adapter);
+  const { event } = await invoke(f, 'addon.provider-chat-demo');
+  assert.equal(calls, 1);
+  assert.equal(event.type, 'error');
+  assert.deepEqual(event.data, { code: 'invalid-event', message: 'Invalid runtime event.' });
+  assert.ok(JSON.stringify(event).length < 1024);
+  assert.doesNotMatch(JSON.stringify(event), /private-body-canary/);
+});
