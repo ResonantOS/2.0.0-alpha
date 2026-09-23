@@ -33,14 +33,26 @@ export async function createHarnessRegistry({ store, reviewedAdapterIds = [], bi
     const document = await store.read();
     if (document !== null) {
       if (document?.version !== 1 || !['pending', 'committed'].includes(document.phase)) throw fail('runtime-unavailable');
-      const loaded = document.state;
+      const loaded = structuredClone(document.state);
       if (!loaded || !counter(loaded.revision) || typeof loaded.governanceActivated !== 'boolean' ||
           !loaded.installations || Array.isArray(loaded.installations) || !loaded.slots || Array.isArray(loaded.slots) ||
           Object.keys(loaded.installations).length > 256) throw fail('runtime-unavailable');
       for (const [id, entry] of Object.entries(loaded.installations)) {
+        // Validate saved consent against its original requests before adding a
+        // runtime request. Legacy delegation authority must never be relabelled.
+        validateGrants(entry, entry.grants);
+        if (entry.manifest.systemSlots?.some(slot => slot.id === 'primary-agent')) {
+          let request = entry.manifest.requestedCapabilities.find(grant => grant.capability === 'agent-runtime');
+          if (!request && entry.manifest.requestedCapabilities.some(grant => grant.capability === 'agent-delegation')) {
+            request = { capability: 'agent-runtime', scope: 'system', revocationBehavior: 'hard-stop', granted: false };
+            entry.manifest.requestedCapabilities.push(request);
+          }
+          if (request && !entry.grants.some(grant => grant.capability === 'agent-runtime')) {
+            entry.grants.push({ ...grantShape(request), granted: false });
+          }
+        }
         assertValidHarnessManifest(entry.manifest);
         if (id !== entry.manifest.id || typeof entry.enabled !== 'boolean') throw fail('runtime-unavailable');
-        validateGrants(entry, entry.grants);
       }
       for (const [slot, owner] of Object.entries(loaded.slots)) {
         if (!Object.hasOwn(slots, slot) || !counter(owner.generation) ||

@@ -149,9 +149,9 @@ working Playwright browser.
   Phase 2 adds dispose.
 - A governed compatibility turn that ends cancelled serializes as HTTP **503**
   on the JSON `/augmentor/chat` route. Harness events retain their own protocol.
-- The manifest's transitional `agent-delegation` request is for the existing SDK
-  primary-slot mapping; increment **2A** removes it. Runtime execution already
-  requires the independently approved `agent-runtime` consent.
+- The example manifests request `agent-runtime` for the primary slot, without a
+  transitional `agent-delegation` request. Runtime execution requires independently
+  approved `agent-runtime` consent; existing delegation consent does not grant it.
 - This Phase 1 run demonstrates DSH and the provider-fabric adapter. Certification
   with two independent OpenAI-compatible harnesses is Phase 2 work.
 - The run's revocation check observes the fenced stream and rejected stale

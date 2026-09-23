@@ -102,7 +102,7 @@ const hookFailurePolicies = ["block", "degrade", "warn"] as const;
 // This map mirrors capabilityForSlot in src/modules/shell/system-slots.ts.
 const systemSlotIds: readonly SystemSlotId[] = ["primary-agent", "chat-interface", "memory-system", "communication-channel"];
 const slotBackingCapability: Record<SystemSlotId, Capability> = {
-  "primary-agent": "agent-delegation",
+  "primary-agent": "agent-runtime",
   "chat-interface": "chat-interface",
   "memory-system": "memory-provider",
   "communication-channel": "notifications",

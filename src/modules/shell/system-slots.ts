@@ -34,7 +34,7 @@ export const capabilityForSlot = (slotId: SystemSlotId): CapabilityGrant["capabi
     case "memory-system":
       return "memory-provider";
     case "primary-agent":
-      return "agent-delegation";
+      return "agent-runtime";
     case "communication-channel":
       return "notifications";
   }
