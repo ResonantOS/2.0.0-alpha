@@ -2,6 +2,7 @@
 // Intent citation: docs/architecture/ADR-003-engineering-standards.md
 
 import { Suspense, lazy, startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
+import { createHarnessClient } from "./core/harness-client";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import type {
   AddOnManifest,
@@ -286,6 +287,7 @@ const errorMessageOf = (error: unknown, fallback: string): string =>
   typeof error === "string" ? error : error instanceof Error ? error.message : fallback;
 
 export function App() {
+  const [harnessClient] = useState(createHarnessClient);
   const surfaceMode = appSurfaceMode();
   const isFloatingChatSurface = surfaceMode === "floating-chat";
   const [loadState, setLoadState] = useState<LoadState>({ phase: "loading" });
@@ -2419,6 +2421,7 @@ export function App() {
               }
             >
               <AddOnsWorkspace
+                harnessClient={harnessClient}
                 search={search}
                 sideloadPath={sideloadPath}
                 filteredManifests={filteredManifests}
