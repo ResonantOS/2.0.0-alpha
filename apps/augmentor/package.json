@@ -6,7 +6,7 @@
   "type": "module",
   "dependencies": {
     "fflate": "0.8.2",
-    "ws": "8.21.0"
+    "ws": "8.21.3"
   },
   "engines": {
     "node": ">=24.21.0"
