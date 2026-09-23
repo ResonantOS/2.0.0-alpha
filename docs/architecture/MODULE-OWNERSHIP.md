@@ -38,7 +38,7 @@ The [Alpha runtime boundary](ALPHA_RUNTIME_BOUNDARY.md) defines what ships. The
 | `browser-first/host/harness-adapter-contract.mjs` | Declarative harness operation/event validation, safe public error vocabulary, and the canonical SDK manifest-validation entrypoint | Untrusted manifests and runtime event shapes | No state; validation results only | Registry ownership, grants, credential binding authorization, transports, or runtime execution |
 | `browser-first/host/harness-host-service.mjs` | Harness composition, strict `/addons/registry`, install/grants/remove/slots and `/agent/*` routes, provider compatibility dispatch, demo candidates, and bounded cleanup | Operator-only approved bindings (`RESONANTOS_HARNESS_BINDINGS`), configured provider readiness, validated payloads, registry grants/generations, and opt-in `RESONANTOS_HARNESS_DEMO=1` | Registry transactions under the external user root, reviewed adapter sessions and credential transports; routes require `addon-runtime-read` or `addon-runtime-control`, bridge authentication, and loopback Host/origin checks | Grant inference from manifests or requests, credential persistence, extension UI, browser tools, or changes to OpenCode stream semantics |
 | `scripts/harness-swap-demo.mjs` and `browser-first/test/harness-swap-demo.test.mjs` | Operator-driven React harness demonstration and receipt verification | Public host transactions, attributed events, reviewed manifest examples, and operator-approved binding configuration | Isolated external user state and evidence; actual UI commands and authenticated host revocation | Runtime policy, manifest authority, public catalog publication, credential persistence, or fixture-as-live certification |
-| `browser-first/host/harness-registry.mjs` | Host installation, explicit consent, binding metadata authorization, serialized slot ownership, generations, boot epochs, and governance projections | Canonically validated manifests, reviewed adapter IDs, approved binding metadata, and durable governance state | Installation/grant records, slot assignments, revisions, synchronous execution fences, and the governance-activated marker | Credential resolution, concrete adapters, network transport, routes, or UI authority |
+| `browser-first/host/harness-registry.mjs` | Host installation, atomic explicit grant batches, untrusted legacy consent candidates, binding metadata authorization, serialized slot ownership, generations, boot epochs, and governance projections | Canonically validated manifests, reviewed adapter IDs, approved binding metadata, and durable governance state | Installation/grant records, slot assignments, revisions, synchronous execution fences, and the governance-activated marker | Credential resolution, concrete adapters, network transport, routes, or UI authority |
 | `browser-first/host/harness-registry-store.mjs` | Atomic, durable pending/committed governance records under the external user root | The private registry file | Private temporary files, synced atomic replacement, and directory durability | Consent decisions, slot eligibility, credentials, or repository state |
 | `browser-first/host/harness-boundary.mjs` | Host-issued session/turn identity, bounded sessions, current-generation checks, cancellation, and revocation cleanup | Registry authorization and host-injected reviewed adapter interfaces | Session/turn registries, abort signals, adapter session cleanup, and validated event publication | Adapter selection from untrusted paths, credentials, transport, routes, browser grants, or UI |
 | `browser-first/host/harness-event-bus.mjs` | Session-local event provenance, monotonic sequence, bounded readers/queues, and terminal closure | Host-issued provenance, current-owner predicate, and validated event payloads | In-memory queues and reader lifecycle | Grants, ownership assignment, credentials, transport, or adapter execution |
@@ -66,10 +66,11 @@ required Alpha processes.
 
 | Path | Primary owner | Boundary |
 | --- | --- | --- |
-| `src/core/harness-client.ts` | In-memory host projection, monotonic acknowledgements, and session event delivery for React | Reads only authenticated host snapshots/events through `web-transport.ts`; never creates grants, owners, candidates, availability, or persisted governance |
+| `src/core/harness-client.ts` | In-memory host projection, monotonic acknowledgements, and session event delivery for React | Sends install, enable/disable, atomic grants and remove transactions; reads only authenticated host snapshots/events through `web-transport.ts`; never creates grants, owners, candidates, availability, or persisted governance |
 | `src/core/` | Shared contracts and pure cross-domain policy | No feature-specific UI or privileged process/filesystem behavior |
 | `packages/addon-sdk/src/` and `src/sdk/addons/` compatibility exports | Canonical add-on manifests, capability vocabulary, protocols, and validation shared by Node and browser consumers | SDK contracts do not grant runtime capabilities |
 | `src/modules/addons/AddOnsWorkspace.tsx` | Harness management presentation, bounded manifest import, and pending/conflict feedback | Reads acknowledged `harness-client.ts` projections; sends explicit install/grant/slot/remove commands; never infers grants, ownership, availability, or credential authority |
+| `src/modules/addons/controller.ts` | Add-on mutations and the five workspace access presets | Sends host transactions through `harness-client.ts`; applies consent only after acknowledgement; local preferences and config remain separate |
 | `src/modules/addons/` | Add-on catalog, grants, setup, and workspace entrypoints | Host mutations stay behind add-on routes and SDK capability policy |
 | `src/modules/archive/` | Living Archive UI, intake, review, promotion, and source management | Trusted writes stay behind archive review and promotion routes |
 | `src/modules/browser/` | Shared/legacy browser workspace presentation | Alpha page actions stay in extension controllers |
@@ -113,6 +114,13 @@ ownership of behavior.
    remain explicit inputs, not implicit filesystem authority.
 7. Wallet, payment, login, credential, signing, transfer, destructive, and
    public-submit actions remain human-only regardless of UI consent state.
+
+`POST /addons/enabled` belongs to `harness-host-service.mjs`, requires
+`addon-runtime-control` plus bridge authentication and loopback Host validation,
+and accepts only `addonId`, boolean `enabled`, and `expectedRevision`. The registry
+checks the revision before durable mutation; denial changes no consent. It accesses
+only registry state and existing execution cleanup, with no new filesystem or
+network destinations. Host-service and route-capability tests cover this boundary.
 
 ## Host And IPC Boundary
 

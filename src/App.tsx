@@ -64,6 +64,7 @@ import {
   describeUninstallBlock,
   executeSideloadManifest,
   grantAddonCapabilities,
+  grantWorkspaceAccess,
   runAddonLogicianHook,
   runAddonLogicianScript,
   toggleAddonCapabilityGrant,
@@ -1518,28 +1519,15 @@ export function App() {
   const paperclipInstallation = state.installations["addon.paperclip"];
   const hermesManifest = allManifests.find((manifest) => manifest.id === "addon.hermes");
   const hermesInstallation = state.installations["addon.hermes"];
-  const grantBrowserVisibleAccess = () => {
-    if (!browserManifest) {
-      return;
-    }
-    updateRuntimeState((draft) => {
-      const installation = draft.installations[browserManifest.id];
-      if (!installation) {
-        return draft;
-      }
-      installation.installed = true;
-      installation.enabled = true;
-      const existingGrants = new Map(installation.grantedCapabilities.map((grant) => [grant.capability, grant]));
-      const missingRequestedGrants = browserManifest.requestedCapabilities.filter((grant) => !existingGrants.has(grant.capability));
-      installation.grantedCapabilities = [...installation.grantedCapabilities, ...missingRequestedGrants].map((grant) =>
-        ["network", "ui-embedding", "browser-control", "filesystem"].includes(grant.capability) ? { ...grant, granted: true } : grant,
-      );
-      installation.status = "enabled";
-      installation.notes = ["Installed, enabled, and granted network, ui-embedding, browser-control, filesystem through Browser v2 setup."];
-      draft.uiPreferences.activeSection = "browser";
-      return draft;
-    });
+  const addonMutationDeps = {
+    client: harnessClient,
+    getManifest: (addonId: string) => allManifests.find(manifest => manifest.id === addonId),
+    getState: () => currentReadyStateRef.current ?? state,
+    updateRuntimeState,
   };
+  const reportAddonError = (error: unknown) => setChatNotice(errorMessageOf(error, "Host denied add-on change."));
+  const grantBrowserVisibleAccess = () =>
+    grantWorkspaceAccess(browserManifest, addonMutationDeps).catch(reportAddonError);
   const updateBrowserWorkspaceState = (browserWorkspace: ResonantShellState["uiPreferences"]["browserWorkspace"]) => {
     updateRuntimeState((draft) => {
       draft.uiPreferences.browserWorkspace = browserWorkspace;
@@ -1701,61 +1689,10 @@ export function App() {
     });
     return result;
   };
-  const grantObsidianWorkspaceAccess = async () => {
-    if (!obsidianManifest) {
-      return;
-    }
-    const currentVaultPath =
-      typeof obsidianInstallation?.config?.vaultPath === "string" ? obsidianInstallation.config.vaultPath : "";
-    const selectedVaultPath = currentVaultPath || (await requestObsidianVaultFolderSelection());
-    updateRuntimeState((draft) => {
-      const installation = draft.installations[obsidianManifest.id];
-      if (!installation) {
-        return draft;
-      }
-      installation.installed = true;
-      installation.enabled = true;
-      installation.status = "enabled";
-      const existingGrants = new Map(installation.grantedCapabilities.map((grant) => [grant.capability, grant]));
-      const missingRequestedGrants = obsidianManifest.requestedCapabilities.filter((grant) => !existingGrants.has(grant.capability));
-      installation.grantedCapabilities = [...installation.grantedCapabilities, ...missingRequestedGrants].map((grant) =>
-        grant.capability === "filesystem" || grant.capability === "ui-embedding" ? { ...grant, granted: true } : grant,
-      );
-      if (selectedVaultPath) {
-        installation.config = {
-          ...(installation.config ?? {}),
-          vaultPath: selectedVaultPath,
-          lastWorkspaceConnectedAt: new Date().toISOString(),
-        };
-      }
-      installation.notes = selectedVaultPath
-        ? [`Workspace access granted for ${selectedVaultPath}.`]
-        : ["Workspace access granted. Choose a vault to open the Resonant Notes workspace."];
-      return draft;
-    });
-  };
-  const grantOpenCodeWorkspaceAccess = () => {
-    if (!opencodeManifest) {
-      return;
-    }
-    updateRuntimeState((draft) => {
-      const installation = draft.installations[opencodeManifest.id];
-      if (!installation) {
-        return draft;
-      }
-      installation.installed = true;
-      installation.enabled = true;
-      installation.status = "enabled";
-      const existingGrants = new Map(installation.grantedCapabilities.map((grant) => [grant.capability, grant]));
-      const missingRequestedGrants = opencodeManifest.requestedCapabilities.filter((grant) => !existingGrants.has(grant.capability));
-      installation.grantedCapabilities = [...installation.grantedCapabilities, ...missingRequestedGrants].map((grant) =>
-        ["filesystem", "shell", "ui-embedding"].includes(grant.capability) ? { ...grant, granted: true } : grant,
-      );
-      installation.notes = ["Installed, enabled, and granted scoped filesystem, shell, and UI embedding for OpenCode workspace spike."];
-      draft.uiPreferences.activeSection = "opencode";
-      return draft;
-    });
-  };
+  const grantObsidianWorkspaceAccess = () =>
+    grantWorkspaceAccess(obsidianManifest, addonMutationDeps, requestObsidianVaultFolderSelection).catch(reportAddonError);
+  const grantOpenCodeWorkspaceAccess = () =>
+    grantWorkspaceAccess(opencodeManifest, addonMutationDeps).catch(reportAddonError);
   const updateOpenCodeWorkspacePath = (workspacePath: string) => {
     if (!opencodeManifest) {
       return;
@@ -1779,32 +1716,8 @@ export function App() {
       return draft;
     });
   };
-  const grantPaperclipWorkspaceAccess = () => {
-    if (!paperclipManifest) {
-      return;
-    }
-    updateRuntimeState((draft) => {
-      const installation = draft.installations[paperclipManifest.id];
-      if (!installation) {
-        return draft;
-      }
-      installation.installed = true;
-      installation.enabled = true;
-      installation.status = "enabled";
-      const existingGrants = new Map(installation.grantedCapabilities.map((grant) => [grant.capability, grant]));
-      const missingRequestedGrants = paperclipManifest.requestedCapabilities.filter((grant) => !existingGrants.has(grant.capability));
-      installation.grantedCapabilities = [...installation.grantedCapabilities, ...missingRequestedGrants].map((grant) =>
-        ["network", "ui-embedding", "agent-delegation"].includes(grant.capability) ? { ...grant, granted: true } : grant,
-      );
-      installation.config = {
-        ...(installation.config ?? {}),
-        endpoint: typeof installation.config?.endpoint === "string" ? installation.config.endpoint : "http://127.0.0.1:3100",
-      };
-      installation.notes = ["Installed, enabled, and granted local network, UI embedding, and delegation issue creation for Paperclip."];
-      draft.uiPreferences.activeSection = "paperclip";
-      return draft;
-    });
-  };
+  const grantPaperclipWorkspaceAccess = () =>
+    grantWorkspaceAccess(paperclipManifest, addonMutationDeps).catch(reportAddonError);
   const updatePaperclipEndpoint = (endpoint: string) => {
     if (!paperclipManifest) {
       return;
@@ -1822,37 +1735,8 @@ export function App() {
       return draft;
     });
   };
-  const grantHermesWorkspaceAccess = () => {
-    if (!hermesManifest) {
-      return;
-    }
-    updateRuntimeState((draft) => {
-      const installation = draft.installations[hermesManifest.id];
-      if (!installation) {
-        return draft;
-      }
-      installation.installed = true;
-      installation.enabled = true;
-      installation.status = "enabled";
-      const workspaceCapabilities = ["shell", "ui-embedding"];
-      const existingGrants = new Map(installation.grantedCapabilities.map((grant) => [grant.capability, grant]));
-      const missingRequestedGrants = hermesManifest.requestedCapabilities.filter((grant) => !existingGrants.has(grant.capability));
-      installation.grantedCapabilities = [...installation.grantedCapabilities, ...missingRequestedGrants].map((grant) =>
-        workspaceCapabilities.includes(grant.capability)
-          ? { ...grant, granted: true }
-          : grant,
-      );
-      installation.notes = [
-        "Installed, enabled, and granted scoped shell and UI embedding for the Hermes workspace. Provider, network, archive-read, and archive-intake-write remain separately approval-gated.",
-      ];
-      const hermesChannel = draft.channels.find((channel) => channel.id === "desktop-hermes");
-      if (hermesChannel) {
-        hermesChannel.enabled = true;
-      }
-      draft.uiPreferences.activeSection = "hermes";
-      return draft;
-    });
-  };
+  const grantHermesWorkspaceAccess = () =>
+    grantWorkspaceAccess(hermesManifest, addonMutationDeps).catch(reportAddonError);
   const updateHermesProfileHome = (profileHome: string) => {
     if (!hermesManifest) {
       return;
@@ -2454,16 +2338,18 @@ export function App() {
                 onSideloadPathChange={setSideloadPath}
                 onSideload={() => void handleSideload()}
                 onSelectManifest={setSelectedAddonId}
-                onToggleAddonInstall={(manifest) => toggleAddonInstallation(manifest, updateRuntimeState)}
+                onToggleAddonInstall={(manifest) => void toggleAddonInstallation(manifest, addonMutationDeps).catch(reportAddonError)}
                 onToggleGrant={(manifestId, capability) =>
-                  toggleAddonCapabilityGrant(manifestId, capability, updateRuntimeState)
+                  void toggleAddonCapabilityGrant(manifestId, capability, addonMutationDeps).catch(reportAddonError)
                 }
-                onGrantCapabilities={(manifestId, capabilities, requestedCapabilities) =>
-                  grantAddonCapabilities(manifestId, capabilities, requestedCapabilities, updateRuntimeState)
-                }
+                onGrantCapabilities={(manifestId, capabilities) => {
+                  const manifest = allManifests.find(item => item.id === manifestId);
+                  if (manifest) void grantAddonCapabilities(manifest, capabilities, addonMutationDeps).catch(reportAddonError);
+                }}
                 onUpdateAddonConfig={(manifestId, config) => updateAddonConfig(manifestId, config, updateRuntimeState)}
                 onUninstallAddon={(manifest) =>
                   uninstallAddon(manifest, {
+                    client: harnessClient,
                     getState: () => {
                       const readyState = currentReadyStateRef.current;
                       if (!readyState) {
@@ -2473,6 +2359,9 @@ export function App() {
                     },
                     updateRuntimeState,
                     stopRunningWork: addonWorkRegistry.stopRunningWork,
+                  }).catch(error => {
+                    reportAddonError(error);
+                    return { outcome: "blocked" as const };
                   })
                 }
                 onRunLogicianScript={async (manifest, installation, script) =>

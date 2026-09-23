@@ -303,6 +303,7 @@ const harnessRoutes = [
   ["harness_registry", "GET", "/addons/registry", "addon-runtime-read"],
   ["harness_install", "POST", "/addons/install", "addon-runtime-control"],
   ["harness_grants", "POST", "/addons/grants", "addon-runtime-control"],
+  ["harness_enabled", "POST", "/addons/enabled", "addon-runtime-control"],
   ["harness_remove", "POST", "/addons/remove", "addon-runtime-control"],
   ["harness_assign_slot", "POST", "/addons/slots/assign", "addon-runtime-control"],
   ["harness_session", "POST", "/agent/session", "addon-runtime-control"],
@@ -446,4 +447,14 @@ describe("harness review regressions", () => {
     expect(bootstrapCalls()).toHaveLength(2);
     expect(routeCalls()).toHaveLength(1);
   });
+});
+
+it("maps harness_enabled to a capability-scoped host transaction", async () => {
+  const args = { addonId: "addon.test", enabled: false, expectedRevision: 3 };
+  await transport.webInvoke("harness_enabled", args);
+  const call = routeCalls()[0];
+  expect(call[0]).toBe(`${baseUrl}/addons/enabled`);
+  expect(call[1]?.method).toBe("POST");
+  expect(JSON.parse(String(call[1]?.body))).toEqual(args);
+  expect(headers(call).get(capabilityHeader)).toBe(issuedTokens["addon-runtime-control"]);
 });

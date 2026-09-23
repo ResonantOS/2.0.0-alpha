@@ -157,7 +157,7 @@ export async function createHarnessHostService({ userRoot, store = createHarness
   const boundary = createHarnessBoundary({ registry, resolveAdapter, cleanupTimeoutMs });
   const snapshot = () => {
     const projection = registry.snapshot();
-    for (const [addonId, entry] of Object.entries(projection.installations)) entry.supportedOperations = [...(manifests.get(addonId)?.agentRuntime.supportedOperations ?? [])];
+    for (const [addonId, entry] of Object.entries(projection.installations)) entry.supportedOperations = [...(manifests.get(addonId)?.agentRuntime?.supportedOperations ?? [])];
     return { ...projection, candidates: structuredClone(candidates) };
   };
   function route(method, path, capability, required, optional, handler, streaming = false) {
@@ -189,6 +189,10 @@ export async function createHarnessHostService({ userRoot, store = createHarness
     route('POST', '/addons/grants', control, ['addonId', 'grants', 'consent', 'expectedRevision'], [], async p => {
       if (!id(p.addonId) || !Array.isArray(p.grants) || typeof p.consent !== 'boolean' || !revision(p.expectedRevision)) throw fail('invalid-event');
       await registry.setGrants(p.addonId, p.grants, p); return snapshot();
+    }),
+    route('POST', '/addons/enabled', control, ['addonId', 'enabled', 'expectedRevision'], [], async p => {
+      if (!id(p.addonId) || typeof p.enabled !== 'boolean' || !revision(p.expectedRevision)) throw fail('invalid-event');
+      await registry.setEnabled(p.addonId, p.enabled, p); return snapshot();
     }),
     route('POST', '/addons/remove', control, ['addonId'], [], async p => {
       if (!id(p.addonId)) throw fail('invalid-event');

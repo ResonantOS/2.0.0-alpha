@@ -69,6 +69,8 @@ export function createHarnessClient(transport: Partial<Transport> = {}) {
     applySnapshot,
     refresh: () => command("harness_registry"),
     install: (manifest: AddOnManifest, enabled: boolean) => command("harness_install", { manifest, enabled }),
+    setEnabled: (addonId: string, enabled: boolean, expectedRevision: number) =>
+      command("harness_enabled", { addonId, enabled, expectedRevision }),
     setGrants: (args: { addonId: string; grants: readonly CapabilityGrant[]; consent: boolean; expectedRevision: number }) =>
       command("harness_grants", args),
     remove: (addonId: string) => command("harness_remove", { addonId }),

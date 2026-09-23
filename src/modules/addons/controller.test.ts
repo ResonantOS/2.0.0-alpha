@@ -9,6 +9,7 @@ import type {
   LogicianExecutionArtifact,
   ResonantShellState,
 } from "../../core/contracts";
+import { createHarnessClient, type HarnessProjection } from "../../core/harness-client";
 import { buildDefaultState } from "../../core/defaults";
 
 const runtimeMocks = vi.hoisted(() => ({
@@ -30,6 +31,7 @@ import {
   describeUninstallBlock,
   executeSideloadManifest,
   grantAddonCapabilities,
+  grantWorkspaceAccess,
   runAddonLogicianHook,
   runAddonLogicianScript,
   toggleAddonCapabilityGrant,
@@ -131,163 +133,11 @@ const uninstallDeps = (
   updateRuntimeState: (updater: (current: ResonantShellState) => ResonantShellState) => void,
   stopRunningWork?: (input: { addonId: string }) => Promise<{ stopped: boolean; detail?: string }>,
 ) => ({
+  client: createHarnessClient({ invoke: vi.fn(async () => ({ bootEpoch: "test", revision: 1, governanceActivated: false, candidates: [], installations: {}, slots: {} })) as never }),
   getState,
   updateRuntimeState,
   stopRunningWork,
   now: () => new Date("2026-09-07T12:00:00.000Z"),
-});
-
-describe("toggleAddonInstallation", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("installs a previously uninstalled addon", () => {
-    const manifest = createMinimalManifest("addon.test", "Test Addon");
-    let state = buildDefaultState([manifest]);
-    state.installations["addon.test"] = createMinimalInstallation("addon.test", false, false, "available");
-
-    toggleAddonInstallation(manifest, (updater) => {
-      state = updater(state);
-    });
-
-    expect(state.installations["addon.test"].installed).toBe(true);
-    expect(state.installations["addon.test"].enabled).toBe(true);
-    expect(state.installations["addon.test"].status).toBe("enabled");
-  });
-
-  it("reinstalling an uninstalled addon rebuilds fresh grants from the manifest", () => {
-    const manifest = {
-      ...createMinimalManifest("addon.test", "Test Addon"),
-      requestedCapabilities: [capability("network"), capability("archive-read")],
-    };
-    let state = buildDefaultState([manifest]);
-    state.installations["addon.test"] = {
-      ...createMinimalInstallation("addon.test", false, false, "uninstalled"),
-      grantedCapabilities: [{ ...capability("network"), granted: true }],
-      privateProviderProfileIds: ["profile-stale"],
-      config: { vaultPath: "/tmp/stale-vault" },
-    };
-
-    toggleAddonInstallation(manifest, (updater) => {
-      state = updater(state);
-    });
-
-    const installation = state.installations["addon.test"];
-    expect(installation.installed).toBe(true);
-    expect(installation.status).toBe("enabled");
-    expect(installation.grantedCapabilities).toEqual([
-      { ...capability("network"), granted: false },
-      { ...capability("archive-read"), granted: false },
-    ]);
-    expect(installation.privateProviderProfileIds).toEqual([]);
-    expect("config" in installation).toBe(false);
-  });
-
-  it("disables an enabled addon", () => {
-    const manifest = createMinimalManifest("addon.test", "Test Addon");
-    let state = buildDefaultState([manifest]);
-    state.installations["addon.test"] = createMinimalInstallation("addon.test", true, true, "enabled");
-
-    toggleAddonInstallation(manifest, (updater) => {
-      state = updater(state);
-    });
-
-    expect(state.installations["addon.test"].enabled).toBe(false);
-    expect(state.installations["addon.test"].status).toBe("disabled");
-  });
-
-  it("re-enables a disabled addon", () => {
-    const manifest = createMinimalManifest("addon.test", "Test Addon");
-    let state = buildDefaultState([manifest]);
-    state.installations["addon.test"] = createMinimalInstallation("addon.test", true, false, "disabled");
-
-    toggleAddonInstallation(manifest, (updater) => {
-      state = updater(state);
-    });
-
-    expect(state.installations["addon.test"].enabled).toBe(true);
-    expect(state.installations["addon.test"].status).toBe("enabled");
-  });
-
-  it("toggles the hermes channel when toggling hermes addon", () => {
-    const manifest = createHermesManifest();
-    let state = buildDefaultState([manifest]);
-    state.channels.find((c) => c.id === "desktop-hermes")!.enabled = true;
-    state.installations["addon.hermes"] = {
-      ...state.installations["addon.hermes"],
-      installed: true,
-      enabled: true,
-      status: "enabled",
-    };
-
-    toggleAddonInstallation(manifest, (updater) => {
-      state = updater(state);
-    });
-
-    expect(state.channels.find((c) => c.id === "desktop-hermes")?.enabled).toBe(false);
-  });
-
-  it("silently returns when installation is missing from state", () => {
-    const manifest = createMinimalManifest("addon.missing", "Missing");
-    let state = buildDefaultState([]);
-
-    toggleAddonInstallation(manifest, (updater) => {
-      state = updater(state);
-    });
-
-    expect(state.installations["addon.missing"]).toBeUndefined();
-  });
-});
-
-describe("toggleAddonCapabilityGrant", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("toggles a capability grant from false to true", () => {
-    const manifest = createMinimalManifest("addon.test", "Test Addon");
-    let state = buildDefaultState([manifest]);
-    state.installations["addon.test"] = {
-      ...createMinimalInstallation("addon.test", true, true, "enabled"),
-      grantedCapabilities: [
-        { capability: "network", granted: false, scope: "shared", revocationBehavior: "hard-stop" },
-      ],
-    };
-
-    toggleAddonCapabilityGrant("addon.test", "network", (updater) => {
-      state = updater(state);
-    });
-
-    expect(state.installations["addon.test"].grantedCapabilities[0].granted).toBe(true);
-  });
-
-  it("toggles a capability grant from true to false", () => {
-    const manifest = createMinimalManifest("addon.test", "Test Addon");
-    let state = buildDefaultState([manifest]);
-    state.installations["addon.test"] = {
-      ...createMinimalInstallation("addon.test", true, true, "enabled"),
-      grantedCapabilities: [
-        { capability: "network", granted: true, scope: "shared", revocationBehavior: "hard-stop" },
-      ],
-    };
-
-    toggleAddonCapabilityGrant("addon.test", "network", (updater) => {
-      state = updater(state);
-    });
-
-    expect(state.installations["addon.test"].grantedCapabilities[0].granted).toBe(false);
-  });
-
-  it("silently returns when the addon installation is missing", () => {
-    let state = buildDefaultState([]);
-
-    toggleAddonCapabilityGrant("addon.nonexistent", "network", (updater) => {
-      state = updater(state);
-    });
-
-    expect(state.installations["addon.nonexistent"]).toBeUndefined();
-  });
 });
 
 describe("uninstallAddon", () => {
@@ -332,7 +182,7 @@ describe("uninstallAddon", () => {
     });
   });
 
-  it("describeUninstallBlock never blocks sideloaded providers", () => {
+  it("describeUninstallBlock blocks sideloaded active owners", () => {
     const manifest = createSystemSlotManifest("addon.sideloaded");
     const state = buildDefaultState([manifest]);
     state.activeSystemSlotProviderIds = { "primary-agent": manifest.id };
@@ -341,7 +191,7 @@ describe("uninstallAddon", () => {
       source: "sideload",
     };
 
-    expect(describeUninstallBlock(state, manifest)).toBeNull();
+    expect(describeUninstallBlock(state, manifest)).toEqual({ blockReason: "active-system-slot-provider", blockDetail: "primary-agent" });
   });
 
   it("clears grants provider profiles and config", async () => {
@@ -518,7 +368,7 @@ describe("uninstallAddon", () => {
     expect(state).toEqual(before);
   });
 
-  it("ignores non-recommended and non-default-provider slots", async () => {
+  it("blocks non-recommended and non-default active owners", async () => {
     const notRecommended = createSystemSlotManifest("addon.not-recommended", "default-provider", false);
     const alternative = createSystemSlotManifest("addon.alternative", "alternative-provider", true);
 
@@ -537,11 +387,11 @@ describe("uninstallAddon", () => {
         ),
       );
 
-      expect(result.outcome).toBe("uninstalled");
+      expect(result).toMatchObject({ outcome: "blocked", blockReason: "active-system-slot-provider" });
     }
   });
 
-  it("allows sideloaded system-slot providers", async () => {
+  it("blocks sideloaded active system-slot providers", async () => {
     const manifest = createSystemSlotManifest("addon.sideloaded");
     let state = buildDefaultState([manifest]);
     state.activeSystemSlotProviderIds = { "primary-agent": manifest.id };
@@ -560,7 +410,7 @@ describe("uninstallAddon", () => {
       ),
     );
 
-    expect(result.outcome).toBe("uninstalled");
+    expect(result).toMatchObject({ outcome: "blocked", blockReason: "active-system-slot-provider" });
   });
 
   it("allows a bundled default once another provider is selected for all its slots", async () => {
@@ -723,41 +573,6 @@ describe("uninstallAddon", () => {
     expect(result.audit?.clearedPrivateProviderProfileIds).toBe(1);
     expect(auditJson).not.toContain("private-profile-123");
     expect(auditJson).not.toContain("secret-config-value");
-  });
-});
-
-describe("grantAddonCapabilities", () => {
-  it("only grants the requested Hermes workspace capabilities", () => {
-    const hermesManifest = createHermesManifest();
-    let state = buildDefaultState([hermesManifest]);
-
-    grantAddonCapabilities("addon.hermes", ["shell", "ui-embedding"], hermesManifest.requestedCapabilities, (updater) => {
-      state = updater(state);
-    });
-
-    const granted = new Set(
-      state.installations["addon.hermes"].grantedCapabilities
-        .filter((grant) => grant.granted)
-        .map((grant) => grant.capability),
-    );
-
-    expect(granted).toEqual(new Set(["shell", "ui-embedding"]));
-    expect(state.channels.find((channel) => channel.id === "desktop-hermes")?.enabled).toBe(true);
-  });
-
-  it("merges missing requested capabilities into existing grants", () => {
-    const hermesManifest = createHermesManifest();
-    let state = buildDefaultState([hermesManifest]);
-    state.installations["addon.hermes"].grantedCapabilities = [];
-
-    grantAddonCapabilities("addon.hermes", ["shell"], hermesManifest.requestedCapabilities, (updater) => {
-      state = updater(state);
-    });
-
-    expect(state.installations["addon.hermes"].grantedCapabilities.length).toBeGreaterThanOrEqual(
-      hermesManifest.requestedCapabilities.length,
-    );
-    expect(state.installations["addon.hermes"].grantedCapabilities.find((g) => g.capability === "shell")?.granted).toBe(true);
   });
 });
 
@@ -1033,4 +848,128 @@ describe("executeSideloadManifest", () => {
 
     expect(setErrorState).toHaveBeenCalledWith("Failed to sideload manifest.");
   });
+});
+
+describe("all add-on and quick-grant actions use host transactions", () => {
+  it.each(["install", "disable", "enable", "grant", "batch", "remove"])("%s waits for acknowledgement and denial changes no consent", async action => {
+    const manifest = createHermesManifest();
+    let state = buildDefaultState([manifest]);
+    state.installations[manifest.id].installed = action !== "install";
+    state.installations[manifest.id].enabled = action !== "enable";
+    state.installations[manifest.id].status = action === "install" ? "available" : "enabled";
+    const snapshot: HarnessProjection = { bootEpoch: "boot", revision: 4, governanceActivated: false, candidates: [], slots: {}, installations:
+      action === "install" ? {} : { [manifest.id]: { ...state.installations[manifest.id], disabledOperations: [], hiddenSurfaceIds: [] } } };
+    let reject!: (error: Error) => void;
+    const invoke = vi.fn((_command: string, _args?: Record<string, unknown>) => new Promise<HarnessProjection>((_, fail) => { reject = fail; }));
+    const client = createHarnessClient({ invoke: invoke as never });
+    client.applySnapshot(snapshot);
+    const deps = { client, getState: () => state, updateRuntimeState: (updater: (s: ResonantShellState) => ResonantShellState) => { state = updater(state); } };
+    const before = structuredClone(state);
+    const pending = action === "remove" ? uninstallAddon(manifest, deps)
+      : action === "grant" ? toggleAddonCapabilityGrant(manifest.id, "shell", deps)
+      : action === "batch" ? grantAddonCapabilities(manifest, ["shell", "ui-embedding"], deps)
+      : toggleAddonInstallation(manifest, deps);
+    const rejected = expect(pending).rejects.toThrow("denied");
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
+    expect(state).toEqual(before);
+    expect(invoke.mock.calls[0][0]).toBe(action === "install" ? "harness_install" : action === "remove" ? "harness_remove" : ["grant", "batch"].includes(action) ? "harness_grants" : "harness_enabled");
+    reject(new Error("denied"));
+    await rejected;
+    expect(state).toEqual(before);
+  });
+});
+
+describe("acknowledged add-on mutations", () => {
+  it.each(["install", "disable", "enable", "grant", "revoke", "batch"])("%s applies only the host result", async action => {
+    const manifest = createHermesManifest();
+    let state = buildDefaultState([manifest]);
+    state.installations[manifest.id].status = "uninstalled";
+    state.installations[manifest.id].config = { stale: true };
+    state.installations[manifest.id].privateProviderProfileIds = ["stale"];
+    const initial: HarnessProjection = { bootEpoch: "boot", revision: 2, governanceActivated: false, candidates: [], slots: {}, installations: {} };
+    const entry = { addonId: manifest.id, installed: true, enabled: action !== "enable", grantedCapabilities: manifest.requestedCapabilities.map(g => ({ ...g, granted: action === "revoke" })), disabledOperations: [], hiddenSurfaceIds: [] };
+    if (action !== "install") initial.installations = { [manifest.id]: entry };
+    const acknowledged = structuredClone(initial);
+    acknowledged.revision++;
+    acknowledged.installations = { [manifest.id]: { ...entry, enabled: action !== "disable", grantedCapabilities: entry.grantedCapabilities.map(g => ({ ...g, granted: action === "batch" ? ["shell", "ui-embedding"].includes(g.capability) : action === "grant" && g.capability === "shell" })) } };
+    let resolve!: (p: HarnessProjection) => void;
+    const invoke = vi.fn((_command: string, _args?: Record<string, unknown>) => new Promise<HarnessProjection>(done => { resolve = done; }));
+    const client = createHarnessClient({ invoke: invoke as never }); client.applySnapshot(initial);
+    const deps = { client, getState: () => state, updateRuntimeState: (updater: (s: ResonantShellState) => ResonantShellState) => { state = updater(state); } };
+    const before = structuredClone(state);
+    const pending = action === "batch" ? grantAddonCapabilities(manifest, ["shell", "ui-embedding"], deps)
+      : ["grant", "revoke"].includes(action) ? toggleAddonCapabilityGrant(manifest.id, "shell", deps)
+      : toggleAddonInstallation(manifest, deps);
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
+    expect(state).toEqual(before);
+    if (action === "batch") expect(invoke).toHaveBeenCalledWith("harness_grants", { addonId: manifest.id, consent: true, expectedRevision: 2, grants: manifest.requestedCapabilities.filter(g => ["shell", "ui-embedding"].includes(g.capability)).map(g => ({ ...g, granted: true })) });
+    resolve(acknowledged); await pending;
+    expect(state.installations[manifest.id].grantedCapabilities).toEqual(acknowledged.installations[manifest.id].grantedCapabilities);
+    expect(state.installations[manifest.id].enabled).toBe(action !== "disable");
+    expect(state.channels.find(c => c.id === "desktop-hermes")?.enabled).toBe(action !== "disable");
+    expect(state.installations[manifest.id].config).toBeUndefined();
+    expect(state.installations[manifest.id].privateProviderProfileIds).toEqual([]);
+  });
+});
+
+it.each(["batch", "toggle"])("a denied %s after installation refreshes installed state without inventing grants", async action => {
+  const manifest = createHermesManifest();
+  let state = buildDefaultState([manifest]);
+  const initial: HarnessProjection = { bootEpoch: "boot", revision: 0, governanceActivated: false, candidates: [], slots: {}, installations: {} };
+  const installed: HarnessProjection = { ...initial, revision: 1, installations: { [manifest.id]: {
+    addonId: manifest.id, installed: true, enabled: true, grantedCapabilities: manifest.requestedCapabilities,
+    disabledOperations: [], hiddenSurfaceIds: [],
+  } } };
+  const refreshed: HarnessProjection = { ...installed, revision: 2, installations: { [manifest.id]: {
+    ...installed.installations[manifest.id], enabled: false,
+  } } };
+  const invoke = vi.fn().mockResolvedValueOnce(installed).mockRejectedValueOnce(new Error("grant denied"))
+    .mockResolvedValueOnce(refreshed);
+  const client = createHarnessClient({ invoke }); client.applySnapshot(initial);
+  const deps = { client, getManifest: () => manifest, getState: () => state,
+    updateRuntimeState: (updater: (s: ResonantShellState) => ResonantShellState) => { state = updater(state); } };
+  await expect(action === "batch"
+    ? grantAddonCapabilities(manifest, ["shell", "ui-embedding"], deps)
+    : toggleAddonCapabilityGrant(manifest.id, "shell", deps)).rejects.toThrow("grant denied");
+  const expected = refreshed.installations[manifest.id];
+  expect.soft(state.installations[manifest.id]).toMatchObject({ installed: expected.installed, enabled: expected.enabled,
+    status: "disabled", grantedCapabilities: expected.grantedCapabilities });
+  expect.soft(state.channels.find(channel => channel.id === "desktop-hermes")?.enabled).toBe(expected.enabled);
+  expect.soft(client.getSnapshot()).toEqual(refreshed);
+  expect(invoke.mock.calls.map(([command]) => command)).toEqual(["harness_install", "harness_grants", "harness_registry"]);
+  expect(expected.grantedCapabilities.every(g => !g.granted)).toBe(true);
+});
+
+it.each(["install", "grant"])("a denied workspace %s never opens the vault picker", async denial => {
+  const manifest = { ...createMinimalManifest("addon.obsidian", "Obsidian"),
+    requestedCapabilities: [capability("filesystem"), capability("ui-embedding")] };
+  let state = buildDefaultState([manifest]);
+  const initial: HarnessProjection = { bootEpoch: "boot", revision: 0, governanceActivated: false, candidates: [], slots: {},
+    installations: denial === "install" ? {} : { [manifest.id]: { addonId: manifest.id, installed: true, enabled: true,
+      grantedCapabilities: manifest.requestedCapabilities, disabledOperations: [], hiddenSurfaceIds: [] } } };
+  const invoke = vi.fn().mockRejectedValue(new Error("host denied"));
+  const client = createHarnessClient({ invoke }); client.applySnapshot(initial);
+  const selectVault = vi.fn().mockResolvedValue("/vault");
+  await expect(grantWorkspaceAccess(manifest, {
+    client, getState: () => state, updateRuntimeState: updater => { state = updater(state); },
+  }, selectVault)).rejects.toThrow("host denied");
+  expect(selectVault).not.toHaveBeenCalled();
+  expect(invoke.mock.calls.map(([command]) => command)).toEqual([denial === "install" ? "harness_install" : "harness_grants"]);
+});
+
+it("an acknowledgement bootstraps an installation missing from the display draft", async () => {
+  const manifest = createHermesManifest();
+  let state = buildDefaultState([]);
+  const initial: HarnessProjection = { bootEpoch: "boot", revision: 0, governanceActivated: false, candidates: [], slots: {}, installations: {} };
+  const entry = { addonId: manifest.id, installed: true, enabled: false,
+    grantedCapabilities: [{ ...capability("shell"), granted: true }], disabledOperations: [], hiddenSurfaceIds: [] };
+  const invoke = vi.fn().mockResolvedValue({ ...initial, revision: 1, installations: { [manifest.id]: entry } });
+  const client = createHarnessClient({ invoke }); client.applySnapshot(initial);
+  await toggleAddonInstallation(manifest, {
+    client, getState: () => state, updateRuntimeState: updater => { state = updater(state); },
+  });
+  expect(state.installations[manifest.id]).toMatchObject({ addonId: manifest.id, installed: true, enabled: false,
+    status: "disabled", grantedCapabilities: entry.grantedCapabilities,
+    privateProviderProfileIds: [], recommendedGrantPresetIds: [] });
+  expect(state.installations[manifest.id].grantedCapabilities).not.toBe(client.getSnapshot()?.installations[manifest.id].grantedCapabilities);
 });

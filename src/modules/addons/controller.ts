@@ -14,6 +14,7 @@ import type {
 } from "../../core/contracts";
 import { executeLogicianHook, executeLogicianScript } from "../../core/logician";
 import { applyProviderCredentialStatuses, hydrateState, loadProviderCredentialStatuses, sideloadManifest } from "../../core/runtime";
+import type { createHarnessClient, HarnessProjection } from "../../core/harness-client";
 import { selectedSystemSlotProviderId } from "../shell/system-slots";
 
 type SideloadControllerInput = {
@@ -57,43 +58,63 @@ export const executeSideloadManifest = async ({
   }
 };
 
-export const toggleAddonInstallation = (
-  manifest: AddOnManifest,
-  updateRuntimeState: (updater: (current: ResonantShellState) => ResonantShellState) => void,
-): void => {
-  updateRuntimeState((draft) => {
-    const installation = draft.installations[manifest.id];
-    if (!installation) {
-      return draft;
+export interface AddonMutationDependencies {
+  client: ReturnType<typeof createHarnessClient>;
+  getManifest?: (addonId: string) => AddOnManifest | undefined;
+  getState: () => ResonantShellState;
+  updateRuntimeState: (updater: (current: ResonantShellState) => ResonantShellState) => void;
+}
+
+const hostSnapshot = async (deps: AddonMutationDependencies) =>
+  deps.client.getSnapshot() ?? await deps.client.refresh();
+
+// Copy only acknowledged governance into the existing display model. Local
+// config, catalog metadata and user data are not host consent.
+const applyAcknowledgement = (addonId: string, snapshot: HarnessProjection, deps: AddonMutationDependencies) => {
+  const acknowledged = snapshot.installations[addonId];
+  if (!acknowledged) throw new Error("Host did not acknowledge the add-on installation.");
+  deps.updateRuntimeState(draft => {
+    // The registry does not attest catalog provenance. Unknown entries get
+    // conservative display metadata; governance below comes from the host.
+    const installation = draft.installations[addonId] ??= {
+      addonId: acknowledged.addonId,
+      source: "sideload",
+      provenanceTier: "sideloaded-unverified",
+      verificationState: "unverified",
+      installed: acknowledged.installed,
+      enabled: acknowledged.enabled,
+      status: "disabled",
+      grantedCapabilities: [],
+      recommendedGrantPresetIds: [],
+      privateProviderProfileIds: [],
+      notes: [],
+    };
+    if (installation.status === "uninstalled") {
+      installation.privateProviderProfileIds = [];
+      delete installation.config;
     }
-    if (!installation.installed) {
-      if (installation.status === "uninstalled") {
-        // Reinstall after uninstall is a fresh grant flow: nothing from the removed installation carries over.
-        installation.grantedCapabilities = manifest.requestedCapabilities.map((grant) => ({ ...grant, granted: false }));
-        installation.privateProviderProfileIds = [];
-        delete installation.config;
-      }
-      installation.installed = true;
-      installation.enabled = true;
-      installation.status = "enabled";
-      installation.notes = [`Installed from the ${installation.source} catalog.`];
-    } else if (installation.enabled) {
-      installation.enabled = false;
-      installation.status = "disabled";
-      installation.notes = ["Disabled without uninstalling the add-on."];
-    } else {
-      installation.enabled = true;
-      installation.status = "enabled";
-      installation.notes = ["Re-enabled after prior disable."];
-    }
-    if (manifest.id === "addon.hermes") {
-      const hermesChannel = draft.channels.find((channel) => channel.id === "desktop-hermes");
-      if (hermesChannel) {
-        hermesChannel.enabled = installation.enabled;
-      }
+    installation.installed = acknowledged.installed;
+    installation.enabled = acknowledged.enabled;
+    installation.grantedCapabilities = structuredClone([...acknowledged.grantedCapabilities]);
+    installation.status = acknowledged.enabled ? "enabled" : "disabled";
+    if (addonId === "addon.hermes") {
+      const channel = draft.channels.find(item => item.id === "desktop-hermes");
+      if (channel) channel.enabled = acknowledged.enabled;
     }
     return draft;
   });
+};
+
+export const toggleAddonInstallation = async (
+  manifest: AddOnManifest,
+  deps: AddonMutationDependencies,
+): Promise<void> => {
+  const snapshot = await hostSnapshot(deps);
+  const installation = snapshot.installations[manifest.id];
+  const next = installation?.installed
+    ? await deps.client.setEnabled(manifest.id, !installation.enabled, snapshot.revision)
+    : await deps.client.install(manifest, true);
+  applyAcknowledgement(manifest.id, next, deps);
 };
 
 export type UninstallAddonBlockReason =
@@ -125,9 +146,7 @@ export interface UninstallAddonResult {
   audit?: UninstallAddonAuditRecord;
 }
 
-export interface UninstallAddonDependencies {
-  getState: () => ResonantShellState;
-  updateRuntimeState: (updater: (current: ResonantShellState) => ResonantShellState) => void;
+export interface UninstallAddonDependencies extends AddonMutationDependencies {
   stopRunningWork?: (input: { addonId: string }) => Promise<{ stopped: boolean; detail?: string }>;
   now?: () => Date;
 }
@@ -144,17 +163,9 @@ const decideUninstall = (state: ResonantShellState, manifest: AddOnManifest): Un
   if (installation.status === "uninstalled") {
     return { ok: false, blockReason: "already-uninstalled" };
   }
-  const activeDefaultSlotIds =
-    installation.source === "bundled"
-      ? (manifest.systemSlots ?? [])
-          .filter(
-            (slot) =>
-              slot.role === "default-provider" &&
-              slot.recommended === true &&
-              selectedSystemSlotProviderId(state, slot.id) === manifest.id,
-          )
-          .map((slot) => slot.id)
-      : [];
+  const activeDefaultSlotIds = (manifest.systemSlots ?? [])
+    .filter(slot => selectedSystemSlotProviderId(state, slot.id) === manifest.id)
+    .map(slot => slot.id);
   if (activeDefaultSlotIds.length > 0) {
     return {
       ok: false,
@@ -207,6 +218,9 @@ export const uninstallAddon = async (
     }
   }
 
+  const snapshot = await deps.client.remove(manifest.id);
+  if (snapshot.installations[manifest.id]) throw new Error("Host did not acknowledge removal.");
+
   let result: UninstallAddonResult = {
     outcome: "blocked",
     blockReason: "not-installed",
@@ -258,50 +272,105 @@ export const uninstallAddon = async (
   return result;
 };
 
-export const toggleAddonCapabilityGrant = (
+export const toggleAddonCapabilityGrant = async (
   manifestId: string,
   capability: CapabilityGrant["capability"],
-  updateRuntimeState: (updater: (current: ResonantShellState) => ResonantShellState) => void,
-): void => {
-  updateRuntimeState((draft) => {
-    const installation = draft.installations[manifestId] as AddOnInstallation | undefined;
-    if (!installation) {
-      return draft;
+  deps: AddonMutationDependencies,
+): Promise<void> => {
+  let snapshot = await hostSnapshot(deps);
+  let prepared = false;
+  if (!snapshot.installations[manifestId]) {
+    const manifest = deps.getManifest?.(manifestId);
+    if (!manifest) throw new Error("Install the add-on through the host before granting access.");
+    snapshot = await deps.client.install(manifest, true);
+    prepared = true;
+  }
+  if (prepared) applyAcknowledgement(manifestId, snapshot, deps);
+  const target = snapshot.installations[manifestId]?.grantedCapabilities.find(grant => grant.capability === capability);
+  if (!target) throw new Error("Install the add-on through the host before granting access.");
+  try {
+    const next = await deps.client.setGrants({ addonId: manifestId, grants: [{ ...target, granted: !target.granted }],
+      consent: true, expectedRevision: snapshot.revision });
+    applyAcknowledgement(manifestId, next, deps);
+  } catch (error) {
+    if (prepared) {
+      try {
+        applyAcknowledgement(manifestId, await deps.client.refresh(), deps);
+      } catch {
+        // Retain the last acknowledged state and the original host refusal if
+        // the recovery read fails. Never infer grants from the failed command.
+      }
     }
-    const target = installation?.grantedCapabilities.find((grant) => grant.capability === capability);
-    if (target) {
-      target.granted = !target.granted;
-      installation.status = installation.enabled ? "enabled" : installation.installed ? "installed" : "available";
-    }
-    return draft;
-  });
+    throw error;
+  }
 };
 
-export const grantAddonCapabilities = (
-  manifestId: string,
+export const grantAddonCapabilities = async (
+  manifest: AddOnManifest,
   capabilities: CapabilityGrant["capability"][],
-  requestedCapabilities: CapabilityGrant[],
-  updateRuntimeState: (updater: (current: ResonantShellState) => ResonantShellState) => void,
-): void => {
-  updateRuntimeState((draft) => {
-    const installation = draft.installations[manifestId] as AddOnInstallation | undefined;
-    if (!installation) {
-      return draft;
-    }
-    installation.installed = true;
-    installation.enabled = true;
-    const existingGrants = new Map(installation.grantedCapabilities.map((grant) => [grant.capability, grant]));
-    const missingRequestedGrants = requestedCapabilities.filter((grant) => !existingGrants.has(grant.capability));
-    installation.grantedCapabilities = [...installation.grantedCapabilities, ...missingRequestedGrants].map((grant) =>
-      capabilities.includes(grant.capability) ? { ...grant, granted: true } : grant,
-    );
-    installation.status = "enabled";
-    installation.notes = [`Installed, enabled, and granted ${capabilities.join(", ")} through reviewed setup.`];
-    if (manifestId === "addon.hermes") {
-      const hermesChannel = draft.channels.find((channel) => channel.id === "desktop-hermes");
-      if (hermesChannel) {
-        hermesChannel.enabled = true;
+  deps: AddonMutationDependencies,
+): Promise<void> => {
+  // Validate the entire declared set before any transaction. The single grants
+  // command lets the host commit all selected grants or reject all of them.
+  const grants = [...new Set(capabilities)].map(capability => {
+    const request = manifest.requestedCapabilities.find(grant => grant.capability === capability);
+    if (!request) throw new Error("The add-on did not request this capability.");
+    return { ...request, granted: true };
+  });
+  let snapshot = await hostSnapshot(deps);
+  let prepared = false;
+  if (!snapshot.installations[manifest.id]?.installed) {
+    snapshot = await deps.client.install(manifest, true);
+    prepared = true;
+  } else if (!snapshot.installations[manifest.id].enabled) {
+    snapshot = await deps.client.setEnabled(manifest.id, true, snapshot.revision);
+    prepared = true;
+  }
+  if (prepared) applyAcknowledgement(manifest.id, snapshot, deps);
+  try {
+    const next = await deps.client.setGrants({ addonId: manifest.id, grants, consent: true, expectedRevision: snapshot.revision });
+    applyAcknowledgement(manifest.id, next, deps);
+  } catch (error) {
+    if (prepared) {
+      try {
+        applyAcknowledgement(manifest.id, await deps.client.refresh(), deps);
+      } catch {
+        // Retain the last acknowledged state and the original host refusal if
+        // the recovery read fails. Never infer grants from the failed command.
       }
+    }
+    throw error;
+  }
+};
+
+export const grantWorkspaceAccess = async (
+  manifest: AddOnManifest | undefined,
+  deps: AddonMutationDependencies,
+  selectVault?: () => Promise<string | null>,
+): Promise<void> => {
+  if (!manifest) return;
+  const presets: Record<string, CapabilityGrant["capability"][]> = {
+    "addon.browser": ["network", "ui-embedding", "browser-control", "filesystem"],
+    "addon.obsidian": ["filesystem", "ui-embedding"],
+    "addon.opencode": ["filesystem", "shell", "ui-embedding"],
+    "addon.paperclip": ["network", "ui-embedding", "agent-delegation"],
+    "addon.hermes": ["shell", "ui-embedding"],
+  };
+  await grantAddonCapabilities(manifest, presets[manifest.id], deps);
+  const currentPath = deps.getState().installations[manifest.id]?.config?.vaultPath;
+  const vaultPath = manifest.id === "addon.obsidian"
+    ? typeof currentPath === "string" && currentPath ? currentPath : await selectVault?.() : undefined;
+  deps.updateRuntimeState(draft => {
+    const installation = draft.installations[manifest.id];
+    if (manifest.id === "addon.obsidian" && vaultPath) {
+      installation.config = { ...installation.config, vaultPath, lastWorkspaceConnectedAt: new Date().toISOString() };
+    }
+    const section = manifest.id.slice("addon.".length);
+    if (section === "browser" || section === "opencode" || section === "paperclip" || section === "hermes") {
+      draft.uiPreferences.activeSection = section;
+    }
+    if (manifest.id === "addon.paperclip") {
+      installation.config = { ...installation.config, endpoint: installation.config?.endpoint ?? "http://127.0.0.1:3100" };
     }
     return draft;
   });
