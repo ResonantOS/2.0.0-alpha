@@ -42,7 +42,8 @@ async function governed(t, adapter, owner = 'provider-chat-demo') {
   for (const manifest of manifests) {
     await registry.install(manifest, { enabled: true });
     await registry.setGrants(manifest.id, manifest.requestedCapabilities.filter(g => g.capability !== 'agent-delegation').map(g => ({ ...g, granted: true })), { consent: true, expectedRevision: registry.snapshot().revision });
-    assert.equal(registry.snapshot().installations[manifest.id].grantedCapabilities.find(g => g.capability === 'agent-delegation').granted, false);
+    // Positive check: the grant loop must have produced live agent-runtime authority (the delegation row no longer exists to check).
+    assert.equal(registry.snapshot().installations[manifest.id].grantedCapabilities.some(g => g.capability === 'agent-runtime' && g.granted), true);
   }
   await registry.assignSlot('primary-agent', `addon.${owner}`, { expectedGeneration: 0 });
   let dshCalls = 0;
@@ -233,7 +234,7 @@ test('example manifests validate and reject paths, unreviewed adapters and unapp
     assert.equal(validation.valid, true, JSON.stringify(validation.issues));
     assert.equal(manifest.requestedCapabilities.every(g => g.granted === false), true);
     assert.equal(manifest.agentRuntime.requiredCapabilities.includes('agent-delegation'), false);
-    assert.equal(manifest.requestedCapabilities.some(g => g.capability === 'agent-delegation'), true);
+    assert.equal(manifest.requestedCapabilities.some(g => g.capability === 'agent-delegation'), false);
     for (const patch of [{ credentialBinding: '/private/secret-file' }, { importPath: './evil.mjs' }, { headers: { Authorization: 'private-canary' } }]) {
       const invalid = structuredClone(manifest); Object.assign(invalid.agentRuntime, patch);
       assert.equal(validateAddOnManifest(invalid).valid, false);

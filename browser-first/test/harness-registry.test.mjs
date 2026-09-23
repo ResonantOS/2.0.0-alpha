@@ -36,6 +36,32 @@ test('installation clears authored consent', async () => {
   await assert.rejects(registry.setGrants('addon.one', [{ capability: 'agent-runtime', granted: true, scope: 'shared', revocationBehavior: 'hard-stop' }], { consent: true, expectedRevision: 1 }), { code: 'permission-denied' });
 });
 
+for (const runtimeRequested of [false, true]) {
+  test(`delegation consent does not migrate to runtime consent (runtime requested: ${runtimeRequested})`, async () => {
+    const store = memoryStore(), value = manifest();
+    if (!runtimeRequested) value.requestedCapabilities = value.requestedCapabilities.filter(grant => grant.capability !== 'agent-runtime');
+    const grants = value.requestedCapabilities.filter(grant => grant.capability !== 'agent-runtime');
+    await store.write({ version: 1, phase: 'committed', state: {
+      revision: 7, governanceActivated: true,
+      installations: { [value.id]: { manifest: value, enabled: true, grants } },
+      slots: { 'primary-agent': { addonId: value.id, generation: 3 } },
+    } });
+    const registry = await open(store);
+    const pending = registry.snapshot().installations[value.id]?.grantedCapabilities.find(grant => grant.capability === 'agent-runtime');
+    assert.deepEqual(pending, { capability: 'agent-runtime', granted: false, scope: 'system', revocationBehavior: 'hard-stop' },
+      'legacy delegation consent must expose a pending runtime request');
+    assert.equal(registry.snapshot().installations[value.id].grantedCapabilities.find(grant => grant.capability === 'agent-delegation').granted, true);
+    assert.equal(registry.snapshot().slots['primary-agent'].available, false);
+    assert.throws(() => registry.authorize('primary-agent', value.id), { code: 'permission-denied' });
+    await assert.rejects(assign(registry, value.id, 3), { code: 'permission-denied' });
+    await assert.rejects(registry.setGrants(value.id, [{ ...pending, granted: true }], { consent: false, expectedRevision: 7 }), { code: 'permission-denied' });
+    await registry.setGrants(value.id, [{ ...pending, granted: true }], { consent: true, expectedRevision: 7 });
+    assert.equal(registry.authorize('primary-agent', value.id).addonId, value.id);
+    const restored = await open(store);
+    assert.equal(restored.authorize('primary-agent', value.id).addonId, value.id, 'explicit runtime consent survives restart');
+  });
+}
+
 test('replacement persists one compare-and-swap winner', async () => {
   const store = memoryStore(), registry = await open(store);
   for (const id of ['addon.one', 'addon.two', 'addon.three']) await installGranted(registry, manifest(id));

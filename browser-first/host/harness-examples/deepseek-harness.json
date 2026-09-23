@@ -5,7 +5,7 @@
   "author": "ResonantOS",
   "category": "agent",
   "sdkVersion": "0.1.0",
-  "description": "Opt-in harness example. Host installation, explicit consent and slot ownership are required; this manifest grants no authority. Delegation is requested only for transitional SDK compatibility.",
+  "description": "Opt-in harness example. Host installation, explicit consent and slot ownership are required; this manifest grants no authority.",
   "runtimeType": "local-service",
   "surfaces": [],
   "requestedCapabilities": [
@@ -23,12 +23,6 @@
     },
     {
       "capability": "chat-interface",
-      "granted": false,
-      "scope": "system",
-      "revocationBehavior": "hard-stop"
-    },
-    {
-      "capability": "agent-delegation",
       "granted": false,
       "scope": "system",
       "revocationBehavior": "hard-stop"

@@ -1,6 +1,7 @@
 // Intent citation: docs/architecture/ADR-018-addon-sdk-v0.md
 
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import type { AddOnManifest, HarnessPublicError } from "../../core/contracts";
 import { validateAddOnManifest } from "./validation";
 
@@ -756,7 +757,7 @@ describe("add-on SDK manifest validation", () => {
   it("rejects a systemSlot claim whose backing capability is not declared (P1-b ungated slot bypass)", () => {
     const result = validateAddOnManifest(
       validManifest({
-        // Claims the primary-agent slot but does NOT declare agent-delegation,
+        // Claims the primary-agent slot but does NOT declare agent-runtime,
         // so the runtime grant gate (activeSystemSlotProvider) can never apply.
         systemSlots: [
           { id: "primary-agent", role: "default-provider", replaceable: true },
@@ -785,24 +786,35 @@ describe("add-on SDK manifest validation", () => {
     expect(result.issues.some((issue) => issue.code === "system-slot-unknown")).toBe(true);
   });
 
-  it("accepts a properly capability-gated systemSlot claim", () => {
-    const base = validManifest();
-    const result = validateAddOnManifest(
-      validManifest({
-        // primary-agent's backing capability (agent-delegation) is declared, so
-        // the runtime grant gate can apply -> covered.
+  it.each(["agent-runtime", "agent-delegation"] as const)(
+    "primary execution requires runtime rather than delegation consent: %s",
+    (capability) => {
+      const result = validateAddOnManifest(validManifest({
         requestedCapabilities: [
-          ...base.requestedCapabilities,
-          { capability: "agent-delegation", granted: false, scope: "system", revocationBehavior: "hard-stop" },
+          ...validManifest().requestedCapabilities,
+          { capability, granted: false, scope: "system", revocationBehavior: "hard-stop" },
         ],
-        systemSlots: [
-          { id: "primary-agent", role: "default-provider", replaceable: true },
-        ],
-      }),
-    );
+        systemSlots: [{ id: "primary-agent", role: "default-provider", replaceable: true }],
+      }));
+      expect(result.valid).toBe(capability === "agent-runtime");
+      expect(result.issues.some((issue) => issue.code === "system-slot-undeclared-capability"))
+        .toBe(capability === "agent-delegation");
+    },
+  );
 
-    expect(result.issues.filter((issue) => issue.code.startsWith("system-slot"))).toEqual([]);
-    expect(result.valid).toBe(true);
+  it("ships primary runtime requests with an explicit Augmentor recommended grant", () => {
+    const manifest = JSON.parse(readFileSync("public/addons/augmentor-chat.json", "utf8")) as AddOnManifest;
+    const request = { capability: "agent-runtime", granted: false, scope: "system", revocationBehavior: "hard-stop" };
+    expect(manifest.requestedCapabilities).toContainEqual(request);
+    expect(manifest.grantPresets?.find((preset) => preset.id === "recommended-primary-chat")?.grants)
+      .toContainEqual({ ...request, granted: true });
+    expect(validateAddOnManifest(manifest).valid).toBe(true);
+  });
+
+  it.each(["deepseek-harness", "provider-chat-demo"])("validates %s without transitional delegation", (name) => {
+    const manifest = JSON.parse(readFileSync(`browser-first/host/harness-examples/${name}.json`, "utf8")) as AddOnManifest;
+    expect(manifest.requestedCapabilities.some((grant) => grant.capability === "agent-delegation")).toBe(false);
+    expect(validateAddOnManifest(manifest).valid).toBe(true);
   });
 });
 

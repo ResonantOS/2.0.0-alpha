@@ -44,6 +44,17 @@ const manifestForSlot = (
 });
 
 describe("system slot replacement runtime", () => {
+  it.each(["agent-runtime", "agent-delegation"] as const)(
+    "primary execution requires runtime rather than delegation consent: %s",
+    (capability) => {
+      const manifest = manifestForSlot("addon.primary", "primary-agent", capability);
+      const state = applyFirstRunRecommendedAddOns(buildDefaultState([manifest]), [manifest], [manifest.id]);
+      expect(systemSlotAvailable(state, [manifest], "primary-agent")).toBe(capability === "agent-runtime");
+      expect(activeSystemSlotProvider(state, [manifest], "primary-agent")?.manifest.id ?? null)
+        .toBe(capability === "agent-runtime" ? manifest.id : null);
+    },
+  );
+
   it("keeps legacy no-slot fixtures available until they migrate to ADR-026 manifests", () => {
     const state = buildDefaultState([]);
 
@@ -249,7 +260,7 @@ describe("host-managed system slots", () => {
 
   it("requires host-owner metadata and installation before reporting a usable provider", () => {
     const host = manifestForSlot("addon.host", "primary-agent", "agent-runtime");
-    const local = manifestForSlot("addon.local", "primary-agent", "agent-delegation");
+    const local = manifestForSlot("addon.local", "primary-agent", "agent-runtime");
     const state = applyFirstRunRecommendedAddOns(buildDefaultState([local]), [local], [local.id]);
     const projection = { ...projectionFor({ "primary-agent": { addonId: host.id, generation: 2, available: true } }),
       installations: { [host.id]: { addonId: host.id, installed: true, enabled: true,
@@ -263,7 +274,7 @@ describe("host-managed system slots", () => {
   });
 
   it("uses only the projected owner and installation despite stale local grants or selection", () => {
-    const local = manifestForSlot("addon.local", "primary-agent", "agent-delegation");
+    const local = manifestForSlot("addon.local", "primary-agent", "agent-runtime");
     const host = manifestForSlot("addon.host", "primary-agent", "agent-runtime");
     const state = applyFirstRunRecommendedAddOns(buildDefaultState([local]), [local], [local.id]);
     const installation = { addonId: host.id, installed: true, enabled: true,

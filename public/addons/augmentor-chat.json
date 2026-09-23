@@ -59,7 +59,7 @@
       "revocationBehavior": "degrade"
     },
     {
-      "capability": "agent-delegation",
+      "capability": "agent-runtime",
       "granted": false,
       "scope": "system",
       "revocationBehavior": "hard-stop"
@@ -82,6 +82,12 @@
       "label": "Recommended primary chat",
       "description": "Enable Augmentor Chat as the default primary-agent interface with provider access and scoped memory read/write-to-intake permissions.",
       "grants": [
+        {
+          "capability": "agent-runtime",
+          "granted": true,
+          "scope": "system",
+          "revocationBehavior": "hard-stop"
+        },
         {
           "capability": "chat-interface",
           "granted": true,
