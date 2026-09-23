@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -77,10 +80,15 @@ test('demo evidence rejects a swap-back answer matching the provider answer', as
 });
 
 test('live-mode verifier success says liveness is attested', () => {
+  // A real file, not /dev/stdin: on Linux the child's stdin is a socketpair and opening /proc/self/fd/0 fails with ENXIO.
+  const dir = mkdtempSync(path.join(tmpdir(), 'harness-swap-demo-'));
+  const evidencePath = path.join(dir, 'evidence.json');
+  writeFileSync(evidencePath, JSON.stringify(bundle()));
   const result = spawnSync(process.execPath, [
     fileURLToPath(new URL('../../scripts/harness-swap-demo.mjs', import.meta.url)),
-    '--verify', '/dev/stdin',
-  ], { input: JSON.stringify(bundle()), encoding: 'utf8' });
+    '--verify', evidencePath,
+  ], { encoding: 'utf8' });
+  rmSync(dir, { recursive: true, force: true });
   assert.ifError(result.error);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /liveness is attested/);
