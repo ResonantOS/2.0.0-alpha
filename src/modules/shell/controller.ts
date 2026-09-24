@@ -2,7 +2,6 @@
 // Intent citation: docs/architecture/ADR-009-rust-service-ipc-boundary.md
 
 import type {
-  CapabilityGrant,
   AddOnManifest,
   LocalRuntimeStatus,
   RecoveryRouteCandidate,
@@ -17,6 +16,7 @@ import {
   requestLocalRuntimeStatus,
   requestRecoveryRouteCandidates,
 } from "../../core/runtime";
+import type { createHarnessClient } from "../../core/harness-client";
 import { recommendedGrantCapabilities, recommendedSystemSlotManifests } from "./system-slots";
 
 export type BootedShellState = {
@@ -58,40 +58,47 @@ export const loadRecoveryRuntimeSnapshot = async (
   return { status, candidates };
 };
 
-export const applyFirstRunRecommendedAddOns = (
-  state: ResonantShellState,
-  manifests: AddOnManifest[],
-  selectedAddonIds: string[],
-): ResonantShellState => {
-  const selected = new Set(selectedAddonIds);
-  const recommendedIds = new Set(recommendedSystemSlotManifests(manifests).map((manifest) => manifest.id));
-  const nextState = structuredClone(state) as ResonantShellState;
+// Only these bundled defaults participate in first-run consent. Catalog and
+// sideloaded recommendations cannot widen the first-run transaction.
+export const firstRunRecommendedAddOns = (bundled: AddOnManifest[]): AddOnManifest[] =>
+  recommendedSystemSlotManifests(bundled).filter(manifest =>
+    manifest.id === "addon.augmentor-chat" || manifest.id === "addon.living-archive");
 
-  for (const manifest of manifests) {
-    if (!recommendedIds.has(manifest.id) || !selected.has(manifest.id)) {
-      continue;
+export const applyFirstRunRecommendedAddOns = async (
+  state: ResonantShellState,
+  bundled: AddOnManifest[],
+  selectedAddonIds: string[],
+  client: ReturnType<typeof createHarnessClient>,
+): Promise<ResonantShellState> => {
+  const selected = new Set(selectedAddonIds);
+  const recommended = firstRunRecommendedAddOns(bundled);
+  for (const manifest of recommended.filter(item => selected.has(item.id))) {
+    let snapshot = client.getSnapshot() ?? await client.refresh();
+    const installation = snapshot.installations[manifest.id];
+    if (!installation?.installed) snapshot = await client.install(manifest, true);
+    else if (!installation.enabled) snapshot = await client.setEnabled(manifest.id, true, snapshot.revision);
+
+    const capabilities = recommendedGrantCapabilities(manifest);
+    snapshot = await client.setGrants({ addonId: manifest.id, consent: true, expectedRevision: snapshot.revision,
+      grants: manifest.requestedCapabilities.filter(grant => capabilities.includes(grant.capability))
+        .map(grant => ({ ...grant, granted: true })),
+    });
+    for (const slot of manifest.systemSlots?.filter(item => item.recommended) ?? []) {
+      const owner = snapshot.slots[slot.id];
+      if (owner?.addonId) continue;
+      // First-run does not consent to replacing an existing host owner.
+      snapshot = await client.assignSlot({ slot: slot.id, addonId: manifest.id, expectedGeneration: 0 });
     }
-    const installation = nextState.installations[manifest.id];
-    if (!installation) {
-      continue;
-    }
-    const recommendedCapabilities = recommendedGrantCapabilities(manifest);
-    installation.installed = true;
-    installation.enabled = true;
-    installation.status = "enabled";
-    installation.grantedCapabilities = installation.grantedCapabilities.map((grant) =>
-      recommendedCapabilities.includes(grant.capability as CapabilityGrant["capability"]) ? { ...grant, granted: true } : grant,
-    );
-    installation.notes = ["Enabled during first-run setup as a recommended replaceable default."];
   }
 
-  nextState.uiPreferences.recommendedAddOnsReviewed = true;
-  nextState.uiPreferences.chatSidebarOpen =
-    selected.has("addon.augmentor-chat") || !recommendedIds.has("addon.augmentor-chat")
-      ? nextState.uiPreferences.chatSidebarOpen
-      : false;
-
-  return nextState;
+  // Only preferences are local. Installations, grants and owners remain in the
+  // acknowledged harness projection, including during partial success/retry.
+  return { ...state, uiPreferences: {
+    ...state.uiPreferences,
+    recommendedAddOnsReviewed: true,
+    chatSidebarOpen: selected.has("addon.augmentor-chat") || !recommended.some(item => item.id === "addon.augmentor-chat")
+      ? state.uiPreferences.chatSidebarOpen : false,
+  } };
 };
 
 export const markFirstRunRecommendedAddOnsReviewed = (state: ResonantShellState): ResonantShellState => ({

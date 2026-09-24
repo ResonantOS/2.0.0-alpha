@@ -72,7 +72,10 @@ export async function createHarnessRegistry({ store, reviewedAdapterIds = [], bi
     return state.installations[addonId];
   };
   function eligible(entry, slot) {
-    if (!entry?.enabled || !bindingAllowed(entry.manifest) || !entry.manifest.systemSlots?.some(item => item.id === slot)) return false;
+    if (!entry?.enabled || !entry.manifest.systemSlots?.some(item => item.id === slot)) return false;
+    // Only primary execution needs a reviewed runtime and approved binding.
+    // Other slots authorize their own capability on an installed registry entry.
+    if (slot === 'primary-agent' && !bindingAllowed(entry.manifest)) return false;
     const required = [slots[slot], ...(slot === 'primary-agent' ? entry.manifest.agentRuntime.requiredCapabilities : [])];
     return required.every(capability => entry.grants.some(grant => grant.capability === capability && grant.granted));
   }

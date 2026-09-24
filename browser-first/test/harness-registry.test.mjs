@@ -297,3 +297,59 @@ test('failed persistence cannot partially commit a grant batch', async () => {
   await assert.rejects(registry.setGrants(value.id, value.requestedCapabilities, { consent: true, expectedRevision: 1 }), { code: 'runtime-unavailable' });
   assert.ok(registry.snapshot().installations[value.id].grantedCapabilities.every(g => !g.granted));
 });
+
+
+test('Living Archive can own memory-system once granted without an agent runtime', async () => {
+  const value = JSON.parse(await readFile(new URL('../../public/addons/living-archive.json', import.meta.url)));
+  const registry = await open(memoryStore());
+  assert.equal(value.agentRuntime, undefined);
+  await registry.install(value, { enabled: true });
+  await assert.rejects(assign(registry, value.id, 0, 'memory-system'), { code: 'permission-denied' });
+  await registry.setGrants(value.id, value.requestedCapabilities.filter(g => g.capability === 'memory-provider').map(g => ({ ...g, granted: true })), { consent: true, expectedRevision: 1 });
+  await registry.setEnabled(value.id, false, { expectedRevision: 2 });
+  await assert.rejects(assign(registry, value.id, 0, 'memory-system'), { code: 'permission-denied' });
+  await registry.setEnabled(value.id, true, { expectedRevision: 3 });
+  await assert.doesNotReject(assign(registry, value.id, 0, 'memory-system'), 'granted Living Archive must own memory-system without an adapter');
+  assert.equal(registry.snapshot().slots['memory-system'].available, true);
+  assert.equal(registry.authorize('memory-system', value.id).addonId, value.id);
+});
+
+for (const slot of ['chat-interface', 'communication-channel']) {
+  test(`${slot} needs only its own grant and declared slot, without an adapter`, async () => {
+    const registry = await open(memoryStore()), value = manifest();
+    delete value.agentRuntime;
+    await registry.install(value, { enabled: true });
+    await assert.rejects(assign(registry, value.id, 0, slot), { code: 'permission-denied' });
+    const capability = slot === 'chat-interface' ? slot : 'notifications';
+    await registry.setGrants(value.id, value.requestedCapabilities.filter(g => g.capability === capability).map(g => ({ ...g, granted: true })), { consent: true, expectedRevision: 1 });
+    await assign(registry, value.id, 0, slot);
+    assert.equal(registry.snapshot().slots[slot].available, true);
+    await registry.setEnabled(value.id, false, { expectedRevision: 3 });
+    assert.equal(registry.snapshot().slots[slot].available, false);
+  });
+}
+
+test('primary-agent still requires a bound runtime and every adapter capability', async () => {
+  const registry = await open(memoryStore()), value = manifest();
+  delete value.agentRuntime;
+  await installGranted(registry, value);
+  await assert.rejects(assign(registry), { code: 'permission-denied' });
+  const harness = manifest();
+  await registry.install(harness, { enabled: true });
+  await registry.setGrants(harness.id, harness.requestedCapabilities.filter(g => g.capability === 'agent-runtime'), { consent: true, expectedRevision: 3 });
+  await assert.rejects(assign(registry), { code: 'permission-denied' });
+  await registry.setGrants(harness.id, harness.requestedCapabilities.filter(g => g.capability === 'chat-interface'), { consent: true, expectedRevision: 4 });
+  await assign(registry);
+  assert.deepEqual(registry.authorize('primary-agent', harness.id), {
+    slot: 'primary-agent', addonId: harness.id, bootEpoch: registry.snapshot().bootEpoch, generation: 1, runtime: harness.agentRuntime,
+  });
+});
+
+test('bundled Augmentor declares the reviewed provider fabric runtime and can become primary', async () => {
+  const value = JSON.parse(await readFile(new URL('../../public/addons/augmentor-chat.json', import.meta.url)));
+  assert.equal(value.agentRuntime?.adapterId, 'provider-fabric-v1', 'Augmentor must declare the provider fabric adapter');
+  const registry = await createHarnessRegistry({ store: memoryStore(), reviewedAdapterIds: ['provider-fabric-v1'] });
+  await installGranted(registry, value);
+  await assign(registry, value.id);
+  assert.equal(registry.snapshot().slots['primary-agent'].available, true);
+});

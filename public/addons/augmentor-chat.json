@@ -131,6 +131,52 @@
       "recommended": true
     }
   ],
+  "tools": [
+    {
+      "name": "harness.invoke",
+      "description": "Submit one turn through the selected host-owned runtime.",
+      "requiredCapabilities": [
+        "agent-runtime",
+        "providers",
+        "chat-interface"
+      ],
+      "inputSchema": {
+        "type": "object"
+      },
+      "outputSchema": {
+        "type": "object"
+      },
+      "audit": {
+        "logRequest": true,
+        "logResult": true,
+        "artifactTypes": []
+      }
+    }
+  ],
+  "agentRuntime": {
+    "invocationTool": "harness.invoke",
+    "chatAuthorLabel": "Augmentor",
+    "displayNameSource": "manifest",
+    "supportsStreaming": false,
+    "supportsCancellation": true,
+    "supportsModelSelection": false,
+    "outputFiltering": "assistant-reply-only",
+    "requiredCapabilities": [
+      "agent-runtime",
+      "providers",
+      "chat-interface"
+    ],
+    "adapterVersion": 1,
+    "adapterId": "provider-fabric-v1",
+    "authScheme": "none",
+    "supportedOperations": [
+      "createSession",
+      "invoke",
+      "cancel"
+    ],
+    "contextRoleFidelity": "structured-messages",
+    "toolCallbacks": false
+  },
   "providerRequirements": {
     "sharedProfiles": ["shared-minimax", "gx10-local-llama", "shared-openai", "shared-local"],
     "supportsPrivateCredentials": true,

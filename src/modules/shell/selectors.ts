@@ -6,6 +6,7 @@ import type {
   ChannelDefinition,
   ContextBudget,
   ContextMemoryState,
+  HarnessRegistryProjection,
   ConversationThread,
   ProviderProfile,
   ProviderRuntimeNode,
@@ -32,6 +33,7 @@ import { systemSlotAvailable } from "./system-slots";
 
 type ViewModelInput = {
   state: ResonantShellState;
+  harnessProjection?: HarnessRegistryProjection | null;
   bundled: AddOnManifest[];
   sideloaded: AddOnManifest[];
   deferredSearch: string;
@@ -160,6 +162,7 @@ export const resolveSelectableChatModelsForSelection = (
 
 export const buildShellViewModel = ({
   state,
+  harnessProjection,
   bundled,
   sideloaded,
   deferredSearch,
@@ -182,7 +185,7 @@ export const buildShellViewModel = ({
     manifestMap.get(selectedAddonId) ?? filteredManifests[0] ?? bundled[0] ?? sideloaded[0] ?? null;
   const selectedInstallation = selectedManifest ? state.installations[selectedManifest.id] ?? null : null;
   const recoveryModeActive = state.recoverySession.active;
-  const chatSlotAvailable = systemSlotAvailable(state, allManifests, "chat-interface");
+  const chatSlotAvailable = systemSlotAvailable(state, allManifests, "chat-interface", harnessProjection);
   const engineerSettingsConsoleActive = !recoveryModeActive && !chatSlotAvailable && state.uiPreferences.activeSection === "settings";
   const chatInterfaceAvailable = recoveryModeActive || chatSlotAvailable || engineerSettingsConsoleActive;
   const selectedChatThread = state.conversationThreads.find((thread) => thread.id === state.uiPreferences.activeChatThreadId);
