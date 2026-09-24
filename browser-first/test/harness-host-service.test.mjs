@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { evaluateBridgeRequestForSelfTest } from '../host/bridge-server.mjs';
 import { createChatTurnController } from '../resonantos-side-panel-extension/src/lib/chat-turn-controller.js';
 import { createProviderHostService } from '../host/provider-host-service.mjs';
@@ -523,4 +525,108 @@ test('reviewed OpenAI adapter resolves bound bearer credentials; unknown adapter
   const other = structuredClone(manifest); other.agentRuntime.adapterId = 'unreviewed-v1';
   const denied = await fixture(t, { bindings: [{ ...binding, adapterId: 'unreviewed-v1' }] });
   assert.equal((await denied.call('/addons/install', { manifest: other, enabled: true })).payload.code, 'permission-denied');
+});
+
+
+test('host signs governance, denied operations and streamed turns with a fresh per-boot Ed25519 key', async t => {
+  const { createHash, createPublicKey, verify } = await import('node:crypto');
+  const receipts = [];
+  const f = await fixture(t, { onReceipt: receipt => receipts.push(receipt) });
+  assert.equal(f.host.signer?.algorithm, 'ed25519', 'host must publish the per-boot receipt signer');
+  const key = createPublicKey(f.host.signer.publicKey);
+  assert.equal(f.host.signer.fingerprint, createHash('sha256').update(key.export({ type: 'spki', format: 'der' })).digest('hex').slice(0, 32));
+  const manifest = await installed(f);
+  await f.call('/addons/remove', { addonId: manifest.id });
+  const session = (await f.call('/agent/session', { addonId: manifest.id })).payload.session;
+  const stream = await f.host.harnessRoutes.find(r => r.path === '/agent/events').handler({}, { url: `/agent/events?${new URLSearchParams(session)}` });
+  await f.call('/agent/turn', { session, input });
+  assert.equal((await stream.events.next()).value.type, 'final');
+  assert.ok(receipts.some(r => r.operation === '/agent/events' && r.ok), 'host must sign the subscription acknowledgement');
+  await stream.close();
+  const canonical = value => JSON.stringify(value, (_, v) => v && typeof v === 'object' && !Array.isArray(v)
+    ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]])) : v);
+  assert.ok(receipts.some(r => r.operation === '/addons/install' && r.ok));
+  assert.ok(receipts.some(r => r.operation === '/addons/remove' && r.error?.code === 'ownership-conflict'));
+  assert.ok(receipts.some(r => r.kind === 'event' && r.event.type === 'final'));
+  for (const receipt of receipts) {
+    const { signature, ...body } = receipt;
+    assert.equal(body.signer.keyId, f.host.signer.fingerprint);
+    assert.equal(verify(null, Buffer.from(canonical(body)), key, Buffer.from(signature, 'base64')), true);
+    assert.equal(verify(null, Buffer.from(canonical({ ...body, bootEpoch: 'tampered' })), key, Buffer.from(signature, 'base64')), false);
+  }
+  const next = await fixture(t);
+  assert.notEqual(next.host.signer.fingerprint, f.host.signer.fingerprint);
+  assert.equal(JSON.stringify(f.stored()).includes(f.host.signer.publicKey), false, 'signing keys stay out of durable state');
+});
+
+test('receipt signing preserves concurrent session/turn attribution', async t => {
+  const receipts = [];
+  const f = await fixture(t, { onReceipt: receipt => receipts.push(receipt) });
+  const manifest = await installed(f);
+  const sessions = await Promise.all([0, 1].map(async () => (await f.call('/agent/session', { addonId: manifest.id })).payload.session));
+  const turns = await Promise.all(sessions.map(session => f.call('/agent/turn', { session, input })));
+  const dispatches = receipts.filter(r => r.kind === 'adapter-dispatch');
+  assert.equal(dispatches.length, 2);
+  for (const [i, session] of sessions.entries()) {
+    const dispatch = dispatches.find(r => r.session.sessionId === session.sessionId);
+    assert.deepEqual(dispatch.session, session);
+    assert.equal(dispatch.turnId, turns[i].payload.turnId);
+  }
+  assert.notEqual(dispatches[0].dispatchId, dispatches[1].dispatchId);
+});
+
+test('boot fingerprint output and receipt sink expose no private key or rejected credential fields', async t => {
+  const printed = [], stdout = [], receipts = [];
+  t.mock.method(console, 'error', value => printed.push(JSON.parse(value)));
+  t.mock.method(console, 'info', value => stdout.push(value));
+  const f = await fixture(t, { onReceipt: receipt => receipts.push(receipt) });
+  assert.equal(printed.length, 1, 'signer announcement must go to stderr');
+  assert.deepEqual(stdout, [], 'signer announcement must not write to stdout');
+  assert.deepEqual(printed[0], { event: 'harness.receipt_signer', bootEpoch: f.host.registry.snapshot().bootEpoch,
+    fingerprint: f.host.signer.fingerprint, algorithm: 'ed25519', mode: 'live' });
+  assert.deepEqual(Object.keys(f.host.signer).sort(), ['algorithm', 'fingerprint', 'publicKey']);
+  await f.call('/agent/turn', { session: { ...ref, credential: 'must-not-enter-receipt' },
+    input: { messages: [{ role: 'user', content: 'private context excluded from receipts' }] } });
+  assert.ok(receipts.some(r => r.operation === '/agent/turn' && !r.ok));
+  assert.equal(JSON.stringify(receipts).includes('must-not-enter-receipt'), false);
+  assert.equal(JSON.stringify(receipts).includes('private context excluded'), false);
+  assert.equal(JSON.stringify(printed).includes('PRIVATE KEY'), false);
+});
+
+test('in-process self-test keeps stdout a single JSON document and announces signer on stderr', async () => {
+  const { stdout, stderr } = await promisify(execFile)(process.execPath, [
+    'browser-first/host/run-browser-first.mjs',
+    '--bridge-auth-inprocess-self-test=true',
+    '--bridge-token=test-token',
+  ], { cwd: process.cwd(), timeout: 30000, maxBuffer: 1024 * 1024 });
+  const result = JSON.parse(stdout);
+  assert.equal(result.ok, true);
+  assert.equal(result.mode, 'in-process');
+  assert.equal(result.authorizedStatus, 200);
+  const announcements = stderr.split('\n').filter(line => line.includes('harness.receipt_signer')).map(line => JSON.parse(line));
+  assert.equal(announcements.length, 1, 'signer announcement must go to stderr exactly once');
+  assert.match(announcements[0].fingerprint, /^[a-f0-9]{32}$/);
+  assert.equal(announcements[0].algorithm, 'ed25519');
+  assert.equal(announcements[0].mode, 'live');
+  assert.doesNotMatch(stdout, /harness\.receipt_signer/);
+  assert.doesNotMatch(stderr, /PRIVATE KEY/);
+});
+
+test('compatibility chat retains its response shape while issuing a signed receipt to the evidence sink', async t => {
+  const receipts = [];
+  const f = await fixture(t, { onReceipt: receipt => receipts.push(receipt) });
+  const manifest = await installed(f);
+  const { status, payload } = await compatibilityHttp(f)();
+  assert.equal(status, 200);
+  assert.deepEqual(Object.keys(payload).sort(), ['harness', 'ok', 'reply'], 'compatibility response must not gain a receipt field');
+  assert.equal(payload.reply, 'answer');
+  assert.equal(payload.harness.addonId, manifest.id);
+  const receipt = receipts.find(r => r.operation === '/augmentor/chat' && r.kind === 'event');
+  assert.equal(receipt.event.type, 'final');
+  assert.equal(receipt.event.turnId, payload.harness.turnId);
+  assert.equal(receipt.event.data.text, payload.reply);
+  const { createPublicKey, verify } = await import('node:crypto');
+  const { canonicalReceipt } = await import('../host/harness-host-service.mjs');
+  const { signature, ...body } = receipt;
+  assert.equal(verify(null, Buffer.from(canonicalReceipt(body)), createPublicKey(f.host.signer.publicKey), Buffer.from(signature, 'base64')), true);
 });
