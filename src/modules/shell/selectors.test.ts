@@ -95,9 +95,9 @@ describe("buildShellViewModel", () => {
     if (available) expect(viewModel.activeThread).not.toBeNull();
     else expect(viewModel.activeThread).toBeNull();
     expect(state).toEqual(before);
-    // An unmanaged slot retains the legacy selector behavior.
+    // An unowned slot remains vacant even when local state claims consent.
     expect(buildShellViewModel({ ...input, harnessProjection: { ...harnessProjection, slots: {} } }).activeThread === null)
-      .toBe(available);
+      .toBe(true);
   });
 
   it("filters manifests by search query", () => {
@@ -235,8 +235,17 @@ describe("Hermes chat model selection", () => {
     state.uiPreferences.activeChatThreadId = hermesThread.id;
 
     const selectable = resolveSelectableChatModelsForSelection(state, hermesThread.id);
+    const manifest = augmentor as AddOnManifest;
+    const harnessProjection: HarnessRegistryProjection = {
+      bootEpoch: "hermes-chat", revision: 1, governanceActivated: true, candidates: [manifest],
+      installations: { [manifest.id]: { addonId: manifest.id, installed: true, enabled: true,
+        grantedCapabilities: manifest.requestedCapabilities.map(grant => ({ ...grant, granted: true })),
+        disabledOperations: [], hiddenSurfaceIds: [] } },
+      slots: { "chat-interface": { addonId: manifest.id, generation: 1, available: true } },
+    };
     const viewModel = buildShellViewModel({
       state,
+      harnessProjection,
       bundled: [],
       sideloaded: [],
       deferredSearch: "",

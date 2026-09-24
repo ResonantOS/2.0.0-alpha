@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { loadInitialShellState } from "../modules/shell/controller";
 import { createHarnessClient } from "./harness-client";
 import { HARNESS_PUBLIC_ERROR_MESSAGES, type HarnessEvent, type HarnessRegistryProjection } from "./contracts";
 
@@ -177,4 +178,44 @@ describe("harness projection client", () => {
     expect(received).toEqual([event(1)]);
     expect(client.getSnapshot()).toEqual(snapshot(3));
   });
+});
+
+afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
+
+it("boot uses the client acknowledgement instead of stored governance, including after an offline restart", async () => {
+  vi.stubEnv("MODE", "development");
+  const forged = { ...snapshot(2), candidates: [],
+    slots: { "primary-agent": { addonId: "addon.saved", generation: 2, available: true } } };
+  let saved = JSON.stringify({ activeSystemSlotProviderIds: { "primary-agent": "addon.saved" },
+    installations: { "addon.saved": { installed: true, enabled: true, grantedCapabilities: [] } },
+    harnessProjection: forged, candidates: [{ id: "addon.saved" }] });
+  vi.stubGlobal("window", { localStorage: { getItem: () => saved, setItem: (_key: string, value: string) => { saved = value; } } });
+  const fetchMock = vi.fn().mockImplementation(async () => new Response("[]"));
+  vi.stubGlobal("fetch", fetchMock);
+  const pending = deferred<HarnessRegistryProjection>();
+  const invoke = vi.fn().mockReturnValue(pending.promise);
+  const client = createHarnessClient({ invoke });
+  const boot = loadInitialShellState(client);
+  await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith("harness_registry"));
+  expect(client.getSnapshot()).toBeNull();
+  expect(JSON.parse(saved)).toHaveProperty("harnessProjection", forged);
+  const acknowledged: HarnessRegistryProjection = { ...snapshot(3),
+    installations: { "addon.host": { addonId: "addon.host", installed: true, enabled: true,
+      grantedCapabilities: [], disabledOperations: [], hiddenSurfaceIds: [] } },
+    slots: { "primary-agent": { addonId: "addon.host", generation: 3, available: true } } };
+  pending.resolve(acknowledged);
+  const { state } = await boot;
+  expect(JSON.parse(saved)).not.toHaveProperty("harnessProjection");
+  expect(JSON.parse(saved)).not.toHaveProperty("installations");
+  expect(state.activeSystemSlotProviderIds).toEqual({ "primary-agent": "addon.host" });
+  expect(state.installations).not.toHaveProperty("addon.saved");
+  expect(state.installations["addon.host"]).toMatchObject({ installed: true, enabled: true });
+  expect(state.distributionModel).toBe("curated-plus-sideload");
+  expect(client.getSnapshot()).toEqual(acknowledged);
+  const offline = createHarnessClient({ invoke: vi.fn().mockRejectedValue(new Error("offline")) });
+  const restarted = await loadInitialShellState(offline);
+  expect(offline.getSnapshot()).toBeNull();
+  expect(restarted.state.activeSystemSlotProviderIds).toEqual({});
+  expect(restarted.state.installations).toEqual({});
+  expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(["/addons/dev-index.json", "/addons/dev-index.json"]);
 });

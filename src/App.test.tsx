@@ -1490,6 +1490,21 @@ const providerStreamInputs = (): Array<{ systemPrompt: string; messages: Convers
     contextSources?: UntrustedChatContext[];
   }>;
 
+const workingShellProjection = (): harnessClients.HarnessProjection => ({
+  bootEpoch: "app-boot", revision: 0, governanceActivated: false,
+  // Working shell fixtures receive explicit host chat/memory ownership.
+  // Authority tests below replace this snapshot with their own vacant/pending host.
+  candidates: [augmentorManifest, archiveManifest] as AddOnManifest[],
+  installations: Object.fromEntries(([augmentorManifest, archiveManifest] as AddOnManifest[]).map(manifest =>
+    [manifest.id, { addonId: manifest.id, installed: true, enabled: true,
+      grantedCapabilities: manifest.requestedCapabilities.map(grant => ({ ...grant, granted: true })),
+      disabledOperations: [], hiddenSurfaceIds: [] }])),
+  slots: {
+    "chat-interface": { addonId: augmentorManifest.id, generation: 1, available: true },
+    "memory-system": { addonId: archiveManifest.id, generation: 1, available: true },
+  },
+});
+
 describe("App boot flow", () => {
   afterEach(async () => {
     vi.useRealTimers();
@@ -1504,9 +1519,7 @@ describe("App boot flow", () => {
   });
 
   beforeEach(() => {
-    let hostState: harnessClients.HarnessProjection = {
-      bootEpoch: "app-boot", revision: 0, governanceActivated: false, candidates: [], installations: {}, slots: {},
-    };
+    let hostState = workingShellProjection();
     harnessInvokeMock.mockReset().mockImplementation(async (command, args) => {
       const next = structuredClone(hostState);
       if (command === "harness_install") next.installations = { ...next.installations, [args.manifest.id]: {
@@ -3536,20 +3549,20 @@ describe("App boot flow", () => {
         const baselineDOM = baseline.container.innerHTML;
         baseline.unmount();
         const response = deferred<harnessClients.HarnessProjection>();
-        const refresh = vi.spyOn(client, "refresh").mockReturnValueOnce(response.promise);
+        const refresh = vi.spyOn(client, "refresh").mockReturnValue(response.promise);
         const view = render(<App />);
-        await openAddons();
         await act(async () => {
           if (code === "absent-registry") response.resolve(null as unknown as harnessClients.HarnessProjection);
           else response.reject(Object.assign(new Error("Host route unavailable"), { code }));
         });
+        await openAddons();
         expect(screen.queryByText("Harness management")).toBeNull();
         expect(screen.queryByRole("region", { name: /harness/i })).toBeNull();
         expect(screen.queryByLabelText("Import JSON manifest")).toBeNull();
         expect(view.container.innerHTML).toBe(baselineDOM);
         fireEvent.change(screen.getByPlaceholderText("Search add-ons"), { target: { value: "Paperclip" } });
         await act(async () => {});
-        expect(refresh).toHaveBeenCalledTimes(1);
+        expect(refresh).toHaveBeenCalledTimes(2);
       } finally {
         factory.mockRestore();
       }
@@ -3558,8 +3571,7 @@ describe("App boot flow", () => {
 
   it.each([false, true])("sends through the existing provider route without refreshing (cached projection: %s)", async projected => {
     const client = harnessClients.createHarnessClient({ invoke: harnessInvokeMock });
-    if (projected) client.applySnapshot({ bootEpoch: "boot", revision: 1, governanceActivated: false,
-      candidates: [], installations: {}, slots: {} });
+    if (projected) client.applySnapshot({ ...workingShellProjection(), bootEpoch: "boot", revision: 1 });
     const refresh = vi.spyOn(client, "refresh");
     const factory = vi.spyOn(harnessClients, "createHarnessClient").mockReturnValue(client);
     try {
@@ -3580,8 +3592,8 @@ describe("App boot flow", () => {
 
   it("hides the host model selector for /delegate with a projected owner", async () => {
     const client = harnessClients.createHarnessClient({ invoke: harnessInvokeMock });
-    client.applySnapshot({ bootEpoch: "boot", revision: 1, governanceActivated: true, candidates: [], installations: {},
-      slots: { "primary-agent": { addonId: "addon.dsh", generation: 1, available: true } } });
+    client.applySnapshot({ ...workingShellProjection(), bootEpoch: "boot", revision: 1, governanceActivated: true,
+      slots: { ...workingShellProjection().slots, "primary-agent": { addonId: "addon.dsh", generation: 1, available: true } } });
     const factory = vi.spyOn(harnessClients, "createHarnessClient").mockReturnValue(client);
     try {
       render(<App />);
@@ -3598,8 +3610,8 @@ describe("App boot flow", () => {
     const session = { addonId: "addon.dsh", sessionId: "pending-session", bootEpoch: "boot", generation: 1 };
     const invoke = vi.fn().mockImplementation(() => pending.promise);
     const client = harnessClients.createHarnessClient({ invoke });
-    client.applySnapshot({ bootEpoch: "boot", revision: 1, governanceActivated: true, candidates: [], installations: {},
-      slots: { "primary-agent": { addonId: "addon.dsh", generation: 1, available: true } } });
+    client.applySnapshot({ ...workingShellProjection(), bootEpoch: "boot", revision: 1, governanceActivated: true,
+      slots: { ...workingShellProjection().slots, "primary-agent": { addonId: "addon.dsh", generation: 1, available: true } } });
     const factory = vi.spyOn(harnessClients, "createHarnessClient").mockReturnValue(client);
     try {
       render(<App />);
@@ -3618,8 +3630,8 @@ describe("App boot flow", () => {
 
   it("wires primary harness chat and Stop without provider credentials", async () => {
     const session = { addonId: "addon.dsh", sessionId: "app-session", bootEpoch: "app-boot", generation: 1 };
-    const snapshot = { bootEpoch: "app-boot", revision: 1, governanceActivated: true, candidates: [], installations: {},
-      slots: { "primary-agent": { addonId: "addon.dsh", generation: 1, available: true } } };
+    const snapshot = { ...workingShellProjection(), bootEpoch: "app-boot", revision: 1, governanceActivated: true,
+      slots: { ...workingShellProjection().slots, "primary-agent": { addonId: "addon.dsh", generation: 1, available: true } } };
     const continueStream = deferred<void>();
     const invoke = vi.fn(async (command: string) => {
       if (command === "harness_registry") return snapshot;

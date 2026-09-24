@@ -155,7 +155,7 @@ type UninstallDecision =
   | { ok: true; installation: AddOnInstallation }
   | { ok: false; blockReason: UninstallAddonBlockReason; blockDetail?: string };
 
-const decideUninstall = (state: ResonantShellState, manifest: AddOnManifest): UninstallDecision => {
+const decideUninstall = (state: ResonantShellState, manifest: AddOnManifest, projection?: HarnessProjection | null): UninstallDecision => {
   const installation = state.installations[manifest.id];
   if (!installation || (!installation.installed && installation.status !== "uninstalled")) {
     return { ok: false, blockReason: "not-installed" };
@@ -164,7 +164,7 @@ const decideUninstall = (state: ResonantShellState, manifest: AddOnManifest): Un
     return { ok: false, blockReason: "already-uninstalled" };
   }
   const activeDefaultSlotIds = (manifest.systemSlots ?? [])
-    .filter(slot => selectedSystemSlotProviderId(state, slot.id) === manifest.id)
+    .filter(slot => selectedSystemSlotProviderId(state, slot.id, projection) === manifest.id)
     .map(slot => slot.id);
   if (activeDefaultSlotIds.length > 0) {
     return {
@@ -179,8 +179,9 @@ const decideUninstall = (state: ResonantShellState, manifest: AddOnManifest): Un
 export const describeUninstallBlock = (
   state: ResonantShellState,
   manifest: AddOnManifest,
+  projection?: HarnessProjection | null,
 ): { blockReason: UninstallAddonBlockReason; blockDetail?: string } | null => {
-  const decision = decideUninstall(state, manifest);
+  const decision = decideUninstall(state, manifest, projection);
   if (decision.ok) {
     return null;
   }
@@ -194,7 +195,7 @@ export const uninstallAddon = async (
   manifest: AddOnManifest,
   deps: UninstallAddonDependencies,
 ): Promise<UninstallAddonResult> => {
-  const initialDecision = decideUninstall(deps.getState(), manifest);
+  const initialDecision = decideUninstall(deps.getState(), manifest, deps.client.getSnapshot());
   if (!initialDecision.ok) {
     return { outcome: "blocked", blockReason: initialDecision.blockReason, blockDetail: initialDecision.blockDetail };
   }
@@ -226,7 +227,7 @@ export const uninstallAddon = async (
     blockReason: "not-installed",
   };
   deps.updateRuntimeState((draft) => {
-    const draftDecision = decideUninstall(draft, manifest);
+    const draftDecision = decideUninstall(draft, manifest, snapshot);
     if (!draftDecision.ok) {
       result = { outcome: "blocked", blockReason: draftDecision.blockReason, blockDetail: draftDecision.blockDetail };
       return draft;

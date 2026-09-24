@@ -67,6 +67,9 @@ required Alpha processes.
 | Path | Primary owner | Boundary |
 | --- | --- | --- |
 | `src/core/harness-client.ts` | In-memory host projection, monotonic acknowledgements, and session event delivery for React | Sends install, enable/disable, atomic grants and remove transactions; reads only authenticated host snapshots/events through `web-transport.ts`; never creates grants, owners, candidates, availability, or persisted governance |
+| `src/core/defaults.ts` | Catalog and recommended-request suggestions | May describe uninstalled, ungranted candidates; must not establish consent or active slot owners |
+| `src/core/runtime.ts` | UI-state hydration and serialization | Reads governance only from authenticated host projection; persisted UI state excludes installations, grants, owners and candidates; development mode grants no authority |
+| `src/modules/shell/system-slots.ts` | Host-projected slot selection and availability | Catalog metadata may describe the acknowledged owner; missing projection or owner is unavailable, including no-manifest fixtures; no local selection or catalog-order fallback |
 | `src/core/` | Shared contracts and pure cross-domain policy | No feature-specific UI or privileged process/filesystem behavior |
 | `packages/addon-sdk/src/` and `src/sdk/addons/` compatibility exports | Canonical add-on manifests, capability vocabulary, protocols, and validation shared by Node and browser consumers | SDK contracts do not grant runtime capabilities |
 | `src/modules/addons/AddOnsWorkspace.tsx` | Harness management presentation, bounded manifest import, and pending/conflict feedback | Reads acknowledged `harness-client.ts` projections; sends explicit install/grant/slot/remove commands; never infers grants, ownership, availability, or credential authority |
@@ -86,7 +89,7 @@ required Alpha processes.
 | `src/modules/paperclip/` | Deferred Paperclip workspace presentation | Development-only add-on boundary |
 | `src/modules/recovery/` | Recovery product workflow | Recovery tools remain bounded and audited |
 | `src/modules/settings/` | Shared settings UI and controllers | Secrets stay host-side |
-| `src/modules/shell/controller.ts` | Shell boot and explicit first-run selection of bundled Augmentor and Living Archive | Sequences existing harness install, enable, grant and slot commands; only acknowledgements establish authority; writes local setup/layout preferences, never local installations, grants or owners |
+| `src/modules/shell/controller.ts` | Shell boot with the acknowledged host projection and explicit first-run selection of bundled Augmentor and Living Archive | Passes the host projection to hydration and shell consumers; sequences existing harness install, enable, grant and slot commands; only acknowledgements establish authority; writes local setup/layout preferences, never local installations, grants or owners |
 | `src/modules/shell/` | Shared React shell hydration, selectors, and composition | Keep domain mutations in their feature owners |
 | `src/modules/strategist/` | Strategist identity, channels, and thread organization | Chat execution remains in the chat owner |
 | `src/App.tsx` | React composition only | Route, mount, wire, and pass callbacks; do not accumulate domain behavior |

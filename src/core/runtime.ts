@@ -4,6 +4,7 @@
 import type {
   UntrustedChatContext,
   AddOnManifest,
+  HarnessRegistryProjection,
   ArchiveAiMemoryBuildJobSummary,
   ArchiveAiMemoryBuildResult,
   ArchiveBackgroundCycleResult,
@@ -92,11 +93,10 @@ import type {
   TrustKernelAdvisory,
 } from "./contracts";
 import type { BrowserToolResult } from "./browser-tools";
-import { buildDefaultState, selectRecommendedDefaultSystemSlotProviderIds } from "./defaults";
+import { buildDefaultState, channels as defaultChannels, createDefaultInstallation } from "./defaults";
 import { renderDelegationTaskMarkdown, validateDelegationPacket } from "./delegation";
 import { normalizeGoalWorkspaces } from "./goal-workspace";
 import { providerNeedsStoredCredential } from "./provider-credentials";
-import { createInstallationSnapshot } from "./policies";
 import { assertValidAddOnManifest } from "../sdk/addons";
 import { webInvoke } from "./web-transport";
 
@@ -1370,18 +1370,38 @@ const readPersistedState = async (): Promise<ResonantShellState | null> => {
   return JSON.parse(raw) as ResonantShellState;
 };
 
+// Explicit UI-state allowlist: older or forged storage may contain arbitrary
+// governance caches, including full host projections. None survive a round trip.
+const uiStateForPersistence = (state: ResonantShellState) => ({
+  strategistIdentity: state.strategistIdentity,
+  coreServices: state.coreServices,
+  providers: state.providers,
+  runtimeNodes: state.runtimeNodes,
+  providerRouting: state.providerRouting,
+  computeFabric: state.computeFabric,
+  modelStrategy: state.modelStrategy,
+  agents: state.agents,
+  channels: state.channels,
+  workspaces: state.workspaces,
+  archivePolicy: state.archivePolicy,
+  archiveAutomationPolicy: state.archiveAutomationPolicy,
+  chatProjects: state.chatProjects,
+  conversationThreads: state.conversationThreads,
+  transcriptLedger: state.transcriptLedger,
+  contextMemoryStates: state.contextMemoryStates,
+  goalWorkspaces: state.goalWorkspaces,
+  recoverySession: state.recoverySession,
+  uiPreferences: state.uiPreferences,
+  distributionModel: state.distributionModel,
+});
+
 export const persistState = async (state: ResonantShellState): Promise<void> => {
-  // The extension preview stores UI state locally. Security-sensitive bridge
-  // state, provider secrets, and capability grants are not written from here.
+  const uiState = uiStateForPersistence(state);
   if (hasCommandHost()) {
-    await hostInvoke("save_runtime_state", { state });
+    await hostInvoke("save_runtime_state", { state: uiState });
     return;
   }
-  if (hasCommandHost()) {
-    await invoke("save_runtime_state", { state });
-    return;
-  }
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(uiState));
 };
 
 export const openFloatingChatWindow = async (): Promise<void> => {
@@ -1459,103 +1479,62 @@ export const requestExecuteOpenCodeTask = async (workspaceId: string): Promise<E
   throw new Error("OpenCode task execution is available only through the local bridge.");
 };
 
-export const hydrateState = async (bundled: AddOnManifest[], sideloaded: AddOnManifest[]): Promise<ResonantShellState> => {
+export const hydrateState = async (bundled: AddOnManifest[], sideloaded: AddOnManifest[], hostProjection?: HarnessRegistryProjection | null): Promise<ResonantShellState> => {
   const manifests = [...bundled, ...sideloaded];
   const base = buildDefaultState(bundled);
   const persisted = await readPersistedState();
-
-  if (!persisted) {
-    const next = enableBundledAddonsForLocalDevelopment(
-      rebaseStateOnManifests(base, manifests, sideloaded.map((manifest) => manifest.id)),
-      bundled,
-    );
-    await persistState(next);
-    return next;
-  }
-
-  const next = enableBundledAddonsForLocalDevelopment(
-    rebaseStateOnManifests(normalizeState(persisted, base), manifests, sideloaded.map((manifest) => manifest.id)),
-    bundled,
+  // An offline or denied host leaves every installation and slot unauthorized.
+  // Development catalog mode has the same acknowledgement boundary as production.
+  const projection = hostProjection === undefined
+    ? await webInvoke<HarnessRegistryProjection>("harness_registry").catch(() => null) : hostProjection;
+  const next = rebaseStateOnManifests(
+    persisted ? normalizeState(persisted, base) : base,
+    manifests,
+    sideloaded.map((manifest) => manifest.id),
+    projection,
   );
   await persistState(next);
   return next;
-};
-
-const enableBundledAddonsForLocalDevelopment = (
-  state: ResonantShellState,
-  bundled: AddOnManifest[],
-): ResonantShellState => {
-  if (!isLocalDevelopmentMode()) {
-    return state;
-  }
-
-  const installations = { ...state.installations };
-  for (const manifest of bundled) {
-    const current = installations[manifest.id];
-    if (!current) {
-      continue;
-    }
-
-    installations[manifest.id] = {
-      ...current,
-      installed: true,
-      enabled: true,
-      status: "enabled",
-      grantedCapabilities: current.grantedCapabilities.map((grant) => ({ ...grant, granted: true })),
-      notes: ["Local development catalog mode: installed and enabled for full add-on testing."],
-    };
-  }
-
-  return {
-    ...state,
-    installations,
-    uiPreferences: {
-      ...state.uiPreferences,
-      recommendedAddOnsReviewed: true,
-    },
-  };
 };
 
 export const rebaseStateOnManifests = (
   state: ResonantShellState,
   manifests: AddOnManifest[],
   sideloadedIds: string[],
+  projection: HarnessRegistryProjection | null = null,
 ): ResonantShellState => {
-  const installations = { ...state.installations };
-  const activeSystemSlotProviderIds = selectRecommendedDefaultSystemSlotProviderIds(
-    manifests,
-    state.activeSystemSlotProviderIds ?? {},
+  // Catalog records describe requests, never persisted consent. Host-only
+  // candidates are unverified metadata and must not acquire bundled provenance.
+  const catalog = new Map(manifests.map(manifest => [manifest.id, manifest]));
+  for (const manifest of projection?.candidates ?? []) {
+    if (!catalog.has(manifest.id)) catalog.set(manifest.id, manifest);
+  }
+  const bundledIds = new Set(manifests.filter(manifest => !sideloadedIds.includes(manifest.id)).map(manifest => manifest.id));
+  const installations: ResonantShellState["installations"] = Object.fromEntries(
+    [...catalog.values()].map(manifest => [manifest.id,
+      createDefaultInstallation(manifest, bundledIds.has(manifest.id) ? "bundled" : "sideload")]),
   );
-  for (const manifest of manifests) {
-    const snapshot = createInstallationSnapshot(
-      manifest,
-      installations[manifest.id],
-      sideloadedIds.includes(manifest.id) ? "sideload" : "bundled",
-    );
-    if (snapshot.status === "uninstalled") {
-      const uninstalledSnapshot = {
-        ...snapshot,
-        installed: false,
-        enabled: false,
-        grantedCapabilities: [],
-        privateProviderProfileIds: [],
-      };
-      delete uninstalledSnapshot.config;
-      installations[manifest.id] = uninstalledSnapshot;
-      continue;
-    }
-    installations[manifest.id] = snapshot;
+  for (const [addonId, acknowledged] of Object.entries(projection?.installations ?? {})) {
+    const metadata = installations[addonId] ?? {
+      addonId, source: "sideload", provenanceTier: "sideloaded-unverified", verificationState: "unverified",
+      recommendedGrantPresetIds: [], privateProviderProfileIds: [], notes: [],
+    };
+    installations[addonId] = {
+      ...metadata,
+      installed: acknowledged.installed,
+      enabled: acknowledged.enabled,
+      status: acknowledged.enabled ? "enabled" : acknowledged.installed ? "disabled" : "available",
+      grantedCapabilities: structuredClone([...acknowledged.grantedCapabilities]),
+    };
   }
-
-  for (const installation of Object.values(installations)) {
-    if (sideloadedIds.includes(installation.addonId)) {
-      installation.source = "sideload";
-    }
+  const activeSystemSlotProviderIds: ResonantShellState["activeSystemSlotProviderIds"] = {};
+  for (const [slotId, owner] of Object.entries(projection?.slots ?? {})) {
+    if (owner.addonId) activeSystemSlotProviderIds[slotId as keyof typeof activeSystemSlotProviderIds] = owner.addonId;
   }
-
-  // If a selected provider is absent from the current catalog, keep the selection;
-  // replacement policy for absent selected providers belongs to a later task.
-  return { ...state, installations, activeSystemSlotProviderIds };
+  return {
+    ...uiStateForPersistence(state), installations, activeSystemSlotProviderIds,
+    channels: normalizeChannels(installations, state.channels, defaultChannels),
+  };
 };
 
 export const applyProviderCredentialStatuses = (
@@ -1760,7 +1739,9 @@ const normalizeChannels = (
       owningAgentId: channel.owningAgentId,
       workspaceId: channel.workspaceId,
       label: channel.label,
-      enabled: addonId ? Boolean((current ?? channel).enabled && addonEnabled) : (current?.enabled ?? channel.enabled),
+      // Add-on channels reflect current host enablement, including after an
+      // offline boot. Saved UI channel flags cannot grant or suppress it.
+      enabled: addonId ? addonEnabled : (current?.enabled ?? channel.enabled),
       metadata: { ...channel.metadata, ...(current?.metadata ?? {}) },
     };
   });
@@ -1780,20 +1761,6 @@ const normalizeWorkspaces = (
       title: workspace.title,
     };
   });
-
-const mergeInstallations = (
-  persisted: ResonantShellState["installations"] | undefined,
-  defaults: ResonantShellState["installations"],
-): ResonantShellState["installations"] =>
-  Object.fromEntries(
-    Object.entries(defaults).map(([addonId, installation]) => [
-      addonId,
-      {
-        ...installation,
-        ...(persisted?.[addonId] ?? {}),
-      },
-    ]),
-  );
 
 const normalizeProviderRouting = (
   persisted: ResonantShellState["providerRouting"] | undefined,
@@ -1897,14 +1864,11 @@ const normalizeArchiveAutomationPolicy = (
 });
 
 export const normalizeState = (state: ResonantShellState, base: ResonantShellState): ResonantShellState => {
-  const installations = mergeInstallations(state.installations, base.installations);
+  const installations = base.installations;
   return {
     ...base,
-    ...state,
-    activeSystemSlotProviderIds: {
-      ...base.activeSystemSlotProviderIds,
-      ...(state.activeSystemSlotProviderIds ?? {}),
-    },
+    ...Object.fromEntries(Object.entries(uiStateForPersistence(state)).filter(([, value]) => value !== undefined)),
+    activeSystemSlotProviderIds: {},
     strategistIdentity: { ...base.strategistIdentity, ...state.strategistIdentity },
     uiPreferences: {
       ...base.uiPreferences,

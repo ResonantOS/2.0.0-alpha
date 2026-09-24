@@ -389,7 +389,7 @@ export function App() {
   useEffect(() => {
     void (async () => {
       try {
-        const booted = await loadInitialShellState();
+        const booted = await loadInitialShellState(harnessClient);
         setLoadState({
           phase: "ready",
           state: booted.state,
@@ -561,7 +561,7 @@ export function App() {
       return;
     }
     const manifests = [...loadState.bundled, ...loadState.sideloaded];
-    const activeProvider = activeSystemSlotProvider(loadState.state, manifests, "memory-system");
+    const activeProvider = activeSystemSlotProvider(loadState.state, manifests, "memory-system", harnessProjection);
     if (hasSystemSlotManifest(manifests, "memory-system") && activeProvider?.manifest.id !== "addon.living-archive") {
       return;
     }
@@ -569,7 +569,7 @@ export function App() {
       return;
     }
     void refreshArchiveRuntime();
-  }, [loadState, archiveStatusBusy, archiveStatus]);
+  }, [loadState, archiveStatusBusy, archiveStatus, harnessProjection]);
 
   useEffect(() => {
     if (loadState.phase !== "ready") {
@@ -579,7 +579,7 @@ export function App() {
       return;
     }
     const manifests = [...loadState.bundled, ...loadState.sideloaded];
-    const activeProvider = activeSystemSlotProvider(loadState.state, manifests, "memory-system");
+    const activeProvider = activeSystemSlotProvider(loadState.state, manifests, "memory-system", harnessProjection);
     if (hasSystemSlotManifest(manifests, "memory-system") && activeProvider?.manifest.id !== "addon.living-archive") {
       return;
     }
@@ -587,7 +587,7 @@ export function App() {
       return;
     }
     void refreshArchiveQueue();
-  }, [loadState, archiveQueueBusy, archiveQueue.length]);
+  }, [loadState, archiveQueueBusy, archiveQueue.length, harnessProjection]);
 
   if (loadState.phase === "loading") {
     return (
@@ -2334,7 +2334,7 @@ export function App() {
                 installations={state.installations}
                 selectedManifest={selectedManifest}
                 selectedInstallation={selectedInstallation}
-                uninstallBlock={selectedManifest ? describeUninstallBlock(state, selectedManifest) : null}
+                uninstallBlock={selectedManifest ? describeUninstallBlock(state, selectedManifest, harnessProjection) : null}
                 onSearchChange={(value) => {
                   startTransition(() => setSearch(value));
                 }}
