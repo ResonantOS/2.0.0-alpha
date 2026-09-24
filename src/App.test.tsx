@@ -16,7 +16,11 @@ import type {
 } from "./core/contracts";
 import { buildDefaultState } from "./core/defaults";
 import * as runtimeModule from "./core/runtime";
+import augmentorManifest from "../public/addons/augmentor-chat.json";
+import archiveManifest from "../public/addons/living-archive.json";
+import { activeSystemSlotProvider } from "./modules/shell/system-slots";
 import * as harnessClients from "./core/harness-client";
+import * as chatController from "./modules/chat/controller";
 import { ArchiveReviewDesk } from "./modules/archive/ArchiveReviewDesk";
 
 const { harnessInvokeMock } = vi.hoisted(() => ({ harnessInvokeMock: vi.fn() }));
@@ -3290,6 +3294,83 @@ describe("App boot flow", () => {
     expect(requestBrowserVisibleHostCommandMock).not.toHaveBeenCalledWith(expect.objectContaining({ type: "open_url" }));
     expect(removedExtensionFolderSelectionMock).not.toHaveBeenCalled();
     expect(removedBrowserProbeMock).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("first-run consent becomes effective only after host acknowledgement (denied: %s)", async denied => {
+    const catalog = [augmentorManifest, archiveManifest] as AddOnManifest[];
+    vi.mocked(runtimeModule.loadBundledManifests).mockResolvedValueOnce(catalog);
+    const state = buildDefaultState(catalog);
+    state.uiPreferences.activeSection = "overview";
+    state.uiPreferences.chatSidebarOpen = true;
+    hydrateStateMock.mockResolvedValueOnce(state);
+    const initial: harnessClients.HarnessProjection = { bootEpoch: "first-run", revision: 0, governanceActivated: false, candidates: [], installations: {}, slots: {} };
+    const pending = deferred<harnessClients.HarnessProjection>();
+    const slotAcknowledgement = deferred<void>();
+    const client = harnessClients.createHarnessClient({ invoke: harnessInvokeMock });
+    const factory = vi.spyOn(harnessClients, "createHarnessClient").mockReturnValue(client);
+    const send = vi.spyOn(chatController, "executeChatTurn").mockResolvedValue(undefined);
+    let snapshot = initial;
+    harnessInvokeMock.mockImplementation(async (command, args) => {
+      if (command === "harness_registry") return snapshot;
+      if (command === "harness_install") {
+        snapshot = { ...snapshot, revision: snapshot.revision + 1, installations: { ...snapshot.installations, [args.manifest.id]: {
+          addonId: args.manifest.id, installed: true, enabled: true,
+          grantedCapabilities: args.manifest.requestedCapabilities.map((g: CapabilityGrant) => ({ ...g, granted: false })), disabledOperations: [], hiddenSurfaceIds: [],
+        } } };
+        return snapshot;
+      }
+      if (command === "harness_grants") {
+        const acknowledgement = await pending.promise;
+        snapshot = acknowledgement;
+        return snapshot;
+      }
+      if (command === "harness_assign_slot") {
+        await slotAcknowledgement.promise;
+        snapshot = { ...snapshot, revision: snapshot.revision + 1, slots: { ...snapshot.slots, [args.slot]: { addonId: args.addonId, generation: 1, available: true } } };
+        return snapshot;
+      }
+      throw new Error("Unexpected first-run command");
+    });
+    try {
+      const { container } = render(<App />);
+      const dialog = await screen.findByRole("dialog", { name: "Choose recommended ResonantOS add-ons" });
+      fireEvent.click(within(dialog).getByRole("checkbox", { name: /Living Archive/ }));
+      fireEvent.click(within(dialog).getByRole("button", { name: "Apply Selection" }));
+      await waitFor(() => expect(harnessInvokeMock).toHaveBeenCalledWith("harness_grants", expect.objectContaining({ addonId: augmentorManifest.id, consent: true })));
+      expect(container.querySelector(".composer-card textarea")).toBeNull();
+      expect(client.getSnapshot()!.installations[augmentorManifest.id].grantedCapabilities.some(g => g.granted)).toBe(false);
+      expect(activeSystemSlotProvider(state, catalog, "primary-agent", client.getSnapshot())).toBeNull();
+      expect(within(dialog).getByRole("button", { name: "Apply Selection" }).hasAttribute("disabled")).toBe(true);
+      if (denied) {
+        await act(async () => pending.reject(new Error("Host denied consent")));
+        expect(screen.getByRole("dialog", { name: "Choose recommended ResonantOS add-ons" })).toBeTruthy();
+        expect(within(dialog).getByRole("alert").textContent).toContain("First-run setup could not be completed");
+        expect(container.querySelector(".composer-card textarea")).toBeNull();
+        expect(activeSystemSlotProvider(state, catalog, "primary-agent", client.getSnapshot())).toBeNull();
+      } else {
+        const grants = harnessInvokeMock.mock.calls.find(([command]) => command === "harness_grants")![1].grants;
+        await act(async () => pending.resolve({ ...snapshot, revision: snapshot.revision + 1, installations: {
+          ...snapshot.installations, [augmentorManifest.id]: { ...snapshot.installations[augmentorManifest.id], grantedCapabilities: grants },
+        } }));
+        await waitFor(() => expect(harnessInvokeMock).toHaveBeenCalledWith("harness_assign_slot", expect.any(Object)));
+        expect(container.querySelector(".composer-card textarea")).toBeNull();
+        expect(activeSystemSlotProvider(state, catalog, "primary-agent", client.getSnapshot())).toBeNull();
+        expect(client.getSnapshot()!.installations[augmentorManifest.id].grantedCapabilities.some(g => g.granted)).toBe(true);
+        await act(async () => slotAcknowledgement.resolve());
+        await waitFor(() => expect(screen.queryByRole("dialog", { name: "Choose recommended ResonantOS add-ons" })).toBeNull());
+        expect(container.querySelector(".composer-card textarea")).toBeTruthy();
+        expect(activeSystemSlotProvider(state, catalog, "primary-agent", client.getSnapshot())?.manifest.id).toBe(augmentorManifest.id);
+        expect(state.installations[augmentorManifest.id].grantedCapabilities.some(g => g.granted)).toBe(false);
+        expect(harnessInvokeMock.mock.calls.filter(([command]) => command === "harness_install")).toHaveLength(1);
+        fireEvent.change(container.querySelector(".composer-card textarea")!, { target: { value: "Hello after first run" } });
+        fireEvent.click(screen.getAllByRole("button", { name: "Send message" })[0]);
+        await waitFor(() => expect(send).toHaveBeenCalledWith(expect.objectContaining({
+          activeThread: expect.objectContaining({ id: state.uiPreferences.activeChatThreadId }),
+          composer: "Hello after first run",
+        })));
+        expect(state.installations[augmentorManifest.id].enabled).toBe(false);
+      }
+    } finally { factory.mockRestore(); send.mockRestore(); }
   });
 
   it.each(["install", "disable", "enable", "grant", "batch", "remove"] as const)(

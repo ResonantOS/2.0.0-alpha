@@ -3,7 +3,6 @@
 import { describe, expect, it } from "vitest";
 import type { AddOnManifest, CapabilityGrant, HarnessRegistryProjection, SystemSlotId } from "../../core/contracts";
 import { buildDefaultState } from "../../core/defaults";
-import { applyFirstRunRecommendedAddOns } from "./controller";
 import { activeSystemSlotProvider, selectedSystemSlotProviderId, systemSlotAvailable } from "./system-slots";
 
 const grant = (capability: CapabilityGrant["capability"]): CapabilityGrant => ({
@@ -43,12 +42,27 @@ const manifestForSlot = (
   compatibility: { shellVersion: "^0.1.0", platforms: ["macOS", "linux", "windows"] },
 });
 
+// Legacy fallback fixtures are deliberately local; first-run no longer creates them.
+const legacyGrantedState = (manifest: AddOnManifest) => {
+  const state = buildDefaultState([manifest]);
+  state.installations[manifest.id] = { ...state.installations[manifest.id], installed: true, enabled: true,
+    grantedCapabilities: manifest.requestedCapabilities.map(g => ({ ...g, granted: true })) };
+  return state;
+};
+
+const acknowledgedSelection = (manifest: AddOnManifest): HarnessRegistryProjection => ({
+  bootEpoch: "first-run", revision: 3, governanceActivated: false, candidates: [manifest],
+  installations: { [manifest.id]: { addonId: manifest.id, installed: true, enabled: true,
+    grantedCapabilities: manifest.requestedCapabilities.map(g => ({ ...g, granted: true })), disabledOperations: [], hiddenSurfaceIds: [] } },
+  slots: Object.fromEntries(manifest.systemSlots!.map(slot => [slot.id, { addonId: manifest.id, generation: 1, available: true }])),
+});
+
 describe("system slot replacement runtime", () => {
   it.each(["agent-runtime", "agent-delegation"] as const)(
     "primary execution requires runtime rather than delegation consent: %s",
     (capability) => {
       const manifest = manifestForSlot("addon.primary", "primary-agent", capability);
-      const state = applyFirstRunRecommendedAddOns(buildDefaultState([manifest]), [manifest], [manifest.id]);
+      const state = legacyGrantedState(manifest);
       expect(systemSlotAvailable(state, [manifest], "primary-agent")).toBe(capability === "agent-runtime");
       expect(activeSystemSlotProvider(state, [manifest], "primary-agent")?.manifest.id ?? null)
         .toBe(capability === "agent-runtime" ? manifest.id : null);
@@ -68,10 +82,10 @@ describe("system slot replacement runtime", () => {
 
     expect(systemSlotAvailable(state, [chatManifest], "chat-interface")).toBe(false);
 
-    const enabled = applyFirstRunRecommendedAddOns(state, [chatManifest], [chatManifest.id]);
+    const projection = acknowledgedSelection(chatManifest);
 
-    expect(systemSlotAvailable(enabled, [chatManifest], "chat-interface")).toBe(true);
-    expect(activeSystemSlotProvider(enabled, [chatManifest], "chat-interface")?.manifest.id).toBe(chatManifest.id);
+    expect(systemSlotAvailable(state, [chatManifest], "chat-interface", projection)).toBe(true);
+    expect(activeSystemSlotProvider(state, [chatManifest], "chat-interface", projection)?.manifest.id).toBe(chatManifest.id);
   });
 
   it("can enable recommended chat and memory defaults independently during first-run setup", () => {
@@ -79,11 +93,10 @@ describe("system slot replacement runtime", () => {
     const memoryManifest = manifestForSlot("addon.living-archive", "memory-system", "memory-provider");
     const state = buildDefaultState([chatManifest, memoryManifest]);
 
-    const next = applyFirstRunRecommendedAddOns(state, [chatManifest, memoryManifest], [memoryManifest.id]);
+    const projection = acknowledgedSelection(memoryManifest);
 
-    expect(next.uiPreferences.recommendedAddOnsReviewed).toBe(true);
-    expect(systemSlotAvailable(next, [chatManifest, memoryManifest], "chat-interface")).toBe(false);
-    expect(systemSlotAvailable(next, [chatManifest, memoryManifest], "memory-system")).toBe(true);
+    expect(systemSlotAvailable(state, [chatManifest, memoryManifest], "chat-interface", projection)).toBe(false);
+    expect(systemSlotAvailable(state, [chatManifest, memoryManifest], "memory-system", projection)).toBe(true);
   });
 
   it("does not select an enabled add-on whose slot capability grant is missing, not granted, or the wrong capability (#349)", () => {
@@ -249,7 +262,7 @@ describe("host-managed system slots", () => {
     { addonId: "addon.local", available: false, generation: 2 },
   ])("managed vacancy overrides eligible local defaults: %j", (slot) => {
     const manifest = manifestForSlot("addon.local", "chat-interface", "chat-interface");
-    const state = applyFirstRunRecommendedAddOns(buildDefaultState([manifest]), [manifest], [manifest.id]);
+    const state = legacyGrantedState(manifest);
     const projection = projectionFor({ "chat-interface": slot });
     expect(activeSystemSlotProvider(state, [manifest], "chat-interface", projection)).toBeNull();
     expect(systemSlotAvailable(state, [manifest], "chat-interface", projection)).toBe(false);
@@ -261,7 +274,7 @@ describe("host-managed system slots", () => {
   it("requires host-owner metadata and installation before reporting a usable provider", () => {
     const host = manifestForSlot("addon.host", "primary-agent", "agent-runtime");
     const local = manifestForSlot("addon.local", "primary-agent", "agent-runtime");
-    const state = applyFirstRunRecommendedAddOns(buildDefaultState([local]), [local], [local.id]);
+    const state = legacyGrantedState(local);
     const projection = { ...projectionFor({ "primary-agent": { addonId: host.id, generation: 2, available: true } }),
       installations: { [host.id]: { addonId: host.id, installed: true, enabled: true,
         grantedCapabilities: [], disabledOperations: [], hiddenSurfaceIds: [] } } };
@@ -276,7 +289,7 @@ describe("host-managed system slots", () => {
   it("uses only the projected owner and installation despite stale local grants or selection", () => {
     const local = manifestForSlot("addon.local", "primary-agent", "agent-runtime");
     const host = manifestForSlot("addon.host", "primary-agent", "agent-runtime");
-    const state = applyFirstRunRecommendedAddOns(buildDefaultState([local]), [local], [local.id]);
+    const state = legacyGrantedState(local);
     const installation = { addonId: host.id, installed: true, enabled: true,
       grantedCapabilities: [{ ...grant("agent-runtime"), granted: true }], disabledOperations: [], hiddenSurfaceIds: [] };
     const projection = { ...projectionFor({ "primary-agent": { addonId: host.id, generation: 4, available: true } }),

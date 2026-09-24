@@ -146,6 +146,7 @@ import { PaperclipWorkspace } from "./modules/paperclip/PaperclipWorkspace";
 import { promoteRecoveryRoute, RECOVERY_RUNBOOK_PROMPT, setRecoveryMode } from "./modules/recovery/controller";
 import {
   applyFirstRunRecommendedAddOns,
+  firstRunRecommendedAddOns,
   loadInitialShellState,
   loadRecoveryRuntimeSnapshot,
   markFirstRunRecommendedAddOnsReviewed,
@@ -159,7 +160,6 @@ import {
 import {
   activeSystemSlotProvider,
   hasSystemSlotManifest,
-  recommendedSystemSlotManifests,
   systemSlotAvailable,
 } from "./modules/shell/system-slots";
 import { createAddOnSurfaceDockRoutes } from "./sdk/addons";
@@ -301,6 +301,8 @@ export function App() {
   const [search, setSearch] = useState("");
   const [sideloadPath, setSideloadPath] = useState("");
   const [selectedAddonId, setSelectedAddonId] = useState<string>("");
+  const [firstRunPending, setFirstRunPending] = useState(false);
+  const [firstRunError, setFirstRunError] = useState("");
   const [firstRunSelections, setFirstRunSelections] = useState<Record<string, boolean>>({});
   const [archiveFocusTarget, setArchiveFocusTarget] = useState<"review" | null>(null);
   const [composer, setComposer] = useState("");
@@ -653,6 +655,7 @@ export function App() {
     dictationAvailable,
   } = buildShellViewModel({
     state,
+    harnessProjection,
     bundled,
     sideloaded,
     deferredSearch,
@@ -663,17 +666,17 @@ export function App() {
   });
   const harnessChatActive = primaryHarnessChatRoute({ projection: harnessProjection, state, thread: activeThread,
     outgoing: composer }) === "harness";
-  const chatSlotAvailable = systemSlotAvailable(state, allManifests, "chat-interface");
+  const chatSlotAvailable = systemSlotAvailable(state, allManifests, "chat-interface", harnessProjection);
   const engineerSettingsConsoleActive = !recoveryModeActive && !chatSlotAvailable && currentSection === "settings";
   const chatInterfaceAvailable = recoveryModeActive || chatSlotAvailable || engineerSettingsConsoleActive;
-  const memorySystemAvailable = systemSlotAvailable(state, allManifests, "memory-system");
+  const memorySystemAvailable = systemSlotAvailable(state, allManifests, "memory-system", harnessProjection);
   const memorySlotHasProviders = hasSystemSlotManifest(allManifests, "memory-system");
-  const activeMemoryProvider = activeSystemSlotProvider(state, allManifests, "memory-system");
+  const activeMemoryProvider = activeSystemSlotProvider(state, allManifests, "memory-system", harnessProjection);
   const livingArchiveMemoryActive =
     !memorySlotHasProviders || activeMemoryProvider?.manifest.id === "addon.living-archive";
   const memoryProviderBroker = resolveMemoryProviderBroker(state, allManifests);
   const archiveAgentThread = state.conversationThreads.find((thread) => thread.id === "thread-living-archive-agent") ?? null;
-  const recommendedAddOns = recommendedSystemSlotManifests(allManifests);
+  const recommendedAddOns = firstRunRecommendedAddOns(bundled);
   const showFirstRunRecommendedAddOns =
     !isFloatingChatSurface && !state.uiPreferences.recommendedAddOnsReviewed && recommendedAddOns.length > 0;
   const firstRunSelectionFor = (manifestId: string): boolean => firstRunSelections[manifestId] ?? true;
@@ -2717,6 +2720,7 @@ export function App() {
                 <label key={manifest.id} className="first-run-choice">
                   <input
                     type="checkbox"
+                    disabled={firstRunPending}
                     checked={firstRunSelectionFor(manifest.id)}
                     onChange={(event) =>
                       setFirstRunSelections((current) => ({
@@ -2732,21 +2736,36 @@ export function App() {
                 </label>
               ))}
             </div>
+            {firstRunError && <p role="alert">{firstRunError}</p>}
             <div className="first-run-actions">
               <button
                 type="button"
+                disabled={firstRunPending}
                 className="button-primary touch-action"
                 onClick={() => {
                   const selectedIds = recommendedAddOns
                     .filter((manifest) => firstRunSelectionFor(manifest.id))
                     .map((manifest) => manifest.id);
-                  commitReadyState(applyFirstRunRecommendedAddOns(state, allManifests, selectedIds));
+                  setFirstRunPending(true);
+                  setFirstRunError("");
+                  void applyFirstRunRecommendedAddOns(state, bundled, selectedIds, harnessClient)
+                    .then(next => updateRuntimeState(current => ({ ...current, uiPreferences: {
+                      ...current.uiPreferences,
+                      recommendedAddOnsReviewed: next.uiPreferences.recommendedAddOnsReviewed,
+                      chatSidebarOpen: next.uiPreferences.chatSidebarOpen,
+                    } })))
+                    .catch(async () => {
+                      await harnessClient.refresh().catch(() => {});
+                      setFirstRunError("First-run setup could not be completed. Review the acknowledged add-ons and retry.");
+                    })
+                    .finally(() => setFirstRunPending(false));
                 }}
               >
                 Apply Selection
               </button>
               <button
                 type="button"
+                disabled={firstRunPending}
                 className="button-secondary touch-action"
                 onClick={() => {
                   const nextState = markFirstRunRecommendedAddOnsReviewed(state);
@@ -2759,6 +2778,7 @@ export function App() {
               </button>
               <button
                 type="button"
+                disabled={firstRunPending}
                 className="button-secondary touch-action"
                 onClick={() => commitReadyState(markFirstRunRecommendedAddOnsReviewed(state))}
               >

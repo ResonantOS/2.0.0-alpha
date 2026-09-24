@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { AddOnManifest, ChannelDefinition, ConversationThread } from "../../core/contracts";
+import type { AddOnManifest, ChannelDefinition, ConversationThread, HarnessRegistryProjection } from "../../core/contracts";
+import augmentor from "../../../public/addons/augmentor-chat.json";
 import { buildDefaultState } from "../../core/defaults";
 import {
   buildShellViewModel,
@@ -71,6 +72,34 @@ describe("channelAllowedByOwningAddon", () => {
 });
 
 describe("buildShellViewModel", () => {
+  it.each([true, false])("uses acknowledged chat ownership instead of contradictory local availability (host available: %s)", available => {
+    const manifest = augmentor as AddOnManifest;
+    const state = buildDefaultState([manifest]);
+    state.uiPreferences.activeSection = "overview";
+    if (!available) {
+      state.installations[manifest.id] = { ...state.installations[manifest.id], installed: true, enabled: true,
+        grantedCapabilities: manifest.requestedCapabilities.map(grant => ({ ...grant, granted: true })) };
+      state.activeSystemSlotProviderIds = { "chat-interface": manifest.id };
+    }
+    const before = structuredClone(state);
+    const harnessProjection: HarnessRegistryProjection = {
+      bootEpoch: "first-run", revision: 3, governanceActivated: true, candidates: [manifest],
+      installations: { [manifest.id]: { addonId: manifest.id, installed: true, enabled: true,
+        grantedCapabilities: manifest.requestedCapabilities.map(grant => ({ ...grant, granted: true })),
+        disabledOperations: [], hiddenSurfaceIds: [] } },
+      slots: { "chat-interface": { addonId: available ? manifest.id : null, generation: 1, available } },
+    };
+    const input = { state, bundled: [manifest], sideloaded: [], deferredSearch: "", selectedAddonId: "",
+      composer: "Hello after first run", attachments: [], selectedChatModel: "", harnessProjection };
+    const viewModel = buildShellViewModel(input);
+    if (available) expect(viewModel.activeThread).not.toBeNull();
+    else expect(viewModel.activeThread).toBeNull();
+    expect(state).toEqual(before);
+    // An unmanaged slot retains the legacy selector behavior.
+    expect(buildShellViewModel({ ...input, harnessProjection: { ...harnessProjection, slots: {} } }).activeThread === null)
+      .toBe(available);
+  });
+
   it("filters manifests by search query", () => {
     const state = buildDefaultState([]);
     const bundled: AddOnManifest[] = [
