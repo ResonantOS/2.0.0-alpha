@@ -18,9 +18,14 @@ function frame(type, data) {
 function text(value) { frame('delta', { text: value }); return value; }
 function content(parts) {
   if (!Array.isArray(parts) || parts.length > 256) throw fail('invalid-event');
-  return text(parts.map(part => {
-    if (!record(part) || part.type !== 'text' || typeof part.text !== 'string') throw fail('invalid-event');
-    return text(part.text);
+  // Model-internal reasoning parts carry no reply text or authority; DSH
+  // reasoning models emit them ahead of the text part. Other non-text types
+  // remain hostile and reject the envelope.
+  return text(parts.flatMap(part => {
+    if (!record(part)) throw fail('invalid-event');
+    if (part.type === 'reasoning') return [];
+    if (part.type !== 'text' || typeof part.text !== 'string') throw fail('invalid-event');
+    return [part.text];
   }).join(''));
 }
 function identifier(value) {

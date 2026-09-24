@@ -112,3 +112,12 @@ for (const part of [null, 'PRIVATE', 42, [], {}, { type: 'image', text: 'PRIVATE
     await assert.rejects(adapter.history({ session }), { code: 'invalid-event' });
   });
 }
+
+test('history drops reasoning parts and keeps only the text reply', async t => {
+  const w = await wire(), adapter = createDshTypertAdapter({ transport: w.transport }); t.after(() => adapter.dispose());
+  const session = await adapter.createSession();
+  w.page({ records: [event('assistant/message', 2, { message: { content: [
+    { type: 'reasoning', text: 'PRIVATE chain-of-thought' }, { type: 'text', text: 'valid' },
+  ] } })], hasMore: false });
+  assert.deepEqual(await adapter.history({ session }), { messages: [{ role: 'assistant', content: 'valid' }], hasMore: false });
+});
