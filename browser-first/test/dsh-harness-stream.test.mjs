@@ -74,6 +74,20 @@ test('a disconnected running stream reports unknown status', async t => {
   assert.deepEqual(await adapter.status({ session }), { status: 'unknown' });
   assert.equal((await result).at(-1).type, 'error');
 });
+test('reasoning content parts are dropped, never surfaced or fatal', async t => {
+  const { w, adapter, session } = await setup(t);
+  const result = Array.fromAsync(adapter.invoke({ session, input }));
+  await until(() => w.rpc('session/prompt').length);
+  w.emit(event('turn/start', 2)); w.emit(chunk('Seven is prime.'));
+  w.emit(event('assistant/message', 3, { message: { content: [
+    { type: 'reasoning', text: 'PRIVATE chain-of-thought' }, { type: 'text', text: 'Seven is prime.' },
+  ] } }));
+  w.emit(event('turn/end', 4));
+  const frames = await result;
+  assert.equal(frames.at(-1).type, 'final');
+  assert.deepEqual(frames.at(-1).data, { text: 'Seven is prime.' });
+  assert.ok(!JSON.stringify(frames).includes('PRIVATE'));
+});
 test('cancellation closes the turn and suppresses late chunks', async t => {
   const { w, adapter, session } = await setup(t);
   const result = Array.fromAsync(adapter.invoke({ session, input }));
