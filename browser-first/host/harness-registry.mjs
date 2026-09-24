@@ -1,3 +1,4 @@
+import { evaluateHarnessPolicy, replacementAllowed } from './harness-policy.mjs';
 import { randomUUID } from 'node:crypto';
 import { assertValidHarnessManifest, publicHarnessError } from './harness-adapter-contract.mjs';
 
@@ -13,7 +14,7 @@ const sameRequest = (a, b) => a.capability === b.capability && a.scope === b.sco
 export async function createHarnessRegistry({ store, reviewedAdapterIds = [], bindings = [] } = {}) {
   if (!store?.read || !store?.write) throw new TypeError('Durable registry store required.');
   const reviewed = new Set(reviewedAdapterIds), approvedBindings = structuredClone(bindings);
-  const bootEpoch = randomUUID(), listeners = new Set(), fenced = new Set();
+  const bootEpoch = randomUUID(), listeners = new Set(), fenced = new Set(), pendingPolicies = new Map();
   let state = empty(), disabled = false, queue = Promise.resolve();
 
   function bindingAllowed(manifest) {
@@ -91,11 +92,20 @@ export async function createHarnessRegistry({ store, reviewedAdapterIds = [], bi
       return authorization.bootEpoch === current.bootEpoch && authorization.generation === current.generation;
     } catch { return false; }
   }
+  function projectPolicy(addonId, entry) {
+    const policy = pendingPolicies.get(addonId) ?? evaluateHarnessPolicy(entry.manifest, entry.grants);
+    return { disabledOperations: disabled || !entry.enabled ? [...(entry.manifest.agentRuntime?.supportedOperations ?? [])] : [...policy.disabledOperations],
+      hiddenSurfaceIds: [...policy.hiddenSurfaceIds] };
+  }
+  function assertOperation(authorization, operation) {
+    if (!isCurrent(authorization)) throw fail('ownership-conflict');
+    if (projectPolicy(authorization.addonId, entryFor(authorization.addonId)).disabledOperations.includes(operation)) throw fail('permission-denied');
+  }
   /** @returns {import('../../src/core/contracts.ts').HarnessRegistryProjection} */
   function snapshot() {
     const installations = Object.fromEntries(Object.entries(state.installations).map(([addonId, entry]) => [addonId, {
       addonId, installed: true, enabled: entry.enabled, grantedCapabilities: structuredClone(entry.grants),
-      disabledOperations: disabled || !entry.enabled ? [...(entry.manifest.agentRuntime?.supportedOperations ?? [])] : [], hiddenSurfaceIds: [],
+      ...projectPolicy(addonId, entry),
     }]));
     const projection = Object.fromEntries(Object.entries(state.slots).map(([slot, owner]) => [slot, { ...owner,
       available: !disabled && !fenced.has(slot) && !!owner.addonId && eligible(state.installations[owner.addonId], slot),
@@ -111,16 +121,25 @@ export async function createHarnessRegistry({ store, reviewedAdapterIds = [], bi
   function transact(prepare) {
     const operation = queue.then(async () => {
       if (disabled) throw fail('runtime-unavailable');
-      const next = structuredClone(state), changedSlots = prepare(next);
+      const next = structuredClone(state), changes = prepare(next);
+      const changedSlots = Array.isArray(changes) ? changes : changes.changedSlots;
+      const effects = Array.isArray(changes) ? [] : changes.effects;
       if (!counter(next.revision + 1)) throw fail('runtime-unavailable');
       next.revision++;
-      const cleanup = Promise.allSettled(changedSlots.flatMap(notify));
+      // Withdraw operation authority before any listener or durable write. New
+      // calls and late results see the same pending policy as running work.
+      for (const effect of effects) pendingPolicies.set(effect.addonId, effect.policy);
+      const cleanup = Promise.allSettled([...changedSlots.flatMap(notify), ...effects.flatMap(effect =>
+        [...listeners].map(listener => {
+          try { return Promise.resolve(listener(effect)); } catch (error) { return Promise.reject(error); }
+        }))]);
       try {
         await store.write({ version: 1, phase: 'pending', state: next });
         const results = await cleanup;
         if (results.some(result => result.status === 'rejected')) throw fail('runtime-unavailable');
         await store.write({ version: 1, phase: 'committed', state: next });
         state = next;
+        pendingPolicies.clear();
         for (const slot of changedSlots) fenced.delete(slot);
         return snapshot();
       } catch {
@@ -143,7 +162,7 @@ export async function createHarnessRegistry({ store, reviewedAdapterIds = [], bi
     return changed;
   }
   return {
-    snapshot, authorize, isCurrent,
+    snapshot, authorize, isCurrent, assertOperation,
     onFence(listener) { listeners.add(listener); return () => listeners.delete(listener); },
     install(manifest, { enabled } = {}) {
       // Capture input before entering the serialized queue to prevent TOCTOU edits.
@@ -185,11 +204,12 @@ export async function createHarnessRegistry({ store, reviewedAdapterIds = [], bi
         if (expectedRevision !== state.revision) throw fail('ownership-conflict');
         if (consent !== true) throw fail('permission-denied');
         const entry = entryFor(addonId); validateGrants(entry, captured);
-        const revoked = captured.some(grant => !grant.granted && entry.grants.some(old => old.capability === grant.capability && old.granted));
+        const revoked = captured.filter(grant => !grant.granted && entry.grants.some(old => old.capability === grant.capability && old.granted)).map(grant => grant.capability);
         next.installations[addonId].grants = entry.grants.map(old => grantShape(captured.find(grant => sameRequest(old, grant)) ?? old));
-        // Phase 1 conservatively fences any revoked grant; per-operation degrade
-        // and hide-surface behavior belongs to the later policy increment.
-        return advance(next, revoked ? ownedSlots(next, addonId) : []);
+        const grants = next.installations[addonId].grants;
+        const changed = ownedSlots(next, addonId).filter(slot => evaluateHarnessPolicy(entry.manifest, grants, { revoked, slot }).hardStop);
+        return { changedSlots: advance(next, changed), effects: revoked.length ? [{ addonId,
+          policy: evaluateHarnessPolicy(entry.manifest, grants, { revoked }) }] : [] };
       });
     },
     setEnabled(addonId, enabled, { expectedRevision } = {}) {
@@ -206,7 +226,7 @@ export async function createHarnessRegistry({ store, reviewedAdapterIds = [], bi
         if (!Object.hasOwn(slots, slot)) throw fail('permission-denied');
         const incumbent = state.slots[slot] ?? { addonId: null, generation: 0 };
         if (expectedGeneration !== incumbent.generation) throw fail('ownership-conflict');
-        if (incumbent.addonId && !replace) throw fail('ownership-conflict');
+        if (incumbent.addonId && (!replace || !replacementAllowed(entryFor(incumbent.addonId).manifest, slot))) throw fail('ownership-conflict');
         if (addonId !== null && !eligible(entryFor(addonId), slot)) throw fail('permission-denied');
         if (!counter(incumbent.generation + 1)) throw fail('runtime-unavailable');
         next.slots[slot] = { addonId, generation: incumbent.generation + 1 };

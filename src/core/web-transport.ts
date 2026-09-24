@@ -41,6 +41,7 @@ const commandRouteMap: Record<string, CommandRoute> = {
   harness_assign_slot: { method: "POST", path: "/addons/slots/assign", capability: "addon-runtime-control" },
   harness_session: { method: "POST", path: "/agent/session", capability: "addon-runtime-control" },
   harness_turn: { method: "POST", path: "/agent/turn", capability: "addon-runtime-control" },
+  harness_dispose: { method: "POST", path: "/agent/dispose", capability: "addon-runtime-control" },
   harness_cancel: { method: "POST", path: "/agent/cancel", capability: "addon-runtime-control" },
   harness_events: { method: "GET", path: "/agent/events", capability: "addon-runtime-read", stream: true },
   harness_history: { method: "POST", path: "/agent/history", capability: "addon-runtime-read" },

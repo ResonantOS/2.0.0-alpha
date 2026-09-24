@@ -55,11 +55,11 @@ async function sessionFor(runtime: HarnessChatRuntime, threadId: string): Promis
       if (thread === threadId || boot !== owner.bootEpoch || addon !== owner.addonId || generation !== owner.generation) runtime.sessions.delete(cached);
     }
     if (!owns(runtime.client, owner)) throw publicError("ownership-conflict");
-    pending = runtime.client.createSession(owner.addonId).then(({ session }) => {
-      // A post-create ownership change can orphan this session. The host fences
-      // it by ownership generation and cleans it on removal/shutdown. A session-
-      // dispose operation is Phase 2 backlog; cancel requires an active turn.
-      if (!owns(runtime.client, owner) || !owns(runtime.client, session)) throw publicError("ownership-conflict");
+    pending = runtime.client.createSession(owner.addonId).then(async ({ session }) => {
+      if (!owns(runtime.client, owner) || !owns(runtime.client, session)) {
+        await runtime.client.dispose(session).catch(() => {});
+        throw publicError("ownership-conflict");
+      }
       return session;
     });
     runtime.sessions.set(key, pending);

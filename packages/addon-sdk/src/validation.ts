@@ -416,6 +416,20 @@ export const validateAddOnManifest = (
     }
   });
 
+  requestedCapabilities.forEach((grant, index) => {
+    if (!isRecord(grant) || grant.revocationBehavior !== "hide-surface") return;
+    const dependent = Array.isArray(candidate.surfaces) && candidate.surfaces.some(surface => {
+      if (!isRecord(surface)) return false;
+      const navigation = isRecord(surface.shellNavigation) ? surface.shellNavigation : null;
+      const workspace = isRecord(candidate.embeddedWorkspace) && candidate.embeddedWorkspace.surfaceId === surface.id ? candidate.embeddedWorkspace : null;
+      return (grant.capability === "ui-embedding") ||
+        (grant.capability === "chat-interface" && Array.isArray(candidate.systemSlots) && candidate.systemSlots.some(slot => isRecord(slot) && slot.id === "chat-interface")) ||
+        (Array.isArray(navigation?.requiredCapabilities) && navigation.requiredCapabilities.includes(grant.capability)) ||
+        (Array.isArray(workspace?.requiredCapabilities) && workspace.requiredCapabilities.includes(grant.capability));
+    });
+    if (!dependent) pushIssue(issues, "error", "revocation-surface-dependency", `requestedCapabilities[${index}].revocationBehavior`, "hide-surface requires a surface that depends on this capability.");
+  });
+
   if (Array.isArray(candidate.surfaces)) {
     candidate.surfaces.forEach((surface, index) => {
       const shellNavigation = isRecord(surface) && isRecord(surface.shellNavigation) ? surface.shellNavigation : null;
@@ -1202,6 +1216,9 @@ export const validateAddOnManifest = (
             `systemSlots id must be a known SystemSlotId (${systemSlotIds.join(", ")}).`,
           );
           return;
+        }
+        if (typeof slot.replaceable !== "boolean") {
+          pushIssue(issues, "error", "system-slot-replaceable-boolean", `${path}.replaceable`, "replaceable must be boolean.");
         }
         const backingCapability = slotBackingCapability[slot.id as SystemSlotId];
         if (!requestedCapabilitySet.has(backingCapability)) {

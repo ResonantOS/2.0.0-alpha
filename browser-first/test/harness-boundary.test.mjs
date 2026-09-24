@@ -5,12 +5,13 @@ import { createHarnessRegistry } from '../host/harness-registry.mjs';
 import { createHarnessBoundary } from '../host/harness-boundary.mjs';
 const base = JSON.parse(await readFile(new URL('../../public/addons/hermes.json', import.meta.url)));
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
-async function fixture(adapterOverrides = {}, limits = {}) {
+async function fixture(adapterOverrides = {}, limits = {}, configure = () => {}) {
   const manifest = structuredClone(base);
   manifest.id = 'addon.one';
   manifest.requestedCapabilities.push(...['agent-runtime', 'agent-delegation', 'chat-interface'].map(capability => ({ capability, granted: true, scope: 'system', revocationBehavior: 'hard-stop' })));
   manifest.systemSlots = ['primary-agent', 'chat-interface'].map(id => ({ id, role: 'alternative-provider', replaceable: true }));
   Object.assign(manifest.agentRuntime, { adapterVersion: 1, adapterId: 'test-adapter', authScheme: 'none', supportedOperations: ['createSession', 'invoke', 'cancel', 'history', 'status', 'modelCatalog', 'selectModel'], contextRoleFidelity: 'text-only', toolCallbacks: false, requiredCapabilities: ['agent-runtime', 'chat-interface'] });
+  configure(manifest);
   let document = null;
   const store = { read: async () => structuredClone(document), write: async value => { document = structuredClone(value); } };
   const registry = await createHarnessRegistry({ store, reviewedAdapterIds: ['test-adapter'] });
@@ -277,3 +278,142 @@ for (const operation of ['history', 'status', 'modelCatalog', 'selectModel']) {
     assert.deepEqual(await f.boundary[operation](session, { model: 'test' }), { result: 'authorized' });
   });
 }
+
+for (const behavior of ['hard-stop', 'degrade', 'hide-surface']) {
+  test(`revocation effects never preserve withdrawn authority at boundary: ${behavior}`, async t => {
+    const entered = deferred(), release = deferred(), historyEntered = deferred(), historyRelease = deferred();
+    const f = await fixture({
+      invoke: async function* ({ signal }) { entered.resolve(signal); await release.promise; yield { type: 'final', data: { text: 'withdrawn' } }; },
+      history: async ({ signal }) => { historyEntered.resolve(signal); await historyRelease.promise; return ['unrelated']; },
+    }, {}, manifest => {
+      manifest.requestedCapabilities.find(g => g.capability === 'providers').revocationBehavior = behavior;
+      manifest.tools.find(tool => tool.name === manifest.agentRuntime.invocationTool).requiredCapabilities = ['providers'];
+      manifest.surfaces[0].shellNavigation = { sectionId: 'hermes', dockIcon: 'bot', eyebrow: 'Test', requiredCapabilities: ['providers'] };
+    });
+    t.after(() => f.boundary.close());
+    const session = await f.boundary.createSession({ addonId: 'addon.one' }), reader = f.boundary.events(session);
+    const turn = f.boundary.invoke(session, {}), signal = await entered.promise;
+    const history = f.boundary.history(session);
+    const outcome = history.then(value => ({ value }), error => ({ code: error.code }));
+    const historySignal = await historyEntered.promise;
+    const before = f.registry.snapshot();
+    const grant = before.installations['addon.one'].grantedCapabilities.find(g => g.capability === 'providers');
+    await f.registry.setGrants('addon.one', [{ ...grant, granted: false }], { consent: true, expectedRevision: before.revision });
+    assert.equal(signal.aborted, true, 'dependent running work must be cancelled');
+    assert.equal(historySignal.aborted, behavior === 'hard-stop', 'unrelated running work survives degrade/hide');
+    assert.ok(f.registry.snapshot().installations['addon.one'].disabledOperations.includes('invoke'), 'dependent operation must be projected disabled');
+    assert.deepEqual(f.registry.snapshot().installations['addon.one'].hiddenSurfaceIds, behavior === 'hide-surface' ? ['hermes-panel'] : []);
+    release.resolve(); historyRelease.resolve(); await turn.completion;
+    if (behavior === 'hard-stop') {
+      assert.deepEqual(await outcome, { code: 'ownership-conflict' });
+      assert.equal((await reader.next()).value.type, 'error');
+      assert.equal((await reader.next()).done, true);
+      assert.ok(f.calls.includes('dispose'));
+    } else {
+      assert.deepEqual(await outcome, { value: ['unrelated'] });
+      assert.equal(f.registry.snapshot().slots['primary-agent'].generation, session.generation);
+      assert.equal((await reader.next()).value.type, 'cancelled', 'late dependent output must not arrive');
+      assert.throws(() => f.boundary.invoke(session, {}), { code: 'permission-denied' });
+      assert.deepEqual(await f.boundary.status(session), { status: 'idle' });
+      assert.ok(!f.calls.includes('dispose'));
+    }
+    await reader.return();
+  });
+  test(`essential runtime revocation hard-stops even under ${behavior}`, async t => {
+    const f = await fixture({}, {}, manifest => {
+      manifest.systemSlots[0].replaceable = false;
+      manifest.requestedCapabilities.find(g => g.capability === 'agent-runtime').revocationBehavior = behavior;
+      manifest.surfaces[0].shellNavigation = { sectionId: 'hermes', dockIcon: 'bot', eyebrow: 'Test', requiredCapabilities: ['agent-runtime'] };
+    });
+    t.after(() => f.boundary.close());
+    const session = await f.boundary.createSession({ addonId: 'addon.one' }), reader = f.boundary.events(session);
+    await f.revoke();
+    assert.equal((await reader.next()).value.type, 'error');
+    assert.equal((await reader.next()).done, true);
+    assert.throws(() => f.boundary.invoke(session, {}), { code: 'session-not-found' });
+    assert.ok(f.calls.includes('dispose'));
+  });
+}
+
+test('client session disposal is idempotent but refuses superseded generations and foreign references', async t => {
+  const f = await fixture(); t.after(() => f.boundary.close());
+  assert.equal(typeof f.boundary.dispose, 'function', 'boundary must expose client disposal');
+  const session = await f.boundary.createSession({ addonId: 'addon.one' }), reader = f.boundary.events(session);
+  for (const patch of [{ addonId: 'addon.foreign' }, { generation: 0 }, { extra: true }]) {
+    await assert.rejects(f.boundary.dispose({ ...session, ...patch }), { code: 'session-not-found' });
+  }
+  await f.boundary.dispose(session); await f.boundary.dispose(session);
+  assert.equal(f.calls.filter(call => call === 'dispose').length, 1);
+  assert.equal((await reader.next()).value.type, 'error');
+  assert.equal((await reader.next()).done, true);
+  assert.throws(() => f.boundary.invoke(session, {}), { code: 'session-not-found' });
+  await f.registry.assignSlot('primary-agent', 'addon.one', { expectedGeneration: 1, replace: true });
+  await assert.rejects(f.boundary.dispose(session), { code: 'session-not-found' });
+});
+
+for (const operation of ['modelCatalog', 'selectModel']) {
+  test(`degrade cancels dependent ${operation} while keeping unrelated session work`, async t => {
+    const entered = deferred(), release = deferred();
+    const f = await fixture({ [operation]: async ({ signal }) => { entered.resolve(signal); await release.promise; return 'withdrawn result'; } }, {}, manifest => {
+      manifest.agentRuntime.modelSelection.requiredCapabilities = ['providers'];
+    });
+    t.after(() => f.boundary.close());
+    const session = await f.boundary.createSession({ addonId: 'addon.one' });
+    const work = f.boundary[operation](session, { model: 'test' });
+    const rejected = assert.rejects(work, { code: 'permission-denied' });
+    const signal = await entered.promise;
+    const grant = f.registry.snapshot().installations['addon.one'].grantedCapabilities.find(g => g.capability === 'providers');
+    await f.registry.setGrants('addon.one', [{ ...grant, granted: false }], { consent: true, expectedRevision: f.registry.snapshot().revision });
+    assert.equal(signal.aborted, true);
+    await rejected; // Adapter ignoring abort cannot postpone withdrawal.
+    await assert.rejects(f.boundary[operation](session, {}), { code: 'permission-denied' });
+    assert.deepEqual(await f.boundary.status(session), { status: 'idle' });
+    await f.registry.setGrants('addon.one', [{ ...grant, granted: true }], { consent: true, expectedRevision: f.registry.snapshot().revision });
+    release.resolve();
+    assert.equal(await f.boundary[operation](session, {}), 'withdrawn result', 'new explicitly authorized operations may proceed');
+  });
+}
+
+test('degrade attempts upstream cancellation even if abort immediately unwinds the turn', async t => {
+  const entered = deferred();
+  const f = await fixture({ invoke: async function* ({ signal }) {
+    entered.resolve();
+    await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
+  } }, {}, manifest => {
+    manifest.tools.find(tool => tool.name === manifest.agentRuntime.invocationTool).requiredCapabilities = ['providers'];
+  });
+  t.after(() => f.boundary.close());
+  const session = await f.boundary.createSession({ addonId: 'addon.one' });
+  const turn = f.boundary.invoke(session, {}); await entered.promise;
+  const grant = f.registry.snapshot().installations['addon.one'].grantedCapabilities.find(g => g.capability === 'providers');
+  await f.registry.setGrants('addon.one', [{ ...grant, granted: false }], { consent: true, expectedRevision: f.registry.snapshot().revision });
+  await turn.completion;
+  assert.ok(f.calls.includes('cancel'), 'upstream cancellation must use the captured turn');
+});
+
+test('a runtime-wide degraded dependency cannot leave a session that revives on regrant', async t => {
+  const f = await fixture({}, {}, manifest => {
+    manifest.agentRuntime.requiredCapabilities.push('providers');
+  });
+  t.after(() => f.boundary.close());
+  const session = await f.boundary.createSession({ addonId: 'addon.one' });
+  const grant = f.registry.snapshot().installations['addon.one'].grantedCapabilities.find(g => g.capability === 'providers');
+  await f.registry.setGrants('addon.one', [{ ...grant, granted: false }], { consent: true, expectedRevision: f.registry.snapshot().revision });
+  assert.ok(f.calls.includes('dispose'), 'loss of every session operation retires the unusable session');
+  await f.registry.setGrants('addon.one', [{ ...grant, granted: true }], { consent: true, expectedRevision: f.registry.snapshot().revision });
+  assert.throws(() => f.boundary.invoke(session, {}), { code: 'session-not-found' });
+  const fresh = await f.boundary.createSession({ addonId: 'addon.one' });
+  assert.deepEqual(await f.boundary.status(fresh), { status: 'idle' });
+});
+
+test('disposal stays idempotent after repeated session churn without retaining session capacity', async t => {
+  const f = await fixture({}, { maxSessions: 1 });
+  t.after(() => f.boundary.close());
+  const first = await f.boundary.createSession({ addonId: 'addon.one' });
+  await f.boundary.dispose(first);
+  const second = await f.boundary.createSession({ addonId: 'addon.one' });
+  await f.boundary.dispose(second);
+  await assert.doesNotReject(f.boundary.dispose(first), 'idempotence must survive subsequent session disposal');
+  await assert.rejects(f.boundary.dispose({ ...first, sessionId: 'unknown' }), { code: 'session-not-found' });
+  assert.equal(f.calls.filter(call => call === 'dispose').length, 2);
+});

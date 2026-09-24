@@ -248,6 +248,7 @@ test("harness routes retain the exact capability and transport boundary", async 
       ["POST /addons/slots/assign", "addon-runtime-control"],
       ["POST /agent/session", "addon-runtime-control"],
       ["POST /agent/turn", "addon-runtime-control"],
+      ["POST /agent/dispose", "addon-runtime-control"],
       ["POST /agent/cancel", "addon-runtime-control"],
       ["GET /agent/events", "addon-runtime-read"],
       ["POST /agent/history", "addon-runtime-read"],

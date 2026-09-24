@@ -353,3 +353,71 @@ test('bundled Augmentor declares the reviewed provider fabric runtime and can be
   await assign(registry, value.id);
   assert.equal(registry.snapshot().slots['primary-agent'].available, true);
 });
+
+for (const replaceable of [false, true]) {
+  test(`vacating an incumbent respects replaceable=${replaceable} without blocking disable`, async () => {
+    const registry = await open(memoryStore()), incumbent = manifest();
+    incumbent.systemSlots[0].replaceable = replaceable;
+    await installGranted(registry, incumbent);
+    await assign(registry);
+    const before = registry.snapshot();
+    const authorization = registry.authorize('primary-agent', incumbent.id);
+    if (replaceable) {
+      await assign(registry, null, 1);
+      assert.deepEqual(registry.snapshot().slots['primary-agent'], { addonId: null, generation: 2, available: false });
+    } else {
+      await assert.rejects(assign(registry, null, 1), { code: 'ownership-conflict' }, 'nonreplaceable incumbent must refuse vacancy');
+      assert.deepEqual(registry.snapshot(), before, 'refused vacancy changes neither generation nor revision');
+      assert.equal(registry.isCurrent(authorization), true);
+      const fences = [];
+      registry.onFence(event => { fences.push(event); });
+      await registry.setEnabled(incumbent.id, false, { expectedRevision: before.revision });
+      assert.equal(registry.snapshot().slots['primary-agent'].available, false, 'disable must still fence a nonreplaceable incumbent');
+      assert.equal(registry.snapshot().slots['primary-agent'].generation, 2);
+      assert.equal(registry.isCurrent(authorization), false);
+      assert.deepEqual(fences, [{ slot: 'primary-agent' }]);
+    }
+  });
+
+  test(`incumbent replaceable=${replaceable} controls replacement but not revocation`, async () => {
+    const registry = await open(memoryStore()), incumbent = manifest();
+    incumbent.systemSlots[0].replaceable = replaceable;
+    const incoming = manifest('addon.two'); incoming.systemSlots[0].replaceable = !replaceable;
+    await installGranted(registry, incumbent); await installGranted(registry, incoming); await assign(registry);
+    const before = registry.snapshot();
+    if (replaceable) await assign(registry, incoming.id, 1);
+    else {
+      await assert.rejects(assign(registry, incoming.id, 1), { code: 'ownership-conflict' }, 'nonreplaceable incumbent must refuse replacement');
+      assert.deepEqual(registry.snapshot(), before, 'refusal changes neither generation nor revision');
+    }
+    const owner = replaceable ? incoming : incumbent;
+    await registry.setGrants(owner.id, [{ ...owner.requestedCapabilities.find(g => g.capability === 'agent-runtime'), granted: false }], { consent: true, expectedRevision: registry.snapshot().revision });
+    assert.equal(registry.snapshot().slots['primary-agent'].available, false, 'revocation ignores replaceable');
+  });
+}
+
+test('pending revocation denies dependent operations before durability and projections cannot alter policy', async () => {
+  const store = memoryStore(), registry = await open(store), value = manifest();
+  value.tools.find(tool => tool.name === value.agentRuntime.invocationTool).requiredCapabilities = ['providers'];
+  await installGranted(registry, value); await assign(registry);
+  const authorization = registry.authorize('primary-agent', value.id);
+  const write = store.write;
+  let release, entered;
+  const blocked = new Promise(resolve => { release = resolve; });
+  const writing = new Promise(resolve => { entered = resolve; });
+  store.write = async document => { entered(); await blocked; await write(document); };
+  const before = registry.snapshot(), grant = value.requestedCapabilities.find(g => g.capability === 'providers');
+  const revoking = registry.setGrants(value.id, [{ ...grant, granted: false }], { consent: true, expectedRevision: before.revision });
+  await writing;
+  try {
+    const projected = registry.snapshot();
+    assert.ok(projected.installations[value.id].disabledOperations.includes('invoke'));
+    projected.installations[value.id].disabledOperations.length = 0;
+    assert.throws(() => registry.assertOperation(authorization, 'invoke'), { code: 'permission-denied' }, 'projection mutation cannot restore withdrawn authority');
+    assert.doesNotThrow(() => registry.assertOperation(authorization, 'status'));
+  } finally { release(); await revoking; }
+  assert.equal(registry.snapshot().slots['primary-agent'].generation, before.slots['primary-agent'].generation);
+  const restored = await open(store);
+  assert.ok(restored.snapshot().installations[value.id].disabledOperations.includes('invoke'));
+  assert.throws(() => restored.assertOperation(restored.authorize('primary-agent', value.id), 'invoke'), { code: 'permission-denied' });
+});

@@ -56,6 +56,7 @@ const requests = async () => [
   ['/addons/slots/assign', { slot: 'primary-agent', addonId: ref.addonId, expectedGeneration: 0 }],
   ['/agent/session', { addonId: ref.addonId }],
   ['/agent/turn', { session: ref, input }],
+  ['/agent/dispose', { session: ref }],
   ['/agent/cancel', { session: ref, turnId: 'turn' }],
   [`/agent/events?${new URLSearchParams(ref)}`, {}],
   ['/agent/history', { session: ref }], ['/agent/status', { session: ref }],
@@ -486,4 +487,15 @@ test('enabled route validates shape and revision before changing state', async t
   const result = await f.call('/addons/enabled', { addonId: manifest.id, enabled: false, expectedRevision: 1 });
   assert.equal(result.status, 200);
   assert.equal(result.payload.installations[manifest.id].enabled, false);
+});
+
+test('client dispose route closes sessions idempotently and denies old generations', async t => {
+  const f = await fixture(t); const manifest = await installed(f);
+  const created = await f.call('/agent/session', { addonId: manifest.id });
+  const session = created.payload.session;
+  assert.equal((await f.call('/agent/dispose', { session })).status, 200, 'dispose route must exist');
+  assert.equal((await f.call('/agent/dispose', { session })).status, 200);
+  assert.notEqual((await f.call('/agent/history', { session })).status, 200);
+  await f.call('/addons/slots/assign', { slot: 'primary-agent', addonId: manifest.id, expectedGeneration: 1, replace: true });
+  assert.notEqual((await f.call('/agent/dispose', { session })).status, 200);
 });
