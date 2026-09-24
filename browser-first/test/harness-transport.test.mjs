@@ -306,3 +306,7 @@ test('DSH transport refuses an approved binding for another adapter or authentic
     await assert.rejects(transportModule.createHarnessTransport({ credentials, addonId: 'addon.dsh', runtime }), { code: 'permission-denied' });
   }
 });
+
+test('DSH uses the shared guard approved-hostname policy', async () => {
+  await assert.rejects(make('http://127.0.0.2:3080'), { code: 'permission-denied' });
+});
