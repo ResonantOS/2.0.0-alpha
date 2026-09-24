@@ -634,7 +634,7 @@ export const executeChatTurn = async ({
         typeof nextState.installations["addon.hermes"]?.config?.profileHome === "string"
           ? nextState.installations["addon.hermes"]?.config?.profileHome
           : undefined;
-      const memoryProvider = resolveMemoryProviderBroker(nextState, [...snapshot.bundled, ...snapshot.sideloaded]);
+      const memoryProvider = resolveMemoryProviderBroker(nextState, [...snapshot.bundled, ...snapshot.sideloaded], harnessRuntime?.client.getSnapshot() ?? null);
       const archiveContext = hermesArchiveReadGranted(nextState)
         ? await buildArchiveContextBundle(trimmed, memoryProvider).catch(() => null)
         : null;
@@ -755,7 +755,7 @@ export const executeChatTurn = async ({
             activeRuntimeKind: runtimeNode.kind,
           });
 
-    const memoryProvider = resolveMemoryProviderBroker(routedState, [...snapshot.bundled, ...snapshot.sideloaded]);
+    const memoryProvider = resolveMemoryProviderBroker(routedState, [...snapshot.bundled, ...snapshot.sideloaded], harnessRuntime?.client.getSnapshot() ?? null);
     if (recoveryAgentActive) {
       markProgress("tool-running", "Probing stronger routes, reading state, and preparing the next recovery step.");
     }

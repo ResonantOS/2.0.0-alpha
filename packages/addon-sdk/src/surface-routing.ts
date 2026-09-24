@@ -5,6 +5,7 @@ import type {
   AddOnInstallation,
   AddOnManifest,
   Capability,
+  HarnessRegistryProjection,
   ShellSectionId,
 } from "../../../src/core/contracts";
 
@@ -18,23 +19,33 @@ export interface AddOnSurfaceDockRoute {
   order: number;
 }
 
-const hasGrantedCapability = (installation: AddOnInstallation, capability: Capability): boolean =>
+const hasGrantedCapability = (installation: HarnessRegistryProjection["installations"][string], capability: Capability): boolean =>
   installation.grantedCapabilities.some((grant) => grant.capability === capability && grant.granted);
 
+/**
+ * The installations argument is retained for signature compatibility and is not consulted.
+ * The host projection is the sole authority; a missing projection yields no dock routes.
+ */
 export const createAddOnSurfaceDockRoutes = (
   manifests: AddOnManifest[],
-  installations: Record<string, AddOnInstallation>,
+  _installations: Record<string, AddOnInstallation>,
+  projection?: HarnessRegistryProjection | null,
 ): AddOnSurfaceDockRoute[] =>
-  manifests
+  [...new Map([...manifests, ...(projection?.candidates ?? [])].map(manifest => [manifest.id, manifest])).values()]
     .flatMap((manifest) => {
-      const installation = installations[manifest.id];
+      const installation = projection?.installations[manifest.id];
       if (!installation?.installed || !installation.enabled) {
+        return [];
+      }
+
+      if (manifest.systemSlots?.length && !manifest.systemSlots.some(({ id }) =>
+        projection?.slots[id]?.available && projection.slots[id]?.addonId === manifest.id)) {
         return [];
       }
 
       return manifest.surfaces.flatMap((surface): AddOnSurfaceDockRoute[] => {
         const navigation = surface.shellNavigation;
-        if (!navigation) {
+        if (!navigation || installation.hiddenSurfaceIds.includes(surface.id)) {
           return [];
         }
         const missingCapability = (navigation.requiredCapabilities ?? []).find(

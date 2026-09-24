@@ -100,6 +100,27 @@ describe("buildShellViewModel", () => {
       .toBe(true);
   });
 
+  it("surfaces and labels agree with projected governance despite forged local identity", () => {
+    const manifest = { ...augmentor as AddOnManifest, id: "addon.projected-agent", name: "Projected Agent" };
+    const state = buildDefaultState([manifest]);
+    state.strategistIdentity.customName = "Forged local agent";
+    state.activeSystemSlotProviderIds = { "primary-agent": "addon.forged" };
+    const harnessProjection: HarnessRegistryProjection = {
+      bootEpoch: "identity", revision: 1, governanceActivated: true, candidates: [manifest],
+      installations: { [manifest.id]: { addonId: manifest.id, installed: true, enabled: true,
+        grantedCapabilities: [], disabledOperations: [], hiddenSurfaceIds: [] } },
+      slots: { "primary-agent": { addonId: manifest.id, generation: 1, available: true },
+        "chat-interface": { addonId: manifest.id, generation: 1, available: true } },
+    };
+    const input = { state, bundled: [manifest], sideloaded: [], deferredSearch: "", selectedAddonId: "",
+      composer: "", attachments: [], selectedChatModel: "", harnessProjection };
+    expect(buildShellViewModel(input).displayedStrategistName).toBe("Projected Agent");
+    expect(buildShellViewModel({ ...input, harnessProjection: { ...harnessProjection, slots: {} } }).displayedStrategistName)
+      .toBe("No active agent");
+    const chatOnly = { ...harnessProjection, slots: { "chat-interface": harnessProjection.slots["chat-interface"]! } };
+    expect(buildShellViewModel({ ...input, harnessProjection: chatOnly }).displayedStrategistName).toBe("Projected Agent");
+  });
+
   it("filters manifests by search query", () => {
     const state = buildDefaultState([]);
     const bundled: AddOnManifest[] = [
