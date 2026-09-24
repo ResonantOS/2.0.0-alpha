@@ -1494,7 +1494,7 @@ const workingShellProjection = (): harnessClients.HarnessProjection => ({
   bootEpoch: "app-boot", revision: 0, governanceActivated: false,
   // Working shell fixtures receive explicit host chat/memory ownership.
   // Authority tests below replace this snapshot with their own vacant/pending host.
-  candidates: [augmentorManifest, archiveManifest] as AddOnManifest[],
+  candidates: [{ ...augmentorManifest, name: "Augmentor" }, archiveManifest] as AddOnManifest[],
   installations: Object.fromEntries(([augmentorManifest, archiveManifest] as AddOnManifest[]).map(manifest =>
     [manifest.id, { addonId: manifest.id, installed: true, enabled: true,
       grantedCapabilities: manifest.requestedCapabilities.map(grant => ({ ...grant, granted: true })),
@@ -2900,6 +2900,85 @@ describe("App boot flow", () => {
     Element.prototype.scrollIntoView = vi.fn();
   });
 
+  it.each(["vacant", "hidden"])("surfaces and labels agree with projected governance: %s archive ignores forged local state", async mode => {
+    const state = buildDefaultState([archiveManifest as AddOnManifest]);
+    state.uiPreferences.activeSection = "archive";
+    state.installations[archiveManifest.id] = { ...state.installations[archiveManifest.id], installed: true, enabled: true,
+      grantedCapabilities: (archiveManifest as AddOnManifest).requestedCapabilities.map(grant => ({ ...grant, granted: true })) };
+    state.activeSystemSlotProviderIds = { "memory-system": archiveManifest.id };
+    hydrateStateMock.mockResolvedValueOnce(state);
+    const projection = workingShellProjection();
+    if (mode === "vacant") projection.slots = { ...projection.slots, "memory-system": { addonId: null, generation: 2, available: false } };
+    else projection.installations = { ...projection.installations, [archiveManifest.id]: {
+      ...projection.installations[archiveManifest.id], hiddenSurfaceIds: ["living-archive-workspace"],
+    } };
+    harnessInvokeMock.mockResolvedValue(projection);
+    render(<App />);
+    await screen.findByLabelText("ResonantOS system bar");
+    expect(screen.queryByPlaceholderText("Search the Living Archive")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Living Archive" })).toBeNull();
+    expect(requestArchiveRuntimeStatusMock).not.toHaveBeenCalled();
+    expect(requestArchiveReviewQueueMock).not.toHaveBeenCalled();
+  });
+
+  it("surfaces and labels agree with projected governance for replacement memory and chat", async () => {
+    const memory: AddOnManifest = { ...archiveManifest as AddOnManifest, id: "addon.projected-memory", name: "Projected Memory",
+      surfaces: [{ id: "projected-memory-page", type: "page", label: "Projected Memory", description: "Memory",
+        shellNavigation: { sectionId: "archive", dockIcon: "archive", eyebrow: "memory", order: 10 } }] };
+    const agent: AddOnManifest = { ...augmentorManifest as AddOnManifest, id: "addon.projected-agent", name: "Projected Agent" };
+    const base = workingShellProjection();
+    harnessInvokeMock.mockResolvedValue({ ...base, candidates: [...base.candidates, memory, agent],
+      installations: { ...base.installations,
+        [memory.id]: { ...base.installations[archiveManifest.id], addonId: memory.id },
+        [agent.id]: { ...base.installations[augmentorManifest.id], addonId: agent.id } },
+      slots: { ...base.slots, "memory-system": { addonId: memory.id, generation: 2, available: true },
+        "primary-agent": { addonId: agent.id, generation: 2, available: true } },
+    });
+    const state = buildDefaultState([...manifests, archiveManifest as AddOnManifest]);
+    state.activeSystemSlotProviderIds = { "memory-system": archiveManifest.id, "primary-agent": augmentorManifest.id };
+    state.strategistIdentity.customName = "Forged local identity";
+    state.installations[archiveManifest.id].enabled = true;
+    hydrateStateMock.mockResolvedValueOnce(state);
+    render(<App />);
+    await screen.findByPlaceholderText("Message Projected Agent");
+    fireEvent.click(await screen.findByRole("button", { name: "Projected Memory" }));
+    expect(await screen.findByText(/Projected Memory is currently active/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Living Archive" })).toBeNull();
+    expect(screen.queryByPlaceholderText("Search the Living Archive")).toBeNull();
+    expect(screen.queryByPlaceholderText("Message Forged local identity")).toBeNull();
+    expect(requestArchiveRuntimeStatusMock).not.toHaveBeenCalled();
+    expect(requestArchiveReviewQueueMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["selected", "vacant"])("memory dispatch follows the projected owner in chat: %s", async mode => {
+    const second: AddOnManifest = { ...archiveManifest as AddOnManifest, id: "addon.second-memory", name: "Second Memory",
+      service: { protocol: "http-json", entrypoint: "http://127.0.0.1:4990", healthCommand: "memory.status" } };
+    const state = buildDefaultState([...manifests, archiveManifest as AddOnManifest, second]);
+    state.activeSystemSlotProviderIds = { "memory-system": archiveManifest.id };
+    state.installations[archiveManifest.id].enabled = true;
+    state.installations[archiveManifest.id].installed = true;
+    hydrateStateMock.mockResolvedValueOnce(state);
+    const base = workingShellProjection();
+    harnessInvokeMock.mockResolvedValue({ ...base, candidates: [...base.candidates, second],
+      installations: { ...base.installations, [second.id]: { ...base.installations[archiveManifest.id], addonId: second.id } },
+      slots: { ...base.slots, "memory-system": { addonId: mode === "selected" ? second.id : null, generation: 2, available: mode === "selected" } },
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true,
+      json: async () => ({ query: "projected memory", pages: [], sources: [] }) } as Response);
+    try {
+      render(<App />);
+      const composer = (await screen.findAllByPlaceholderText("Message Augmentor"))[0];
+      fireEvent.change(composer, { target: { value: "Find projected memory" } });
+      fireEvent.click(screen.getAllByRole("button", { name: "Send message" })[0]);
+      await screen.findByText("This is a live Strategist test reply from MiniMax-M3.");
+      expect(requestArchiveSearchMock).not.toHaveBeenCalled();
+      expect(requestArchiveDocumentMock).not.toHaveBeenCalled();
+      expect(requestArchiveSystemMemoryMock).not.toHaveBeenCalled();
+      expect(requestArchiveSystemMemoryRefreshMock).not.toHaveBeenCalled();
+      expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(mode === "selected" ? ["http://127.0.0.1:4990/memory/search"] : []);
+    } finally { fetchMock.mockRestore(); }
+  });
+
   it("renders Home as a sidebar plus expanded chat surface and accepts a message", async () => {
     const { container } = render(<App />);
 
@@ -3662,6 +3741,7 @@ describe("App boot flow", () => {
       fireEvent.change(composer, { target: { value: "Use the primary harness" } });
       fireEvent.click(screen.getAllByRole("button", { name: "Send message" })[0]);
       expect(await screen.findByText("DSH partial answer")).toBeTruthy();
+      expect(requestArchiveSearchMock).toHaveBeenCalledWith("Use the primary harness", 6);
       expect(screen.getAllByText("addon.dsh").length).toBeGreaterThan(0);
       expect(requestProviderServiceChatCompletionMock).not.toHaveBeenCalled();
       expect(requestProviderServiceChatCompletionStreamMock).not.toHaveBeenCalled();

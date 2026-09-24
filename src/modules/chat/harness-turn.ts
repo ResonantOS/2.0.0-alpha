@@ -157,7 +157,7 @@ export async function executeHarnessTurn(input: {
       ? { history: { messages: [] } }
       : await runtime.client.history(active.session);
     if (!current()) return;
-    const memory = resolveMemoryProviderBroker(state, input.manifests);
+    const memory = resolveMemoryProviderBroker(state, input.manifests, runtime.client.getSnapshot());
     const systemMemoryContext = await buildSystemMemoryContextBundle(memory).catch(() => null);
     if (!current()) return;
     const archiveContext = await buildArchiveContextBundle(input.outgoing, memory).catch(() => null);

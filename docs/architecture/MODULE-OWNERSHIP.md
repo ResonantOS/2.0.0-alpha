@@ -70,6 +70,9 @@ required Alpha processes.
 | `src/core/defaults.ts` | Catalog and recommended-request suggestions | May describe uninstalled, ungranted candidates; must not establish consent or active slot owners |
 | `src/core/runtime.ts` | UI-state hydration and serialization | Reads governance only from authenticated host projection; persisted UI state excludes installations, grants, owners and candidates; development mode grants no authority |
 | `src/modules/shell/system-slots.ts` | Host-projected slot selection and availability | Catalog metadata may describe the acknowledged owner; missing projection or owner is unavailable, including no-manifest fixtures; no local selection or catalog-order fallback |
+| `src/core/memory-provider.ts` | Memory transport adapter for the acknowledged memory-system owner | Reads the harness-client projection; dispatches only to that owner, never the first eligible catalog entry or implicit Living Archive; local config supplies transport settings, never selection or grants |
+| `src/modules/shell/selectors.ts` | Chat availability and displayed slot identity | Reads the same harness-client projection as dispatch; local identity and installation fields cannot select a slot owner |
+| `packages/addon-sdk/src/surface-routing.ts` | Manifest surface dock routes | Reads acknowledged installations, slot owners, grants and hidden surfaces from the harness-client projection; catalog metadata and local installations confer no availability |
 | `src/core/` | Shared contracts and pure cross-domain policy | No feature-specific UI or privileged process/filesystem behavior |
 | `packages/addon-sdk/src/` and `src/sdk/addons/` compatibility exports | Canonical add-on manifests, capability vocabulary, protocols, and validation shared by Node and browser consumers | SDK contracts do not grant runtime capabilities |
 | `src/modules/addons/AddOnsWorkspace.tsx` | Harness management presentation, bounded manifest import, and pending/conflict feedback | Reads acknowledged `harness-client.ts` projections; sends explicit install/grant/slot/remove commands; never infers grants, ownership, availability, or credential authority |
@@ -92,7 +95,7 @@ required Alpha processes.
 | `src/modules/shell/controller.ts` | Shell boot with the acknowledged host projection and explicit first-run selection of bundled Augmentor and Living Archive | Passes the host projection to hydration and shell consumers; sequences existing harness install, enable, grant and slot commands; only acknowledgements establish authority; writes local setup/layout preferences, never local installations, grants or owners |
 | `src/modules/shell/` | Shared React shell hydration, selectors, and composition | Keep domain mutations in their feature owners |
 | `src/modules/strategist/` | Strategist identity, channels, and thread organization | Chat execution remains in the chat owner |
-| `src/App.tsx` | React composition only | Route, mount, wire, and pass callbacks; do not accumulate domain behavior |
+| `src/App.tsx` | React composition only | Passes one harness-client projection to memory, identity and surface consumers; Living Archive workspace and dock require projected ownership and a visible surface; local state cannot restore them; no governance mutations |
 | `public/addons/` | Bundled manifest/catalog data | Manifest presence is not install, enablement, or grant authority |
 | `addons/resonant-browser-host/` | Optional browser-host add-on package | Not the required Alpha bridge or browser runtime |
 | `examples/` | Optional examples | Never required for Alpha startup |

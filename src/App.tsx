@@ -562,7 +562,8 @@ export function App() {
     }
     const manifests = [...loadState.bundled, ...loadState.sideloaded];
     const activeProvider = activeSystemSlotProvider(loadState.state, manifests, "memory-system", harnessProjection);
-    if (hasSystemSlotManifest(manifests, "memory-system") && activeProvider?.manifest.id !== "addon.living-archive") {
+    if (activeProvider?.manifest.id !== "addon.living-archive" ||
+        harnessProjection?.installations[activeProvider.manifest.id]?.hiddenSurfaceIds.includes("living-archive-workspace")) {
       return;
     }
     if (archiveStatusBusy || archiveStatus) {
@@ -580,7 +581,8 @@ export function App() {
     }
     const manifests = [...loadState.bundled, ...loadState.sideloaded];
     const activeProvider = activeSystemSlotProvider(loadState.state, manifests, "memory-system", harnessProjection);
-    if (hasSystemSlotManifest(manifests, "memory-system") && activeProvider?.manifest.id !== "addon.living-archive") {
+    if (activeProvider?.manifest.id !== "addon.living-archive" ||
+        harnessProjection?.installations[activeProvider.manifest.id]?.hiddenSurfaceIds.includes("living-archive-workspace")) {
       return;
     }
     if (archiveQueueBusy || archiveQueue.length) {
@@ -673,8 +675,9 @@ export function App() {
   const memorySlotHasProviders = hasSystemSlotManifest(allManifests, "memory-system");
   const activeMemoryProvider = activeSystemSlotProvider(state, allManifests, "memory-system", harnessProjection);
   const livingArchiveMemoryActive =
-    !memorySlotHasProviders || activeMemoryProvider?.manifest.id === "addon.living-archive";
-  const memoryProviderBroker = resolveMemoryProviderBroker(state, allManifests);
+    activeMemoryProvider?.manifest.id === "addon.living-archive" &&
+    !harnessProjection?.installations[activeMemoryProvider.manifest.id]?.hiddenSurfaceIds.includes("living-archive-workspace");
+  const memoryProviderBroker = resolveMemoryProviderBroker(state, allManifests, harnessProjection);
   const archiveAgentThread = state.conversationThreads.find((thread) => thread.id === "thread-living-archive-agent") ?? null;
   const recommendedAddOns = firstRunRecommendedAddOns(bundled);
   const showFirstRunRecommendedAddOns =
@@ -1796,7 +1799,7 @@ export function App() {
   const opencodeDockEnabled = Boolean(opencodeManifest && opencodeInstallation?.installed && opencodeInstallation.enabled);
   const paperclipDockEnabled = Boolean(paperclipManifest && paperclipInstallation?.installed && paperclipInstallation.enabled);
   const hermesDockEnabled = Boolean(hermesManifest && hermesInstallation?.installed && hermesInstallation.enabled);
-  const manifestSurfaceDockItems = createAddOnSurfaceDockRoutes(allManifests, state.installations).map((route) => ({
+  const manifestSurfaceDockItems = createAddOnSurfaceDockRoutes(allManifests, state.installations, harnessProjection).map((route) => ({
     id: route.sectionId as Section,
     label: route.label,
     eyebrow: route.eyebrow,
@@ -1823,11 +1826,11 @@ export function App() {
   ];
   const visibleNavItems = addOnNavItems.length
     ? [
-        ...navItems.slice(0, 4),
+        ...navItems.slice(0, 4).filter((item) => item.id !== "archive" || livingArchiveMemoryActive),
         ...addOnNavItems,
         ...navItems.slice(4),
       ]
-    : navItems;
+    : navItems.filter((item) => item.id !== "archive" || livingArchiveMemoryActive);
 
   return (
     <div className="app-zoom-viewport" style={zoomStyle}>
@@ -2650,7 +2653,7 @@ export function App() {
           void saveChatMessageToArchiveIntake({
             thread: activeThread,
             message,
-            memoryProvider: resolveMemoryProviderBroker(state, allManifests),
+            memoryProvider: resolveMemoryProviderBroker(state, allManifests, harnessProjection),
             setChatNotice,
             setArchiveQueueBusy,
             setArchiveQueue,

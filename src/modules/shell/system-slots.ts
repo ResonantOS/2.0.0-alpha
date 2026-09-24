@@ -1,7 +1,6 @@
 // Intent citation: docs/architecture/ADR-026-minimal-kernel-replaceable-default-addons.md
 
 import type {
-  AddOnInstallation,
   AddOnManifest,
   CapabilityGrant,
   HarnessRegistryProjection,
@@ -9,10 +8,8 @@ import type {
   SystemSlotId,
 } from "../../core/contracts";
 
-export type SystemSlotProvider = {
-  manifest: AddOnManifest;
-  installation: AddOnInstallation | HarnessRegistryProjection["installations"][string];
-};
+import { activeSystemSlotProvider } from "../../core/system-slots";
+export { activeSystemSlotProvider, type SystemSlotProvider } from "../../core/system-slots";
 
 export const manifestsForSystemSlot = (manifests: AddOnManifest[], slotId: SystemSlotId): AddOnManifest[] =>
   manifests.filter((manifest) => manifest.systemSlots?.some((slot) => slot.id === slotId));
@@ -43,22 +40,6 @@ export const capabilityForSlot = (slotId: SystemSlotId): CapabilityGrant["capabi
 export const selectedSystemSlotProviderId = (
   _state: ResonantShellState, slotId: SystemSlotId, projection?: HarnessRegistryProjection | null,
 ): string | undefined => projection?.slots[slotId]?.addonId ?? undefined;
-
-export const activeSystemSlotProvider = (
-  _state: ResonantShellState,
-  manifests: AddOnManifest[],
-  slotId: SystemSlotId,
-  projection?: HarnessRegistryProjection | null,
-): SystemSlotProvider | null => {
-  const slot = projection?.slots[slotId];
-  if (!projection || !slot?.available || !slot.addonId) return null;
-  // Catalog metadata may describe the host-selected identity; it cannot choose
-  // another owner or contribute any installation/grant state.
-  const manifest = projection.candidates.find(item => item.id === slot.addonId)
-    ?? manifests.find(item => item.id === slot.addonId);
-  const installation = projection.installations[slot.addonId];
-  return manifest && installation ? { manifest, installation } : null;
-};
 
 export const systemSlotAvailable = (
   state: ResonantShellState,

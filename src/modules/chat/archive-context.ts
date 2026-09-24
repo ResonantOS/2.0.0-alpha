@@ -84,7 +84,7 @@ const systemMemoryPageRank = (pageId: string): number => {
 export const buildSystemMemoryContextBundle = async (
   memoryProvider?: MemoryProviderBroker,
 ): Promise<SystemMemoryContextBundle | null> => {
-  if (memoryProvider && !memoryProvider.supports.read) {
+  if (memoryProvider && (memoryProvider.kind !== "living-archive" || !memoryProvider.supports.read)) {
     return null;
   }
   const failures: string[] = [];

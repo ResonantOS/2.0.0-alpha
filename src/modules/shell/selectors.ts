@@ -20,7 +20,7 @@ import {
   latestCompactStateForThread,
   promptMessagesForThread,
 } from "../../core/context-memory";
-import { resolveProviderPath, strategistDisplayName } from "../../core/policies";
+import { resolveProviderPath } from "../../core/policies";
 import {
   resolveAgentChatRoute,
   resolveStrategistChatRoute,
@@ -29,7 +29,7 @@ import {
 } from "../../core/provider-service";
 import { canUseDictation } from "../chat/dictation";
 import type { ComposerAttachment } from "../chat/types";
-import { systemSlotAvailable } from "./system-slots";
+import { activeSystemSlotProvider, systemSlotAvailable } from "./system-slots";
 
 type ViewModelInput = {
   state: ResonantShellState;
@@ -180,7 +180,9 @@ export const buildShellViewModel = ({
         return haystack.includes(needle);
       });
   const manifestMap = new Map(allManifests.map((manifest) => [manifest.id, manifest]));
-  const displayedStrategistName = strategistDisplayName(state);
+  const displayedStrategistName = activeSystemSlotProvider(state, allManifests, "primary-agent", harnessProjection)?.manifest.name
+    ?? activeSystemSlotProvider(state, allManifests, "chat-interface", harnessProjection)?.manifest.name
+    ?? "No active agent";
   const selectedManifest =
     manifestMap.get(selectedAddonId) ?? filteredManifests[0] ?? bundled[0] ?? sideloaded[0] ?? null;
   const selectedInstallation = selectedManifest ? state.installations[selectedManifest.id] ?? null : null;

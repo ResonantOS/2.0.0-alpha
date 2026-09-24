@@ -1,8 +1,50 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildDefaultState } from "../../core/defaults";
+import { resolveMemoryProviderBroker, type MemoryProviderBroker } from "../../core/memory-provider";
+import { requestArchiveSystemMemory, requestArchiveSystemMemoryRefresh } from "../../core/runtime";
 
-import { archiveCitationsFromBundle, formatArchiveContextForPrompt, type ArchiveContextBundle } from "./archive-context";
+import { buildSystemMemoryContextBundle, archiveCitationsFromBundle, formatArchiveContextForPrompt, type ArchiveContextBundle } from "./archive-context";
+
+vi.mock("../../core/runtime", () => ({
+  requestArchiveSystemMemory: vi.fn(),
+  requestArchiveSystemMemoryRefresh: vi.fn(),
+}));
 
 describe("archive chat context", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(requestArchiveSystemMemory).mockResolvedValue({
+      status: "missing", manifestPath: "system/manifest.json", pagesRoot: "system",
+      sources: [], pages: [], staleSources: [], missingSources: [],
+    });
+  });
+
+  it.each(["http-json", "unsupported"] as const)("does not call Living Archive system memory for a %s broker", async kind => {
+    const vacant = resolveMemoryProviderBroker(buildDefaultState([]), []);
+    const broker: MemoryProviderBroker = {
+      ...vacant, kind, supports: { ...vacant.supports, read: kind === "http-json" },
+    };
+
+    const bundle = await buildSystemMemoryContextBundle(broker);
+
+    expect(requestArchiveSystemMemory).not.toHaveBeenCalled();
+    expect(requestArchiveSystemMemoryRefresh).not.toHaveBeenCalled();
+    expect(bundle).toBeNull();
+  });
+
+  it.each(["living-archive", "omitted"] as const)("preserves Living Archive status and refresh for a %s broker", async kind => {
+    const vacant = resolveMemoryProviderBroker(buildDefaultState([]), []);
+    const broker: MemoryProviderBroker = {
+      ...vacant, kind: "living-archive", supports: { ...vacant.supports, read: true },
+    };
+
+    const bundle = await buildSystemMemoryContextBundle(kind === "omitted" ? undefined : broker);
+
+    expect(requestArchiveSystemMemory).toHaveBeenCalledTimes(2);
+    expect(requestArchiveSystemMemoryRefresh).toHaveBeenCalledTimes(1);
+    expect(bundle?.status).toBe("missing");
+  });
+
   it("passes raw imported source excerpts to the Strategist without treating them as promoted pages", () => {
     const bundle: ArchiveContextBundle = {
       query: "do you know what's the mixtape protocol?",
