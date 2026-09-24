@@ -128,19 +128,35 @@ const createSystemSlotManifest = (
   ],
 });
 
+const ownerProjection = (owners: ResonantShellState["activeSystemSlotProviderIds"]): HarnessProjection => ({
+  bootEpoch: "test", revision: 0, governanceActivated: true, candidates: [], installations: {},
+  slots: Object.fromEntries(Object.entries(owners).map(([slot, addonId]) =>
+    [slot, { addonId, generation: 1, available: true }])),
+});
+
 const uninstallDeps = (
   getState: () => ResonantShellState,
   updateRuntimeState: (updater: (current: ResonantShellState) => ResonantShellState) => void,
   stopRunningWork?: (input: { addonId: string }) => Promise<{ stopped: boolean; detail?: string }>,
-) => ({
-  client: createHarnessClient({ invoke: vi.fn(async () => ({ bootEpoch: "test", revision: 1, governanceActivated: false, candidates: [], installations: {}, slots: {} })) as never }),
-  getState,
-  updateRuntimeState,
-  stopRunningWork,
-  now: () => new Date("2026-09-07T12:00:00.000Z"),
-});
+) => {
+  const client = createHarnessClient({ invoke: vi.fn(async () => ({ bootEpoch: "test", revision: 1, governanceActivated: false, candidates: [], installations: {}, slots: {} })) as never });
+  // Explicit host acknowledgement for these uninstall fixtures. The local
+  // selection alone is never authority (covered separately below).
+  client.applySnapshot(ownerProjection(getState().activeSystemSlotProviderIds));
+  return { client, getState, updateRuntimeState, stopRunningWork,
+    now: () => new Date("2026-09-07T12:00:00.000Z") };
+};
 
 describe("uninstallAddon", () => {
+  it("ignores a forged local owner when the host slot is vacant", () => {
+    const manifest = createSystemSlotManifest("addon.forged");
+    const state = buildDefaultState([manifest]);
+    state.installations[manifest.id] = createMinimalInstallation(manifest.id, true, true, "enabled");
+    state.activeSystemSlotProviderIds = { "primary-agent": manifest.id };
+    expect(describeUninstallBlock(state, manifest, ownerProjection({}))).toBeNull();
+    expect(describeUninstallBlock(state, manifest)).toBeNull();
+  });
+
   it("describeUninstallBlock mirrors decideUninstall for allowed, not-installed, uninstalled and active-slot cases", () => {
     const allowedManifest = createMinimalManifest("addon.allowed", "Allowed");
     const missingManifest = createMinimalManifest("addon.missing", "Missing");
@@ -160,7 +176,7 @@ describe("uninstallAddon", () => {
     expect(describeUninstallBlock(state, allowedManifest)).toBeNull();
     expect(describeUninstallBlock(state, missingManifest)).toEqual({ blockReason: "not-installed" });
     expect(describeUninstallBlock(state, uninstalledManifest)).toEqual({ blockReason: "already-uninstalled" });
-    expect(describeUninstallBlock(state, activeSlotManifest)).toEqual({
+    expect(describeUninstallBlock(state, activeSlotManifest, ownerProjection({ "primary-agent": activeSlotManifest.id }))).toEqual({
       blockReason: "active-system-slot-provider",
       blockDetail: "primary-agent",
     });
@@ -176,7 +192,7 @@ describe("uninstallAddon", () => {
     const twoSlotState = buildDefaultState([twoSlotManifest]);
     twoSlotState.installations[twoSlotManifest.id] = createMinimalInstallation(twoSlotManifest.id, true, true, "enabled");
     twoSlotState.activeSystemSlotProviderIds = { "primary-agent": twoSlotManifest.id, "chat-interface": twoSlotManifest.id };
-    expect(describeUninstallBlock(twoSlotState, twoSlotManifest)).toEqual({
+    expect(describeUninstallBlock(twoSlotState, twoSlotManifest, ownerProjection({ "primary-agent": twoSlotManifest.id, "chat-interface": twoSlotManifest.id }))).toEqual({
       blockReason: "active-system-slot-provider",
       blockDetail: "primary-agent, chat-interface",
     });
@@ -191,7 +207,7 @@ describe("uninstallAddon", () => {
       source: "sideload",
     };
 
-    expect(describeUninstallBlock(state, manifest)).toEqual({ blockReason: "active-system-slot-provider", blockDetail: "primary-agent" });
+    expect(describeUninstallBlock(state, manifest, ownerProjection({ "primary-agent": manifest.id }))).toEqual({ blockReason: "active-system-slot-provider", blockDetail: "primary-agent" });
   });
 
   it("clears grants provider profiles and config", async () => {

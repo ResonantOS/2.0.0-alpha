@@ -26,10 +26,11 @@ export type BootedShellState = {
   selectedAddonId: string;
 };
 
-export const loadInitialShellState = async (): Promise<BootedShellState> => {
+export const loadInitialShellState = async (client?: ReturnType<typeof createHarnessClient>): Promise<BootedShellState> => {
   const bundled = await loadBundledManifests();
   const sideloaded = await loadSideloadedManifests();
-  const state = await hydrateState(bundled, sideloaded);
+  const projection = client?.getSnapshot() ?? await client?.refresh().catch(() => null);
+  const state = await hydrateState(bundled, sideloaded, projection);
   const credentialStatuses = await loadProviderCredentialStatuses();
   const nextState = applyProviderCredentialStatuses(state, credentialStatuses);
 

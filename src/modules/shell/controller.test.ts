@@ -39,6 +39,28 @@ describe("shell boot controller", () => {
     expect(booted.state.uiPreferences.activeSection).toBe("archive");
   });
 
+  it("receives the host projection at boot and passes it to hydration and slot lookups", async () => {
+    const manifest = augmentor as AddOnManifest;
+    const state = buildDefaultState([manifest]);
+    const projection: HarnessRegistryProjection = {
+      bootEpoch: "boot", revision: 1, governanceActivated: true, candidates: [manifest],
+      installations: { [manifest.id]: { addonId: manifest.id, installed: true, enabled: true,
+        grantedCapabilities: manifest.requestedCapabilities.map(grant => ({ ...grant, granted: true })),
+        disabledOperations: [], hiddenSurfaceIds: [] } },
+      slots: { "chat-interface": { addonId: manifest.id, generation: 1, available: true } },
+    };
+    const invoke = vi.fn().mockResolvedValue(projection);
+    const client = createHarnessClient({ invoke });
+    runtimeMocks.loadBundledManifests.mockResolvedValue([manifest]);
+    runtimeMocks.hydrateState.mockResolvedValue(state);
+    const { loadInitialShellState } = await import("./controller");
+    const booted = await loadInitialShellState(client);
+    expect(invoke).toHaveBeenCalledWith("harness_registry");
+    expect(runtimeMocks.hydrateState).toHaveBeenCalledWith([manifest], [], projection);
+    expect(systemSlotAvailable(booted.state, booted.bundled, "chat-interface", client.getSnapshot())).toBe(true);
+    expect(state.activeSystemSlotProviderIds).toEqual({});
+  });
+
   it("loads recovery runtime snapshot with status and candidates", async () => {
     const state = buildDefaultState([]);
     const status = { recoveryModelRunning: true, modelVersion: "0.1.0" };

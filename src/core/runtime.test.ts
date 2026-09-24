@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AddOnManifest, InstallationStatus, ResonantShellState } from "./contracts";
+import type { AddOnManifest, HarnessRegistryProjection, InstallationStatus, ResonantShellState } from "./contracts";
 import { buildDefaultState } from "./defaults";
-import { applyProviderCredentialStatuses, normalizeState, rebaseStateOnManifests, requestProviderSmokeTest, requestProviderServiceChatCompletion, requestProviderServiceChatCompletionStream } from "./runtime";
+import { applyProviderCredentialStatuses, hydrateState, loadBundledManifests, persistState, normalizeState, rebaseStateOnManifests, requestProviderSmokeTest, requestProviderServiceChatCompletion, requestProviderServiceChatCompletionStream } from "./runtime";
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 const testManifest = (id: string): AddOnManifest => ({
@@ -436,7 +437,7 @@ describe("runtime state migration", () => {
     expect(rebased.installations["addon.browser"].recommendedGrantPresetIds).toContain("browser-visible-session");
   });
 
-  it("rebaseStateOnManifests preserves uninstalled state without restoring grants", () => {
+  it("rebaseStateOnManifests treats saved installations as untrusted catalog suggestions", () => {
     const manifest = {
       ...testManifest("addon.obsidian"),
       requestedCapabilities: [{ capability: "filesystem", granted: false, scope: "shared", revocationBehavior: "hard-stop" }],
@@ -461,15 +462,15 @@ describe("runtime state migration", () => {
     const rebased = rebaseStateOnManifests(stale, [manifest], []);
     const installation = rebased.installations["addon.obsidian"];
 
-    expect(installation.status).toBe("uninstalled");
+    expect(installation.status).toBe("available");
     expect(installation.installed).toBe(false);
     expect(installation.enabled).toBe(false);
-    expect(installation.grantedCapabilities).toEqual([]);
+    expect(installation.grantedCapabilities).toEqual(manifest.requestedCapabilities);
     expect(installation.privateProviderProfileIds).toEqual([]);
-    expect("config" in installation).toBe(false);
+    expect(installation.config).toEqual({});
   });
 
-  it("normalizeState keeps persisted slot selection and fills missing slots from defaults", () => {
+  it("normalizeState discards saved slot selections instead of promoting suggestions", () => {
     const defaultMemoryProvider = {
       ...testManifest("addon.default-memory"),
       systemSlots: [
@@ -490,13 +491,10 @@ describe("runtime state migration", () => {
 
     const normalized = normalizeState(persisted, base);
 
-    expect(normalized.activeSystemSlotProviderIds).toEqual({
-      "memory-system": "addon.default-memory",
-      "chat-interface": "addon.custom-chat",
-    });
+    expect(normalized.activeSystemSlotProviderIds).toEqual({});
   });
 
-  it("rebaseStateOnManifests preserves slot selection and tolerates a legacy object without the field", () => {
+  it("rebaseStateOnManifests discards legacy owners with or without a saved selection", () => {
     const defaultChatProvider = {
       ...testManifest("addon.default-chat"),
       systemSlots: [
@@ -523,11 +521,8 @@ describe("runtime state migration", () => {
       [],
     );
 
-    expect(rebasedLegacy.activeSystemSlotProviderIds).toEqual({ "chat-interface": "addon.default-chat" });
-    expect(rebasedPersisted.activeSystemSlotProviderIds).toEqual({
-      "chat-interface": "addon.default-chat",
-      "memory-system": "addon.missing-from-catalog",
-    });
+    expect(rebasedLegacy.activeSystemSlotProviderIds).toEqual({});
+    expect(rebasedPersisted.activeSystemSlotProviderIds).toEqual({});
   });
 });
 
@@ -544,3 +539,125 @@ describe("runtime state migration", () => {
   expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ workload: "augmentor-chat", surface: "react-shell", model: "test", thinkingDepth: "high", systemPrompt: "trusted", messages: input.messages, contextSources: input.contextSources });
   expect(events.mock.calls).toEqual(stream ? [[{ runId: "run", type: "chunk", content: "reply" }], [{ runId: "run", type: "completed", content: "" }]] : []);
  });
+
+const storageKey = "resonantos-vnext.runtime-state";
+const governanceManifest = (): AddOnManifest => ({
+  ...testManifest("addon.governance"),
+  requestedCapabilities: [{ capability: "chat-interface", granted: true, scope: "system", revocationBehavior: "hard-stop" }],
+  systemSlots: [{ id: "chat-interface", role: "default-provider", replaceable: true, recommended: true }],
+});
+const stubStorage = (saved: unknown = null) => {
+  const values = new Map<string, string>(saved ? [[storageKey, JSON.stringify(saved)]] : []);
+  const localStorage = { getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value); } };
+  vi.stubGlobal("window", { localStorage });
+  return () => JSON.parse(values.get(storageKey)!);
+};
+const forgedState = () => {
+  const manifest = governanceManifest();
+  const state = buildDefaultState([manifest]);
+  state.installations[manifest.id] = { ...state.installations[manifest.id], installed: true, enabled: true,
+    status: "enabled", grantedCapabilities: manifest.requestedCapabilities };
+  state.activeSystemSlotProviderIds = { "chat-interface": manifest.id };
+  return { ...state, candidates: [manifest], grants: manifest.requestedCapabilities,
+    owners: state.activeSystemSlotProviderIds, governanceActivated: true,
+    harnessProjection: { installations: state.installations, slots: { "chat-interface": { addonId: manifest.id, available: true } } } };
+};
+
+describe("storage and development mode cannot restore governance", () => {
+  it.each(["test", "development"])("ignores a forged saved consent/owner payload in %s mode", async mode => {
+    vi.stubEnv("MODE", mode);
+    const saved = forgedState();
+    saved.uiPreferences.windowZoom = 1.25;
+    stubStorage(saved);
+    const state = await hydrateState([governanceManifest()], []);
+    expect(state.activeSystemSlotProviderIds).toEqual({});
+    expect(state.installations["addon.governance"]).toMatchObject({ installed: false, enabled: false });
+    expect(state.installations["addon.governance"].grantedCapabilities.every(grant => !grant.granted)).toBe(true);
+    expect(state).not.toHaveProperty("harnessProjection");
+    expect(state).not.toHaveProperty("candidates");
+    expect(state.uiPreferences.windowZoom).toBe(1.25);
+  });
+
+  it("development startup produces no effective grant without host acknowledgement", async () => {
+    vi.stubEnv("MODE", "development");
+    // Exercise the runtime's own MODE branch, not just the test's environment.
+    const fetchMock = vi.fn().mockResolvedValue(new Response("[]"));
+    vi.stubGlobal("fetch", fetchMock);
+    await loadBundledManifests();
+    expect(fetchMock).toHaveBeenCalledWith("/addons/dev-index.json");
+    stubStorage();
+    const state = await hydrateState([governanceManifest()], []);
+    expect(state.installations["addon.governance"].enabled).toBe(false);
+    expect(state.installations["addon.governance"].grantedCapabilities.every(grant => !grant.granted)).toBe(true);
+    expect(state.activeSystemSlotProviderIds).toEqual({});
+    expect(state.uiPreferences.recommendedAddOnsReviewed).toBe(false);
+  });
+
+  it.each([false, true])("derives addon channels from host installations across reload (saved=%s)", async saved => {
+    const manifest = testManifest("addon.hermes");
+    const previous = buildDefaultState([manifest]);
+    previous.channels.find(channel => channel.id === "desktop-hermes")!.enabled = true;
+    previous.channels.find(channel => channel.id === "telegram-primary")!.enabled = true;
+    stubStorage(saved ? previous : null);
+    const projection: HarnessRegistryProjection = {
+      bootEpoch: "boot", revision: 1, governanceActivated: true, candidates: [manifest], slots: {},
+      installations: { [manifest.id]: { addonId: manifest.id, installed: true, enabled: true,
+        grantedCapabilities: [], disabledOperations: [], hiddenSurfaceIds: [] } },
+    };
+    const enabled = await hydrateState([manifest], [], projection);
+    expect(enabled.installations[manifest.id].enabled).toBe(true);
+    expect(enabled.channels.find(channel => channel.id === "desktop-hermes")!.enabled).toBe(true);
+    expect(enabled.channels.find(channel => channel.id === "telegram-primary")!.enabled).toBe(saved);
+
+    // Neither saved channel enablement nor a prior acknowledgement survives host denial.
+    const offline = await hydrateState([manifest], [], null);
+    expect(offline.channels.find(channel => channel.id === "desktop-hermes")!.enabled).toBe(false);
+    const disabled = structuredClone(projection);
+    disabled.installations[manifest.id].enabled = false;
+    const denied = await hydrateState([manifest], [], disabled);
+    expect(denied.channels.find(channel => channel.id === "desktop-hermes")!.enabled).toBe(false);
+
+    // A disabled projection persisted during an outage must not freeze the next boot.
+    const restored = await hydrateState([manifest], [], projection);
+    expect(restored.channels.find(channel => channel.id === "desktop-hermes")!.enabled).toBe(true);
+  });
+
+  it("serializes UI state without any installation, grant, owner, candidate or projection cache", async () => {
+    const readSaved = stubStorage();
+    const state = forgedState();
+    await persistState(state);
+    const saved = readSaved();
+    for (const key of ["installations", "activeSystemSlotProviderIds", "grants", "owners", "candidates", "harnessProjection", "governanceActivated"])
+      expect(saved, key).not.toHaveProperty(key);
+    expect(saved.uiPreferences).toEqual(state.uiPreferences);
+    expect(saved.conversationThreads).toEqual(state.conversationThreads);
+    expect(state.installations["addon.governance"].enabled).toBe(true);
+  });
+
+  it.each([true, false])("hydrates only acknowledged host governance in development (enabled=%s)", async enabled => {
+    vi.stubEnv("MODE", "development");
+    const readSaved = stubStorage(forgedState());
+    const manifest = governanceManifest();
+    const hostOnly = { ...manifest, id: "addon.host-only" };
+    const projection: HarnessRegistryProjection = {
+      bootEpoch: "current-boot", revision: 7, governanceActivated: true, candidates: [hostOnly],
+      installations: { [hostOnly.id]: { addonId: hostOnly.id, installed: true, enabled,
+        grantedCapabilities: manifest.requestedCapabilities.map(grant => ({ ...grant, granted: enabled })),
+        disabledOperations: [], hiddenSurfaceIds: [] } },
+      slots: { "chat-interface": { addonId: hostOnly.id, available: enabled, generation: 2 } },
+    };
+    vi.stubGlobal("__RESONANTOS_BRIDGE_CONFIG__", { bridgeUrl: "http://127.0.0.1:47773" });
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true, ...projection })));
+    vi.stubGlobal("fetch", fetchMock);
+    const state = await hydrateState([manifest], []);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(String(fetchMock.mock.calls[0][0])).toBe("http://127.0.0.1:47773/addons/registry");
+    expect(state.activeSystemSlotProviderIds).toEqual({ "chat-interface": hostOnly.id });
+    expect(state.installations[manifest.id].enabled).toBe(false);
+    expect(state.installations[hostOnly.id]).toMatchObject({ installed: true, enabled,
+      grantedCapabilities: projection.installations[hostOnly.id].grantedCapabilities });
+    expect(readSaved()).not.toHaveProperty("installations");
+    expect(readSaved()).not.toHaveProperty("activeSystemSlotProviderIds");
+  });
+});

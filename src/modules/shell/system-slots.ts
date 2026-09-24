@@ -40,67 +40,24 @@ export const capabilityForSlot = (slotId: SystemSlotId): CapabilityGrant["capabi
   }
 };
 
-const hostManagesSlot = (projection: HarnessRegistryProjection | null | undefined, slotId: SystemSlotId): boolean =>
-  Boolean(projection && Object.hasOwn(projection.slots, slotId));
-
 export const selectedSystemSlotProviderId = (
-  state: ResonantShellState, slotId: SystemSlotId, projection?: HarnessRegistryProjection | null,
-): string | undefined => hostManagesSlot(projection, slotId)
-  ? projection?.slots[slotId]?.addonId ?? undefined
-  : state.activeSystemSlotProviderIds?.[slotId];
-
-const eligibleSystemSlotProvider = (
-  state: ResonantShellState,
-  manifest: AddOnManifest,
-  slotId: SystemSlotId,
-): SystemSlotProvider | null => {
-  if (!manifest.systemSlots?.some((slot) => slot.id === slotId)) {
-    return null;
-  }
-  const installation = state.installations[manifest.id];
-  if (!installation?.enabled) {
-    return null;
-  }
-  const requiredCapability = capabilityForSlot(slotId);
-  if (!installation.grantedCapabilities.some((grant) => grant.capability === requiredCapability && grant.granted)) {
-    return null;
-  }
-  return { manifest, installation };
-};
+  _state: ResonantShellState, slotId: SystemSlotId, projection?: HarnessRegistryProjection | null,
+): string | undefined => projection?.slots[slotId]?.addonId ?? undefined;
 
 export const activeSystemSlotProvider = (
-  state: ResonantShellState,
+  _state: ResonantShellState,
   manifests: AddOnManifest[],
   slotId: SystemSlotId,
   projection?: HarnessRegistryProjection | null,
 ): SystemSlotProvider | null => {
-  if (hostManagesSlot(projection, slotId)) {
-    const slot = projection!.slots[slotId];
-    if (!slot?.available || !slot.addonId) return null;
-    // Catalog metadata may describe the host-selected identity; it cannot choose
-    // another owner or contribute any installation/grant state.
-    const manifest = projection!.candidates.find(item => item.id === slot.addonId)
-      ?? manifests.find(item => item.id === slot.addonId);
-    const installation = projection!.installations[slot.addonId];
-    return manifest && installation ? { manifest, installation } : null;
-  }
-  const selectedManifestId = selectedSystemSlotProviderId(state, slotId);
-  const selectedManifest = selectedManifestId ? manifests.find((manifest) => manifest.id === selectedManifestId) : undefined;
-  if (selectedManifest) {
-    const selectedProvider = eligibleSystemSlotProvider(state, selectedManifest, slotId);
-    if (selectedProvider) {
-      return selectedProvider;
-    }
-  }
-
-  for (const manifest of manifestsForSystemSlot(manifests, slotId)) {
-    const provider = eligibleSystemSlotProvider(state, manifest, slotId);
-    if (provider) {
-      return provider;
-    }
-  }
-
-  return null;
+  const slot = projection?.slots[slotId];
+  if (!projection || !slot?.available || !slot.addonId) return null;
+  // Catalog metadata may describe the host-selected identity; it cannot choose
+  // another owner or contribute any installation/grant state.
+  const manifest = projection.candidates.find(item => item.id === slot.addonId)
+    ?? manifests.find(item => item.id === slot.addonId);
+  const installation = projection.installations[slot.addonId];
+  return manifest && installation ? { manifest, installation } : null;
 };
 
 export const systemSlotAvailable = (
@@ -108,17 +65,7 @@ export const systemSlotAvailable = (
   manifests: AddOnManifest[],
   slotId: SystemSlotId,
   projection?: HarnessRegistryProjection | null,
-): boolean => {
-  if (hostManagesSlot(projection, slotId)) {
-    return Boolean(activeSystemSlotProvider(state, manifests, slotId, projection));
-  }
-  // Legacy/test manifest sets predate ADR-026 and do not declare replacement slots.
-  // In that case the old built-in surfaces remain available until migrated.
-  if (!hasSystemSlotManifest(manifests, slotId)) {
-    return true;
-  }
-  return Boolean(activeSystemSlotProvider(state, manifests, slotId));
-};
+): boolean => Boolean(activeSystemSlotProvider(state, manifests, slotId, projection));
 
 export const recommendedGrantCapabilities = (manifest: AddOnManifest): CapabilityGrant["capability"][] => {
   const presetGrants = manifest.grantPresets?.flatMap((preset) => preset.grants.map((grant) => grant.capability)) ?? [];

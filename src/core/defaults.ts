@@ -900,6 +900,8 @@ export const createDefaultInstallation = (manifest: AddOnManifest, source: AddOn
   notes: ["Not installed yet."],
 });
 
+// Suggestions for an operator request only. Never copy these into active owners;
+// installation, consent and slot assignment require host acknowledgements.
 export const selectRecommendedDefaultSystemSlotProviderIds = (
   manifests: AddOnManifest[],
   current: Partial<Record<SystemSlotId, string>> = {},
@@ -944,7 +946,7 @@ export const buildDefaultState = (manifests: AddOnManifest[]): ResonantShellStat
     goalWorkspaces: [],
     recoverySession,
     installations,
-    activeSystemSlotProviderIds: selectRecommendedDefaultSystemSlotProviderIds(manifests),
+    activeSystemSlotProviderIds: {},
     uiPreferences: {
       activeSection: "overview",
       activeChatThreadId: "thread-main-desktop",
