@@ -432,3 +432,10 @@ test('harness documentation is included without widening neighboring scope', () 
   assert.equal(result, 0);
   assert.match(output, /Needs manual review: 0/);
 });
+
+test('only the governed OpenAI example gains release inclusion', () => {
+  assert.equal(auditModule.classify('examples/addons/openai-compatible-harness.json', 'added').bucket, 'include');
+  for (const path of ['examples/addons/other-harness.json', 'examples/addons/openai-compatible-harness.json.bak', 'examples/addons/nested/openai-compatible-harness.json']) {
+    assert.equal(auditModule.classify(path, 'added').bucket, 'review');
+  }
+});
