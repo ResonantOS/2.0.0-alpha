@@ -210,6 +210,9 @@ export async function createHarnessHostService({ userRoot, store = createHarness
       const session = sessionRef(p.session), input = chatInput(p.input);
       const { turnId } = boundary.invoke(session, input); return { turnId };
     }),
+    route('POST', '/agent/dispose', control, ['session'], [], async p => {
+      await boundary.dispose(sessionRef(p.session)); return {};
+    }),
     route('POST', '/agent/cancel', control, ['session', 'turnId'], [], async p => {
       const session = sessionRef(p.session);
       if (!id(p.turnId)) throw fail('invalid-event');

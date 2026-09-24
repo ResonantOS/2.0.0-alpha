@@ -772,7 +772,8 @@ test('harness SSE uses sanitized harness terminal events', async t => {
   assert.doesNotMatch(text, /opencode|OPENCODE/);
 
   const auth = { addonId: 'addon.test', slot: 'primary-agent', bootEpoch: 'boot', generation: 1, runtime: { supportedOperations: ['createSession', 'invoke'] } };
-  const boundary = createHarnessBoundary({ registry: { authorize: () => auth, isCurrent: () => true, onFence: () => () => {} },
+  const boundary = createHarnessBoundary({ registry: { authorize: () => auth, isCurrent: () => true, onFence: () => () => {},
+    assertOperation(authorization, operation) { /* Current owner with no disabled operations. */ } },
     resolveAdapter: () => ({ createSession: async () => ({}), dispose: async () => {}, invoke: async function* () { throw Object.assign(new Error('upstream-private-canary'), { code: 'invalid-event', credential: 'upstream-private-canary' }); } }) });
   t.after(() => boundary.close());
   const session = await boundary.createSession({ addonId: auth.addonId });

@@ -927,3 +927,27 @@ describe("harness review regressions", () => {
     expect(safeError.message).not.toBe(mismatchedError.message);
   });
 });
+
+describe("replacement and revocation dependency validation", () => {
+  it.each([undefined, null, "false", 0])("rejects invalid replaceable %s", replaceable => {
+    const manifest = validManifest();
+    manifest.requestedCapabilities.push({ capability: "chat-interface", scope: "system", granted: false, revocationBehavior: "degrade" });
+    const candidate = { ...manifest, systemSlots: [{ id: "chat-interface", role: "alternative-provider", replaceable }] };
+    expect(validateAddOnManifest(candidate).issues.some(issue => issue.code === "system-slot-replaceable-boolean")).toBe(true);
+  });
+  it("requires hide-surface to name a dependent surface", () => {
+    const manifest = validManifest();
+    manifest.requestedCapabilities[0].revocationBehavior = "hide-surface";
+    expect(validateAddOnManifest(manifest).issues.some(issue => issue.code === "revocation-surface-dependency")).toBe(true);
+    manifest.surfaces[0].shellNavigation = { sectionId: "browser", dockIcon: "browser", eyebrow: "Browser", requiredCapabilities: ["network"] };
+    expect(validateAddOnManifest(manifest).valid).toBe(true);
+  });
+  it("rejects unknown revocation behavior and unrequested model-selection capabilities", () => {
+    const manifest = JSON.parse(readFileSync(new URL("../../../public/addons/hermes.json", import.meta.url), "utf8"));
+    manifest.requestedCapabilities[0].revocationBehavior = "preserve";
+    expect(validateAddOnManifest(manifest).issues.map(issue => issue.code)).toEqual(["unknown-enum"]);
+    manifest.requestedCapabilities[0].revocationBehavior = "hard-stop";
+    manifest.agentRuntime.modelSelection.requiredCapabilities = ["agent-runtime"];
+    expect(validateAddOnManifest(manifest).issues.map(issue => issue.code)).toEqual(["model-selection-unrequested-capability"]);
+  });
+});

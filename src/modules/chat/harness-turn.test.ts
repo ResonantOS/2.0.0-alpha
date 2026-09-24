@@ -32,6 +32,7 @@ function fixture(events: () => AsyncIterable<HarnessEvent>) {
     if (command === "harness_turn") return { turnId: "turn" };
     if (command === "harness_history") return { history: { messages: [{ role: "assistant", content: "Host history" }] } };
     if (command === "harness_select_model") return { selection: { selected: true } };
+    if (command === "harness_dispose") return {};
     if (command === "harness_cancel") return {};
     throw new Error("Unexpected host call");
   });
@@ -167,4 +168,17 @@ describe("host harness turns", () => {
     expect(f.last().status).toBe("interrupted");
     expect(f.last().content).not.toContain("Too late");
   });
+});
+
+it("disposes a created session when the ownership re-check fails", async () => {
+  const f = fixture(async function* () {});
+  const creating = deferred<{ session: typeof session }>();
+  f.invoke.mockImplementationOnce(() => creating.promise);
+  const running = executeHarnessTurn(f.input);
+  f.client.applySnapshot({ ...f.projection, revision: 2, slots: { "primary-agent": { addonId: "addon.other", generation: 2, available: true } } });
+  creating.resolve({ session });
+  await running;
+  expect(f.invoke).toHaveBeenCalledWith("harness_dispose", { session });
+  expect(f.invoke.mock.calls.map(([command]) => command)).not.toContain("harness_turn");
+  expect(f.runtime.sessions.size).toBe(0);
 });

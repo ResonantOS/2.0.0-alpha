@@ -308,6 +308,7 @@ const harnessRoutes = [
   ["harness_assign_slot", "POST", "/addons/slots/assign", "addon-runtime-control"],
   ["harness_session", "POST", "/agent/session", "addon-runtime-control"],
   ["harness_turn", "POST", "/agent/turn", "addon-runtime-control"],
+  ["harness_dispose", "POST", "/agent/dispose", "addon-runtime-control"],
   ["harness_cancel", "POST", "/agent/cancel", "addon-runtime-control"],
   ["harness_events", "GET", "/agent/events", "addon-runtime-read"],
   ["harness_history", "POST", "/agent/history", "addon-runtime-read"],

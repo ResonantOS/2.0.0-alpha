@@ -78,6 +78,7 @@ export function createHarnessClient(transport: Partial<Transport> = {}) {
       command("harness_assign_slot", args),
     createSession: (addonId: string) => invoke<{ session: HarnessSession }>("harness_session", { addonId }),
     turn: (session: HarnessSession, input: Record<string, unknown>) => invoke<{ turnId: string }>("harness_turn", { session, input }),
+    dispose: (session: HarnessSession) => invoke("harness_dispose", { session }),
     cancel: (session: HarnessSession, turnId: string) => invoke("harness_cancel", { session, turnId }),
     history: (session: HarnessSession) => invoke<{ history: unknown }>("harness_history", { session }),
     status: (session: HarnessSession) => invoke<{ status: unknown }>("harness_status", { session }),
