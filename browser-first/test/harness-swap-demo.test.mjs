@@ -1,144 +1,176 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { createPublicKey, generateKeyPairSync, sign } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { FIXTURE_SIGNER, runFixtureCertification, verifyEvidence } from '../../scripts/harness-swap-demo.mjs';
 
-const dsh = 'addon.deepseek-harness', provider = 'addon.provider-chat-demo';
-// Independently authored live-shaped input tests the verifier, never live proof.
-function bundle() {
-  const at = '2026-09-22T12:00:00.000Z';
-  const turns = [dsh, provider, dsh].map((addonId, i) => ({
-    mode: 'live', at, addonId, generation: i + 1, bootEpoch: 'boot-1',
-    sessionId: `session-${i}`, turnId: `turn-${i}`, owner: addonId,
-    dispatch: { source: addonId === dsh ? 'dsh-typert' : 'provider-fabric', accepted: true, at },
-    answer: { author: addonId, text: `Distinct answer ${i}`, visible: true, at },
-    final: { addonId, generation: i + 1, bootEpoch: 'boot-1', sessionId: `session-${i}`, turnId: `turn-${i}`, type: 'final', data: { text: `Distinct answer ${i}` } },
-  }));
-  return { version: 1, mode: 'live', startedAt: at, finishedAt: at, turns,
-    governance: {
-      installation: { mode: 'live', at, addonId: dsh, grants: [] },
-      denied: { mode: 'live', at, code: 'permission-denied', dispatchesBefore: 0, dispatchesAfter: 0 },
-      reload: { mode: 'live', at, before: { addonId: dsh, generation: 3, bootEpoch: 'boot-1', granted: true }, after: { addonId: dsh, generation: 3, bootEpoch: 'boot-2', granted: true } },
-      revocation: { mode: 'live', at, addonId: dsh, turnId: 'revoked-turn', generationBefore: 3, generationAfter: 4, dispatched: true, cancelled: true, streamClosed: true, lateEvents: [], staleSessionCode: 'session-not-found' },
-      removal: { mode: 'live', at, addonId: dsh, owner: dsh, code: 'ownership-conflict', installed: true },
-    } };
+const canonical = value => JSON.stringify(value, (_, v) => v && typeof v === 'object' && !Array.isArray(v)
+  ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]])) : v);
+const fingerprint = async publicKey => (await import('node:crypto')).createHash('sha256')
+  .update(createPublicKey(publicKey).export({ type: 'spki', format: 'der' })).digest('hex').slice(0, 32);
+let fixturePromise;
+const fixtureBundle = async () => structuredClone(await (fixturePromise ??= runFixtureCertification()));
+// Independently generated keys exercise the live verifier. This is synthetic
+// test input, never live evidence: witnesses must compare fingerprints at boot.
+async function liveBundle() {
+  const bundle = await fixtureBundle();
+  bundle.mode = 'live';
+  const keys = [];
+  for (const boot of bundle.boots) {
+    const { privateKey, publicKey } = generateKeyPairSync('ed25519'); keys.push(privateKey);
+    const pem = publicKey.export({ type: 'spki', format: 'pem' });
+    boot.signer = { algorithm: 'ed25519', publicKey: pem, fingerprint: await fingerprint(pem) };
+  }
+  for (const turn of bundle.turns) turn.answer.visible = true;
+  resign(bundle, keys);
+  return { bundle, keys };
 }
+function resign(bundle, keys) {
+  for (const [i, boot] of bundle.boots.entries()) for (const receipt of boot.receipts) {
+    receipt.mode = bundle.mode;
+    receipt.signer = { algorithm: 'ed25519', keyId: boot.signer.fingerprint };
+    const { signature, ...body } = receipt;
+    receipt.signature = sign(null, Buffer.from(canonical(body)), keys[i]).toString('base64');
+  }
+}
+const get = (b, id) => b.boots.flatMap(boot => boot.receipts).find(r => `${r.bootEpoch}:${r.receiptSequence}` === id);
 
-async function verifier() {
-  const module = await import('../../scripts/harness-swap-demo.mjs').catch(error => {
-    if (error.code === 'ERR_MODULE_NOT_FOUND') return {};
-    throw error;
+test('fixture certification completes both boot epochs, three owners and all policy steps', async () => {
+  const bundle = await fixtureBundle();
+  assert.equal(verifyEvidence(bundle, { requireLive: false }), true);
+  assert.equal(bundle.turns.length, 6);
+  assert.deepEqual(bundle.turns.map(t => get(bundle, t.final).event.addonId), [
+    'addon.deepseek-harness', 'addon.openai-compatible-harness', 'addon.second-compatible',
+    'addon.second-compatible', 'addon.deepseek-harness', 'addon.openai-compatible-harness',
+  ]);
+  assert.notEqual(bundle.boots[0].bootEpoch, bundle.boots[1].bootEpoch);
+  assert.deepEqual(bundle.boots[0].signer, FIXTURE_SIGNER);
+  assert.deepEqual(bundle.boots[1].signer, FIXTURE_SIGNER);
+  assert.ok(bundle.boots.every(boot => boot.receipts.every(r => r.signature && r.mode === 'fixture')));
+});
+
+test('restart certification rejects stale execution receipts', async t => {
+  for (const key of ['session', 'invocation', 'final']) await t.test(`old ${key}`, async () => {
+    const { bundle } = await liveBundle();
+    bundle.turns[3][key] = bundle.turns[2][key];
+    assert.throws(() => verifyEvidence(bundle), /stale execution receipts/);
   });
-  assert.equal(typeof module.verifyEvidence, 'function', 'demo must export an evidence verifier');
-  return module.verifyEvidence;
-}
+});
+
+test('live certification rejects unsigned receipts even with consistent labels', async t => {
+  // A receipt is unsigned whether the signature, the signer block, or both are missing;
+  // the verifier must not treat an absent signer as "nothing to verify" (audit finding).
+  for (const [name, strip] of Object.entries({
+    'missing signature': receipt => { delete receipt.signature; },
+    'missing signer': receipt => { delete receipt.signer; },
+    'missing signer and signature': receipt => { delete receipt.signer; delete receipt.signature; },
+  })) await t.test(name, async () => {
+    const { bundle } = await liveBundle();
+    strip(get(bundle, bundle.turns[0].final));
+    assert.throws(() => verifyEvidence(bundle), /unsigned|signature/);
+  });
+});
 
 test('demo evidence requires real attributed turns and governance outcomes', async t => {
-  const verify = await verifier();
-  assert.equal(verify(bundle(), { requireLive: true }), true);
   const mutations = {
     'missing receipts': b => { delete b.turns; },
-    'UI text without dispatch': b => { delete b.turns[0].dispatch; },
-    'wrong owner identity': b => { b.turns[1].owner = dsh; },
-    'no distinct second answer': b => { b.turns[1].answer.text = b.turns[0].answer.text; b.turns[1].final.data.text = b.turns[0].answer.text; },
-    'wrong attribution': b => { b.turns[0].answer.author = provider; },
-    'no host provenance': b => { delete b.turns[0].final; },
-    'wrong generation': b => { b.turns[0].final.generation++; },
-    'wrong epoch': b => { b.turns[0].final.bootEpoch = 'stale'; },
-    'missing reload': b => { delete b.governance.reload; },
-    'lost reload consent': b => { b.governance.reload.after.granted = false; },
-    'no restart': b => { b.governance.reload.after.bootEpoch = 'boot-1'; },
-    'missing revocation': b => { delete b.governance.revocation; },
-    'revocation before dispatch': b => { b.governance.revocation.dispatched = false; },
-    'late output': b => { b.governance.revocation.lateEvents.push({ type: 'final' }); },
+    'UI text without dispatch': b => { delete b.turns[0].invocation; },
+    'wrong owner order': b => { [b.turns[0], b.turns[1]] = [b.turns[1], b.turns[0]]; },
+    'no distinct second answer': b => { const text = b.turns[0].answer.text; b.turns[1].answer.text = get(b, b.turns[1].final).event.data.text = text; },
+    'swap-back matching answer': b => { const text = b.turns[0].answer.text; b.turns[4].answer.text = get(b, b.turns[4].final).event.data.text = text; },
+    'wrong attribution': b => { b.turns[0].answer.author = 'wrong'; },
+    'no visible reply': b => { b.turns[0].answer.visible = false; },
+    'wrong generation': b => { get(b, b.turns[0].final).event.generation++; },
+    'wrong event epoch': b => { get(b, b.turns[3].final).event.bootEpoch = b.boots[0].bootEpoch; },
+    'wrong session epoch': b => { get(b, b.turns[3].session).result.session.bootEpoch = b.boots[0].bootEpoch; },
+    'lost reload consent': b => { b.boots[1].receipts[0].projection.installations['addon.second-compatible'].grantedCapabilities[0].granted = false; },
+    'lost reload owner': b => { b.boots[1].receipts[0].projection.slots['primary-agent'].addonId = 'wrong'; },
+    'no restart': b => { b.boots[1].bootEpoch = b.boots[0].bootEpoch; },
+    'reused session after restart': b => { b.governance.staleSession = b.turns[3].invocation; },
+    'missing stale events check': b => { delete b.governance.staleEvents; },
+    'missing hard-stop': b => { delete b.governance.hardStop; },
+    'missing degrade': b => { delete b.governance.degrade; },
+    'revocation before dispatch': b => { b.governance.hardStop.dispatched = false; },
+    'open hard-stop stream': b => { delete b.governance.hardStop.closed; },
+    'degrade aborts unrelated status': b => { get(b, b.governance.degrade.status).ok = false; },
+    'late output': b => { const r = b.boots[1].receipts.find(r => r.kind === 'event' && r.event.type === 'cancelled'); r.event.type = 'final'; },
+    'replaceable incumbent': b => { get(b, b.governance.lockInstall).declaration.systemSlots[0].replaceable = true; },
+    'wrong generation caused refusal': b => { get(b, b.governance.replacement).request.expectedGeneration++; },
     'missing removal': b => { delete b.governance.removal; },
-    'removed owner': b => { b.governance.removal.installed = false; },
-    'denial still dispatched': b => { b.governance.denied.dispatchesAfter++; },
-    'missing timestamp': b => { delete b.turns[0].at; },
-    'fixture bundle as live': b => { b.mode = 'fixture'; },
-    'fixture receipt as live': b => { b.turns[0].mode = 'fixture'; },
-    'fixture governance as live': b => { b.governance.reload.mode = 'fixture'; },
+    'removed owner': b => { get(b, b.governance.removal).projection.installations['addon.second-compatible'].installed = false; },
+    'same compatible endpoint': b => { get(b, b.governance.installations[2]).declaration.agentRuntime.endpoint = get(b, b.governance.installations[1]).declaration.agentRuntime.endpoint; },
+    'missing timestamp': b => { delete b.turns[0].answer.at; },
+    'empty turn id': b => { get(b, b.turns[0].final).event.turnId = ' \t\n '; },
+    'time reversal': b => { b.startedAt = '2026-09-22T08:01:00-04:00'; b.finishedAt = '2026-09-22T14:00:00+02:00'; },
+    'invalid timestamp': b => { b.startedAt = 'not-a-timestamp'; },
   };
-  for (const [name, mutate] of Object.entries(mutations)) await t.test(name, () => {
-    const invalid = bundle(); mutate(invalid);
-    assert.throws(() => verify(invalid, { requireLive: true }), /evidence/i);
+  for (const [name, mutate] of Object.entries(mutations)) await t.test(name, async () => {
+    const { bundle, keys } = await liveBundle(); mutate(bundle); resign(bundle, keys);
+    assert.throws(() => verifyEvidence(bundle), /evidence/i);
   });
-  const fixture = bundle(); fixture.mode = 'fixture';
-  for (const receipt of [...fixture.turns, ...Object.values(fixture.governance)]) receipt.mode = 'fixture';
-  assert.equal(verify(fixture, { requireLive: false }), true);
-  assert.throws(() => verify(fixture), /evidence/i, 'live is the default');
 });
 
-test('demo evidence rejects a swap-back answer matching the provider answer', async () => {
-  const verify = await verifier();
-  const invalid = bundle();
-  invalid.turns[2].answer.text = invalid.turns[2].final.data.text = invalid.turns[1].answer.text;
-  assert.throws(() => verify(invalid), /^Error: Invalid demo evidence: distinct second answer$/);
+test('every host receipt is verified, including unreferenced receipts', async t => {
+  for (const kind of ['boot', 'route', 'event', 'stream-closed']) await t.test(kind, async () => {
+    const { bundle } = await liveBundle();
+    bundle.boots[0].receipts.find(r => r.kind === kind).at = '2000-01-01T00:00:00Z';
+    assert.throws(() => verifyEvidence(bundle), /signature failed/);
+  });
+  const { bundle } = await liveBundle();
+  bundle.boots[0].receipts[0].signer.keyId = bundle.boots[1].signer.fingerprint;
+  assert.throws(() => verifyEvidence(bundle), /key mismatch/);
 });
 
-test('live-mode verifier success says liveness is attested', () => {
-  // A real file, not /dev/stdin: on Linux the child's stdin is a socketpair and opening /proc/self/fd/0 fails with ENXIO.
-  const dir = mkdtempSync(path.join(tmpdir(), 'harness-swap-demo-'));
-  const evidencePath = path.join(dir, 'evidence.json');
-  writeFileSync(evidencePath, JSON.stringify(bundle()));
-  const result = spawnSync(process.execPath, [
-    fileURLToPath(new URL('../../scripts/harness-swap-demo.mjs', import.meta.url)),
-    '--verify', evidencePath,
-  ], { encoding: 'utf8' });
-  rmSync(dir, { recursive: true, force: true });
-  assert.ifError(result.error);
-  assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /liveness is attested/);
-  assert.equal(result.stdout.trim(), 'Evidence is internally consistent; liveness is attested by the operator who ran the demo and by its witnesses, not proven by this verifier');
+test('fixture key is rejected as live even after every fixture label is relabelled', async () => {
+  const bundle = await fixtureBundle(); bundle.mode = 'live';
+  for (const boot of bundle.boots) for (const receipt of boot.receipts) receipt.mode = 'live';
+  assert.throws(() => verifyEvidence(bundle), /fixture signing key/);
+  assert.throws(() => verifyEvidence({ ...bundle, mode: 'fixture' }), /fixture/);
 });
 
-test('demo evidence rejects internally consistent turns in the wrong owner order', async () => {
-  const verify = await verifier();
-  const invalid = bundle();
-  invalid.turns = [invalid.turns[0], invalid.turns[2], invalid.turns[1]];
-  for (const [i, turn] of invalid.turns.entries()) {
-    turn.generation = turn.final.generation = i + 1;
-    assert.equal(turn.owner, turn.addonId);
-    assert.equal(turn.dispatch.source, turn.addonId === dsh ? 'dsh-typert' : 'provider-fabric');
-  }
-  assert.deepEqual(invalid.turns.map(turn => turn.owner), [dsh, dsh, provider]);
-  assert.deepEqual(invalid.turns.map(turn => turn.generation), [1, 2, 3]);
-  assert.throws(() => verify(invalid), /^Error: Invalid demo evidence: owner order$/);
+test('fingerprint is recomputed and each boot requires its own live key', async () => {
+  const { bundle, keys } = await liveBundle();
+  bundle.boots[0].signer.fingerprint = '0'.repeat(32);
+  assert.throws(() => verifyEvidence(bundle), /fingerprint/);
+  bundle.boots[0].signer = bundle.boots[1].signer;
+  resign(bundle, [keys[1], keys[1]]);
+  assert.throws(() => verifyEvidence(bundle), /key rotation/);
 });
 
-test('demo evidence accepts chronological timestamps with different UTC offsets', async () => {
-  const verify = await verifier();
-  const valid = bundle();
-  valid.startedAt = '2026-09-22T14:00:00+02:00';
-  valid.finishedAt = '2026-09-22T08:01:00-04:00';
-  assert.equal(verify(valid), true);
+test('canonical signatures survive JSON property reordering and whitespace', async () => {
+  const { bundle } = await liveBundle();
+  const reorder = value => Array.isArray(value) ? value.map(reorder) : value && typeof value === 'object'
+    ? Object.fromEntries(Object.entries(value).reverse().map(([k, v]) => [k, reorder(v)])) : value;
+  const reordered = JSON.parse(JSON.stringify(reorder(bundle), null, 4));
+  assert.equal(verifyEvidence(reordered), true);
+  reordered.startedAt = '2026-09-22T14:00:00+02:00';
+  reordered.finishedAt = '2026-09-22T08:01:00-04:00';
+  assert.equal(verifyEvidence(reordered), true);
 });
 
-test('demo evidence rejects a finish instant before its start across UTC offsets', async () => {
-  const verify = await verifier();
-  const invalid = bundle();
-  invalid.startedAt = '2026-09-22T08:01:00-04:00';
-  invalid.finishedAt = '2026-09-22T14:00:00+02:00';
-  assert.throws(() => verify(invalid), /bundle timestamps/);
-});
-
-test('demo evidence rejects unparseable bundle timestamps', async () => {
-  const verify = await verifier();
-  for (const key of ['startedAt', 'finishedAt']) {
-    const invalid = bundle();
-    invalid[key] = 'not-a-timestamp';
-    assert.throws(() => verify(invalid), /bundle timestamps/);
-  }
-});
-
-test('demo evidence rejects a whitespace-only turnId', async () => {
-  const verify = await verifier();
-  const invalid = bundle();
-  invalid.turns[0].turnId = invalid.turns[0].final.turnId = ' \t\n ';
-  assert.throws(() => verify(invalid), /host provenance/);
+test('CLI verifies fixture end to end and explains fingerprint comparison and liveness limits', async () => {
+  const directory = mkdtempSync(path.join(tmpdir(), 'harness-swap-demo-'));
+  try {
+    const file = path.join(directory, 'evidence.json');
+    const script = fileURLToPath(new URL('../../scripts/harness-swap-demo.mjs', import.meta.url));
+    const run = flags => spawnSync(process.execPath, [script, '--verify', file, ...flags], { encoding: 'utf8' });
+    writeFileSync(file, JSON.stringify(await fixtureBundle()));
+    const fixture = run(['--fixture']); assert.equal(fixture.status, 0, fixture.stderr);
+    assert.match(fixture.stdout, /Fixture evidence verified; not live proof/);
+    assert.equal(run([]).status, 1);
+    const { bundle } = await liveBundle(); writeFileSync(file, JSON.stringify(bundle));
+    const live = run([]); assert.equal(live.status, 0, live.stderr);
+    assert.match(live.stdout, /does not attest the operator/);
+    assert.match(live.stdout, /forged bundle can embed its own key/);
+    assert.match(live.stdout, /Comparing the recorded fingerprint against the one printed by the real host/);
+    assert.match(live.stdout, /Liveness is attested/);
+    delete bundle.boots[0].receipts[0].signature;
+    writeFileSync(file, JSON.stringify(bundle)); assert.equal(run([]).status, 1);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
 async function compatibleSwap(t, loopback) {
@@ -227,3 +259,16 @@ async function compatibleSwap(t, loopback) {
 
 test('a second compatible harness requires only a manifest and binding', { timeout: 8000 }, t => compatibleSwap(t, true));
 test('compatible harness receipt shape and host attribution with deterministic transport', { timeout: 8000 }, t => compatibleSwap(t, false));
+
+
+
+test('policy proof requires host-signed dispatch and abort receipts', async () => {
+  const bundle = await fixtureBundle();
+  for (const proof of [bundle.governance.degrade, bundle.governance.hardStop]) {
+    assert.equal(typeof proof.dispatched, 'string', 'dispatch must reference a signed host receipt, not an operator boolean');
+    assert.equal(get(bundle, proof.dispatched).kind, 'adapter-dispatch');
+    assert.deepEqual(get(bundle, proof.dispatched).session, get(bundle, proof.invocation).request.session, 'dispatch must identify the executing session');
+    assert.equal(get(bundle, proof.dispatched).turnId, get(bundle, proof.invocation).result.turnId);
+    assert.equal(get(bundle, proof.aborted).kind, 'adapter-abort');
+  }
+});

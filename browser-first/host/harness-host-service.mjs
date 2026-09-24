@@ -1,5 +1,7 @@
 // Composition owns routes, never grants inferred from bridge authentication.
 import { readFile } from 'node:fs/promises';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { createHash, createPublicKey, generateKeyPairSync, randomUUID, sign } from 'node:crypto';
 import { createHarnessRegistry } from './harness-registry.mjs';
 import { createHarnessRegistryStore } from './harness-registry-store.mjs';
 import { createHarnessBoundary } from './harness-boundary.mjs';
@@ -10,6 +12,15 @@ import { createDshTypertAdapter } from './agent-adapters/dsh-typert.mjs';
 import { createProviderFabricAdapter } from './agent-adapters/provider-fabric.mjs';
 import { publicHarnessError } from './harness-adapter-contract.mjs';
 import { bridgeCorsHeaders, HarnessTransportError, validateLoopbackHost } from './bridge-server.mjs';
+
+// JSON data only: recursively sort object keys, preserve array order, no whitespace.
+export function canonicalReceipt(value) {
+  return JSON.stringify(value, (_, item) => record(item)
+    ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item);
+}
+export function receiptFingerprint(publicKey) {
+  return createHash('sha256').update(createPublicKey(publicKey).export({ type: 'spki', format: 'der' })).digest('hex').slice(0, 32);
+}
 
 const fail = code => Object.assign(new Error(publicHarnessError({ code }).message), { code });
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -101,7 +112,7 @@ export function createHarnessStreamSubscription(reader) {
 }
 
 export async function createHarnessHostService({ userRoot, store = createHarnessRegistryStore({ userRoot }),
-  bindings = [], env = process.env, providerHost, cleanupTimeoutMs = 1000,
+  bindings = [], env = process.env, providerHost, cleanupTimeoutMs = 1000, onReceipt = () => {}, fixtureSigningKey,
   transportFactory = createHarnessTransport, dshAdapterFactory = createDshTypertAdapter, openaiAdapterFactory = createOpenAICompatibleAdapter } = {}) {
   if (!Number.isSafeInteger(cleanupTimeoutMs) || cleanupTimeoutMs < 1 || cleanupTimeoutMs > 30000) throw new TypeError('Bounded cleanup required.');
   const approvedBindings = structuredClone(bindings);
@@ -118,6 +129,26 @@ export async function createHarnessHostService({ userRoot, store = createHarness
   };
   const registry = await createHarnessRegistry({ store: trackedStore, reviewedAdapterIds: ['dsh-typert-v1', 'provider-fabric-v1', 'openai-compatible-v1'],
     bindings: approvedBindings.map(({ name, addonId, adapterId, authScheme, endpoint }) => ({ name, addonId, adapterId, authScheme, endpoint })) });
+  // Only the explicit fixture composition injects a public test key. Production
+  // keys are generated anew, remain in this closure, and are never persisted.
+  const { privateKey } = fixtureSigningKey ? { privateKey: fixtureSigningKey } : generateKeyPairSync('ed25519');
+  if (privateKey.asymmetricKeyType !== 'ed25519') throw new TypeError('Ed25519 receipt key required.');
+  const publicKey = createPublicKey(privateKey).export({ type: 'spki', format: 'pem' });
+  const signer = Object.freeze({ algorithm: 'ed25519', publicKey, fingerprint: receiptFingerprint(publicKey) });
+  let receiptSequence = 0;
+  const turnReceiptContext = new AsyncLocalStorage();
+  function issue(fields) {
+    const body = JSON.parse(canonicalReceipt({ ...fields, bootEpoch: registry.snapshot().bootEpoch,
+      receiptSequence: ++receiptSequence, at: new Date().toISOString(),
+      mode: fixtureSigningKey ? 'fixture' : 'live', signer: { algorithm: 'ed25519', keyId: signer.fingerprint } }));
+    const receipt = { ...body, signature: sign(null, Buffer.from(canonicalReceipt(body)), privateKey).toString('base64') };
+    // An observational sink cannot change the host result or authority.
+    try { onReceipt(structuredClone(receipt)); } catch { /* Evidence collection is not runtime authority. */ }
+    return receipt;
+  }
+  console.error(JSON.stringify({ event: 'harness.receipt_signer', bootEpoch: registry.snapshot().bootEpoch,
+    fingerprint: signer.fingerprint, algorithm: signer.algorithm, mode: fixtureSigningKey ? 'fixture' : 'live' }));
+  issue({ kind: 'boot', projection: registry.snapshot() });
   const candidates = env.RESONANTOS_HARNESS_DEMO === '1'
     ? await Promise.all(['deepseek-harness', 'provider-chat-demo'].map(async name => JSON.parse(await readFile(new URL(`./harness-examples/${name}.json`, import.meta.url), 'utf8')))) : [];
   async function bounded(operation) {
@@ -156,7 +187,19 @@ export async function createHarnessHostService({ userRoot, store = createHarness
     };
     resources.add(resource);
     if (closed) { await resource.dispose({}); throw fail('runtime-unavailable'); }
-    return { ...adapter, dispose: resource.dispose };
+    return { ...adapter, dispose: resource.dispose,
+      async *invoke(args) {
+        const dispatch = { dispatchId: randomUUID(), addonId: authorization.addonId,
+          generation: authorization.generation, adapterId: authorization.runtime.adapterId,
+          ...turnReceiptContext.getStore() };
+        issue({ kind: 'adapter-dispatch', ...dispatch });
+        const aborted = () => issue({ kind: 'adapter-abort', ...dispatch });
+        args.signal.addEventListener('abort', aborted, { once: true });
+        if (args.signal.aborted) aborted();
+        try { yield* await adapter.invoke(args); }
+        finally { args.signal.removeEventListener('abort', aborted); }
+      },
+    };
   }
   const boundary = createHarnessBoundary({ registry, resolveAdapter, cleanupTimeoutMs });
   const snapshot = () => {
@@ -178,7 +221,46 @@ export async function createHarnessHostService({ userRoot, store = createHarness
         } else if (query.size) throw fail('invalid-event');
         shape(payload, required, optional);
         if (Buffer.byteLength(JSON.stringify(payload)) > 1048576) throw fail('invalid-event');
-        return handler(payload);
+        // Record only validated identities, never request headers, credentials or
+        // caller-supplied chat context. Outcomes use sanitized host projections.
+        const requestReceipt = {};
+        for (const key of ['addonId', 'slot', 'session', 'turnId', 'expectedGeneration', 'replace', 'expectedRevision', 'enabled', 'bootEpoch', 'generation', 'sessionId']) {
+          const value = payload[key];
+          if (key === 'session' && record(value)) {
+            requestReceipt.session = Object.fromEntries(['addonId', 'sessionId', 'bootEpoch', 'generation']
+              .filter(field => field === 'generation' ? revision(value[field]) : id(value[field])).map(field => [field, value[field]]));
+          } else if (typeof value === 'boolean' || revision(value) || id(value) || value === null) requestReceipt[key] = value;
+        }
+        if (path === '/addons/install' && id(payload.manifest?.id)) requestReceipt.addonId = payload.manifest.id;
+        try {
+          const result = await handler(payload);
+          if (streaming) {
+            issue({ kind: 'route', operation: path, request: requestReceipt, ok: true, result: { subscribed: true } });
+            const events = result.events;
+            result.events = {
+              [Symbol.asyncIterator]() { return this; },
+              async next() {
+                const item = await events.next();
+                if (item.done) issue({ kind: 'stream-closed', session: payload });
+                else issue({ kind: 'event', event: item.value });
+                return item;
+              },
+            };
+          } else {
+            const declaration = path === '/addons/install' ? {
+              systemSlots: payload.manifest.systemSlots,
+              agentRuntime: payload.manifest.agentRuntime,
+              tools: payload.manifest.tools,
+            } : undefined;
+            issue({ kind: 'route', operation: path, request: requestReceipt, ok: true, result, declaration,
+              ...(path === '/agent/turn' ? { runtime: manifests.get(payload.session.addonId)?.agentRuntime } : {}) });
+          }
+          return result;
+        } catch (error) {
+          issue({ kind: 'route', operation: path, request: requestReceipt, ok: false,
+            error: publicHarnessError(error), projection: registry.snapshot() });
+          throw error;
+        }
       },
     };
   }
@@ -212,7 +294,10 @@ export async function createHarnessHostService({ userRoot, store = createHarness
     }),
     route('POST', '/agent/turn', control, ['session', 'input'], [], p => {
       const session = sessionRef(p.session), input = chatInput(p.input);
-      const { turnId } = boundary.invoke(session, input); return { turnId };
+      const context = { session: structuredClone(session) };
+      const { turnId } = turnReceiptContext.run(context, () => boundary.invoke(session, input));
+      context.turnId = turnId;
+      return { turnId };
     }),
     route('POST', '/agent/dispose', control, ['session'], [], async p => {
       await boundary.dispose(sessionRef(p.session)); return {};
@@ -264,11 +349,16 @@ export async function createHarnessHostService({ userRoot, store = createHarness
         compatibilitySession = await boundary.createSession({ addonId: owner.addonId });
       }
       reader = boundary.events(compatibilitySession);
-      turn = boundary.invoke(compatibilitySession, input);
+      const context = { session: structuredClone(compatibilitySession) };
+      turn = turnReceiptContext.run(context, () => boundary.invoke(compatibilitySession, input));
+      context.turnId = turn.turnId;
       return await Promise.race([
         (async () => {
           for await (const event of reader) {
-            if (event.type === 'final') return { reply: event.data.text, harness: { ...compatibilitySession, turnId: turn.turnId } };
+            if (event.type === 'final') {
+              issue({ kind: 'event', operation: '/augmentor/chat', event });
+              return { reply: event.data.text, harness: { ...compatibilitySession, turnId: turn.turnId } };
+            }
             if (event.type === 'error') throw fail(event.data.code);
             if (event.type === 'cancelled') throw fail('cancelled');
           }
@@ -281,7 +371,7 @@ export async function createHarnessHostService({ userRoot, store = createHarness
       ]);
     } finally { clearTimeout(timer); await reader?.return(); compatibilityBusy = false; }
   }
-  return { registry, boundary, harnessRoutes, executeBridgeChat,
+  return { registry, boundary, harnessRoutes, executeBridgeChat, signer,
     composeProviderRoutes(routes) {
       return routes.map(route => route.method === 'POST' && route.path === '/augmentor/chat'
         ? { ...route, handler: executeBridgeChat }
