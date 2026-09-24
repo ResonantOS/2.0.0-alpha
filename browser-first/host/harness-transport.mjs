@@ -1,32 +1,22 @@
 // Client transport only. Adapter semantics, grants, routes and UI are separate.
-import { lookup as dnsLookup } from 'node:dns/promises';
-import { isIP } from 'node:net';
+import { createAgentRuntimeEndpoint } from './agent-runtime-endpoint.mjs';
 import { publicHarnessError } from './harness-adapter-contract.mjs';
 
 const fail = code => Object.assign(new Error(publicHarnessError({ code }).message), { code });
 const safe = error => fail(['permission-denied', 'deadline-exceeded'].includes(error?.code) ? error.code : 'runtime-unavailable');
 const routes = new Set(['augmentor', ...['create', 'prompt', 'cancel', 'page', 'list', 'rename', 'selectModel', 'modelCatalog'].map(name => `session/${name}`)].map(name => `/api/${name}`));
-const loopback = address => address === '::1' || (isIP(address) === 4 && address.startsWith('127.'));
-function originFor(endpoint) {
-  let origin;
-  try { origin = new URL(endpoint); } catch { throw fail('permission-denied'); }
-  const host = origin.hostname.replace(/^\[|\]$/g, '');
-  if (!['http:', 'https:'].includes(origin.protocol) || !origin.port || origin.username || origin.password ||
-      origin.pathname !== '/' || origin.search || origin.hash || (host !== 'localhost' && !loopback(host))) throw fail('permission-denied');
-  return origin;
-}
-
 // All injected dependencies are trusted host/test dependencies, never request
 // fields. The native Node 24 WebSocket refuses redirects during its handshake.
-export async function createHarnessTransport({ credentials, addonId, runtime, lookup = dnsLookup,
+export async function createHarnessTransport({ credentials, addonId, runtime, lookup,
   fetchImpl = globalThis.fetch, WebSocketImpl = globalThis.WebSocket, timeoutMs = 10000,
   maxResponseBytes = 1048576, maxMessageBytes = 1048576 } = {}) {
   if (runtime?.adapterId !== 'dsh-typert-v1' || runtime?.authScheme !== 'dsh-action-token') throw fail('permission-denied');
   if (![timeoutMs, maxResponseBytes, maxMessageBytes].every(value => Number.isSafeInteger(value) && value > 0 && value <= 2147483647)) throw fail('permission-denied');
   const lease = await credentials.acquire({ addonId, runtime });
-  let origin;
-  try { origin = await lease.use(({ endpoint }) => originFor(endpoint)); }
+  let endpointGuard;
+  try { endpointGuard = await lease.use(({ endpoint }) => createAgentRuntimeEndpoint({ endpoint, lookup, fetchImpl, WebSocketImpl })); }
   catch (error) { lease.dispose(); throw safe(error); }
+  const origin = endpointGuard.origin;
   const lifetime = new AbortController(), streams = new Set();
   let cookie = '', authenticating = null;
   function check(signal) { if (lifetime.signal.aborted || signal?.aborted) throw fail(signal?.reason?.code === 'deadline-exceeded' ? 'deadline-exceeded' : 'runtime-unavailable'); }
@@ -47,19 +37,6 @@ export async function createHarnessTransport({ credentials, addonId, runtime, lo
     } catch (error) { throw safe(error); }
     finally { clearTimeout(timer); combined.removeEventListener('abort', abort); }
   }
-  async function destination(path, signal, websocket = false) {
-    check(signal);
-    const host = origin.hostname.replace(/^\[|\]$/g, '');
-    const answers = isIP(host) ? [{ address: host }] : await lookup(host, { all: true, verbatim: true });
-    check(signal);
-    if (!Array.isArray(answers) || !answers.length || answers.some(answer => !loopback(answer.address))) throw fail('permission-denied');
-    const url = new URL(path, origin);
-    // Connect using the validated IP, never trigger a second DNS lookup. Port
-    // and scheme come from the approved binding; no caller selects a URL.
-    url.hostname = isIP(answers[0].address) === 6 ? `[${answers[0].address}]` : answers[0].address;
-    if (websocket) url.protocol = origin.protocol === 'https:' ? 'wss:' : 'ws:';
-    return url;
-  }
   async function readBody(response, signal) {
     const reader = response.body?.getReader();
     if (!reader) return '';
@@ -79,13 +56,10 @@ export async function createHarnessTransport({ credentials, addonId, runtime, lo
     } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
   }
   async function requestRaw(path, { method = 'GET', headers = {}, body, signal, consumeBody = true } = {}, exchange = false) {
-    const url = await destination(path, signal);
     check(signal);
-    const response = await fetchImpl(url, { method, headers, body, signal, redirect: 'manual' });
+    const response = await endpointGuard.connectHttp(path, { method, headers, body, signal },
+      exchange ? response => response.status === 303 : undefined);
     check(signal);
-    if (response.status >= 300 && response.status < 400 && !(exchange && response.status === 303)) {
-      await response.body?.cancel(); throw fail('runtime-unavailable');
-    }
     // Status/header-only auth requests must not buffer DSH's potentially large SPA shell.
     if (!consumeBody) {
       await response.body?.cancel();
@@ -141,10 +115,10 @@ export async function createHarnessTransport({ credentials, addonId, runtime, lo
     async openStream({ signal, onMessage = () => {}, onError = () => {}, onClose = () => {} } = {}) {
       return bounded(async openingSignal => {
         await authorize(openingSignal);
-        const url = await destination('/api/remote.mux', openingSignal, true);
         check(openingSignal);
-        return lease.use(({ actionToken }) => new Promise((resolve, reject) => {
-          const socket = new WebSocketImpl(url, { headers: { 'x-augmentor-token': actionToken, cookie } });
+        return lease.use(({ actionToken }) => endpointGuard.connectWebSocket('/api/remote.mux', {
+          headers: { 'x-augmentor-token': actionToken, cookie }, signal: openingSignal,
+        }, socket => new Promise((resolve, reject) => {
           let opened = false, closed = false;
           const streamSignal = AbortSignal.any([lifetime.signal, ...(signal ? [signal] : [])]);
           const report = error => { try { onError(safe(error)); } catch {} };
@@ -184,7 +158,7 @@ export async function createHarnessTransport({ credentials, addonId, runtime, lo
           });
           socket.addEventListener('error', () => { if (!closed) report(fail('runtime-unavailable')); close(); });
           socket.addEventListener('close', () => { close(); try { onClose(); } catch {} });
-        }));
+        })));
       }, signal);
     },
     dispose() {
