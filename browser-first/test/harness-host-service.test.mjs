@@ -499,3 +499,28 @@ test('client dispose route closes sessions idempotently and denies old generatio
   await f.call('/addons/slots/assign', { slot: 'primary-agent', addonId: manifest.id, expectedGeneration: 1, replace: true });
   assert.notEqual((await f.call('/agent/dispose', { session })).status, 200);
 });
+
+test('reviewed OpenAI adapter resolves bound bearer credentials; unknown adapters remain denied', async t => {
+  const manifest = await example('deepseek-harness');
+  manifest.id = 'addon.compatible-registration';
+  Object.assign(manifest.agentRuntime, { adapterId: 'openai-compatible-v1', authScheme: 'bearer', credentialBinding: 'compatible.registration' });
+  const binding = { name: manifest.agentRuntime.credentialBinding, addonId: manifest.id, adapterId: manifest.agentRuntime.adapterId,
+    authScheme: 'bearer', endpoint: manifest.agentRuntime.endpoint, source: { env: 'REGISTRATION_BEARER' } };
+  let resolved = 0, disposed = 0;
+  const f = await fixture(t, { bindings: [binding], env: { REGISTRATION_BEARER: 'ephemeral-test-value' },
+    openaiAdapterFactory: async ({ credentials, addonId, runtime }) => {
+      const lease = await credentials.acquire({ addonId, runtime }); resolved++;
+      return { createSession: async () => ({}), dispose: async () => { disposed++; lease.dispose(); } };
+    } });
+  assert.equal((await f.call('/addons/install', { manifest, enabled: true })).status, 200);
+  await f.host.registry.setGrants(manifest.id, manifest.requestedCapabilities.map(g => ({ ...g, granted: true })), { consent: true, expectedRevision: 1 });
+  await f.host.registry.assignSlot('primary-agent', manifest.id, { expectedGeneration: 0 });
+  const result = await f.call('/agent/session', { addonId: manifest.id });
+  assert.equal(result.status, 200);
+  assert.equal(resolved, 1);
+  await f.host.close();
+  assert.equal(disposed, 1);
+  const other = structuredClone(manifest); other.agentRuntime.adapterId = 'unreviewed-v1';
+  const denied = await fixture(t, { bindings: [{ ...binding, adapterId: 'unreviewed-v1' }] });
+  assert.equal((await denied.call('/addons/install', { manifest: other, enabled: true })).payload.code, 'permission-denied');
+});

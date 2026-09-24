@@ -5,6 +5,7 @@ import { createHarnessRegistryStore } from './harness-registry-store.mjs';
 import { createHarnessBoundary } from './harness-boundary.mjs';
 import { createHarnessCredentials } from './harness-credentials.mjs';
 import { createHarnessTransport } from './harness-transport.mjs';
+import { createOpenAICompatibleAdapter } from './agent-adapters/openai-compatible.mjs';
 import { createDshTypertAdapter } from './agent-adapters/dsh-typert.mjs';
 import { createProviderFabricAdapter } from './agent-adapters/provider-fabric.mjs';
 import { publicHarnessError } from './harness-adapter-contract.mjs';
@@ -101,7 +102,7 @@ export function createHarnessStreamSubscription(reader) {
 
 export async function createHarnessHostService({ userRoot, store = createHarnessRegistryStore({ userRoot }),
   bindings = [], env = process.env, providerHost, cleanupTimeoutMs = 1000,
-  transportFactory = createHarnessTransport, dshAdapterFactory = createDshTypertAdapter } = {}) {
+  transportFactory = createHarnessTransport, dshAdapterFactory = createDshTypertAdapter, openaiAdapterFactory = createOpenAICompatibleAdapter } = {}) {
   if (!Number.isSafeInteger(cleanupTimeoutMs) || cleanupTimeoutMs < 1 || cleanupTimeoutMs > 30000) throw new TypeError('Bounded cleanup required.');
   const approvedBindings = structuredClone(bindings);
   const credentials = createHarnessCredentials({ bindings: approvedBindings, env });
@@ -115,7 +116,7 @@ export async function createHarnessHostService({ userRoot, store = createHarness
     },
     write: document => store.write(document),
   };
-  const registry = await createHarnessRegistry({ store: trackedStore, reviewedAdapterIds: ['dsh-typert-v1', 'provider-fabric-v1'],
+  const registry = await createHarnessRegistry({ store: trackedStore, reviewedAdapterIds: ['dsh-typert-v1', 'provider-fabric-v1', 'openai-compatible-v1'],
     bindings: approvedBindings.map(({ name, addonId, adapterId, authScheme, endpoint }) => ({ name, addonId, adapterId, authScheme, endpoint })) });
   const candidates = env.RESONANTOS_HARNESS_DEMO === '1'
     ? await Promise.all(['deepseek-harness', 'provider-chat-demo'].map(async name => JSON.parse(await readFile(new URL(`./harness-examples/${name}.json`, import.meta.url), 'utf8')))) : [];
@@ -138,6 +139,9 @@ export async function createHarnessHostService({ userRoot, store = createHarness
       transport = await transportFactory({ credentials, addonId: authorization.addonId, runtime: authorization.runtime });
       try { adapter = dshAdapterFactory({ transport }); }
       catch (error) { await bounded(() => transport.dispose()); throw error; }
+    } else if (authorization.runtime.adapterId === 'openai-compatible-v1') {
+      try { adapter = await openaiAdapterFactory({ credentials, addonId: authorization.addonId, runtime: authorization.runtime }); }
+      catch (error) { await bounded(() => adapter?.dispose()); throw error; }
     } else throw fail('permission-denied');
     let disposed = false;
     const resource = {

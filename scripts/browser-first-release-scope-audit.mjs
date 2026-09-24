@@ -254,6 +254,9 @@ export function classify(changedPath, state) {
       reason: "local ResonantOS governance discipline",
     };
   }
+  if (changedPath === "examples/addons/openai-compatible-harness.json") {
+    return { bucket: "include", reason: "governed OpenAI-compatible harness example" };
+  }
   if (includeDocs.has(changedPath)) {
     return {
       bucket: "include",

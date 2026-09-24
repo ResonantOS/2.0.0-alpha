@@ -140,3 +140,90 @@ test('demo evidence rejects a whitespace-only turnId', async () => {
   invalid.turns[0].turnId = invalid.turns[0].final.turnId = ' \t\n ';
   assert.throws(() => verify(invalid), /host provenance/);
 });
+
+async function compatibleSwap(t, loopback) {
+  const { readFile } = await import('node:fs/promises');
+  const { createHash, randomBytes } = await import('node:crypto');
+  const { createServer } = await import('node:http');
+  const { once } = await import('node:events');
+  const { createHarnessHostService } = await import('../host/harness-host-service.mjs');
+  const { createOpenAICompatibleAdapter } = await import('../host/agent-adapters/openai-compatible.mjs');
+  const { validateHarnessManifest } = await import('../host/harness-adapter-contract.mjs');
+  const examplePath = new URL('../../examples/addons/openai-compatible-harness.json', import.meta.url);
+  const original = JSON.parse(await readFile(examplePath));
+  assert.equal(validateHarnessManifest(original).valid, true);
+  const adapterPath = new URL('../host/agent-adapters/openai-compatible.mjs', import.meta.url);
+  const hash = async () => createHash('sha256').update(await readFile(adapterPath)).digest('hex');
+  const before = await hash();
+  const manifests = [], bindings = [], dispatches = [], receipts = [], env = {}, responders = new Map();
+  for (let i = 0; i < 2; i++) {
+    const token = randomBytes(24).toString('hex');
+    let endpoint = `http://127.0.0.1:${35000 + i}`;
+    const respond = (url, authorization, request) => {
+      assert.equal(new URL(url, endpoint).pathname, '/v1/chat/completions');
+      assert.equal(authorization, `Bearer ${token}`);
+      dispatches.push({ source: 'openai-compatible-v1', accepted: true, model: request.model, endpoint });
+      return `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: `Independent reply ${i}` } }] })}\n\ndata: [DONE]\n\n`;
+    };
+    if (loopback) {
+      const server = createServer(async (req, res) => {
+        let body = ''; for await (const chunk of req) body += chunk;
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        res.end(respond(req.url, req.headers.authorization, JSON.parse(body)));
+      });
+      server.listen(0, '127.0.0.1'); await once(server, 'listening');
+      t.after(() => { server.closeAllConnections(); server.close(); });
+      endpoint = `http://127.0.0.1:${server.address().port}`;
+    }
+    responders.set(endpoint, respond);
+    const manifest = structuredClone(original);
+    if (i) { manifest.id = 'addon.second-compatible'; manifest.name = manifest.agentRuntime.chatAuthorLabel = 'Second Compatible'; }
+    manifest.agentRuntime.endpoint = endpoint;
+    manifest.agentRuntime.credentialBinding = `compatible.demo${i}`;
+    assert.equal(validateHarnessManifest(manifest).valid, true);
+    manifests.push(manifest);
+    env[`DEMO_BEARER_${i}`] = token;
+    bindings.push({ name: manifest.agentRuntime.credentialBinding, addonId: manifest.id, adapterId: manifest.agentRuntime.adapterId,
+      authScheme: 'bearer', endpoint: manifest.agentRuntime.endpoint, source: { env: `DEMO_BEARER_${i}` } });
+  }
+  let stored = null;
+  const host = await createHarnessHostService({ bindings, env, ...(loopback ? {} : { openaiAdapterFactory: options => createOpenAICompatibleAdapter({ ...options, fetchImpl: async (url, init) => new Response(responders.get(url.origin)(url, init.headers.Authorization, JSON.parse(init.body)), { headers: { 'content-type': 'text/event-stream' } }) }) }), store: { read: async () => stored, write: async value => { stored = structuredClone(value); } } });
+  t.after(() => host.close());
+  for (const [i, manifest] of manifests.entries()) {
+    await host.registry.install(manifest, { enabled: true });
+    await host.registry.setGrants(manifest.id, manifest.requestedCapabilities.map(g => ({ ...g, granted: true })), { consent: true, expectedRevision: host.registry.snapshot().revision });
+    await host.registry.assignSlot('primary-agent', manifest.id, { expectedGeneration: i, replace: i > 0 });
+    const session = await host.boundary.createSession({ addonId: manifest.id });
+    const reader = host.boundary.events(session);
+    await host.boundary.selectModel(session, { provider: 'local', model: `model-${i}` });
+    const turn = host.boundary.invoke(session, { messages: [{ role: 'user', content: `prompt ${i}` }] });
+    const final = (await reader.next()).value;
+    await turn.completion;
+    assert.equal(final.type, 'final');
+    assert.equal(final.addonId, manifest.id);
+    assert.equal(final.generation, i + 1);
+    assert.equal(final.turnId, turn.turnId);
+    assert.equal(final.sessionId, session.sessionId);
+    assert.equal(final.bootEpoch, session.bootEpoch);
+    assert.equal(final.data.text, `Independent reply ${i}`);
+    assert.equal(dispatches[i].model, `model-${i}`);
+    // The 2H live driver will collect this shape; these real HTTP protocol
+    // fixtures remain explicitly fixture evidence, never live certification.
+    receipts.push({ mode: 'fixture', at: new Date().toISOString(), ...session, turnId: turn.turnId,
+      owner: manifest.id, adapterSourceHash: await hash(), dispatch: dispatches[i],
+      answer: { author: manifest.id, text: final.data.text, visible: false }, final });
+    assert.equal(receipts[i].adapterSourceHash, before, 'manifest swaps must not edit adapter source');
+    await reader.return();
+    if (i === 0) {
+      await host.boundary.dispose(session);
+      await assert.rejects(host.boundary.history(session), { code: 'session-not-found' });
+    }
+  }
+  assert.notEqual(receipts[0].dispatch.endpoint, receipts[1].dispatch.endpoint);
+  assert.notEqual(receipts[0].dispatch.model, receipts[1].dispatch.model);
+  assert.notEqual(receipts[0].answer.text, receipts[1].answer.text);
+  assert.equal(await hash(), before);
+ }
+
+test('a second compatible harness requires only a manifest and binding', { timeout: 8000 }, t => compatibleSwap(t, true));
+test('compatible harness receipt shape and host attribution with deterministic transport', { timeout: 8000 }, t => compatibleSwap(t, false));

@@ -66,6 +66,63 @@ itself needs no provider-fabric key, but the second, independently routed answer
 does. This demo invokes real models and may incur provider charges. No tool
 callbacks are enabled by the harness adapter.
 
+## OpenAI-compatible endpoint and bearer binding
+
+The SDK-valid [OpenAI-compatible example](../../examples/addons/openai-compatible-harness.json)
+selects the reviewed `openai-compatible-v1` adapter. Import the JSON through the
+harness management surface, explicitly grant its requested capabilities, and
+assign the primary-agent slot. It is not enrolled in either public catalog or
+the private DSH/provider demonstration catalog.
+
+Its `http://127.0.0.1:8000` endpoint is a **proposal**, not network authorization.
+The host operator must approve the exact origin and port with `authScheme:
+"bearer"` and the `credentialBinding` **name** `openai.compatible`. For example,
+merge this entry into `RESONANTOS_HARNESS_BINDINGS` (preserving other bindings):
+
+```json
+{
+  "name": "openai.compatible",
+  "addonId": "addon.openai-compatible-harness",
+  "adapterId": "openai-compatible-v1",
+  "authScheme": "bearer",
+  "endpoint": "http://127.0.0.1:8000",
+  "source": { "env": "LOCAL_COMPATIBLE_BEARER" }
+}
+```
+
+Supply `LOCAL_COMPATIBLE_BEARER` privately to the bridge process, or use the
+existing owner-only secret-file binding. No token value belongs in the manifest.
+The transport resolves the binding by name and checks its add-on, adapter,
+auth scheme and endpoint before attaching the bearer header. The SSE decoder
+receives an authorized transport and never receives the credential. DSH and this
+adapter use the same loopback-only endpoint guard: DNS is checked afresh for
+each request, the approved port is pinned, and redirects are refused.
+
+The bridge uses `/v1/chat/completions`. Host compositions can configure another
+origin-relative path through the adapter factory's `completionsPath` option;
+the manifest schema does not accept paths or arbitrary headers. Select the
+endpoint's model through `/agent/select-model` before the first turn, or supply
+the model on a turn. The adapter forwards structured messages using the shared
+untrusted-context framing and enables no tool callbacks.
+
+The host session wrapper owns bounded in-memory history and model selection;
+the wire decoder has no transcript authority. Only completed replies enter that
+history. Cancellation aborts the request and releases the body reader, and
+failed or cancelled output cannot enter a later turn. History expires with the
+host session. SSE is decoded across UTF-8 and event boundaries with a 64 KiB
+frame/text limit, a 1 MiB wire limit and a two-minute default deadline. Public
+output is one final reply after `[DONE]`, not incremental deltas, allowing
+credential redaction across event boundaries. Errors use the fixed harness
+vocabulary.
+
+The deterministic swap test uses two manifests, bindings, endpoints and models
+through the same adapter and compares its source hash before and after both
+turns. Its receipt shape contains the adapter source hash, dispatch endpoint and
+model, owner, boot epoch, generation, session/turn IDs and attributed final
+reply. These are explicitly **fixture** receipts. The real-server variant
+requires loopback sockets; the actual two-harness live run and restart
+certification remain increment 2H.
+
 ## Run and inspect evidence
 
 Stop another development server using port 1430 first. Supply a **new absolute
@@ -128,7 +185,7 @@ working Playwright browser.
 | --- | --- |
 | Installation and consent | Manifest requests confer no grants. Host acknowledgements establish effective consent. |
 | Binding custody | Operator approval binds name, add-on, adapter, auth scheme and endpoint; tokens/cookies remain host-only and are redacted. |
-| Network destination | DSH uses an approved loopback origin and port, checked DNS answers, pinned connection destination, and refused redirects. |
+| Network destination | DSH and OpenAI-compatible transports use an approved loopback origin and port, checked DNS answers, pinned connection destination, and refused redirects. |
 | Bridge routes | Bridge authentication, scoped read/control capabilities, loopback Host/origin checks and strict payload validation precede execution. |
 | Runtime identity | Host-issued boot epoch, owner generation, session and turn IDs attribute output; model self-identification confers no authority. |
 | Ownership and persistence | Durable compare-and-swap governs replacement. An active slot owner cannot be removed. Reload preserves consent/owner, not old session authority. |
@@ -188,7 +245,8 @@ The cache-free alternate command
 in **48 files**. `npm run verify:alpha` passed hygiene and docs, then stopped
 at the same config-cache `EPERM` during `npm run build`.
 
-The release-scope exception includes only this document. An adjacent unapproved
+Exact release-scope exceptions include this document and the linked OpenAI-compatible
+example. Unrelated neighboring examples remain `review`. An adjacent unapproved
 `docs/addons/` document remains `review`; the strict integration fixture checks
 the approved paths. Required checks also include `npm run docs:check`,
 `npm run test:docs`, `npx tsc --noEmit -p tsconfig.json`, `npm run -s test`,
