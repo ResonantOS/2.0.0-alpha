@@ -120,6 +120,25 @@ for (const kind of ['HTTP', 'WebSocket']) {
   });
 }
 
+test('shared guard rejects origin changes hidden by URL control-character normalization before DNS', async () => {
+  let lookups = 0, connections = 0;
+  const endpoint = 'http://localhost:3080';
+  const client = guard({ endpoint,
+    lookup: async () => { lookups++; return [{ address: '127.0.0.1', family: 4 }]; },
+    fetchImpl: async () => { connections++; return new Response('ok'); },
+    WebSocketImpl: class { constructor() { connections++; } },
+  });
+  for (const path of ['/\t/evil', '/\n/evil', '/\r/evil']) {
+    // The raw path passes the earlier checks, but URL parsing removes these controls.
+    assert.ok(path.startsWith('/') && !path.startsWith('//') && !path.includes('\\'));
+    assert.equal(new URL(path, endpoint).origin, 'http://evil');
+    await assert.rejects(client.connectHttp(path), { code: 'permission-denied' });
+    await assert.rejects(client.connectWebSocket(path, {}, () => {}), { code: 'permission-denied' });
+    assert.equal(lookups, 0, 'changed origins must be rejected before DNS');
+    assert.equal(connections, 0, 'changed origins must never reach either connector');
+  }
+});
+
 test('aborted DNS cannot establish a late connection on either transport', async () => {
   for (const kind of ['HTTP', 'WebSocket']) {
     let release, connections = 0;

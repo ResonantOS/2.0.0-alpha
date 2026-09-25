@@ -211,6 +211,43 @@ const settledOrPending = promise => Promise.race([
   promise.then(value => ({ value }), error => ({ code: error.code })),
   new Promise(resolve => setImmediate(() => resolve('pending'))),
 ]);
+test('history rechecks degraded permission after await without a generation change or fence', async t => {
+  const f = await fixture();
+  t.after(() => f.boundary.close());
+  const entered = deferred(), release = deferred();
+  let degraded = false, fences = 0;
+  const authorization = f.registry.authorize('primary-agent', 'addon.one');
+  t.after(f.registry.onFence(() => { fences++; }));
+  const boundary = createHarnessBoundary({
+    registry: { ...f.registry, assertOperation: (authorization, operation) => {
+      f.registry.assertOperation(authorization, operation);
+      if (degraded && operation === 'history') throw Object.assign(new Error('Permission denied.'), { code: 'permission-denied' });
+    } },
+    resolveAdapter: async () => ({
+      createSession: async () => ({}),
+      dispose: async () => {},
+      history: async ({ signal }) => {
+        entered.resolve(signal); await release.promise; return ['withdrawn result'];
+      },
+    }),
+  });
+  t.after(() => boundary.close());
+  const session = await boundary.createSession({ addonId: 'addon.one' });
+  const surfaced = [];
+  const request = boundary.history(session).then(result => { surfaced.push(result); return result; });
+  const rejected = assert.rejects(request, { code: 'permission-denied' });
+  const signal = await entered.promise;
+  degraded = true;
+  assert.equal(f.registry.isCurrent(authorization), true);
+  assert.equal(f.registry.snapshot().slots['primary-agent'].generation, session.generation);
+  assert.equal(fences, 0);
+  assert.equal(signal.aborted, false, 'only the post-await policy check can reject the result');
+  release.resolve();
+  await rejected;
+  assert.deepEqual(surfaced, [], 'withdrawn adapter output must not reach the caller');
+  assert.equal(signal.aborted, false);
+});
+
 for (const operation of ['history', 'status', 'modelCatalog', 'selectModel']) {
   test(`${operation} rechecks ownership after await without an abort notification`, async t => {
     const f = await fixture();
