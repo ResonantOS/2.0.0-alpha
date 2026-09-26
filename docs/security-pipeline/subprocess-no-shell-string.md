@@ -52,7 +52,17 @@ masks until its closing backtick (templates legitimately span lines; no
 instance in this repo), spread values are not resolved (so
 `{ shell: false, ...options }` can re-enable the shell invisibly), and
 provenance tracking is textual, so an import-shaped string literal could
-register a phantom alias in the over-matching direction.
+register a phantom alias in the over-matching direction. Confirmed evasions,
+each demonstrated against this checker during maintainer review (2026-09-26) —
+they are limits, not regressions, and they do not block the gate's job:
+an options object held in a variable
+(`const opts = { shell: true }; spawn(cmd, args, opts)`); indirect invocation
+(`exec.apply(null, [cmd])`, `Reflect.apply`, `(0, exec)(cmd)`, `cp["exec"](cmd)`);
+member-copy aliasing (`const s = cp.spawn; s(cmd, args, { shell: true })`);
+renamed imports from `node:child_process/promises`; and `let`/`var`
+destructure-renames where only `const` is matched. This check runs below a
+parser: it stops the pattern being introduced by accident, not an author who is
+deliberately evading it — such an author can edit the allowlist or the check.
 
 ## Scope
 
@@ -76,6 +86,14 @@ live in the adapter's
 and must carry the data-flow rationale for why the site is safe (for example:
 compile-time literal commands with no variable content). Known blind spots and
 the current allowlisted sites are documented in the adapter header.
+
+The check also honours a registry allowlist from `checks.yml`
+(`allowlist: [{ path, reason, rule, snippet }]`), and it applies the same
+snippet parity there: an entry exempts only when `path`, `rule`, and the exact
+`finding.snippet` all match. A shorter entry — `path` plus `reason` alone, the
+shape that would silence every future finding in that file — grants no relief
+and is reported as a configuration error (`allowlist-entry-incomplete`), so a
+stale exemption fails loudly instead of hiding new findings.
 
 ## Run Locally
 

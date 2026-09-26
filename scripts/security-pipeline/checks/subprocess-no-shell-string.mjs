@@ -34,7 +34,15 @@
 // { shell: false, ...options }) can re-enable the shell invisibly — spread
 // values are not resolved. Provenance tracking is textual: an import-shaped
 // string literal could register a phantom alias (over-matching direction;
-// allowlist relief applies).
+// allowlist relief applies). Confirmed evasions (maintainer review 2026-09-26,
+// each demonstrated on this checker): an options object held in a variable
+// (const opts = { shell: true }; spawn(cmd, args, opts)); indirect invocation
+// (exec.apply(null, [cmd]), Reflect.apply, (0, exec)(cmd), cp["exec"](cmd));
+// member-copy aliasing (const s = cp.spawn; s(cmd, args, { shell: true }));
+// renamed imports from node:child_process/promises; and let/var destructure
+// renames where only const is matched. This is a heuristic operating below a
+// parser: it stops the pattern being introduced by accident, not an author
+// deliberately evading it.
 //
 // Scope: in a git checkout the scan enumerates git-tracked and visible
 // untracked files (git ls-files --cached --others --exclude-standard), so
@@ -561,6 +569,11 @@ function allowlisted(finding) {
 export async function run({ check, repoRoot }) {
   const registrySurfaces = Array.isArray(check?.surfaces) ? check.surfaces : null;
   const registryAllowlist = Array.isArray(check?.allowlist) ? check.allowlist : [];
+  const registryMismatch = [];
+  // An entry that cannot express parity is a config error, not an exemption.
+  const incompleteRegistryEntries = registryAllowlist.filter(
+    (entry) => !entry || !entry.path || !entry.reason || !entry.rule || !entry.snippet
+  );
   let files = await listSourceFiles(repoRoot);
   if (registrySurfaces) {
     // Registry `surfaces` scopes the scan (the convention the other checks
@@ -599,15 +612,55 @@ export async function run({ check, repoRoot }) {
         allowlistedCount += 1;
         continue;
       }
-      // Registry allowlist (checks.yml `allowlist: [{path, reason}]`) — the
-      // exception convention the other checks use; internal ALLOWLIST entries
-      // stay the primary, fingerprinted mechanism.
-      if (registryAllowlist.some((entry) => entry.path === finding.file && entry.reason)) {
+      // Registry allowlist (checks.yml `allowlist`) — snippet parity with the internal
+      // list: an entry must name path + rule + the exact snippet to grant relief. A
+      // path+reason-only entry (which would silence every future finding in that file)
+      // grants nothing and is reported as a configuration error instead.
+      const registryEntry = registryAllowlist.find(
+        (entry) => entry && entry.path === finding.file && entry.reason
+      );
+      if (
+        registryEntry &&
+        registryEntry.rule === finding.rule &&
+        registryEntry.snippet === finding.snippet
+      ) {
         allowlistedCount += 1;
+        continue;
+      }
+      if (registryEntry) {
+        registryMismatch.push({
+          path: finding.file,
+          rule: finding.rule,
+          line: finding.line,
+          snippet: finding.snippet,
+          reason:
+            "registry allowlist entry matched the path but not the rule+snippet; " +
+            "parity is required (see docs/security-pipeline/subprocess-no-shell-string.md#allowlisting)",
+        });
+        violations.push(finding);
         continue;
       }
       violations.push(finding);
     }
+  }
+
+  const configErrors = incompleteRegistryEntries.map((entry) => ({
+    path: entry?.path ?? "<missing path>",
+    line: 0,
+    rule: "allowlist-entry-incomplete",
+    snippet: "",
+  }));
+
+  // A config error is never swallowed by a clean scan: it fails on its own.
+  if (configErrors.length > 0 && violations.length === 0) {
+    return {
+      status: "fail",
+      summary:
+        `subprocess-no-shell-string: ${configErrors.length} registry allowlist entry(ies) ` +
+        "cannot express snippet parity — each needs path + reason + rule + snippet. " +
+        "Whole-file exemptions are not accepted by this check.",
+      evidence: configErrors,
+    };
   }
 
   if (violations.length > 0) {
@@ -615,14 +668,23 @@ export async function run({ check, repoRoot }) {
       status: "fail",
       summary:
         `subprocess-no-shell-string: ${violations.length} string-to-shell construction(s) found ` +
-        `(${allowlistedCount} allowlisted site(s) skipped). ` +
-        "Execute commands as argv arrays with shell:false (see PR #333).",
-      evidence: violations.map((violation) => ({
-        path: violation.file,
-        line: violation.line,
-        rule: violation.rule,
-        snippet: violation.snippet,
-      })),
+        `(${allowlistedCount} allowlisted site(s) skipped` +
+        (registryMismatch.length > 0
+          ? `; ${registryMismatch.length} registry allowlist entry(ies) failed snippet parity`
+          : "") +
+        (configErrors.length > 0
+          ? `; ${configErrors.length} entry(ies) cannot express parity`
+          : "") +
+        "). Execute commands as argv arrays with shell:false (see PR #333).",
+      evidence: [
+        ...violations.map((violation) => ({
+          path: violation.file,
+          line: violation.line,
+          rule: violation.rule,
+          snippet: violation.snippet,
+        })),
+        ...configErrors,
+      ],
     };
   }
 
@@ -630,7 +692,7 @@ export async function run({ check, repoRoot }) {
     status: "pass",
     summary:
       `subprocess-no-shell-string: no string-to-shell constructions in ${files.length} source file(s) ` +
-      `(${allowlistedCount} allowlisted site(s), data-flow safe).`,
+      `(${allowlistedCount} allowlisted site(s); heuristic match, see documented limits).`,
     evidence: [],
   };
 }

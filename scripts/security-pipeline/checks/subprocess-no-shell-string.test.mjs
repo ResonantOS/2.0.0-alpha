@@ -235,12 +235,77 @@ test("registry surfaces scope the scan and registry allowlist exempts paths", as
     assert.equal(slashScoped.status, "fail");
     assert.deepEqual(slashScoped.evidence.map((item) => item.path), ["scripts/a.mjs"]);
 
-    const exempt = await run({
+    // Maintainer review 2026-09-26: a path+reason entry must NOT silence a whole file.
+    // It grants no relief, and it is reported loudly as a parity/config error.
+    const noParity = await run({
       check: { allowlist: [{ path: "browser-first/b.mjs", reason: "documented fixture" }] },
       repoRoot: root,
     });
-    assert.equal(exempt.status, "fail");
-    assert.deepEqual(exempt.evidence.map((item) => item.path), ["scripts/a.mjs"]);
+    assert.equal(noParity.status, "fail");
+    assert.deepEqual(
+      [...new Set(noParity.evidence.map((item) => item.path))].sort(),
+      ["browser-first/b.mjs", "scripts/a.mjs"]
+    );
+    assert.ok(
+      noParity.evidence.some((item) => item.rule === "allowlist-entry-incomplete"),
+      "the incomplete entry is reported as a config error"
+    );
+    assert.match(noParity.summary, /cannot express parity|failed snippet parity/);
+
+    // Full parity — path + reason + rule + exact snippet — is the only entry shape
+    // that exempts, and it exempts exactly that site.
+    const parity = await run({
+      check: {
+        allowlist: [
+          {
+            path: "browser-first/b.mjs",
+            reason: "documented fixture",
+            rule: "exec-string-api",
+            snippet: "execSync('ls');",
+          },
+        ],
+      },
+      repoRoot: root,
+    });
+    assert.equal(parity.status, "fail");
+    assert.deepEqual(parity.evidence.map((item) => item.path), ["scripts/a.mjs"]);
+
+    // A near-miss snippet must not exempt either: parity is exact.
+    const nearMiss = await run({
+      check: {
+        allowlist: [
+          {
+            path: "browser-first/b.mjs",
+            reason: "documented fixture",
+            rule: "exec-string-api",
+            snippet: "execSync('ls'); // edited",
+          },
+        ],
+      },
+      repoRoot: root,
+    });
+    assert.equal(nearMiss.status, "fail");
+    assert.deepEqual(
+      [...new Set(nearMiss.evidence.map((item) => item.path))].sort(),
+      ["browser-first/b.mjs", "scripts/a.mjs"]
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an incomplete registry allowlist entry fails a clean repo (never silent)", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "spnssh-configerr-"));
+  try {
+    await mkdir(path.join(root, "scripts"), { recursive: true });
+    await writeFile(path.join(root, "scripts", "clean.mjs"), "const x = 1;\n");
+    const result = await run({
+      check: { allowlist: [{ path: "scripts/clean.mjs", reason: "no snippet, no rule" }] },
+      repoRoot: root,
+    });
+    assert.equal(result.status, "fail");
+    assert.equal(result.evidence[0].rule, "allowlist-entry-incomplete");
+    assert.match(result.summary, /snippet parity/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
