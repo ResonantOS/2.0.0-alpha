@@ -15,10 +15,11 @@ function requireExport(name) {
 
 async function withTempRepository(run) {
   const root = await mkdtemp(join(tmpdir(), "release-scope-audit-"));
-  const git = (args) => execFileSync("git", ["-C", root, ...args], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
+  const git = (args) =>
+    execFileSync("git", ["-C", root, ...args], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
 
   try {
     git(["init", "--quiet"]);
@@ -50,17 +51,14 @@ test("parses committed ranges with local and CI defaults and configurable refs",
     nullSeparated: false,
     strict: false,
   });
-  assert.deepEqual(
-    parseArgs(["--committed", "--base", "upstream/dev", "--head=topic"]),
-    {
-      base: "upstream/dev",
-      head: "topic",
-      includePathsOnly: false,
-      mode: "committed",
-      nullSeparated: false,
-      strict: false,
-    },
-  );
+  assert.deepEqual(parseArgs(["--committed", "--base", "upstream/dev", "--head=topic"]), {
+    base: "upstream/dev",
+    head: "topic",
+    includePathsOnly: false,
+    mode: "committed",
+    nullSeparated: false,
+    strict: false,
+  });
 
   assert.deepEqual(
     parseArgs(["--committed"], {
@@ -77,13 +75,10 @@ test("parses committed ranges with local and CI defaults and configurable refs",
     },
   );
   assert.deepEqual(
-    parseArgs(
-      ["--committed", "--base=cli-base", "--head", "cli-head"],
-      {
-        RESONANTOS_SCOPE_BASE: "environment-base",
-        RESONANTOS_SCOPE_HEAD: "environment-head",
-      },
-    ),
+    parseArgs(["--committed", "--base=cli-base", "--head", "cli-head"], {
+      RESONANTOS_SCOPE_BASE: "environment-base",
+      RESONANTOS_SCOPE_HEAD: "environment-head",
+    }),
     {
       base: "cli-base",
       head: "cli-head",
@@ -120,16 +115,15 @@ test("project sync executes pull-request events only from trusted base code", as
   const workflow = parse(workflowText);
   const job = workflow.jobs.sync;
   const checkout = job.steps.find((step) => step.name === "Checkout");
-  const captureSnapshot = job.steps.find((step) => step.name === "Capture Project 2 scope snapshot");
+  const captureSnapshot = job.steps.find(
+    (step) => step.name === "Capture Project 2 scope snapshot",
+  );
   const syncStep = job.steps.find((step) => step.name === "Sync project and labels");
 
   assert.equal(workflow.on.pull_request, undefined);
   assert.ok(workflow.on.pull_request_target);
   assert.equal(job.if, undefined);
-  assert.equal(
-    checkout.with.ref,
-    "${{ github.event.repository.default_branch }}",
-  );
+  assert.equal(checkout.with.ref, "${{ github.event.repository.default_branch }}");
   assert.doesNotMatch(workflowText, /pull_request\.base\.(?:sha|ref)/);
   assert.equal(checkout.with["persist-credentials"], false);
   assert.equal(workflow.permissions.contents, "read");
@@ -177,9 +171,10 @@ test("fails clearly when the committed range base is unavailable", () => {
   const options = parseArgs(["--committed", "--base", "missing-base"]);
 
   assert.throws(
-    () => collectChangedPaths(options, () => {
-      throw new Error("ambiguous argument with internal git details");
-    }),
+    () =>
+      collectChangedPaths(options, () => {
+        throw new Error("ambiguous argument with internal git details");
+      }),
     /committed range base is unavailable: missing-base/i,
   );
 });
@@ -265,8 +260,16 @@ test("preserves include-path filtering and NUL-separated output", () => {
       return "";
     },
     processRef,
-    stderr: { write: (chunk) => { stderr += chunk; } },
-    stdout: { write: (chunk) => { stdout += chunk; } },
+    stderr: {
+      write: (chunk) => {
+        stderr += chunk;
+      },
+    },
+    stdout: {
+      write: (chunk) => {
+        stdout += chunk;
+      },
+    },
   });
 
   assert.equal(result, 0);
@@ -283,11 +286,14 @@ test("unknown modified documentation still fails strict committed audit", () => 
 
   const result = main({
     argv: ["--committed", "--strict"],
-    gitRunner: (args) => args[0] === "rev-parse"
-      ? `${hashes.shift()}\n`
-      : "M\0docs/unapproved.md\0",
+    gitRunner: (args) =>
+      args[0] === "rev-parse" ? `${hashes.shift()}\n` : "M\0docs/unapproved.md\0",
     processRef,
-    stderr: { write: (chunk) => { stderr += chunk; } },
+    stderr: {
+      write: (chunk) => {
+        stderr += chunk;
+      },
+    },
     stdout: { write: () => {} },
   });
 
@@ -327,12 +333,18 @@ test("known canonical, ADR, icon, and deleted documentation pass strict audit", 
 
   const result = main({
     argv: ["--committed", "--strict"],
-    gitRunner: (args) => args[0] === "rev-parse"
-      ? `${hashes.shift()}\n`
-      : nameStatus,
+    gitRunner: (args) => (args[0] === "rev-parse" ? `${hashes.shift()}\n` : nameStatus),
     processRef,
-    stderr: { write: (chunk) => { stderr += chunk; } },
-    stdout: { write: (chunk) => { stdout += chunk; } },
+    stderr: {
+      write: (chunk) => {
+        stderr += chunk;
+      },
+    },
+    stdout: {
+      write: (chunk) => {
+        stdout += chunk;
+      },
+    },
   });
 
   assert.equal(result, 0);
@@ -356,7 +368,11 @@ test("classify includes the add-on SDK package family and tsconfig in the browse
   ]) {
     assert.equal(classify(p, "added").bucket, "include", `${p} must be in release scope`);
   }
-  assert.equal(classify("tsconfig.json", "modified").bucket, "include", "tsconfig.json must be in release scope");
+  assert.equal(
+    classify("tsconfig.json", "modified").bucket,
+    "include",
+    "tsconfig.json must be in release scope",
+  );
   // negative control: an unrelated new top-level path still needs review
   assert.notEqual(classify("packages/some-unrelated-tool/index.ts", "added").bucket, "include");
 });
@@ -385,15 +401,45 @@ test("security-pipeline documentation is approved release documentation", () => 
   assert.equal(classify("docs/unlisted/notes.md", "added").bucket, "review");
 });
 
+test("planning and architecture governance docs are approved release documentation", () => {
+  const classify = requireExport("classify");
+
+  assert.deepEqual(classify("docs/planning/03-master-implementation-plan.md", "added"), {
+    bucket: "include",
+    reason: "planning and architecture governance documentation",
+  });
+  assert.equal(classify("docs/planning/daily/2026-09-17.md", "modified").bucket, "include");
+});
+
+test("agent harness prompts are approved release documentation", () => {
+  const classify = requireExport("classify");
+
+  assert.deepEqual(classify("prompts/sdk-demo-prompt.md", "added"), {
+    bucket: "include",
+    reason: "shared agent-harness prompts and authoring guidance",
+  });
+  assert.equal(classify("prompts/agent-test-demo-prompt.md", "modified").bucket, "include");
+});
+
 test("Resonant Extension Framework specification docs are approved release documentation", () => {
   const classify = requireExport("classify");
 
-  assert.deepEqual(classify("docs/addons/resonant-extension-framework/ADDON_PACKAGE_AND_MANIFEST_SPEC_V0.1.md", "added"), {
-    bucket: "include",
-    reason: "Resonant Extension Framework specification documentation",
-  });
+  assert.deepEqual(
+    classify(
+      "docs/addons/resonant-extension-framework/ADDON_PACKAGE_AND_MANIFEST_SPEC_V0.1.md",
+      "added",
+    ),
+    {
+      bucket: "include",
+      reason: "Resonant Extension Framework specification documentation",
+    },
+  );
   assert.equal(classify("docs/addons/other-framework/notes.md", "added").bucket, "review");
-  assert.equal(classify("docs/REVIEW_PACKET_2026-08-25.md", "added").bucket, "review", "process artifacts at the docs root still need manual review");
+  assert.equal(
+    classify("docs/REVIEW_PACKET_2026-08-25.md", "added").bucket,
+    "review",
+    "process artifacts at the docs root still need manual review",
+  );
 });
 
 test("the add-on lifecycle uninstall design note is approved release documentation", () => {
@@ -403,11 +449,19 @@ test("the add-on lifecycle uninstall design note is approved release documentati
     bucket: "include",
     reason: "browser-first release documentation",
   });
-  assert.equal(classify("docs/addons/some-other-note.md", "added").bucket, "review", "docs/addons/ stays manual-review by default; only the listed note is approved");
+  assert.equal(
+    classify("docs/addons/some-other-note.md", "added").bucket,
+    "review",
+    "docs/addons/ stays manual-review by default; only the listed note is approved",
+  );
 });
 
 test("recognizes only the vendored Augmentor product scope", () => {
-  for (const path of ["apps/augmentor/README.md", "apps/augmentor/pipe.mjs", "apps/augmentor/plugin/package.json"]) {
+  for (const path of [
+    "apps/augmentor/README.md",
+    "apps/augmentor/pipe.mjs",
+    "apps/augmentor/plugin/package.json",
+  ]) {
     const result = auditModule.classify(path, "added");
     assert.equal(result.bucket, "include");
     assert.match(result.reason, /vendored Augmentor product/);

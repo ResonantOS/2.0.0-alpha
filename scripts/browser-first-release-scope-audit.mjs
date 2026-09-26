@@ -113,15 +113,13 @@ export function parseArgs(argv, env = process.env) {
   return options;
 }
 
-export function createGitRunner({
-  cwd = REPO_ROOT,
-  execFileSyncImpl = execFileSync,
-} = {}) {
-  return (args) => execFileSyncImpl("git", args, {
-    cwd,
-    encoding: "utf8",
-    shell: false,
-  });
+export function createGitRunner({ cwd = REPO_ROOT, execFileSyncImpl = execFileSync } = {}) {
+  return (args) =>
+    execFileSyncImpl("git", args, {
+      cwd,
+      encoding: "utf8",
+      shell: false,
+    });
 }
 
 function splitGitPaths(value) {
@@ -130,14 +128,22 @@ function splitGitPaths(value) {
 
 function committedState(status) {
   switch (status[0]) {
-    case "A": return "added";
-    case "C": return "copied";
-    case "D": return "deleted";
-    case "M": return "modified";
-    case "R": return "renamed";
-    case "T": return "type-changed";
-    case "U": return "unmerged";
-    default: return "unknown";
+    case "A":
+      return "added";
+    case "C":
+      return "copied";
+    case "D":
+      return "deleted";
+    case "M":
+      return "modified";
+    case "R":
+      return "renamed";
+    case "T":
+      return "type-changed";
+    case "U":
+      return "unmerged";
+    default:
+      return "unknown";
   }
 }
 
@@ -178,51 +184,40 @@ function parseGitNameStatus(value) {
 
 function resolveCommit(runGit, label, ref) {
   try {
-    const commit = String(runGit([
-      "rev-parse",
-      "--verify",
-      "--quiet",
-      "--end-of-options",
-      `${ref}^{commit}`,
-    ])).trim();
+    const commit = String(
+      runGit(["rev-parse", "--verify", "--quiet", "--end-of-options", `${ref}^{commit}`]),
+    ).trim();
     if (commit) return commit;
   } catch {
     // The public error below avoids leaking Git internals while naming the bad ref.
   }
-  throw new Error(`Committed range ${label} is unavailable: ${ref}. Fetch it or pass --${label} <ref>.`);
+  throw new Error(
+    `Committed range ${label} is unavailable: ${ref}. Fetch it or pass --${label} <ref>.`,
+  );
 }
 
 export function collectChangedPaths(options, runGit) {
   if (options.mode === "staged") {
-    return parseGitNameStatus(runGit([
-      "diff",
-      "--cached",
-      "--name-status",
-      "--no-renames",
-      "-z",
-      "--",
-    ]));
+    return parseGitNameStatus(
+      runGit(["diff", "--cached", "--name-status", "--no-renames", "-z", "--"]),
+    );
   }
 
   if (options.mode === "committed") {
     const baseCommit = resolveCommit(runGit, "base", options.base);
     const headCommit = resolveCommit(runGit, "head", options.head);
     const range = `${baseCommit}...${headCommit}`;
-    return parseGitNameStatus(runGit([
-      "diff",
-      "--name-status",
-      "--no-renames",
-      "-z",
-      range,
-      "--",
-    ]));
+    return parseGitNameStatus(runGit(["diff", "--name-status", "--no-renames", "-z", range, "--"]));
   }
 
   return [
-    ...splitGitPaths(runGit(["diff", "--name-only", "-z", "--"]))
-      .map((changedPath) => ({ path: changedPath, state: "modified" })),
-    ...splitGitPaths(runGit(["ls-files", "--others", "--exclude-standard", "-z", "--"]))
-      .map((changedPath) => ({ path: changedPath, state: "untracked" })),
+    ...splitGitPaths(runGit(["diff", "--name-only", "-z", "--"])).map((changedPath) => ({
+      path: changedPath,
+      state: "modified",
+    })),
+    ...splitGitPaths(runGit(["ls-files", "--others", "--exclude-standard", "-z", "--"])).map(
+      (changedPath) => ({ path: changedPath, state: "untracked" }),
+    ),
   ];
 }
 
@@ -233,7 +228,8 @@ export function classify(changedPath, state) {
   if (changedPath.startsWith("apps/augmentor/")) {
     return {
       bucket: "include",
-      reason: "vendored Augmentor product (independent extension, native host, and published plugin)",
+      reason:
+        "vendored Augmentor product (independent extension, native host, and published plugin)",
     };
   }
   if (changedPath.startsWith("browser-first/")) {
@@ -275,6 +271,18 @@ export function classify(changedPath, state) {
       reason: "security-pipeline policy and check documentation",
     };
   }
+  if (changedPath.startsWith("docs/planning/")) {
+    return {
+      bucket: "include",
+      reason: "planning and architecture governance documentation",
+    };
+  }
+  if (changedPath.startsWith("prompts/")) {
+    return {
+      bucket: "include",
+      reason: "shared agent-harness prompts and authoring guidance",
+    };
+  }
   if (changedPath.startsWith("docs/addons/resonant-extension-framework/")) {
     return {
       bucket: "include",
@@ -302,7 +310,8 @@ export function classify(changedPath, state) {
   if (changedPath.startsWith("packages/addon-sdk")) {
     return {
       bucket: "include",
-      reason: "add-on SDK package family (ADR-018/ADR-040), part of the browser-first extension release surface",
+      reason:
+        "add-on SDK package family (ADR-018/ADR-040), part of the browser-first extension release surface",
     };
   }
   if (
@@ -349,7 +358,10 @@ export function classify(changedPath, state) {
       reason: "desktop/native host removal required for the Chrome extension alpha",
     };
   }
-  if (changedPath.startsWith("public/icons/custom/audio2tol") || changedPath === "public/icons/icon-preview.html") {
+  if (
+    changedPath.startsWith("public/icons/custom/audio2tol") ||
+    changedPath === "public/icons/icon-preview.html"
+  ) {
     return {
       bucket: "include",
       reason: "alpha icon catalog cleanup for removed workspaces",
@@ -423,9 +435,11 @@ export function main({
 
   if (options.includePathsOnly) {
     const paths = groups.get("include").map((entry) => entry.path);
-    stdout.write(options.nullSeparated
-      ? `${paths.join("\0")}${paths.length ? "\0" : ""}`
-      : `${paths.join("\n")}${paths.length ? "\n" : ""}`);
+    stdout.write(
+      options.nullSeparated
+        ? `${paths.join("\0")}${paths.length ? "\0" : ""}`
+        : `${paths.join("\n")}${paths.length ? "\n" : ""}`,
+    );
     return 0;
   }
 
@@ -444,14 +458,16 @@ export function main({
   printGroup("Defer to separate commit/release", groups.get("defer"));
   printGroup("Needs manual review", groups.get("review"));
 
-  const missing = [...includeDocs]
-    .filter((expectedPath) => !existsSync(path.join(repoRoot, expectedPath)));
+  const missing = [...includeDocs].filter(
+    (expectedPath) => !existsSync(path.join(repoRoot, expectedPath)),
+  );
   if (missing.length > 0) {
     writeLine(stdout, "\nMissing expected release-scope files:");
     for (const missingPath of missing) writeLine(stdout, `- ${missingPath}`);
   }
 
-  const largeIncluded = groups.get("include")
+  const largeIncluded = groups
+    .get("include")
     .map((entry) => ({ ...entry, absolute: path.join(repoRoot, entry.path) }))
     .filter((entry) => existsSync(entry.absolute) && statSync(entry.absolute).isFile())
     .map((entry) => ({ ...entry, size: statSync(entry.absolute).size }))
@@ -463,26 +479,31 @@ export function main({
     }
   }
 
-  const hasBlockingScope = groups.get("review").length > 0 ||
+  const hasBlockingScope =
+    groups.get("review").length > 0 ||
     groups.get("defer").length > 0 ||
     missing.length > 0 ||
     largeIncluded.length > 0;
 
   if (options.strict && hasBlockingScope) {
-    writeLine(stderr, "\nStrict mode failed: deferred/review/missing/large paths are present. Split or re-scope changes before release.");
+    writeLine(
+      stderr,
+      "\nStrict mode failed: deferred/review/missing/large paths are present. Split or re-scope changes before release.",
+    );
     processRef.exitCode = 1;
     return 1;
   }
   if (hasBlockingScope) {
-    writeLine(stdout, "\nNon-strict audit complete: deferred or review paths exist. Do not push a mixed release without splitting or documenting them.");
+    writeLine(
+      stdout,
+      "\nNon-strict audit complete: deferred or review paths exist. Do not push a mixed release without splitting or documenting them.",
+    );
   }
   return 0;
 }
 
 export function isDirectExecution(moduleUrl, argvEntry) {
-  return Boolean(
-    argvEntry && pathToFileURL(path.resolve(argvEntry)).href === moduleUrl,
-  );
+  return Boolean(argvEntry && pathToFileURL(path.resolve(argvEntry)).href === moduleUrl);
 }
 
 if (isDirectExecution(import.meta.url, process.argv[1])) {
