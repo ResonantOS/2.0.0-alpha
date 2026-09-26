@@ -76,6 +76,101 @@ const faultExpectedDetail = {
   "extension-status-cards": /403 bridge response outside the loopback probe/,
 };
 
+function assertLaneFaultOutcome(code, scenarios, scenarioId, rawOutput = "") {
+  // Raw lane output is appended to every failure so attribution does not cost the
+  // diagnostic context the old exit-code assertion carried (review round 1).
+  const raw = rawOutput ? `\n${rawOutput}` : "";
+  // A target regression takes precedence over any other failure in the lane.
+  const scenario = scenarios.find((entry) => entry.id === scenarioId);
+  const targetContext = `lane exited ${code}; target scenario ${scenarioId}`;
+  assert.ok(scenario, `${targetContext} is missing from the scenario matrix${raw}`);
+  if (scenario.status !== "passed") {
+    assert.fail(`${targetContext} ${scenario.status} — ${scenario.detail}${raw}`);
+  }
+  assert.match(scenario.detail, /Expected failure observed/i,
+    `${targetContext} did not record Expected failure observed — ${scenario.detail}${raw}`);
+  if (faultExpectedDetail[scenarioId]) {
+    assert.match(scenario.detail, faultExpectedDetail[scenarioId],
+      `${targetContext} detail did not match ${faultExpectedDetail[scenarioId]} — ${scenario.detail}${raw}`);
+  }
+  if (code !== 0) {
+    const unrelatedFailures = scenarios.filter((entry) => entry.id !== scenarioId && entry.status === "failed");
+    if (unrelatedFailures.length) {
+      const reason = unrelatedFailures.length === 1 ? "an unrelated scenario failed" : "unrelated scenarios failed";
+      assert.fail(`lane exited ${code} because ${reason}: ${unrelatedFailures.map((entry) => `${entry.id} — ${entry.detail}`).join("; ")}${raw}`);
+    }
+    assert.fail(`lane exited ${code} but the scenario matrix contains no failed scenarios${raw}`);
+  }
+}
+
+const attributionTarget = {
+  id: "extension-status-cards",
+  status: "passed",
+  detail: "Expected failure observed: 403 bridge response outside the loopback probe",
+};
+const attributionUnrelatedFailure = {
+  id: "opencode-version-pin",
+  status: "failed",
+  detail: "OpenCode version mismatch: expected 1.18.4, actual 1.18.32",
+};
+
+test("fault attribution names unrelated failures after successful fault detection", () => {
+  assert.throws(
+    () => assertLaneFaultOutcome(1, [attributionTarget, attributionUnrelatedFailure], attributionTarget.id),
+    {
+      name: "AssertionError",
+      message: `lane exited 1 because an unrelated scenario failed: ${attributionUnrelatedFailure.id} — ${attributionUnrelatedFailure.detail}`,
+    },
+  );
+});
+
+test("fault attribution prioritizes a failed target over unrelated failures", () => {
+  const target = { ...attributionTarget, status: "failed", detail: "Expected failure did not occur" };
+  assert.throws(
+    () => assertLaneFaultOutcome(1, [attributionUnrelatedFailure, target], target.id),
+    { name: "AssertionError", message: `lane exited 1; target scenario ${target.id} failed — ${target.detail}` },
+  );
+});
+
+test("fault attribution prioritizes a missing target over unrelated failures", () => {
+  assert.throws(
+    () => assertLaneFaultOutcome(1, [attributionUnrelatedFailure], attributionTarget.id),
+    { name: "AssertionError", message: `lane exited 1; target scenario ${attributionTarget.id} is missing from the scenario matrix` },
+  );
+});
+
+test("fault attribution accepts a successful lane and detected target fault", () => {
+  assert.doesNotThrow(() => assertLaneFaultOutcome(0, [
+    attributionTarget,
+    { ...attributionUnrelatedFailure, status: "passed", detail: "OpenCode version matches" },
+  ], attributionTarget.id));
+});
+
+test("fault attribution rejects a target without expected-failure evidence", () => {
+  assert.throws(
+    () => assertLaneFaultOutcome(1, [
+      { ...attributionTarget, detail: "scenario passed" }, attributionUnrelatedFailure,
+    ], attributionTarget.id),
+    /target scenario extension-status-cards did not record Expected failure observed — scenario passed/,
+  );
+});
+
+test("fault attribution rejects the wrong expected-failure detail", () => {
+  assert.throws(
+    () => assertLaneFaultOutcome(1, [
+      { ...attributionTarget, detail: "Expected failure observed: unrelated error" }, attributionUnrelatedFailure,
+    ], attributionTarget.id),
+    /target scenario extension-status-cards detail did not match.*403 bridge response outside the loopback probe.*Expected failure observed: unrelated error/,
+  );
+});
+
+test("fault attribution rejects unexplained non-zero lane exits", () => {
+  assert.throws(
+    () => assertLaneFaultOutcome(1, [attributionTarget], attributionTarget.id),
+    { name: "AssertionError", message: "lane exited 1 but the scenario matrix contains no failed scenarios" },
+  );
+});
+
 function runLaneFault(scenarioId, artifactDir) {
   return new Promise((resolve, reject) => {
     const child = spawn(
@@ -180,14 +275,8 @@ for (const scenarioId of faultScenarios) {
     try {
       const result = await runLaneFault(scenarioId, artifactDir);
       const payload = JSON.parse(await readFile(path.join(artifactDir, "scenario-matrix.json"), "utf8"));
-      assert.equal(result.code, 0, `${result.stdout}\n${result.stderr}\n${JSON.stringify(payload, null, 2)}`);
-      const scenario = payload.scenarios.find((entry) => entry.id === scenarioId);
       assert.equal(payload.certification, "resonantos-live-sdk");
-      assert.equal(scenario?.status, "passed", JSON.stringify(payload.scenarios, null, 2));
-      assert.match(scenario.detail, /Expected failure observed/i);
-      if (faultExpectedDetail[scenarioId]) {
-        assert.match(scenario.detail, faultExpectedDetail[scenarioId]);
-      }
+      assertLaneFaultOutcome(result.code, payload.scenarios, scenarioId, `${result.stdout}\n${result.stderr}`);
     } finally {
       await rm(artifactDir, { recursive: true, force: true });
     }
@@ -304,9 +393,8 @@ test("raw-log fault fails at credential scan", { concurrency: false }, async (t)
   try {
     const result = await runLaneFault("opencode-proxy-raw-log", artifactDir);
     const payload = JSON.parse(await readFile(path.join(artifactDir, "scenario-matrix.json"), "utf8"));
-    const scenario = payload.scenarios.find((entry) => entry.id === "opencode-proxy-raw-log");
-    assert.equal(result.code, 0);
-    assert.match(scenario?.detail ?? "", /OPENCODE_RAW_LOG_CREDENTIAL_DETECTED/);
+    assert.equal(payload.certification, "resonantos-live-sdk");
+    assertLaneFaultOutcome(result.code, payload.scenarios, "opencode-proxy-raw-log", `${result.stdout}\n${result.stderr}`);
   } finally {
     await rm(artifactDir, { recursive: true, force: true });
   }
