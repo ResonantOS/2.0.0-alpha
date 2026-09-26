@@ -31,8 +31,8 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const useGit = process.argv.includes('--git')
 let src
 if (useGit) {
-  const { execSync } = await import('node:child_process')
-  src = execSync('git show HEAD:extension/sw.js', { cwd: path.join(path.dirname(fileURLToPath(import.meta.url)), '..') }).toString()
+  const { execFileSync } = await import('node:child_process')
+  src = execFileSync('git', ['show', 'HEAD:extension/sw.js'], { cwd: path.join(path.dirname(fileURLToPath(import.meta.url)), '..') }).toString()
 } else {
   src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'extension', 'sw.js'), 'utf8')
 }
