@@ -105,7 +105,10 @@ const EXECUTABLE_FENCE_LANGUAGES = new Set([
   "zsh",
   "zsh-session",
 ]);
-const ALLOWED_ADR_STATUSES = new Set(["Accepted", "Deferred", "Superseded", "Historical"]);
+// "Proposed" is a decision that has been written down but not yet taken. Without it an
+// author with a genuine proposal has to mislabel it as Accepted or Deferred, and a
+// deferral is a different statement: it says the decision was considered and postponed.
+const ALLOWED_ADR_STATUSES = new Set(["Proposed", "Accepted", "Deferred", "Superseded", "Historical"]);
 const ALLOWED_ALPHA_APPLICABILITY = new Set([
   "Applies",
   "Partial",
@@ -1553,7 +1556,7 @@ export function validateAdrIndex(context) {
 
     const status = rowValues.get("decision status");
     if (!allowedValue(ALLOWED_ADR_STATUSES, status)) {
-      findings.push(createFinding(adr, 1, `${adr} must declare an allowed decision status: Accepted, Deferred, Superseded, or Historical`));
+      findings.push(createFinding(adr, 1, `${adr} must declare an allowed decision status: Proposed, Accepted, Deferred, Superseded, or Historical`));
     }
 
     const alphaApplicability = rowValues.get("alpha applicability");
@@ -1578,7 +1581,7 @@ export function validateAdrIndex(context) {
       findings.push(createFinding(
         adr,
         adrStatus.line,
-        `${adr} must declare an allowed decision status: Accepted, Deferred, Superseded, or Historical`,
+        `${adr} must declare an allowed decision status: Proposed, Accepted, Deferred, Superseded, or Historical`,
       ));
     }
     const adrApplicability = metadata.get("alpha applicability");
