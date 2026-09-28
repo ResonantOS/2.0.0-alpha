@@ -421,6 +421,7 @@
     this._maxHistory = config.maxHistory || MAX_HISTORY;
     this._maxClicks = config.maxClicks || MAX_CLICKS;
     this._persistSession = config.persistSession !== false;
+    this._redactionWarningEmitted = false;
 
     // State
     this._history = [];      // [{path, title, enteredAt, dwellMs}]
@@ -501,7 +502,7 @@
     // Update dwell on previous page if exists
     if (this._history.length > 0) {
       var prev = this._history[this._history.length - 1];
-      if (prev.path === current.path) {
+      if (prev.path === current.path || _matchesRedactedReload(prev.path, current.path)) {
         // Same page reload — don't add duplicate
         return;
       }
@@ -524,14 +525,47 @@
     }
   };
 
+  function _redactionApi() {
+    var api = globalThis.__RESONANTOS_TRACE_REDACTION__;
+    if (!api || api.version !== 1 || !Object.isFrozen(api) ||
+        typeof api.redactTraceText !== 'function' || typeof api.redactTraceValue !== 'function') {
+      throw new Error('Redaction unavailable');
+    }
+    return api;
+  }
+
+  function _matchesRedactedReload(previousPath, currentPath) {
+    try {
+      var navigation = window.performance.getEntriesByType('navigation')[0];
+      // Redaction is lossy: equal sanitized paths alone cannot identify a page.
+      // Only use that comparison when the browser confirms an actual reload.
+      return navigation && navigation.type === 'reload' &&
+        previousPath === _redactionApi().redactTraceText(currentPath);
+    } catch (e) {
+      // Persistence handles unavailable redaction with its fixed diagnostic.
+      return false;
+    }
+  }
+
   SessionTracker.prototype._persist = function () {
     if (!this._persistSession) return;
+    var detached;
     try {
-      sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
+      var api = _redactionApi();
+      detached = api.redactTraceValue({
         history: this._history,
         clickTrail: this._clickTrail,
         entryPoint: this._entryPoint
-      }));
+      });
+    } catch (e) {
+      if (!this._redactionWarningEmitted) {
+        this._redactionWarningEmitted = true;
+        console.warn('Resonant Context: session history will not survive navigation because redaction is unavailable.');
+      }
+      return;
+    }
+    try {
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(detached));
     } catch (e) { /* quota exceeded — ignore */ }
   };
 

@@ -2,14 +2,14 @@
 // session view. It owns the reducer state and re-renders on each event. The live
 // data source is injected as `subscribe` so the element is decoupled from the
 // transport — at mount, the caller wires `subscribe` to the bridge-proxied
-// `opencode serve` SSE stream, and `sendPrompt` / `replyPermission` / `revert`
+// session event stream, and `sendPrompt` / `replyPermission` / `revert`
 // to the corresponding server calls.
 
 import {
   applyOpenCodeEvent,
   changedFilesView,
   createOpenCodeSessionState,
-  normalizeOpenCodeEvent
+  normalizeGovernedOpenCodeEvent
 } from "./opencode-session-model.js";
 import {
   renderApprovals,
@@ -25,11 +25,13 @@ const STATUS_TEXT = {
   done: "Done",
   error: "Error"
 };
+const PUBLIC_OPENCODE_ERROR = "OpenCode boundary request failed.";
 
 export function createOpenCodeSession({
   document: doc,
   container,
   scope = "",
+  sessionId = "",
   subscribe = () => () => {},
   sendPrompt = async () => {},
   onAbort = async () => {},
@@ -37,9 +39,10 @@ export function createOpenCodeSession({
   revert = async () => {}
 } = {}) {
   const d = doc ?? (typeof document !== "undefined" ? document : null);
-  if (!d || !container) return { destroy: () => {} };
+  if (!d || !container) return { destroy: () => {}, setTransportError: () => {} };
 
-  let state = createOpenCodeSessionState();
+  let destroyed = false;
+  let state = createOpenCodeSessionState({ sessionId });
 
   const section = d.createElement("section");
   section.className = "oc-session";
@@ -50,6 +53,8 @@ export function createOpenCodeSession({
       <span class="oc-context-pill" hidden></span>
       <span class="oc-agent-pill"></span>
       <span class="oc-model-pill"></span>
+      <span class="oc-source-pill" hidden></span>
+      <span class="oc-transport-error" hidden></span>
       <span class="oc-spacer"></span>
       <span class="oc-scope"></span>
     </div>
@@ -75,6 +80,8 @@ export function createOpenCodeSession({
   const contextPill = el(".oc-context-pill");
   const agentPill = el(".oc-agent-pill");
   const modelPill = el(".oc-model-pill");
+  const sourcePill = el(".oc-source-pill");
+  const errorEl = el(".oc-transport-error");
   const scopeEl = el(".oc-scope");
   const todoEl = el(".oc-todo");
   const approvalsEl = el(".oc-approvals");
@@ -99,8 +106,13 @@ export function createOpenCodeSession({
     return parts.join(" · ");
   }
 
+  function isTerminal() {
+    return Boolean(state.transportError) || state.status === "error";
+  }
+
   function render() {
     const running = state.status === "running";
+    const disabled = running || isTerminal();
     statusPill.dataset.status = state.status;
     statusPill.textContent = STATUS_TEXT[state.status] ?? state.status;
     const contextText = formatContext(state.context);
@@ -108,14 +120,29 @@ export function createOpenCodeSession({
     contextPill.textContent = contextText;
     agentPill.textContent = state.agent || "";
     modelPill.textContent = state.model || "";
-    input.disabled = running;
-    sendButton.disabled = running;
-    stopButton.hidden = !running;
-    busyHint.hidden = !running;
+    const metadataSource = state.metadataSource === "governed" ? "governed" : state.metadataSource === "external" ? "external" : "";
+    sourcePill.hidden = !metadataSource;
+    if (metadataSource) {
+      sourcePill.dataset.source = metadataSource;
+      sourcePill.textContent = metadataSource === "governed" ? "Governed" : "External";
+    } else {
+      sourcePill.textContent = "";
+      delete sourcePill.dataset.source;
+    }
+    const errorText = state.transportError ? (state.transportError.error || PUBLIC_OPENCODE_ERROR) : "";
+    errorEl.hidden = !errorText;
+    errorEl.textContent = errorText;
+    if (state.transportError?.code) errorEl.dataset.code = state.transportError.code;
+    input.disabled = disabled;
+    sendButton.disabled = disabled;
+    stopButton.hidden = !running || isTerminal();
+    busyHint.hidden = !running || isTerminal();
     renderTodoChecklist(todoEl, state.todos, { document: d });
     renderApprovals(approvalsEl, state.approvals, {
       document: d,
+      disabled,
       onReply: async (id, decision) => {
+        if (destroyed || isTerminal()) return;
         // Optimistically clear so the UI stays responsive; the server's
         // permission.replied event confirms it.
         state = applyOpenCodeEvent(state, { kind: "permission-replied", id });
@@ -130,14 +157,15 @@ export function createOpenCodeSession({
     });
   }
 
-  const unsubscribe = subscribe((raw) => {
-    state = applyOpenCodeEvent(state, normalizeOpenCodeEvent(raw));
+  const unsubscribe = subscribe((envelope) => {
+    if (destroyed) return;
+    state = applyOpenCodeEvent(state, normalizeGovernedOpenCodeEvent(envelope, sessionId || state.sessionId));
     render();
   });
 
   async function submitPrompt() {
     const text = input.value.trim();
-    if (!text || state.status === "running") return;
+    if (!text || state.status === "running" || isTerminal()) return;
     const priorStatus = state.status;
     input.value = "";
     state = { ...state, status: "running" };
@@ -145,6 +173,7 @@ export function createOpenCodeSession({
     try {
       await sendPrompt(text);
     } catch (error) {
+      if (destroyed || isTerminal()) return;
       state = { ...state, status: priorStatus };
       render();
     }
@@ -163,6 +192,7 @@ export function createOpenCodeSession({
   });
 
   stopButton.addEventListener("click", () => {
+    if (destroyed || isTerminal()) return;
     void onAbort();
   });
 
@@ -170,10 +200,22 @@ export function createOpenCodeSession({
 
   return {
     destroy: () => {
+      destroyed = true;
       try { unsubscribe?.(); } catch { /* noop */ }
       section.remove();
     },
-    // Exposed for tests / imperative feeding.
+    setTransportError: ({ code, error } = {}) => {
+      if (destroyed) return;
+      state = {
+        ...state,
+        status: "error",
+        transportError: {
+          code: code || "OPENCODE_STREAM_DISCONNECTED",
+          error: error || PUBLIC_OPENCODE_ERROR
+        }
+      };
+      render();
+    },
     getState: () => state
   };
 }

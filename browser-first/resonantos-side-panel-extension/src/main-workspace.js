@@ -20,7 +20,6 @@ import { renderAddOnsWorkspace } from "./lib/main-workspace-addons.js";
 import { renderArtifactsWorkspace } from "./lib/main-workspace-artifacts.js";
 import { createMainWorkspaceBrowserJobController } from "./lib/main-workspace-browser-job-controller.js";
 import {
-  mainBrowserJobSnapshot,
   renderMainBrowserJobStatus
 } from "./lib/main-workspace-browser-jobs.js";
 import { renderHermesDashboardWorkspace } from "./lib/main-workspace-hermes.js";
@@ -359,22 +358,63 @@ const mainBrowserJobController = createMainWorkspaceBrowserJobController({
   storageKeys: STORAGE_KEYS
 });
 
-async function renderMainBrowserJobStatusFromStorage() {
-  if (activeWorkspace !== "answer") {
-    if (mainBrowserJobs) mainBrowserJobs.hidden = true;
-    return mainBrowserJobSnapshot();
-  }
-  const snapshot = await mainBrowserJobController.readJobs();
-  return renderMainBrowserJobStatus({
+let browserJobHistory = { jobs: [], activeJobId: "", historyState: "loading" };
+let browserJobHistoryRefresh = null;
+
+function renderBrowserJobHistory(snapshot) {
+  renderMainBrowserJobStatus({
     ...snapshot,
     container: mainBrowserJobs,
     maxConcurrent: 2,
+    onRetryHistory: retryBrowserJobHistory,
     onCancelFocused: mainBrowserJobController.cancelJob,
     onContinueFocused: mainBrowserJobController.continueJob,
     onFocusJob: mainBrowserJobController.focusJob,
     onOpenMonitor: mainBrowserJobController.openMonitor,
     onPauseFocused: mainBrowserJobController.pauseJob
   });
+  if (activeWorkspace !== "answer" && mainBrowserJobs) mainBrowserJobs.hidden = true;
+  if (snapshot.historyState !== "ready") {
+    dockControlEls.titleEl.textContent = snapshot.historyState === "loading"
+      ? "Loading browser job history…"
+      : "Browser job history could not be loaded.";
+    dockControlEls.statusEl.textContent = snapshot.historyState === "loading" ? "Loading" : "Blocked";
+    dockControlEls.statusEl.dataset.status = "blocked";
+    dockControlEls.stepListEl.replaceChildren();
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.textContent = "Retry";
+    retry.title = "Reload browser job history";
+    retry.disabled = snapshot.historyState === "loading";
+    retry.addEventListener("click", retryBrowserJobHistory);
+    dockControlEls.stepListEl.append(retry);
+    return;
+  }
+  delete dockControlEls.statusEl.dataset.status;
+  const job = snapshot.jobs.find((entry) => entry.id === snapshot.activeJobId)
+    ?? snapshot.jobs.find((entry) => entry.status === "running" || entry.status === "blocked")
+    ?? snapshot.jobs[0] ?? null;
+  renderDockControl(dockControlEls, job, { document });
+}
+
+function renderMainBrowserJobStatusFromStorage() {
+  if (browserJobHistoryRefresh) return browserJobHistoryRefresh;
+  browserJobHistoryRefresh = mainBrowserJobController.readJobs().then((snapshot) => {
+    browserJobHistory = snapshot;
+    renderBrowserJobHistory(snapshot);
+    const blocking = snapshot.historyState !== "ready" ||
+      hasBlockingBrowserJob(snapshot.jobs);
+    dockTabs.signalActivity("jobs", { blocking });
+    dockTabs.signalActivity("control", { blocking });
+    return snapshot;
+  }).finally(() => { browserJobHistoryRefresh = null; });
+  return browserJobHistoryRefresh;
+}
+
+function retryBrowserJobHistory() {
+  browserJobHistory = { ...browserJobHistory, historyState: "loading" };
+  renderBrowserJobHistory(browserJobHistory);
+  return renderMainBrowserJobStatusFromStorage();
 }
 
 const chatRenderers = createSidePanelRenderers({
@@ -538,13 +578,8 @@ const dockControlEls = {
 const dockPermissionList = document.querySelector("#permission-manager-list");
 const dockPermissionTitle = document.querySelector("#permission-manager-title");
 
-async function refreshDockControl() {
-  const snapshot = await mainBrowserJobController.readJobs().catch(() => null);
-  const jobs = Array.isArray(snapshot?.jobs) ? snapshot.jobs : [];
-  const job = jobs.find((entry) => entry.id === snapshot?.activeJobId)
-    ?? jobs.find((entry) => entry.status === "running" || entry.status === "blocked")
-    ?? jobs[0] ?? null;
-  renderDockControl(dockControlEls, job, { document });
+function refreshDockControl() {
+  return renderMainBrowserJobStatusFromStorage();
 }
 
 async function refreshDockPermissions() {
@@ -1084,12 +1119,6 @@ chrome.storage?.onChanged?.addListener?.((changes, areaName) => {
   if (areaName !== "local") return;
   if (changes[STORAGE_KEYS.browserJobs] || changes[STORAGE_KEYS.activeBrowserJob]) {
     void renderMainBrowserJobStatusFromStorage();
-    // Keep the Jobs + Control dots in sync with the side panel: light them on
-    // any job change, red (blocking) when a job needs the human.
-    const jobs = changes[STORAGE_KEYS.browserJobs]?.newValue ?? [];
-    const blocking = hasBlockingBrowserJob(jobs);
-    dockTabs.signalActivity("jobs", { blocking });
-    dockTabs.signalActivity("control", { blocking });
   }
   // Live tandem sync: mirror chat/folder/project/active-session changes made in
   // the sidecar (or another tab). Our own writes carry our instanceId and are skipped.

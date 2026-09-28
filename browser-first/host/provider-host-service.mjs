@@ -1,4 +1,5 @@
 import os from "node:os";
+import { createProviderFabricAdapter } from "./agent-adapters/provider-fabric.mjs";
 import path from "node:path";
 import { createProviderBridgeService } from "./provider-bridge-service.mjs";
 
@@ -40,6 +41,9 @@ export function createProviderHostService({ redactDiagnosticText, extractJsonObj
 
   return {
     ...service,
+    // Host composition injects this reviewed factory into the harness boundary.
+    // It cannot recurse through compatibility chat or select another owner.
+    createHarnessAdapter: () => createProviderFabricAdapter({ executeRawProviderChat: service.executeRawProviderChat }),
     providerBridgeRoutes: [
       {
         method: "GET",

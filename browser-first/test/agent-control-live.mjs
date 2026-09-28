@@ -512,7 +512,10 @@ async function waitForSidePanelReady(panel, label, timeoutMs = 8000) {
 }
 
 async function browserTargets() {
-  return fetch(`http://127.0.0.1:${debugPort}/json`).then((response) => response.json());
+  const response = await fetch(`http://127.0.0.1:${debugPort}/json`);
+  if (!response.ok) return [];
+  const payload = await response.json().catch(() => []);
+  return Array.isArray(payload) ? payload : [];
 }
 
 async function waitForBrowserTarget(predicate, label) {

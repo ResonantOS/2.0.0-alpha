@@ -15,6 +15,8 @@
 // generated/default. Most callers should use `await resolveBridgeConfig()`
 // and pass the result, so the chrome.storage override is honored.
 
+import { redactTraceText } from "./trace-redaction.js";
+
 const DEFAULT_BRIDGE_URL = "http://127.0.0.1:47773";
 const STORAGE_OVERRIDE_KEY = "bridgeTargetOverride";
 const GENERATED_CONFIG_PATH = "src/bridge-config.generated.js";
@@ -77,6 +79,20 @@ const BRIDGE_ROUTE_CAPABILITIES = Object.freeze({
   "POST /archive/review/promotions/restore": "archive-write",
   "POST /browser/downloads/action": "browser-download-action",
   "POST /diagnostics/report": "diagnostics-report-export",
+  "GET /addons/registry": "addon-runtime-read",
+  "POST /addons/install": "addon-runtime-control",
+  "POST /addons/grants": "addon-runtime-control",
+  "POST /addons/enabled": "addon-runtime-control",
+  "POST /addons/remove": "addon-runtime-control",
+  "POST /addons/slots/assign": "addon-runtime-control",
+  "POST /agent/session": "addon-runtime-control",
+  "POST /agent/turn": "addon-runtime-control",
+  "POST /agent/dispose": "addon-runtime-control",
+  "POST /agent/cancel": "addon-runtime-control",
+  "GET /agent/events": "addon-runtime-read",
+  "POST /agent/history": "addon-runtime-read",
+  "POST /agent/status": "addon-runtime-read",
+  "POST /agent/select-model": "addon-runtime-control",
   "GET /addons/status": "addon-runtime-read",
   "GET /addons/execution-settings": "addon-runtime-read",
   "POST /addons/execution-settings": "addon-execution-settings-write",
@@ -97,6 +113,7 @@ const BRIDGE_ROUTE_CAPABILITIES = Object.freeze({
   "POST /opencode/session/start": "addon-runtime-control",
   "POST /opencode/session/prompt": "addon-runtime-control",
   "POST /opencode/session/permission": "addon-runtime-control",
+  "GET /opencode/session/events": "addon-runtime-read",
   "POST /opencode/session/stop": "addon-runtime-control",
   "POST /opencode/sessions/list": "addon-runtime-read",
   "POST /opencode/session/messages": "addon-runtime-read",
@@ -132,11 +149,52 @@ export function capabilityForBridgeRoute(route, method = "GET") {
   return BRIDGE_ROUTE_CAPABILITIES[routeCapabilityKey(method, route)] ?? "";
 }
 
+export const BRIDGE_TARGET_URL_ERROR = "Bridge URL must be an absolute HTTP(S) URL without userinfo, query, or fragment. Conservative secret detection may reject a benign host or path; choose another endpoint.";
+
+const BRIDGE_URL_CONTROLS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
+const MAX_BRIDGE_URL_DECODE_PASSES = 16;
+
+function hasSafeBridgeUrlComponents(url) {
+  let decoded = url;
+  for (let pass = 0; pass < MAX_BRIDGE_URL_DECODE_PASSES; pass += 1) {
+    if (/[?#&]/.test(decoded) || BRIDGE_URL_CONTROLS.test(decoded)) return false;
+    // Escape bare percent signs only for inspection, preserving legitimate paths.
+    // Decode all components, independent of parameter names and hex letter case.
+    const next = decodeURIComponent(decoded.replace(/%(?![0-9a-f]{2})/gi, "%25"));
+    if (next === decoded) return true;
+    decoded = next;
+  }
+  // Never accept an endpoint whose remaining encoding has not been inspected.
+  return false;
+}
+
+// Reject altered endpoints instead of silently turning them into a different target.
+// Credentials are operational secrets and must never pass through this policy.
+export function validateBridgeTargetUrl(candidate) {
+  const url = typeof candidate === "string" ? candidate.trim() : "";
+  const rejected = { ok: false, error: BRIDGE_TARGET_URL_ERROR };
+  try {
+    // Check the original input before trim()/URL can discard control characters.
+    if (typeof candidate !== "string" || BRIDGE_URL_CONTROLS.test(candidate) || !hasSafeBridgeUrlComponents(url)) return rejected;
+    const authority = url.match(/^https?:\/\/([^/\\?#]*)/i)?.[1];
+    if (!authority?.trim()) return rejected;
+    const parsed = new URL(url);
+    if (!["http:", "https:"].includes(parsed.protocol) || !parsed.hostname) return rejected;
+    // URL.username/password omit empty userinfo, so also inspect the authority.
+    if (parsed.username || parsed.password || authority.includes("@")) return rejected;
+    const cleanUrl = redactTraceText(url, { replacement: "REDACTED", tokenReplacement: "[REDACTED-TOKEN]" });
+    if (cleanUrl !== url) return rejected;
+    return { ok: true, url: cleanUrl };
+  } catch {
+    return rejected;
+  }
+}
+
 function normalizeBridgeTarget(value) {
   if (!value || typeof value !== "object") return null;
-  const url = typeof value.bridgeUrl === "string" ? value.bridgeUrl.trim() : "";
-  if (!url) return null;
-  if (!/^https?:\/\//i.test(url)) return null;
+  const validated = validateBridgeTargetUrl(value.bridgeUrl);
+  if (!validated.ok) return null;
+  const url = validated.url;
   const token = typeof value.bridgeToken === "string" && value.bridgeToken.trim()
     ? value.bridgeToken.trim()
     : null;
@@ -267,11 +325,52 @@ function isAbortError(error) {
   return error && typeof error === "object" && error.name === "AbortError";
 }
 
+const OPENCODE_PUBLIC_ERROR = "OpenCode boundary request failed.";
+const OPENCODE_HTTP_CODES = Object.freeze({
+  400: "OPENCODE_INVALID_REQUEST",
+  401: "OPENCODE_BRIDGE_UNAUTHORIZED",
+  403: "OPENCODE_CAPABILITY_REQUIRED",
+  404: "OPENCODE_SESSION_UNKNOWN",
+  429: "OPENCODE_LIMIT",
+  502: "OPENCODE_UPSTREAM_FAILED",
+  503: "OPENCODE_UNAVAILABLE",
+  504: "OPENCODE_TIMEOUT"
+});
+const OPENCODE_EVENTS_PATH = "/opencode/session/events";
+
+function openCodeErrorCode(payload, status) {
+  const code = typeof payload?.code === "string" ? payload.code : "";
+  if (code.startsWith("OPENCODE_")) return code;
+  return OPENCODE_HTTP_CODES[status] || "OPENCODE_INTERNAL";
+}
+
 function bridgeResponseError(payload, status) {
   const error = new Error(payload?.error ?? `Bridge request failed with HTTP ${status}.`);
   error.bridgeStatus = status;
   error.bridgePayload = payload;
+  if (typeof payload?.code === "string") error.code = payload.code;
   return error;
+}
+
+function openCodeBridgeResponseError(payload, status) {
+  const code = openCodeErrorCode(payload, status);
+  const error = new Error(payload?.error ?? OPENCODE_PUBLIC_ERROR);
+  error.bridgeStatus = status;
+  error.bridgePayload = payload;
+  error.code = code;
+  return error;
+}
+
+function isRelativeBridgeRoute(route) {
+  return typeof route === "string" && route.startsWith("/") && !route.startsWith("//");
+}
+
+function routePathname(route) {
+  try {
+    return new URL(route ?? "/", DEFAULT_BRIDGE_URL).pathname;
+  } catch {
+    return "";
+  }
 }
 
 export function isUnauthorizedBridgeError(error) {
@@ -287,8 +386,14 @@ export function createBridgeClient(config = globalThis.__RESONANTOS_BRIDGE_CONFI
   const fetchImpl = config.fetchImpl ?? fetch;
 
   return async function bridgeRequest(route, options = {}) {
-    const method = options.method ?? "GET";
-    const headers = options.body ? { "Content-Type": "application/json" } : {};
+    const wantsSse = options.responseType === "sse";
+    if (wantsSse) {
+      if (!isRelativeBridgeRoute(route) || routePathname(route) !== OPENCODE_EVENTS_PATH) {
+        throw openCodeBridgeResponseError({ code: "OPENCODE_ROUTE_UNKNOWN", error: OPENCODE_PUBLIC_ERROR }, 404);
+      }
+    }
+    const method = wantsSse ? "GET" : (options.method ?? "GET");
+    const headers = !wantsSse && options.body ? { "Content-Type": "application/json" } : {};
     if (bridgeToken) {
       headers["X-ResonantOS-Bridge-Token"] = bridgeToken;
     }
@@ -302,12 +407,24 @@ export function createBridgeClient(config = globalThis.__RESONANTOS_BRIDGE_CONFI
       response = await fetchImpl(`${bridgeUrl}${route}`, {
         method,
         headers,
-        body: options.body ? JSON.stringify(options.body) : undefined,
-        signal: options.signal
+        body: wantsSse ? undefined : (options.body ? JSON.stringify(options.body) : undefined),
+        signal: options.signal,
+        ...(wantsSse ? { redirect: "error" } : {})
       });
     } catch (error) {
       if (isAbortError(error)) throw error;
       throw bridgeNetworkError(route, error);
+    }
+    if (wantsSse) {
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw openCodeBridgeResponseError(payload, response.status);
+      }
+      const contentType = String(response.headers?.get?.("content-type") ?? "").toLowerCase();
+      if (response.status !== 200 || contentType.split(";", 1)[0].trim() !== "text/event-stream") {
+        throw openCodeBridgeResponseError({ code: "OPENCODE_PROTOCOL_ERROR", error: OPENCODE_PUBLIC_ERROR }, response.status);
+      }
+      return response;
     }
     const payload = await response.json().catch(() => ({}));
     if (!response.ok || !payload.ok) {

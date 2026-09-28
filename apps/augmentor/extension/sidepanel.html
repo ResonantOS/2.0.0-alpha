@@ -1,0 +1,593 @@
+<!doctype html>
+
+<!-- Augmentor — dsh-augmentor plugin, pipe, and Chromium extension
+     Copyright © 2026 Manolo Remiddi
+     SPDX-License-Identifier: MIT
+     License: MIT — see LICENSE at the repository root. -->
+
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Augmentor Agent powered by DSH</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<script src="vendor/marked.min.js"></script>
+<!-- Theme + color restore must be a file, not inline: MV3's default
+     extension-page CSP (script-src 'self') blocks inline scripts in
+     extension pages. theme-tokens.js first: theme-boot.js uses its math. -->
+<script src="theme-tokens.js"></script>
+<script src="theme-boot.js"></script>
+<link rel="stylesheet" href="prompt-library.css">
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: rgb(21, 21, 23);
+    --layer1: rgb(35, 35, 36);
+    --layer2: rgb(44, 44, 46);
+    --layer3: rgb(53, 54, 56);
+    --border: rgba(255, 255, 255, 0.06);
+    --border2: rgba(255, 255, 255, 0.12);
+    --text: rgba(255, 255, 255, 0.92);
+    --text2: rgba(255, 255, 255, 0.62);
+    --text3: rgba(255, 255, 255, 0.42);
+    --sep: rgba(255, 255, 255, 0.25);
+    --brand: rgb(86, 134, 254);
+    --err: rgb(255, 92, 92);
+    --ok: rgb(52, 199, 123);
+    --warn: rgb(245, 158, 11);
+    --hover: rgba(255, 255, 255, 0.08);
+    /* GUI scrollbar tokens (dark): --dsw-alias-scrollbar-bg-l1 / -hover-l1. */
+    --sb-thumb: rgb(60, 60, 61);
+    --sb-thumb-hover: rgb(84, 85, 87);
+    --code: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, "Courier New", monospace;
+  }
+  /* Light palette: the GUI's light theme values (design-platform.css). */
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg: rgb(255, 255, 255);
+    --layer1: rgb(244, 245, 248);
+    --layer2: rgb(238, 240, 244);
+    --layer3: rgb(231, 234, 239);
+    --border: rgba(15, 17, 21, 0.06);
+    --border2: rgba(15, 17, 21, 0.12);
+    --text: rgb(15, 17, 21);
+    --text2: rgb(97, 102, 107);
+    --text3: rgb(129, 133, 140);
+    --sep: rgba(15, 17, 21, 0.22);
+    --brand: rgb(65, 118, 230);
+    --err: rgb(236, 19, 19);
+    --ok: rgb(34, 197, 94);
+    --warn: rgb(245, 158, 11);
+    --hover: rgba(38, 49, 72, 0.06);
+    --sb-thumb: rgb(229, 229, 229);
+    --sb-thumb-hover: rgb(212, 212, 212);
+  }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 13px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  #app { display: flex; flex-direction: column; height: 100%; }
+
+  header { flex: none; display: flex; align-items: center; gap: 4px;
+    padding: 9px 10px; border-bottom: 1px solid var(--border); }
+   /* (the connection dot and the "connected" status text were removed in
+      0.1.16/0.1.17 — the panel is auto-connected; the header has no
+      persistent state readout) */
+  #logo { width: 18px; height: 18px; flex: none; display: block; }
+   /* Chat title (plain — the top strip carries the brand). Double-click to
+      rename: an input swaps in over the span, pre-filled with the current
+      name (Enter/blur commits via session.rename, Esc cancels). */
+   #title { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 700;
+     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: text; }
+   #title[hidden] { display: none; }
+   #title-edit { flex: 1; min-width: 0; box-sizing: border-box;
+     font-family: inherit; font-size: 12.5px; font-weight: 700; color: var(--text);
+     background: transparent; border: none; border-bottom: 1px solid var(--brand);
+     padding: 1px 2px; outline: none; }
+    text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Header action buttons are icon-only (26px squares, stroke icons at 16px):
+     the old text labels crowded the bar at side-panel widths. Tooltips carry
+     the words; aria-labels keep them out of the accessibility tree silent. */
+  .hbtn { flex: none; display: inline-flex; align-items: center; justify-content: center;
+    width: 26px; height: 26px; border: none; border-radius: 6px; background: transparent;
+    color: var(--text2); cursor: pointer; padding: 0; -webkit-appearance: none;
+    appearance: none; }
+  /* 0.1.19: header icons are FLAT, no exceptions — hover/active/focus
+     backgrounds are explicitly pinned to transparent (the default button
+     appearance is reset too), so no state ever paints a rectangle behind an
+     icon. State shows in the icon itself (the save star fills), never in a
+     tint. */
+  .hbtn:hover, .hbtn:active, .hicon:hover, .hicon:active,
+  .hbtn:focus, .hicon:focus, .hbtn:focus-visible, .hicon:focus-visible {
+    background: transparent; box-shadow: none; }
+  .hbtn svg { display: block; }
+  /* M3: Save badge — a saved chat reads as "done": the star FILLS in the
+     accent (a filled shape, not a hover tint). */
+  #save.saved { color: var(--accent, var(--brand)); }
+  #save.saved svg { fill: currentColor; }
+  .hicon { flex: none; display: inline-flex; align-items: center; justify-content: center;
+    width: 26px; height: 26px; border: none; border-radius: 6px; background: transparent;
+    color: var(--text2); cursor: pointer; -webkit-appearance: none; appearance: none; }
+
+  /* Color picker (header hue icon): a rainbow disc. */
+  #hue .hue-chip { width: 15px; height: 15px; border-radius: 50%;
+    background: conic-gradient(from 90deg, #f43f3f, #f4c23f, #3fc43f, #3fc9f4,
+      #3f5ef4, #b43ff4, #f43f3f);
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.28); }
+
+  /* Color popover: surface hue / brightness + accent, live preview. */
+  #huepop { position: fixed; z-index: 10; width: 236px; padding: 12px;
+    background: var(--layer1); border: 1px solid var(--border2); border-radius: 10px;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35); }
+  #huepop[hidden] { display: none; }
+  .hp-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  .hp-title { font-size: 12px; font-weight: 700; color: var(--text); }
+  .hp-reset { border: 1px solid var(--border2); background: transparent; color: var(--text2);
+    font-size: 10.5px; font-weight: 600; border-radius: 5px; padding: 2px 8px; cursor: pointer; }
+  .hp-reset:hover { background: var(--hover); color: var(--text); }
+  .hp-row { display: block; margin-bottom: 10px; }
+  .hp-label { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600;
+    color: var(--text2); margin-bottom: 5px; }
+  .hp-val { font-weight: 500; color: var(--text3); font-size: 10.5px; }
+  .hp-sep { height: 1px; background: var(--border); margin: 2px 0 10px; }
+  .hp-swatch { width: 12px; height: 12px; border-radius: 3px; background: var(--brand);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.3); margin-left: auto; }
+  .hp-seg { display: flex; gap: 4px; }
+  .hp-seg button { flex: 1; display: flex; align-items: center; justify-content: center;
+    gap: 5px; border: 1px solid var(--border2); background: transparent; color: var(--text2);
+    font-size: 11px; font-weight: 600; border-radius: 6px; padding: 4px 0; cursor: pointer; }
+  .hp-seg button:hover { background: var(--hover); color: var(--text); }
+  .hp-seg button.active { background: var(--brand); border-color: var(--brand);
+    color: var(--on-brand, #fff); }
+  input.hueslider { -webkit-appearance: none; appearance: none; display: block; width: 100%;
+    height: 10px; border-radius: 5px; outline: none; margin: 0; cursor: pointer;
+    border: 1px solid var(--border2); }
+  input.hueslider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
+    width: 14px; height: 14px; border-radius: 50%; background: var(--text);
+    border: 2px solid var(--bg); box-shadow: 0 0 0 1px var(--border2), 0 1px 4px rgba(0, 0, 0, 0.4); }
+  #neut-hue, #accent-hue {
+    background: linear-gradient(90deg, hsl(0 80% 55%), hsl(60 80% 55%), hsl(120 80% 45%),
+      hsl(180 80% 45%), hsl(240 80% 60%), hsl(300 80% 55%), hsl(360 80% 55%)); }
+  /* left = darker, right = lighter, in both themes */
+  #neut-bright, #accent-bright { background: linear-gradient(90deg, #232326, #ffffff); }
+  /* mini frost-veil pill: live preview of the overlay color (JS-styled) */
+  .hp-veil { display: flex; align-items: center; gap: 7px; margin: 2px 0 10px;
+    border-radius: 999px; padding: 5px 12px 5px 9px; font-size: 11px; border: 1px solid; }
+  .vp-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .hp-note { margin: 0; font-size: 10.5px; line-height: 1.5; color: var(--text3); }
+
+  #logwrap { flex: 1; min-height: 0; position: relative; display: flex; }
+  #log { flex: 1; overflow-y: auto; padding: 12px 14px 4px; display: flex;
+    flex-direction: column; gap: 10px; }
+
+  /* Jump-to-top: floats in while the reader is away from the bottom */
+  #top { position: absolute; right: 12px; bottom: 12px; z-index: 2;
+    display: none; align-items: center; justify-content: center;
+    width: 28px; height: 28px; border-radius: 50%;
+    border: 1px solid var(--border2); background: var(--layer2);
+    color: var(--text2); cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,0.18); }
+  #top.show { display: inline-flex; }
+  #top:hover { color: var(--text); background: var(--layer3); }
+
+  /* Scrollbar skin (GUI parity): without color-scheme + this rule every
+     scroll region shows the UA bar, which ignores the palette — a light
+     native bar over the dark panel. 8px, transparent track, token-driven so
+     both themes render their own thumb (GUI scrollbar.css, l1 tokens). */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { border-radius: 4px; background: var(--sb-thumb); }
+  ::-webkit-scrollbar-thumb:hover { background: var(--sb-thumb-hover); }
+  ::-webkit-scrollbar-corner { background: transparent; }
+
+  .msg { display: flex; gap: 8px; align-items: baseline; }
+  .msg .who { flex: none; font-size: 10.5px; font-weight: 700; color: var(--text3);
+    text-transform: uppercase; letter-spacing: 0.06em; padding-top: 2px; }
+  /* Your prompts sit in a faint accent wash — noticeable without shouting,
+     and it follows the accent hue/brightness (the --brand-soft token). */
+  .msg.user { color: var(--text); background: var(--brand-soft, rgba(86, 134, 254, 0.16));
+    border-radius: 10px; padding: 7px 10px 4px; }
+  /* Assistant blocks stack (Think over text) — a flex row here would let the
+     wide Think block squeeze the reply into a one-character sliver. */
+  .msg.assistant { display: block; }
+  /* User stack: bubble + right-aligned action row beneath it (GUI parity). */
+  .userbody { flex: 1; min-width: 0; }
+  /* Message action row (GUI MessageIconActions parity): per-message copy. */
+  .msgactions { display: flex; align-items: center; gap: 8px; height: 28px; margin-top: 2px; }
+  .msg.user .msgactions { justify-content: flex-end; }
+  .msgaction { display: inline-flex; align-items: center; justify-content: center;
+    width: 28px; height: 28px; padding: 6px; border: none; border-radius: 28px;
+    background: transparent; color: var(--text3); cursor: pointer; }
+  .msgaction:hover { background: var(--hover); color: var(--text2); }
+
+  .md, .msg.assistant { white-space: normal; word-break: break-word; }
+  .md > :first-child, .msg.assistant > :first-child { margin-top: 0; }
+  .md > :last-child, .msg.assistant > :last-child { margin-bottom: 0; }
+  .md p, .msg.assistant p { margin: 0 0 8px; }
+  .md pre, .msg.assistant pre { background: var(--layer1); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; overflow-x: auto; font: 11.5px/1.5 var(--code); }
+  .md code, .msg.assistant code { font-family: var(--code); font-size: 0.92em;
+    background: var(--layer2); border-radius: 4px; padding: 1px 5px; }
+  .md pre code, .msg.assistant pre code { background: none; padding: 0; }
+  .md ul, .md ol, .msg.assistant ul, .msg.assistant ol { margin: 0 0 8px; padding-left: 20px; }
+  .md a { color: var(--brand); text-decoration: none; }
+  /* Caret on the live assistant tail while its step is streaming. */
+  .md.streaming::after { content: "▍"; color: var(--brand);
+    animation: caret-blink 1s steps(1) infinite; }
+  @keyframes caret-blink { 50% { opacity: 0; } }
+  .md table, .msg.assistant table { border-collapse: collapse; font-size: 12px; }
+  .md th, .md td, .msg.assistant th, .msg.assistant td { border: 1px solid var(--border2);
+    padding: 3px 8px; }
+
+  .think { margin: 0 0 8px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--layer1); }
+  .msg.assistant .think:last-child { margin-bottom: 0; }
+  .think summary { display: flex; gap: 8px; align-items: baseline; cursor: pointer;
+    padding: 6px 10px; list-style: none; user-select: none; font-size: 12px; }
+  .think summary::-webkit-details-marker { display: none; }
+  .think-label { flex: none; font-size: 10.5px; font-weight: 700; color: var(--text3);
+    text-transform: uppercase; letter-spacing: 0.06em; }
+  .think-preview { color: var(--text3); font-size: 11.5px; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .think pre { margin: 0; padding: 0 10px 8px; font: 11.5px/1.55 var(--code);
+    color: var(--text2); white-space: pre-wrap; word-break: break-word;
+    max-height: 280px; overflow-y: auto; }
+
+  .toolrow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; width: 100%;
+    border: 1px solid var(--border); border-radius: 8px; background: var(--layer2);
+    padding: 6px 10px; cursor: pointer; font: inherit; color: var(--text); text-align: left; }
+  .toolrow:hover { background: var(--layer3); }
+  .toolname { flex: none; font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em;
+    color: var(--text2); background: var(--bg); border: 1px solid var(--border2);
+    border-radius: 4px; padding: 1px 7px; }
+  .toollabel { flex: 1; min-width: 0; font-size: 12px; color: var(--text);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .failed-badge { flex: none; font-size: 10px; font-weight: 700; color: var(--err);
+    border: 1px solid rgba(255, 92, 92, 0.45); border-radius: 4px; padding: 0 6px; }
+  .toolbody { display: none; width: 100%; }
+  .toolrow.open .toolbody { display: block; }
+  .outlabel { font-size: 10px; font-weight: 700; color: var(--text3); text-transform: uppercase;
+    letter-spacing: 0.06em; margin: 8px 0 2px; }
+  .toolbody pre { margin: 0; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 7px 9px; font: 11px/1.5 var(--code); color: var(--text2);
+    white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow-y: auto; }
+
+  .toolresult pre { margin: 0; background: var(--layer1); border: 1px solid var(--border);
+    border-radius: 8px; padding: 7px 9px; font: 11px/1.5 var(--code); color: var(--text2);
+    white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow-y: auto; }
+  .toolresult.err pre { border-color: rgba(255, 92, 92, 0.4); color: var(--err); }
+
+  footer { flex: none; display: flex; gap: 8px; align-items: flex-end;
+    padding: 10px 12px 8px; border-top: 1px solid var(--border); background: var(--layer1); }
+
+  /* Composer dock status strip (GUI parity): approval mode · model · stats. */
+  #strip { flex: none; display: flex; gap: 8px; align-items: center; position: relative;
+    padding: 5px 12px 7px; background: var(--layer1); border-top: 1px solid var(--border); }
+  /* 0.1.18: the access pill is GONE from the strip — the approval mode now
+     lives in a long-press on the New Chat icon (the setting is still the DSH
+     permission preset, ns "permission", defaultPreset; default = Automatic /
+     full access). The menu is fixed-positioned by sidepanel.js under the
+     icon that opened it. */
+  #access-menu { position: fixed; z-index: 40;
+    width: 264px; background: var(--bg); border: 1px solid var(--border2);
+    border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.28); padding: 4px; }
+  .access-head { font-size: 10px; font-weight: 700; color: var(--text3); text-transform:
+    uppercase; letter-spacing: 0.06em; padding: 4px 8px 5px; }
+  .access-opt { display: block; width: 100%; text-align: left; background: none; border: none;
+    border-radius: 6px; padding: 6px 8px; cursor: pointer; font-family: inherit; }
+  .access-opt:hover { background: var(--hover); }
+  .access-opt .a-name { font-size: 12px; font-weight: 600; color: var(--text2); }
+  .access-opt.current .a-name { color: var(--brand); }
+  .access-opt .a-desc { font-size: 10.5px; color: var(--text3); margin-top: 1px; line-height: 1.35; }
+  /* Model picker trigger (the DSH composer's model seat): chip + chevron. */
+  #model { flex: none; display: inline-flex; align-items: center; gap: 5px;
+    font-size: 10.5px; color: var(--text2); background: var(--layer2);
+    border: 1px solid var(--border); border-radius: 999px; padding: 1.5px 8px;
+    cursor: pointer; font-family: inherit; }
+  /* 0.1.18: the chip hugs the text. The old `max-width: 55%` was a
+     circular constraint (55% of the chip, whose width came from the same
+     label) — the chip sized to the FULL name while the label truncated to
+     half of it, leaving a dead pill twice as wide as the letters. A fixed
+     cap (240px) only ever trims genuinely long provider/model ids. */
+  #model-label { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #model .model-chev { flex: none; color: var(--text3); }
+  #model:hover:not(:disabled) { border-color: var(--border2); color: var(--text); }
+  #model:hover:not(:disabled) .model-chev { color: var(--text2); }
+  #model:disabled { opacity: 0.5; cursor: default; }
+  #model.open { border-color: var(--brand); color: var(--text); }
+
+  /* Model popover (DSH ModelSelect parity): provider groups of model rows,
+     a check on the selected row, and a loading / error + retry strip. The
+     bridge serves the catalog from $DSH_HOME/settings.yaml — the same
+     document the DSH app loads. Positioned by sidepanel.js. */
+  #modelpop { position: fixed; z-index: 10; width: 280px; padding: 8px;
+    background: var(--layer1); border: 1px solid var(--border2); border-radius: 10px;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35); }
+  #modelpop[hidden] { display: none; }
+  /* Picker search (parity with the DSH model-picker-augmented plugin):
+     filters rows by model name/id or provider name, case-insensitive; the
+     clear button appears only while a query is active. */
+  #modelpop-search { position: relative; margin-bottom: 6px; }
+  #modelpop-search > svg { position: absolute; left: 7px; top: 50%; transform: translateY(-50%);
+    color: var(--text3); pointer-events: none; }
+  #modelpop-search-input { width: 100%; box-sizing: border-box; font: inherit; font-size: 11px;
+    background: var(--bg); color: var(--text); border: 1px solid var(--border2);
+    border-radius: 7px; padding: 5px 26px 5px 24px; outline: none; }
+  #modelpop-search-input:focus { border-color: var(--brand); }
+  #modelpop-search-input::placeholder { color: var(--text3); }
+  #modelpop-search-clear { position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 16px; height: 16px; border: none; border-radius: 4px; padding: 0;
+    background: transparent; color: var(--text3); cursor: pointer; }
+  #modelpop-search-clear:hover { background: var(--hover); color: var(--text); }
+  #modelpop-search-clear[hidden] { display: none; }
+  #modelpop-body { max-height: 264px; overflow-y: auto; }
+  .mp-group { font-size: 10px; font-weight: 700; color: var(--text3); text-transform: uppercase;
+    letter-spacing: 0.06em; margin: 8px 6px 2px; }
+  .mp-group:first-child { margin-top: 2px; }
+  /* Pinned section header: the DSH picker's pin list rides on top (same
+     .mp-group look, pin glyph for a glanceable difference). */
+  .mp-group.pin { display: flex; align-items: center; gap: 5px; }
+  .mp-group.pin svg { flex: none; }
+  .mp-row { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+    border: none; background: transparent; color: var(--text); font: inherit;
+    border-radius: 7px; padding: 6px 8px; cursor: pointer; }
+  .mp-row:hover { background: var(--hover); }
+  .mp-name { flex: 1; min-width: 0; font-size: 12px; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .mp-check { flex: none; color: var(--brand); display: none; }
+  .mp-row.selected .mp-check { display: inline-flex; }
+  .mp-strip { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    font-size: 11px; color: var(--text3); padding: 8px 6px; }
+  .mp-strip.err { color: var(--err); }
+  .mp-strip button { border: 1px solid var(--border2); background: transparent; color: var(--text2);
+    font-size: 10.5px; font-weight: 600; border-radius: 5px; padding: 2px 8px; cursor: pointer; }
+  .mp-strip button:hover { background: var(--hover); color: var(--text); }
+  /* Model popover Refresh footer: forces a fresh bridge catalog fetch (see
+     #modelpop markup). Reuses the strip/button look of the retry strip. */
+  #modelpop-foot { border-top: 1px solid var(--border); margin-top: 4px; }
+  #modelpop-foot-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #modelpop-refresh { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+  #modelpop-refresh svg { flex: none; }
+  #modelpop-refresh:disabled { opacity: 0.5; cursor: default; }
+  /* Sessions popover (M1): browse the DSH app's own sessions. One row per
+     session — running dot, title (or cwd), last-activity time. A fence-probe
+     strip at the bottom records the C1 trust-fence evidence. */
+  #sessionspop { position: fixed; z-index: 10; width: 300px; padding: 8px;
+    background: var(--layer1); border: 1px solid var(--border2); border-radius: 10px;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35); }
+  #sessionspop[hidden] { display: none; }
+  #sessionspop-body { max-height: 300px; overflow-y: auto; }
+  .sp-row { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+    border: none; background: transparent; color: var(--text); font: inherit;
+    border-radius: 7px; padding: 6px 8px; cursor: pointer; }
+  .sp-row:hover { background: var(--hover); }
+  .sp-main { min-width: 0; flex: 1; }
+  .sp-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 12px; }
+  .sp-sub { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 10.5px; color: var(--text3); }
+  .sp-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text3); flex: none; }
+  .sp-dot.on { background: var(--brand); }
+  .sp-strip { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    font-size: 11px; color: var(--text3); padding: 8px 6px; }
+  .sp-strip.err { color: var(--err); }
+  .sp-strip.ok { color: var(--brand); }
+  .sp-strip button { border: 1px solid var(--border2); background: transparent; color: var(--text2);
+    font-size: 10.5px; font-weight: 600; border-radius: 5px; padding: 2px 8px; cursor: pointer; }
+  .sp-strip button:hover { background: var(--hover); color: var(--text); }
+  #stats { flex: 1; min-width: 0; font-size: 10.5px; line-height: 18px; color: var(--text3);
+    overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  /* 0.1.25: the site, one click away at the bottom of the dock — quiet at
+     rest, accent on hover, real <a> so middle-click / right-click behave. */
+  #site { flex: none; font-size: 10px; line-height: 18px; color: var(--text3);
+    text-decoration: none; white-space: nowrap; border-radius: 4px; padding: 0 3px; }
+  #site:hover { color: var(--brand); text-decoration: underline; }
+  #input { flex: 1; resize: none; border: 1px solid var(--border2); border-radius: 8px;
+    background: var(--bg); color: var(--text); font: inherit; padding: 8px 10px;
+    max-height: 120px; outline: none; }
+  #input:focus { border-color: var(--brand); }
+  #send { border: none; border-radius: 8px; background: var(--brand);
+    color: var(--on-brand, #fff); /* --on-brand flips #fff→#000 when the
+    accent is brightened past pastel (theme-tokens contrastOn) */
+    font-size: 12px; font-weight: 600; padding: 8px 14px; cursor: pointer; height: 36px; }
+  #send:disabled { opacity: 0.4; cursor: default; }
+  #send:not(:disabled):hover { filter: brightness(1.1); }
+  #stop { border: none; border-radius: 8px; background: var(--warn); color: #1a1205;
+    font-size: 12px; font-weight: 700; padding: 8px 14px; cursor: pointer; height: 36px; }
+  #stop:hover { filter: brightness(1.08); }
+
+  /* 0.1.30 (Phase 1): the Updates popover — installed vs latest per
+     component, one action per row. Rows are rendered by sidepanel.js. */
+  #updatespop { position: fixed; z-index: 10; width: 320px; padding: 8px;
+    background: var(--layer1); border: 1px solid var(--border2); border-radius: 10px;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35); }
+  #updatespop[hidden] { display: none; }
+  .up-row { display: flex; align-items: center; gap: 8px; padding: 7px 8px; }
+  .up-row + .up-row { border-top: 1px solid var(--border); }
+  .up-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .up-name { font-size: 12px; font-weight: 600; color: var(--text2); }
+  .up-versions { font-size: 10.5px; color: var(--text3); margin-top: 1px; }
+  .up-versions.stale { color: var(--warn); font-weight: 600; }
+  .up-versions.fresh { color: var(--ok); }
+  .up-btn { flex: none; border: 1px solid var(--border2); border-radius: 6px;
+    background: transparent; color: var(--text2); font: inherit; font-size: 11px;
+    font-weight: 600; padding: 3.5px 10px; cursor: pointer; }
+  .up-btn:hover { background: var(--hover); color: var(--text); }
+  .up-btn:disabled { opacity: 0.45; cursor: default; }
+  .up-btn.primary { border-color: var(--brand); color: var(--brand); }
+  .up-btn.primary:hover { background: var(--hover); }
+  .up-strip { font-size: 10.5px; line-height: 1.45; color: var(--text3);
+    padding: 6px 8px 2px; white-space: pre-wrap; word-break: break-word; }
+  .up-strip.warn { color: var(--warn); }
+  .up-strip.err { color: var(--err); }
+  .up-strip.ok { color: var(--ok); }
+  #updates-status { flex: 1; min-width: 0; font-size: 10.5px; line-height: 1.4;
+    white-space: pre-wrap; word-break: break-word; }
+  #updates-status.warn { color: var(--warn); }
+  #updates-status.err { color: var(--err); }
+  #updates-status.ok { color: var(--ok); }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <img id="logo" src="favicon.svg" alt="" width="18" height="18">
+    <span id="title" title="Double-click to rename">Augmentor</span>
+    <button id="newchat" class="hbtn" title="Start a new session (hold for approval mode)" aria-label="Start a new session, hold for approval mode">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+        stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M3.5 3.5h9a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H7L4.5 13v-2.5h-1a1 1 0 0 1-1-1v-5a1 1 0 0 1 1-1z" />
+        <path d="M8 4.75v3.5M6.25 6.5h3.5" />
+      </svg>
+    </button>
+    <button id="save" class="hbtn" title="Save this chat to the Augmentor Chat workspace in DSH (tap again to unsave)" aria-label="Save this chat">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+        stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M8 1.33l2.06 4.18 4.61.67-3.34 3.25.79 4.58-4.12-2.16-4.12 2.16.79-4.58-3.34-3.25 4.61-.67z" />
+      </svg>
+    </button>
+    <button id="sessions" class="hbtn" title="Browse DSH app sessions" aria-label="Browse sessions">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+        stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M6.2 4.5h7.3M6.2 8h7.3M6.2 11.5h7.3" />
+        <path d="M2.9 4.5h.01M2.9 8h.01M2.9 11.5h.01" />
+      </svg>
+    </button>
+    <button id="openindsh" class="hbtn" title="Expand into the full DSH session"
+      aria-label="Expand into the full DSH session">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <path fillRule="evenodd" clipRule="evenodd" fill="currentColor"
+          d="M9.67272 0.522841C10.8339 0.522841 11.76 0.522714 12.4963 0.602493C13.2453 0.683657 13.8789 0.854248 14.4264 1.25197C14.7504 1.48739 15.0355 1.77247 15.2709 2.0965C15.6686 2.64394 15.8392 3.27758 15.9204 4.02655C16.0002 4.7629 16 5.68895 16 6.85014V9.14986C16 10.3111 16.0002 11.2371 15.9204 11.9735C15.8392 12.7224 15.6686 13.3561 15.2709 13.9035C15.0355 14.2275 14.7504 14.5126 14.4264 14.748C13.8789 15.1458 13.2453 15.3163 12.4963 15.3975C11.76 15.4773 10.8339 15.4772 9.67272 15.4772H6.3273C5.16611 15.4772 4.24006 15.4773 3.50371 15.3975C2.75474 15.3163 2.1211 15.1458 1.57366 14.748C1.24963 14.5126 0.964549 14.2275 0.729131 13.9035C0.331407 13.3561 0.160817 12.7224 0.0796529 11.9735C-0.000126137 11.2371 1.25338e-09 10.3111 1.25338e-09 9.14986V6.85014C1.25329e-09 5.68895 -0.000126137 4.7629 0.0796529 4.02655C0.160817 3.27758 0.331407 2.64394 0.729131 2.0965C0.964549 1.77247 1.24963 1.48739 1.57366 1.25197C2.1211 0.854248 2.75474 0.683657 3.50371 0.602493C4.24006 0.522714 5.16611 0.522841 6.3273 0.522841H9.67272ZM5.54303 1.88715V14.1118C5.78636 14.1128 6.04709 14.1169 6.3273 14.1169H9.67272C10.8639 14.1169 11.7032 14.1164 12.3493 14.0465C12.9824 13.9779 13.3497 13.8494 13.6268 13.6482C13.8354 13.4966 14.0195 13.3125 14.1711 13.1039C14.3723 12.8268 14.5007 12.4595 14.5693 11.8264C14.6393 11.1803 14.6398 10.341 14.6398 9.14986V6.85014C14.6398 5.65896 14.6393 4.81967 14.5693 4.1736C14.5007 3.54048 14.3723 3.17318 14.1711 2.89609C14.0195 2.68747 13.8354 2.50337 13.6268 2.35179C13.3497 2.1506 12.9824 2.02212 12.3493 1.95353C11.7032 1.88358 10.8639 1.88307 9.67272 1.88307H6.3273C6.04709 1.88307 5.78636 1.8862 5.54303 1.88715ZM4.1828 1.91166C3.99125 1.9216 3.8148 1.93577 3.65076 1.95353C3.01764 2.02212 2.65034 2.1506 2.37325 2.35179C2.16463 2.50337 1.98052 2.68747 1.82895 2.89609C1.62776 3.17318 1.49928 3.54048 1.43069 4.1736C1.36074 4.81967 1.36023 5.65896 1.36023 6.85014V9.14986C1.36023 10.341 1.36074 11.1803 1.43069 11.8264C1.49928 12.4595 1.62776 12.8268 1.82895 13.1039C1.98052 13.3125 2.16463 13.4966 2.37325 13.6482C2.65034 13.8494 3.01764 13.9779 3.65076 14.0465C3.81478 14.0642 3.99127 14.0774 4.1828 14.0873V1.91166Z" />
+      </svg>
+    </button>
+    <button id="updates" class="hicon" title="Check for updates (plugin, pipe, extension)"
+      aria-label="Check for updates">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+        stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M8 2.2v6.6M5.2 5.9l2.8 2.8 2.8-2.8" />
+        <path d="M2.6 10.6v1.7a1.5 1.5 0 0 0 1.5 1.5h7.8a1.5 1.5 0 0 0 1.5-1.5v-1.7" />
+      </svg>
+    </button>
+    <button id="prompt-settings" class="hicon" title="Settings · Prompt library" aria-label="Settings · Prompt library">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m10 3-.6 2.1-2 .9-1.9-.6-2 3.4 1.5 1.5v2.3L3.5 14l2 3.4 2-.5 1.9 1 .6 2.1h4l.6-2.1 2-.9 1.9.5 2-3.4-1.5-1.5v-2.3l1.5-1.6-2-3.4-2 .6-1.9-1L14 3z"/><circle cx="12" cy="11.5" r="3"/></svg>
+    </button>
+    <button id="hue" class="hicon" title="Theme + colors"
+      aria-label="Color settings" aria-haspopup="dialog">
+      <span class="hue-chip"></span>
+    </button>
+  </header>
+  <div id="logwrap">
+    <div id="log"></div>
+    <button id="top" title="Jump to top" aria-label="Jump to top">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+        stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 9.5 8 5.5l4 4" />
+      </svg>
+    </button>
+  </div>
+  <footer>
+    <textarea id="input" rows="2" placeholder="Ask the agent… (Enter to send)"></textarea>
+    <button id="send" disabled>Send</button>
+    <button id="stop" hidden title="Stop the current run">■ Stop</button>
+  </footer>
+  <div id="strip">
+    <button id="model" hidden title="Switch model" aria-haspopup="dialog">
+      <span id="model-label"></span>
+      <svg class="model-chev" width="10" height="10" viewBox="0 0 16 16" fill="none"
+        stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 6l4 4 4-4" />
+      </svg>
+    </button>
+    <span id="stats"></span>
+    <a id="site" href="https://augmentoragent.com" target="_blank" rel="noreferrer"
+      title="Learn about Augmentor — open augmentoragent.com">augmentoragent.com</a>
+  </div>
+</div>
+<!-- Color popover (opened by the hue icon): positioned by sidepanel.js. -->
+<div id="huepop" hidden role="dialog" aria-label="Color settings">
+  <div class="hp-head">
+    <span class="hp-title">Colors</span>
+    <button id="hue-reset" class="hp-reset" type="button">Reset</button>
+  </div>
+  <div class="hp-row">
+    <span class="hp-label">Theme</span>
+    <div id="theme-seg" class="hp-seg" role="group" aria-label="Panel theme">
+      <button type="button" data-theme-opt="light" aria-pressed="false">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+          <circle cx="8" cy="8" r="2.8"></circle>
+          <path d="M8 1.4v1.8M8 12.8v1.8M1.4 8h1.8M12.8 8h1.8M3.3 3.3l1.3 1.3M11.4 11.4l1.3 1.3M12.7 3.3l-1.3 1.3M4.6 11.4l-1.3 1.3"></path>
+        </svg>
+        Light
+      </button>
+      <button type="button" data-theme-opt="dark" aria-pressed="false">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M13.2 9.7A5.6 5.6 0 0 1 6.3 2.8a5.6 5.6 0 1 0 6.9 6.9Z"></path>
+        </svg>
+        Dark
+      </button>
+    </div>
+  </div>
+  <label class="hp-row">
+    <span class="hp-label">Surface hue</span>
+    <input id="neut-hue" class="hueslider" type="range" min="0" max="360" step="1">
+  </label>
+  <label class="hp-row">
+    <span class="hp-label">Surface brightness <span id="neut-bright-val" class="hp-val"></span></span>
+    <input id="neut-bright" class="hueslider" type="range" min="-15" max="15" step="1">
+  </label>
+  <div class="hp-sep"></div>
+  <label class="hp-row">
+    <span class="hp-label">Accent <span id="accent-swatch" class="hp-swatch"></span></span>
+    <input id="accent-hue" class="hueslider" type="range" min="0" max="360" step="1">
+  </label>
+  <label class="hp-row">
+    <span class="hp-label">Accent brightness <span id="accent-bright-val" class="hp-val"></span></span>
+    <input id="accent-bright" class="hueslider" type="range" min="-15" max="15" step="1">
+  </label>
+  <div id="veil-preview" class="hp-veil">
+    <span class="vp-dot"></span>
+    <span class="vp-label">Augmentor — Clicking…</span>
+  </div>
+  <p class="hp-note">Surface color tints the panel in light and dark mode. The accent colors
+    buttons, links — and the overlay shown while the agent drives the browser.
+    Brightness shifts lightness in both themes.</p>
+</div>
+<!-- Model picker popover (opened by the #model chip in the strip): the DSH
+     app's model catalog, rows rendered by sidepanel.js. The search field
+     filters rows live (model name/id or provider name, DSH
+     model-picker-augmented parity); when that plugin's settings carry a
+     pinned list, a Pinned section renders on top of the provider groups.
+     The footer's Refresh button forces a fresh bridge catalog fetch (pins
+     included): the SW serves the handshake's memory copy otherwise, and the
+     DSH app's model set can change while the panel is open (a model added
+     to settings.yaml). -->
+<div id="modelpop" hidden role="dialog" aria-label="Choose model">
+  <div id="modelpop-search">
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m10.3 10.3 3.7 3.7"/></svg>
+    <input id="modelpop-search-input" type="text" placeholder="Search models…" spellcheck="false" autocomplete="off" aria-label="Search models">
+    <button id="modelpop-search-clear" type="button" aria-label="Clear search" hidden>
+      <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg>
+    </button>
+  </div>
+  <div id="modelpop-body"></div>
+  <div id="modelpop-foot" class="mp-strip">
+    <span id="modelpop-foot-status" role="status"></span>
+    <button id="modelpop-refresh" type="button" title="Re-read the model list from the DSH app">
+      <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.65 5.35A6 6 0 1 0 14 8"/><path d="M14 2v3.35h-3.35"/></svg>
+      Refresh
+    </button>
+  </div>
+</div>
+<div id="sessionspop" hidden role="dialog" aria-label="DSH app sessions">
+  <div id="sessionspop-body"></div>
+</div>
+<!-- 0.1.30 (Phase 1): the Updates popover. The rows are rendered by
+     sidepanel.js from the pipe's updates/check reply; the footer carries
+     the status line (role=status) + the Check action. -->
+<div id="updatespop" hidden role="dialog" aria-label="Updates">
+  <div id="updatespop-body"></div>
+  <div class="mp-strip">
+    <span id="updates-status" role="status"></span>
+    <button id="updates-check" type="button">Check</button>
+  </div>
+</div>
+<script type="module" src="sidepanel.js"></script>
+</body>
+</html>

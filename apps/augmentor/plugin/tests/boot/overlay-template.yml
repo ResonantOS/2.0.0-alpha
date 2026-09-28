@@ -1,0 +1,31 @@
+# Augmentor — dsh-augmentor plugin, pipe, and Chromium extension
+# Copyright © 2026 Manolo Remiddi
+# SPDX-License-Identifier: MIT
+# License: MIT — see LICENSE at the repository root.
+
+# Real-composition boot test overlay (run.sh fills AUGMENTOR_ENTRY).
+# Mounts dsh-augmentor from source with an EXPLICIT action-channel token so the
+# test drives the gate deterministically (config > file > generated).
+#
+# Two constraints shape how run.sh boots with this overlay:
+#  1. A second insert row with the same id as the home patch's dsh-augmentor
+#     row fails boot ("duplicate loader entry id"), so the test boots under an
+#     ISOLATED DSH_HOME that has no cordis.patch.yml at all (profiles, settings
+#     and storage are symlinked in; sessions/ is fresh and empty).
+#  2. The isolated home starts with no augmentor-ws-token file, so the config
+#     branch of token resolution is exercised and no per-machine file is
+#     created or read (asserted by run.sh).
+- insert:
+  - id: dsh-augmentor
+    name: AUGMENTOR_ENTRY
+    config:
+      apiPath: '/api/augmentor'
+      wsToken: 'boot-test-token-0123456789abcdef'
+      # M3 chat lifecycle: a throwaway chat dir inside the isolated home,
+      # sub-second retention + fast sweep so the housekeeping pass is
+      # exercised within the test's lifetime (run.sh fills AUGMENTOR_CHATDIR).
+      chatDir: AUGMENTOR_CHATDIR
+      retentionDays: 0.00001
+      deleteAfterDays: 0
+      sweepFirstDelayMs: 400
+      sweepEveryMs: 500

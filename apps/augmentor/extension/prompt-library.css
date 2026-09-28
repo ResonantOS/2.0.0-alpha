@@ -1,0 +1,10 @@
+/* Augmentor — dsh-augmentor plugin, pipe, and Chromium extension
+ * Copyright © 2026 Manolo Remiddi
+ * SPDX-License-Identifier: MIT
+ * License: MIT — see LICENSE at the repository root.
+ */
+#prompt-completions {position:fixed;z-index:100;max-height:230px;overflow:auto;background:var(--layer1,#223033);color:var(--text,#eef4f4);border:1px solid var(--border2,#607070);border-radius:12px;padding:5px;box-shadow:0 6px 24px #0004;box-sizing:border-box;}
+#prompt-completions[hidden] {display:none;}
+#prompt-completions button {display:block;width:100%;text-align:left;white-space:pre-line;border:0;background:transparent;color:inherit;padding:8px;border-radius:8px;font:inherit;font-size:12px;}
+#prompt-completions button[aria-selected=true] {background:var(--hover,#42605a);}
+#prompt-completions p {margin:8px;font-size:12px;}

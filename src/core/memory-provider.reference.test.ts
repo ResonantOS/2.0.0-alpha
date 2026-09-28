@@ -132,7 +132,18 @@ describe("reference memory provider", () => {
 
     const manifest = referenceMemoryManifest();
     const state = enableProvider(buildDefaultState([manifest]), manifest);
-    const broker = resolveMemoryProviderBroker(state, [manifest]);
+    const broker = resolveMemoryProviderBroker(state, [manifest], {
+      bootEpoch: "reference-memory-test", revision: 1, governanceActivated: true,
+      candidates: [manifest],
+      installations: {
+        [manifest.id]: {
+          addonId: manifest.id, installed: true, enabled: true,
+          grantedCapabilities: manifest.requestedCapabilities.map(grant => ({ ...grant, granted: true })),
+          disabledOperations: [], hiddenSurfaceIds: [],
+        },
+      },
+      slots: { "memory-system": { addonId: manifest.id, generation: 1, available: true } },
+    });
 
     const status = await broker.status();
     const search = await broker.search("memory", 5);

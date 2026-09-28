@@ -1,0 +1,19 @@
+<!-- Augmentor — dsh-augmentor plugin, pipe, and Chromium extension
+     Copyright © 2026 Manolo Remiddi
+     SPDX-License-Identifier: MIT
+     License: MIT — see LICENSE at the repository root. -->
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#10b981"/>
+      <stop offset="1" stop-color="#d97706"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="#0a0a0a"/>
+  <!-- stylised 'A' frost mark -->
+  <path d="M13 48 L27 16 L33 16 L44 48" fill="none" stroke="url(#g)" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <line x1="20" y1="37" x2="38" y2="37" stroke="#34d399" stroke-width="4.5" stroke-linecap="round"/>
+  <!-- spark / snow glint -->
+  <circle cx="48" cy="17" r="2.6" fill="#e7f8ef"/>
+</svg>

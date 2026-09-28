@@ -5,7 +5,7 @@ Manifest V3 extension connected to one authenticated local Node.js bridge.
 
 ## Prerequisites
 
-- Node.js 22.13.0 or newer. The repository pin is in `.nvmrc`.
+- Node.js 24.21.0 or newer. The repository pin is in `.nvmrc`.
 - npm, supplied with Node.js.
 - Google Chrome 116 or newer.
 - A terminal kept open while the bridge is running.

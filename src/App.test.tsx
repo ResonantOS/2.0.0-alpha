@@ -4,16 +4,29 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AddOnCategory,
+  CapabilityGrant,
   AddOnManifest,
   ArchiveAiMemoryBuildJobSummary,
   ArchiveQueuedIngestRequest,
   ArchiveReviewArtifact,
   ConversationMessage,
+  UntrustedChatContext,
   ProviderProfile,
   ResonantShellState,
 } from "./core/contracts";
 import { buildDefaultState } from "./core/defaults";
+import * as runtimeModule from "./core/runtime";
+import augmentorManifest from "../public/addons/augmentor-chat.json";
+import archiveManifest from "../public/addons/living-archive.json";
+import { activeSystemSlotProvider } from "./modules/shell/system-slots";
+import * as harnessClients from "./core/harness-client";
+import * as chatController from "./modules/chat/controller";
 import { ArchiveReviewDesk } from "./modules/archive/ArchiveReviewDesk";
+
+const { harnessInvokeMock } = vi.hoisted(() => ({ harnessInvokeMock: vi.fn() }));
+vi.mock("./core/web-transport", async (importOriginal) => ({
+  ...await importOriginal<typeof import("./core/web-transport")>(), webInvoke: harnessInvokeMock,
+}));
 
 const manifests: AddOnManifest[] = [
   createManifest("addon.telegram-channel", "Telegram Channel", "channel"),
@@ -1470,11 +1483,27 @@ const openChatHistory = async () => {
   await screen.findByLabelText("Chat history");
 };
 
-const providerStreamInputs = (): Array<{ systemPrompt: string; messages: ConversationMessage[] }> =>
+const providerStreamInputs = (): Array<{ systemPrompt: string; messages: ConversationMessage[]; contextSources?: UntrustedChatContext[] }> =>
   requestProviderServiceChatCompletionStreamMock.mock.calls.map((call) => call[0]) as Array<{
     systemPrompt: string;
     messages: ConversationMessage[];
+    contextSources?: UntrustedChatContext[];
   }>;
+
+const workingShellProjection = (): harnessClients.HarnessProjection => ({
+  bootEpoch: "app-boot", revision: 0, governanceActivated: false,
+  // Working shell fixtures receive explicit host chat/memory ownership.
+  // Authority tests below replace this snapshot with their own vacant/pending host.
+  candidates: [{ ...augmentorManifest, name: "Augmentor" }, archiveManifest] as AddOnManifest[],
+  installations: Object.fromEntries(([augmentorManifest, archiveManifest] as AddOnManifest[]).map(manifest =>
+    [manifest.id, { addonId: manifest.id, installed: true, enabled: true,
+      grantedCapabilities: manifest.requestedCapabilities.map(grant => ({ ...grant, granted: true })),
+      disabledOperations: [], hiddenSurfaceIds: [] }])),
+  slots: {
+    "chat-interface": { addonId: augmentorManifest.id, generation: 1, available: true },
+    "memory-system": { addonId: archiveManifest.id, generation: 1, available: true },
+  },
+});
 
 describe("App boot flow", () => {
   afterEach(async () => {
@@ -1490,6 +1519,22 @@ describe("App boot flow", () => {
   });
 
   beforeEach(() => {
+    let hostState = workingShellProjection();
+    harnessInvokeMock.mockReset().mockImplementation(async (command, args) => {
+      const next = structuredClone(hostState);
+      if (command === "harness_install") next.installations = { ...next.installations, [args.manifest.id]: {
+        addonId: args.manifest.id, installed: true, enabled: args.enabled,
+        grantedCapabilities: args.manifest.requestedCapabilities.map((g: CapabilityGrant) => ({ ...g, granted: false })), disabledOperations: [], hiddenSurfaceIds: [],
+      } };
+      if (command === "harness_enabled") next.installations = { ...next.installations, [args.addonId]: { ...next.installations[args.addonId], enabled: args.enabled } };
+      if (command === "harness_grants") next.installations = { ...next.installations, [args.addonId]: {
+        ...next.installations[args.addonId], grantedCapabilities: next.installations[args.addonId].grantedCapabilities.map(g => args.grants.find((candidate: CapabilityGrant) => candidate.capability === g.capability) ?? g),
+      } };
+      if (command === "harness_remove") next.installations = Object.fromEntries(Object.entries(next.installations).filter(([id]) => id !== args.addonId));
+      if (command !== "harness_registry") next.revision++;
+      hostState = next;
+      return next;
+    });
     window.history.replaceState({}, "", "/");
     class ResizeObserverMock {
       observe() {}
@@ -2855,6 +2900,85 @@ describe("App boot flow", () => {
     Element.prototype.scrollIntoView = vi.fn();
   });
 
+  it.each(["vacant", "hidden"])("surfaces and labels agree with projected governance: %s archive ignores forged local state", async mode => {
+    const state = buildDefaultState([archiveManifest as AddOnManifest]);
+    state.uiPreferences.activeSection = "archive";
+    state.installations[archiveManifest.id] = { ...state.installations[archiveManifest.id], installed: true, enabled: true,
+      grantedCapabilities: (archiveManifest as AddOnManifest).requestedCapabilities.map(grant => ({ ...grant, granted: true })) };
+    state.activeSystemSlotProviderIds = { "memory-system": archiveManifest.id };
+    hydrateStateMock.mockResolvedValueOnce(state);
+    const projection = workingShellProjection();
+    if (mode === "vacant") projection.slots = { ...projection.slots, "memory-system": { addonId: null, generation: 2, available: false } };
+    else projection.installations = { ...projection.installations, [archiveManifest.id]: {
+      ...projection.installations[archiveManifest.id], hiddenSurfaceIds: ["living-archive-workspace"],
+    } };
+    harnessInvokeMock.mockResolvedValue(projection);
+    render(<App />);
+    await screen.findByLabelText("ResonantOS system bar");
+    expect(screen.queryByPlaceholderText("Search the Living Archive")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Living Archive" })).toBeNull();
+    expect(requestArchiveRuntimeStatusMock).not.toHaveBeenCalled();
+    expect(requestArchiveReviewQueueMock).not.toHaveBeenCalled();
+  });
+
+  it("surfaces and labels agree with projected governance for replacement memory and chat", async () => {
+    const memory: AddOnManifest = { ...archiveManifest as AddOnManifest, id: "addon.projected-memory", name: "Projected Memory",
+      surfaces: [{ id: "projected-memory-page", type: "page", label: "Projected Memory", description: "Memory",
+        shellNavigation: { sectionId: "archive", dockIcon: "archive", eyebrow: "memory", order: 10 } }] };
+    const agent: AddOnManifest = { ...augmentorManifest as AddOnManifest, id: "addon.projected-agent", name: "Projected Agent" };
+    const base = workingShellProjection();
+    harnessInvokeMock.mockResolvedValue({ ...base, candidates: [...base.candidates, memory, agent],
+      installations: { ...base.installations,
+        [memory.id]: { ...base.installations[archiveManifest.id], addonId: memory.id },
+        [agent.id]: { ...base.installations[augmentorManifest.id], addonId: agent.id } },
+      slots: { ...base.slots, "memory-system": { addonId: memory.id, generation: 2, available: true },
+        "primary-agent": { addonId: agent.id, generation: 2, available: true } },
+    });
+    const state = buildDefaultState([...manifests, archiveManifest as AddOnManifest]);
+    state.activeSystemSlotProviderIds = { "memory-system": archiveManifest.id, "primary-agent": augmentorManifest.id };
+    state.strategistIdentity.customName = "Forged local identity";
+    state.installations[archiveManifest.id].enabled = true;
+    hydrateStateMock.mockResolvedValueOnce(state);
+    render(<App />);
+    await screen.findByPlaceholderText("Message Projected Agent");
+    fireEvent.click(await screen.findByRole("button", { name: "Projected Memory" }));
+    expect(await screen.findByText(/Projected Memory is currently active/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Living Archive" })).toBeNull();
+    expect(screen.queryByPlaceholderText("Search the Living Archive")).toBeNull();
+    expect(screen.queryByPlaceholderText("Message Forged local identity")).toBeNull();
+    expect(requestArchiveRuntimeStatusMock).not.toHaveBeenCalled();
+    expect(requestArchiveReviewQueueMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["selected", "vacant"])("memory dispatch follows the projected owner in chat: %s", async mode => {
+    const second: AddOnManifest = { ...archiveManifest as AddOnManifest, id: "addon.second-memory", name: "Second Memory",
+      service: { protocol: "http-json", entrypoint: "http://127.0.0.1:4990", healthCommand: "memory.status" } };
+    const state = buildDefaultState([...manifests, archiveManifest as AddOnManifest, second]);
+    state.activeSystemSlotProviderIds = { "memory-system": archiveManifest.id };
+    state.installations[archiveManifest.id].enabled = true;
+    state.installations[archiveManifest.id].installed = true;
+    hydrateStateMock.mockResolvedValueOnce(state);
+    const base = workingShellProjection();
+    harnessInvokeMock.mockResolvedValue({ ...base, candidates: [...base.candidates, second],
+      installations: { ...base.installations, [second.id]: { ...base.installations[archiveManifest.id], addonId: second.id } },
+      slots: { ...base.slots, "memory-system": { addonId: mode === "selected" ? second.id : null, generation: 2, available: mode === "selected" } },
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true,
+      json: async () => ({ query: "projected memory", pages: [], sources: [] }) } as Response);
+    try {
+      render(<App />);
+      const composer = (await screen.findAllByPlaceholderText("Message Augmentor"))[0];
+      fireEvent.change(composer, { target: { value: "Find projected memory" } });
+      fireEvent.click(screen.getAllByRole("button", { name: "Send message" })[0]);
+      await screen.findByText("This is a live Strategist test reply from MiniMax-M3.");
+      expect(requestArchiveSearchMock).not.toHaveBeenCalled();
+      expect(requestArchiveDocumentMock).not.toHaveBeenCalled();
+      expect(requestArchiveSystemMemoryMock).not.toHaveBeenCalled();
+      expect(requestArchiveSystemMemoryRefreshMock).not.toHaveBeenCalled();
+      expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(mode === "selected" ? ["http://127.0.0.1:4990/memory/search"] : []);
+    } finally { fetchMock.mockRestore(); }
+  });
+
   it("renders Home as a sidebar plus expanded chat surface and accepts a message", async () => {
     const { container } = render(<App />);
 
@@ -3264,6 +3388,172 @@ describe("App boot flow", () => {
     expect(removedBrowserProbeMock).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])("first-run consent becomes effective only after host acknowledgement (denied: %s)", async denied => {
+    const catalog = [augmentorManifest, archiveManifest] as AddOnManifest[];
+    vi.mocked(runtimeModule.loadBundledManifests).mockResolvedValueOnce(catalog);
+    const state = buildDefaultState(catalog);
+    state.uiPreferences.activeSection = "overview";
+    state.uiPreferences.chatSidebarOpen = true;
+    hydrateStateMock.mockResolvedValueOnce(state);
+    const initial: harnessClients.HarnessProjection = { bootEpoch: "first-run", revision: 0, governanceActivated: false, candidates: [], installations: {}, slots: {} };
+    const pending = deferred<harnessClients.HarnessProjection>();
+    const slotAcknowledgement = deferred<void>();
+    const client = harnessClients.createHarnessClient({ invoke: harnessInvokeMock });
+    const factory = vi.spyOn(harnessClients, "createHarnessClient").mockReturnValue(client);
+    const send = vi.spyOn(chatController, "executeChatTurn").mockResolvedValue(undefined);
+    let snapshot = initial;
+    harnessInvokeMock.mockImplementation(async (command, args) => {
+      if (command === "harness_registry") return snapshot;
+      if (command === "harness_install") {
+        snapshot = { ...snapshot, revision: snapshot.revision + 1, installations: { ...snapshot.installations, [args.manifest.id]: {
+          addonId: args.manifest.id, installed: true, enabled: true,
+          grantedCapabilities: args.manifest.requestedCapabilities.map((g: CapabilityGrant) => ({ ...g, granted: false })), disabledOperations: [], hiddenSurfaceIds: [],
+        } } };
+        return snapshot;
+      }
+      if (command === "harness_grants") {
+        const acknowledgement = await pending.promise;
+        snapshot = acknowledgement;
+        return snapshot;
+      }
+      if (command === "harness_assign_slot") {
+        await slotAcknowledgement.promise;
+        snapshot = { ...snapshot, revision: snapshot.revision + 1, slots: { ...snapshot.slots, [args.slot]: { addonId: args.addonId, generation: 1, available: true } } };
+        return snapshot;
+      }
+      throw new Error("Unexpected first-run command");
+    });
+    try {
+      const { container } = render(<App />);
+      const dialog = await screen.findByRole("dialog", { name: "Choose recommended ResonantOS add-ons" });
+      fireEvent.click(within(dialog).getByRole("checkbox", { name: /Living Archive/ }));
+      fireEvent.click(within(dialog).getByRole("button", { name: "Apply Selection" }));
+      await waitFor(() => expect(harnessInvokeMock).toHaveBeenCalledWith("harness_grants", expect.objectContaining({ addonId: augmentorManifest.id, consent: true })));
+      expect(container.querySelector(".composer-card textarea")).toBeNull();
+      expect(client.getSnapshot()!.installations[augmentorManifest.id].grantedCapabilities.some(g => g.granted)).toBe(false);
+      expect(activeSystemSlotProvider(state, catalog, "primary-agent", client.getSnapshot())).toBeNull();
+      expect(within(dialog).getByRole("button", { name: "Apply Selection" }).hasAttribute("disabled")).toBe(true);
+      if (denied) {
+        await act(async () => pending.reject(new Error("Host denied consent")));
+        expect(screen.getByRole("dialog", { name: "Choose recommended ResonantOS add-ons" })).toBeTruthy();
+        expect(within(dialog).getByRole("alert").textContent).toContain("First-run setup could not be completed");
+        expect(container.querySelector(".composer-card textarea")).toBeNull();
+        expect(activeSystemSlotProvider(state, catalog, "primary-agent", client.getSnapshot())).toBeNull();
+      } else {
+        const grants = harnessInvokeMock.mock.calls.find(([command]) => command === "harness_grants")![1].grants;
+        await act(async () => pending.resolve({ ...snapshot, revision: snapshot.revision + 1, installations: {
+          ...snapshot.installations, [augmentorManifest.id]: { ...snapshot.installations[augmentorManifest.id], grantedCapabilities: grants },
+        } }));
+        await waitFor(() => expect(harnessInvokeMock).toHaveBeenCalledWith("harness_assign_slot", expect.any(Object)));
+        expect(container.querySelector(".composer-card textarea")).toBeNull();
+        expect(activeSystemSlotProvider(state, catalog, "primary-agent", client.getSnapshot())).toBeNull();
+        expect(client.getSnapshot()!.installations[augmentorManifest.id].grantedCapabilities.some(g => g.granted)).toBe(true);
+        await act(async () => slotAcknowledgement.resolve());
+        await waitFor(() => expect(screen.queryByRole("dialog", { name: "Choose recommended ResonantOS add-ons" })).toBeNull());
+        expect(container.querySelector(".composer-card textarea")).toBeTruthy();
+        expect(activeSystemSlotProvider(state, catalog, "primary-agent", client.getSnapshot())?.manifest.id).toBe(augmentorManifest.id);
+        expect(state.installations[augmentorManifest.id].grantedCapabilities.some(g => g.granted)).toBe(false);
+        expect(harnessInvokeMock.mock.calls.filter(([command]) => command === "harness_install")).toHaveLength(1);
+        fireEvent.change(container.querySelector(".composer-card textarea")!, { target: { value: "Hello after first run" } });
+        fireEvent.click(screen.getAllByRole("button", { name: "Send message" })[0]);
+        await waitFor(() => expect(send).toHaveBeenCalledWith(expect.objectContaining({
+          activeThread: expect.objectContaining({ id: state.uiPreferences.activeChatThreadId }),
+          composer: "Hello after first run",
+        })));
+        expect(state.installations[augmentorManifest.id].enabled).toBe(false);
+      }
+    } finally { factory.mockRestore(); send.mockRestore(); }
+  });
+
+  it.each(["install", "disable", "enable", "grant", "batch", "remove"] as const)(
+    "rendered add-on %s denial changes no displayed consent", async action => {
+      const state = buildDefaultState(manifests);
+      state.uiPreferences.activeSection = "addons";
+      const addonId = action === "batch" ? "addon.browser" : "addon.obsidian";
+      const manifest = manifests.find(item => item.id === addonId)!;
+      const installation = state.installations[addonId];
+      installation.installed = action !== "install";
+      installation.enabled = action !== "install" && action !== "enable";
+      installation.status = action === "install" ? "available" : action === "enable" ? "disabled" : "enabled";
+      installation.grantedCapabilities = installation.grantedCapabilities.map(g => ({ ...g, granted: false }));
+      const snapshot: harnessClients.HarnessProjection = { bootEpoch: "app-boot", revision: 3, governanceActivated: false, candidates: [], slots: {}, installations:
+        action === "install" ? {} : { [addonId]: { ...installation, disabledOperations: [], hiddenSurfaceIds: [] } } };
+      const pending = deferred<harnessClients.HarnessProjection>();
+      harnessInvokeMock.mockImplementation(command => command === "harness_registry" ? Promise.resolve(snapshot) : pending.promise);
+      hydrateStateMock.mockResolvedValueOnce(state);
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+      try {
+        const { container } = render(<App />);
+        await screen.findAllByText(manifest.name);
+        const card = Array.from(container.querySelectorAll(".addon-card")).find(element => element.textContent?.includes(manifest.name))! as HTMLElement;
+        fireEvent.click(card);
+        const displayed = () => ({ card: card.textContent, grants: Array.from(container.querySelectorAll(".grant-chip")).map(element => ({ text: element.textContent, granted: element.classList.contains("granted") })) });
+        const before = displayed();
+        if (action === "remove") fireEvent.click(screen.getByRole("button", { name: `Uninstall ${manifest.name}` }));
+        else if (action === "grant") fireEvent.click(container.querySelector(".grant-chip")!);
+        else fireEvent.click(within(card).getByRole("button", { name: action === "batch" ? "Install and grant browser access" : action === "install" ? "Install" : action === "enable" ? "Enable" : "Disable" }));
+        const command = action === "install" ? "harness_install" : action === "remove" ? "harness_remove" : action === "batch" || action === "grant" ? "harness_grants" : "harness_enabled";
+        await waitFor(() => expect(harnessInvokeMock).toHaveBeenCalledWith(command, expect.any(Object)));
+        expect(displayed()).toEqual(before);
+        await act(async () => pending.reject(new Error("Host denied consent")));
+        expect(displayed()).toEqual(before);
+      } finally { confirm.mockRestore(); }
+    },
+  );
+
+  it.each([
+    ["browser", "Install and grant browser access"],
+    ["obsidian", "Connect workspace"],
+    ["opencode", "Grant OpenCode Access"],
+    ["paperclip", "Grant Paperclip Access"],
+    ["hermes", "Grant Hermes Access"],
+  ] as const)("all add-on and quick-grant actions use host transactions: %s denial preserves displayed consent", async (section, button) => {
+    const extra = createManifest("addon.hermes", "Hermes", "agent");
+    extra.requestedCapabilities = ["shell", "ui-embedding"].map(capability => ({ capability, scope: "system", revocationBehavior: "hard-stop", granted: false })) as CapabilityGrant[];
+    const catalog = section === "hermes" ? [...manifests, extra] : manifests;
+    vi.mocked(runtimeModule.loadBundledManifests).mockResolvedValueOnce(catalog);
+    const state = buildDefaultState(catalog);
+    state.uiPreferences.activeSection = section;
+    const addonId = `addon.${section}`;
+    state.installations[addonId].installed = true;
+    state.installations[addonId].enabled = true;
+    state.installations[addonId].grantedCapabilities = state.installations[addonId].grantedCapabilities.map(g => ({ ...g, granted: false }));
+    const snapshot = { bootEpoch: "app-boot", revision: 5, governanceActivated: false, candidates: [], slots: {},
+      installations: { [addonId]: { ...state.installations[addonId], disabledOperations: [], hiddenSurfaceIds: [] } } };
+    const pending = deferred<typeof snapshot>();
+    harnessInvokeMock.mockImplementation(command => command === "harness_registry" ? Promise.resolve(snapshot) : pending.promise);
+    hydrateStateMock.mockResolvedValueOnce(state);
+    render(<App />);
+    if (section === "opencode" || section === "paperclip") {
+      fireEvent.click(await screen.findByRole("button", { name: `${section === "opencode" ? "OpenCode" : "Paperclip"} workspace settings` }));
+    }
+    fireEvent.click(await screen.findByRole("button", { name: button }));
+    await waitFor(() => expect(harnessInvokeMock).toHaveBeenCalledWith("harness_grants", expect.objectContaining({ addonId, consent: true, expectedRevision: 5 })));
+    expect(screen.queryByText("Required grants active")).toBeNull();
+    await act(async () => pending.reject(new Error("Host denied consent")));
+    expect(screen.queryByText("Required grants active")).toBeNull();
+    expect(screen.queryByText("network granted")).toBeNull();
+    expect(screen.queryByText("filesystem granted")).toBeNull();
+    expect(screen.getByRole("button", { name: button })).toBeTruthy();
+    const expectedCapabilities: Record<string, string[]> = {
+      browser: ["network", "ui-embedding", "browser-control", "filesystem"],
+      obsidian: ["filesystem", "ui-embedding"], opencode: ["filesystem", "shell", "ui-embedding"],
+      paperclip: ["network", "ui-embedding", "agent-delegation"], hermes: ["shell", "ui-embedding"],
+    };
+    const grantCalls = harnessInvokeMock.mock.calls.filter(([command]) => command === "harness_grants");
+    expect(grantCalls).toHaveLength(1);
+    expect(grantCalls[0][1].grants.map((g: CapabilityGrant) => g.capability)).toEqual(expectedCapabilities[section]);
+    const acknowledged = structuredClone(snapshot);
+    acknowledged.revision++;
+    acknowledged.installations[addonId].grantedCapabilities = acknowledged.installations[addonId].grantedCapabilities.map(g => ({ ...g, granted: expectedCapabilities[section].includes(g.capability) }));
+    harnessInvokeMock.mockResolvedValueOnce(acknowledged);
+    fireEvent.click(screen.getByRole("button", { name: button }));
+    if (section === "browser") expect(await screen.findByLabelText("Browser URL")).toBeTruthy();
+    else if (section === "opencode" || section === "paperclip") expect(await screen.findByText("Required grants active")).toBeTruthy();
+    else if (section === "hermes") await waitFor(() => expect(screen.queryByText("Hermes workspace access is gated")).toBeNull());
+    else await waitFor(() => expect(screen.queryByText(/Next:.*grant filesystem access/)).toBeNull());
+  });
+
   it("grants the Browser controlled access preset from the Add-ons workspace", async () => {
     render(<App />);
 
@@ -3318,6 +3608,174 @@ describe("App boot flow", () => {
 
     expect(await screen.findByLabelText("Browser URL")).toBeTruthy();
     expect(screen.getByLabelText("Browser extension preview")).toBeTruthy();
+  });
+
+  it.each(["permission-denied", "unsupported-operation", "route-unknown", "absent-registry"])(
+    "preserves the shell DOM without harness controls when the host returns %s", async code => {
+      const client = harnessClients.createHarnessClient({ invoke: harnessInvokeMock });
+      const factory = vi.spyOn(harnessClients, "createHarnessClient")
+        .mockReturnValueOnce(undefined as unknown as typeof client)
+        .mockReturnValueOnce(client);
+      const openAddons = async () => {
+        expect((await screen.findAllByText("Launch your AI tools from one workbench.")).length).toBeGreaterThan(0);
+        fireEvent.click(screen.getAllByRole("button", { name: /Add-ons/i })[0]);
+        expect(await screen.findByPlaceholderText("Search add-ons")).toBeTruthy();
+        expect((await screen.findAllByText("Paperclip")).length).toBeGreaterThan(0);
+      };
+      try {
+        const baseline = render(<App />);
+        await openAddons();
+        const baselineDOM = baseline.container.innerHTML;
+        baseline.unmount();
+        const response = deferred<harnessClients.HarnessProjection>();
+        const refresh = vi.spyOn(client, "refresh").mockReturnValue(response.promise);
+        const view = render(<App />);
+        await act(async () => {
+          if (code === "absent-registry") response.resolve(null as unknown as harnessClients.HarnessProjection);
+          else response.reject(Object.assign(new Error("Host route unavailable"), { code }));
+        });
+        await openAddons();
+        expect(screen.queryByText("Harness management")).toBeNull();
+        expect(screen.queryByRole("region", { name: /harness/i })).toBeNull();
+        expect(screen.queryByLabelText("Import JSON manifest")).toBeNull();
+        expect(view.container.innerHTML).toBe(baselineDOM);
+        fireEvent.change(screen.getByPlaceholderText("Search add-ons"), { target: { value: "Paperclip" } });
+        await act(async () => {});
+        expect(refresh).toHaveBeenCalledTimes(2);
+      } finally {
+        factory.mockRestore();
+      }
+    },
+  );
+
+  it.each([false, true])("sends through the existing provider route without refreshing (cached projection: %s)", async projected => {
+    const client = harnessClients.createHarnessClient({ invoke: harnessInvokeMock });
+    if (projected) client.applySnapshot({ ...workingShellProjection(), bootEpoch: "boot", revision: 1 });
+    const refresh = vi.spyOn(client, "refresh");
+    const factory = vi.spyOn(harnessClients, "createHarnessClient").mockReturnValue(client);
+    try {
+      render(<App />);
+      const composer = (await screen.findAllByPlaceholderText("Message Augmentor"))[0];
+      refresh.mockClear();
+      fireEvent.change(composer, { target: { value: "Use the existing provider route" } });
+      fireEvent.click(screen.getAllByRole("button", { name: "Send message" })[0]);
+      expect(refresh).not.toHaveBeenCalled();
+      expect(await screen.findByText("This is a live Strategist test reply from MiniMax-M3.")).toBeTruthy();
+      // Existing provider expectations: attempt streaming, then the compatibility completion.
+      expect(requestProviderServiceChatCompletionStreamMock).toHaveBeenCalledTimes(1);
+      expect(requestProviderServiceChatCompletionMock).toHaveBeenCalledTimes(1);
+      expect(requestProviderServiceChatCompletionStreamMock.mock.invocationCallOrder[0])
+        .toBeLessThan(requestProviderServiceChatCompletionMock.mock.invocationCallOrder[0]);
+    } finally { factory.mockRestore(); refresh.mockRestore(); }
+  });
+
+  it("hides the host model selector for /delegate with a projected owner", async () => {
+    const client = harnessClients.createHarnessClient({ invoke: harnessInvokeMock });
+    client.applySnapshot({ ...workingShellProjection(), bootEpoch: "boot", revision: 1, governanceActivated: true,
+      slots: { ...workingShellProjection().slots, "primary-agent": { addonId: "addon.dsh", generation: 1, available: true } } });
+    const factory = vi.spyOn(harnessClients, "createHarnessClient").mockReturnValue(client);
+    try {
+      render(<App />);
+      const composer = (await screen.findAllByPlaceholderText("Message Augmentor"))[0];
+      expect(screen.getAllByRole("option", { name: "Choose host model…" }).length).toBeGreaterThan(0);
+      fireEvent.change(composer, { target: { value: "/delegate opencode Implement a deterministic browser bridge" } });
+      expect(screen.queryByRole("option", { name: "Choose host model…" })).toBeNull();
+      expect(screen.queryByRole("option", { name: "Host-selected model" })).toBeNull();
+    } finally { factory.mockRestore(); }
+  });
+
+  it("makes Stop available immediately while the first harness host call is pending", async () => {
+    const pending = deferred<{ session: { addonId: string; sessionId: string; bootEpoch: string; generation: number } }>();
+    const session = { addonId: "addon.dsh", sessionId: "pending-session", bootEpoch: "boot", generation: 1 };
+    const invoke = vi.fn().mockImplementation(() => pending.promise);
+    const client = harnessClients.createHarnessClient({ invoke });
+    client.applySnapshot({ ...workingShellProjection(), bootEpoch: "boot", revision: 1, governanceActivated: true,
+      slots: { ...workingShellProjection().slots, "primary-agent": { addonId: "addon.dsh", generation: 1, available: true } } });
+    const factory = vi.spyOn(harnessClients, "createHarnessClient").mockReturnValue(client);
+    try {
+      render(<App />);
+      const composer = (await screen.findAllByPlaceholderText("Message Augmentor"))[0];
+      fireEvent.change(composer, { target: { value: "Start immediately" } });
+      fireEvent.click(screen.getAllByRole("button", { name: "Send message" })[0]);
+      expect(screen.getByRole("button", { name: "Stop response" })).toBeTruthy();
+      expect(invoke).toHaveBeenCalledWith("harness_session", { addonId: "addon.dsh" });
+      fireEvent.click(screen.getByRole("button", { name: "Stop response" }));
+      await act(async () => { pending.resolve({ session }); });
+      expect(invoke.mock.calls.map(([command]) => command)).toEqual(["harness_session"]);
+      expect(screen.getAllByText(/Interrupted/i).length).toBeGreaterThan(0);
+      expect(requestProviderServiceChatCompletionMock).not.toHaveBeenCalled();
+    } finally { pending.resolve({ session }); factory.mockRestore(); }
+  });
+
+  it("wires primary harness chat and Stop without provider credentials", async () => {
+    const session = { addonId: "addon.dsh", sessionId: "app-session", bootEpoch: "app-boot", generation: 1 };
+    const snapshot = { ...workingShellProjection(), bootEpoch: "app-boot", revision: 1, governanceActivated: true,
+      slots: { ...workingShellProjection().slots, "primary-agent": { addonId: "addon.dsh", generation: 1, available: true } } };
+    const continueStream = deferred<void>();
+    const invoke = vi.fn(async (command: string) => {
+      if (command === "harness_registry") return snapshot;
+      if (command === "harness_session") return { session };
+      if (command === "harness_history") return { history: { messages: [] } };
+      if (command === "harness_turn") return { turnId: "app-turn" };
+      return {};
+    });
+    const client = harnessClients.createHarnessClient({ invoke: invoke as never, events: async function* () {
+      yield { ...session, turnId: "app-turn", sequence: 1, type: "delta", data: { text: "DSH partial answer" } };
+      await continueStream.promise;
+      yield { ...session, turnId: "app-turn", sequence: 2, type: "final", data: { text: "Late DSH answer" } };
+    } });
+    client.applySnapshot(snapshot);
+    const factory = vi.spyOn(harnessClients, "createHarnessClient").mockImplementation(() => client);
+    const prompt = vi.spyOn(window, "prompt").mockReturnValue("dsh-provider/model-name");
+    const state = buildDefaultState(manifests);
+    state.providers = [];
+    hydrateStateMock.mockResolvedValueOnce(state);
+    try {
+      render(<App />);
+      const composer = (await screen.findAllByPlaceholderText("Message Augmentor"))[0];
+      fireEvent.change(screen.getAllByLabelText("Model and reasoning profile")[0], { target: { value: "Choose host model…" } });
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith("harness_select_model", {
+        session, model: { provider: "dsh-provider", model: "model-name" },
+      }));
+      expect(await screen.findByText("Model selection acknowledged by the host.")).toBeTruthy();
+      fireEvent.change(composer, { target: { value: "Use the primary harness" } });
+      fireEvent.click(screen.getAllByRole("button", { name: "Send message" })[0]);
+      expect(await screen.findByText("DSH partial answer")).toBeTruthy();
+      expect(requestArchiveSearchMock).toHaveBeenCalledWith("Use the primary harness", 6);
+      expect(screen.getAllByText("addon.dsh").length).toBeGreaterThan(0);
+      expect(requestProviderServiceChatCompletionMock).not.toHaveBeenCalled();
+      expect(requestProviderServiceChatCompletionStreamMock).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Stop response" }));
+      expect(invoke).toHaveBeenCalledWith("harness_cancel", { session, turnId: "app-turn" });
+      await act(async () => { continueStream.resolve(); });
+      expect(screen.getByText("DSH partial answer")).toBeTruthy();
+      expect(screen.queryByText("Late DSH answer")).toBeNull();
+      expect(screen.getAllByText(/Interrupted/i).length).toBeGreaterThan(0);
+    } finally { continueStream.resolve(); factory.mockRestore(); prompt.mockRestore(); }
+  });
+
+  it("wires host harness management behind the existing Add-ons shell", async () => {
+    const candidate = createManifest("addon.host-harness", "Host Harness", "agent");
+    const snapshot = {
+      bootEpoch: "app-boot", revision: 0, governanceActivated: false,
+      candidates: [candidate], installations: {}, slots: {},
+    };
+    harnessInvokeMock.mockResolvedValueOnce(snapshot);
+    render(<App />);
+    expect((await screen.findAllByText("Launch your AI tools from one workbench.")).length).toBeGreaterThan(0);
+    expect(screen.queryByText("Host Harness")).toBeNull();
+    fireEvent.click(screen.getAllByRole("button", { name: /Add-ons/i })[0]);
+    const region = await screen.findByRole("region", { name: "Host Harness" });
+    expect(screen.getByRole("heading", { name: "Harness management" })).toBeTruthy();
+    expect(harnessInvokeMock).toHaveBeenCalledWith("harness_registry");
+    const pending = deferred<typeof snapshot>();
+    harnessInvokeMock.mockReturnValueOnce(pending.promise);
+    fireEvent.click(within(region).getByRole("button", { name: "Install" }));
+    expect(harnessInvokeMock).toHaveBeenLastCalledWith("harness_install", { manifest: candidate, enabled: true });
+    expect(screen.getByText("Pending: Install")).toBeTruthy();
+    expect(within(region).queryByRole("button", { name: "Remove" })).toBeNull();
+    await act(async () => pending.resolve({ ...snapshot, revision: 1 }));
+    expect(await screen.findByPlaceholderText("Search add-ons")).toBeTruthy();
   });
 
   it("shows Paperclip in the Add-ons catalog before installation", async () => {
@@ -3979,13 +4437,15 @@ describe("App boot flow", () => {
     expect(requestArchiveDocumentMock).toHaveBeenCalledWith("WIKI/concepts/provider-fabric.md");
     expect(requestProviderServiceChatCompletionStreamMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        systemPrompt: expect.stringContaining("Living Archive context retrieved for this turn."),
+        contextSources: expect.arrayContaining([expect.objectContaining({ source: "living-archive", kind: "status" })]),
+        systemPrompt: expect.not.stringContaining("Living Archive context retrieved for this turn."),
       }),
       expect.any(Function),
     );
     expect(requestProviderServiceChatCompletionStreamMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        systemPrompt: expect.stringContaining("Provider routing belongs to ResonantOS"),
+        contextSources: expect.arrayContaining([expect.objectContaining({ source: "living-archive", kind: "page", path: "WIKI/concepts/provider-fabric.md", text: expect.stringContaining("Provider routing belongs to ResonantOS") })]),
+        systemPrompt: expect.not.stringContaining("Provider routing belongs to ResonantOS"),
       }),
       expect.any(Function),
     );
@@ -4207,8 +4667,12 @@ describe("App boot flow", () => {
 
     expect(await screen.findByText("This is a live Strategist test reply from MiniMax-M3.")).toBeTruthy();
     const providerCall = providerStreamInputs().at(-1);
-    expect(providerCall?.systemPrompt).toContain("ResonantOS compacted conversation memory:");
-    expect(providerCall?.systemPrompt).toContain("Edited why: preserve the user's intent across compaction.");
+    const compactRecord = providerCall?.contextSources?.find(record => record.kind === "compact");
+    expect(compactRecord).toMatchObject({ source: "conversation-memory", title: "ResonantOS compacted conversation memory", path: providerCall?.messages.at(-1)?.threadId });
+    expect(JSON.parse(compactRecord!.text).threadId).toBe(providerCall?.messages.at(-1)?.threadId);
+    expect(providerCall?.systemPrompt).not.toContain("ResonantOS compacted conversation memory:");
+    expect(compactRecord?.text).toContain("Edited why: preserve the user's intent across compaction.");
+    expect(providerCall?.systemPrompt).not.toContain("Edited why: preserve the user's intent across compaction.");
     expect(providerCall?.messages.map((message) => message.id)).not.toContain("thread-main-desktop:m1");
     expect(providerCall?.messages.map((message) => message.id)).toContain("thread-main-desktop:m12");
     expect(providerCall?.messages.at(-1)?.content).toBe("Continue after compacting the chat.");
@@ -4255,8 +4719,12 @@ describe("App boot flow", () => {
     expect(await screen.findByText(/automatic compaction threshold/i)).toBeTruthy();
     expect(await screen.findByText("This is a live Strategist test reply from MiniMax-M3.")).toBeTruthy();
     const providerCall = providerStreamInputs().at(-1);
-    expect(providerCall?.systemPrompt).toContain("ResonantOS compacted conversation memory:");
-    expect(providerCall?.systemPrompt).toContain("automatic compaction protects long chat continuity");
+    const compactRecord = providerCall?.contextSources?.find(record => record.kind === "compact");
+    expect(compactRecord).toMatchObject({ source: "conversation-memory", title: "ResonantOS compacted conversation memory", path: providerCall?.messages.at(-1)?.threadId });
+    expect(JSON.parse(compactRecord!.text).threadId).toBe(providerCall?.messages.at(-1)?.threadId);
+    expect(providerCall?.systemPrompt).not.toContain("ResonantOS compacted conversation memory:");
+    expect(compactRecord?.text).toContain("automatic compaction protects long chat continuity");
+    expect(providerCall?.systemPrompt).not.toContain("automatic compaction protects long chat continuity");
     expect(providerCall?.messages.map((message) => message.id)).not.toContain("thread-main-desktop:m1");
     expect(providerCall?.messages.at(-1)?.content).toBe("Send after auto compaction threshold.");
   });
@@ -4303,8 +4771,12 @@ describe("App boot flow", () => {
 
     expect(await screen.findByText("This is a live Strategist test reply from MiniMax-M3.")).toBeTruthy();
     const providerCall = providerStreamInputs().at(-1);
-    expect(providerCall?.systemPrompt).toContain("ResonantOS compacted conversation memory:");
-    expect(providerCall?.systemPrompt).toContain("avoid amnesia when exploring alternatives");
+    const compactRecord = providerCall?.contextSources?.find(record => record.kind === "compact");
+    expect(compactRecord).toMatchObject({ source: "conversation-memory", title: "ResonantOS compacted conversation memory", path: providerCall?.messages.at(-1)?.threadId });
+    expect(JSON.parse(compactRecord!.text).threadId).toBe(providerCall?.messages.at(-1)?.threadId);
+    expect(providerCall?.systemPrompt).not.toContain("ResonantOS compacted conversation memory:");
+    expect(compactRecord?.text).toContain("avoid amnesia when exploring alternatives");
+    expect(providerCall?.systemPrompt).not.toContain("avoid amnesia when exploring alternatives");
     expect(providerCall?.messages.at(-1)?.threadId).toMatch(/^thread-fork-/);
     expect(providerCall?.messages.at(-1)?.content).toBe("Continue from this branched compacted thread.");
   });
@@ -4911,7 +5383,7 @@ describe("App boot flow", () => {
     expect(screen.getByLabelText("1 changed Obsidian note(s)")).toBeTruthy();
     expect(screen.getByText("2 note(s) ready for review queue")).toBeTruthy();
     fireEvent.click(screen.getAllByRole("button", { name: "Grant intake access" })[0]);
-    fireEvent.click(screen.getByRole("button", { name: "Queue scanned notes" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Queue scanned notes" }));
     expect(await screen.findByText("Review notes before queueing")).toBeTruthy();
     expect(screen.getByText("Architecture Note.md")).toBeTruthy();
     expect(screen.getByText("Fresh Note.md")).toBeTruthy();
@@ -5283,7 +5755,8 @@ describe("App boot flow", () => {
     const request = requestProviderServiceChatCompletionStreamMock.mock.calls.at(-1)?.[0];
     expect(request?.threadId).toBe("thread-living-archive-agent");
     expect(request?.messages.at(-1)?.content).toBe("Fix the Living Archive setup without moving this conversation to the sidebar.");
-    expect(request?.systemPrompt).toContain("This conversation is happening inside the Living Archive workspace");
+    expect(request?.contextSources?.find((record: UntrustedChatContext) => record.source === "archive-workspace")?.text).toContain("This conversation is happening inside the Living Archive workspace");
+    expect(request?.systemPrompt).not.toContain("This conversation is happening inside the Living Archive workspace");
 
     const dialogue = document.querySelector(".archive-agent-dialogue");
     expect(dialogue?.textContent).toContain("Fix the Living Archive setup");
@@ -5422,9 +5895,12 @@ describe("App boot flow", () => {
     );
     expect(requestArchiveLibraryPreflightMock).toHaveBeenCalledWith("/Users/augmentor/Documents/RESONANT_OS_BASE");
     const request = requestProviderServiceChatCompletionStreamMock.mock.calls.at(-1)?.[0];
-    expect(request?.systemPrompt).toContain("Host archive coverage inspection already ran for this turn");
-    expect(request?.systemPrompt).toContain("Managed folders with supported files but no manifest record");
-    expect(request?.systemPrompt).toContain("02_PROTOCOL_LIBRARY");
+    expect(request?.contextSources?.find((record: UntrustedChatContext) => record.source === "archive-workspace")?.text).toContain("Host archive coverage inspection already ran for this turn");
+    expect(request?.systemPrompt).not.toContain("Host archive coverage inspection already ran for this turn");
+    expect(request?.contextSources?.find((record: UntrustedChatContext) => record.source === "archive-workspace")?.text).toContain("Managed folders with supported files but no manifest record");
+    expect(request?.systemPrompt).not.toContain("Managed folders with supported files but no manifest record");
+    expect(request?.contextSources?.find((record: UntrustedChatContext) => record.source === "archive-workspace")?.text).toContain("02_PROTOCOL_LIBRARY");
+    expect(request?.systemPrompt).not.toContain("02_PROTOCOL_LIBRARY");
   });
 
   it("opens a host-owned mixed library classification review from the source registry", async () => {

@@ -11,18 +11,35 @@ import { DecodingMode, EntityDecoder, htmlDecodeTree } from "entities/decode";
 import semver from "semver";
 import { isAlias, isMap, isSeq, parseDocument } from "yaml";
 
-const CANONICAL_ENTRYPOINTS = [
+const CANONICAL_READING_ORDER = [
   "AGENTS.md",
   "README.md",
   "INSTALL.md",
   "CONTRIBUTING.md",
   "docs/README.md",
 ];
+// The vendored Augmentor package has its own documentation index; it does not
+// extend the repository's required five-file contributor reading order.
+const CANONICAL_ENTRYPOINTS = [
+  ...CANONICAL_READING_ORDER,
+  "apps/augmentor/README.md",
+];
+// Published vendored packages serve npm consumers independently of this repo's
+// toolchain pin. Keep dsh-augmentor's Node 22 support; still require a valid floor.
+const VENDORED_PUBLISHED_MANIFESTS = new Set([
+  "apps/augmentor/plugin/package.json",
+]);
 const IMPLICIT_DOCUMENT_CONSUMERS = new Set([
   ".github/pull_request_template.md",
   "index.html",
+  // Vendored Augmentor HTML is consumed by its extension and lab, not doc navigation.
+  "apps/augmentor/extension/sidepanel.html",
+  "apps/augmentor/lab/veil-preview.html",
   "browser-first/resonantos-side-panel-extension/src/main-workspace.html",
   "browser-first/resonantos-side-panel-extension/src/side-panel.html",
+]);
+const EVIDENCE_DOCUMENTS = new Set([
+  "docs/augmentor-future-list-acceptance-matrix.md",
 ]);
 const DOCUMENTATION_PATH = /\.(?:md|markdown|mdx|txt|html|pdf|docx)$/i;
 
@@ -1217,7 +1234,7 @@ function validateEntrypoints(context) {
   if (findings.length > 0) return findings;
 
   const orderedLinks = entrypointLinks(context, "AGENTS.md");
-  const positions = CANONICAL_ENTRYPOINTS.map((path) => orderedLinks.find((link) => link.path === path)?.index ?? -1);
+  const positions = CANONICAL_READING_ORDER.map((path) => orderedLinks.find((link) => link.path === path)?.index ?? -1);
   if (positions.some((position) => position === -1) || positions.some((position, index) => index > 0 && position < positions[index - 1])) {
     findings.push(createFinding(
       "AGENTS.md",
@@ -1769,7 +1786,7 @@ function validateEngineFloor(metadata, path, nvmVersion, findings) {
   const floor = normalizedRange ? semver.minVersion(normalizedRange) : null;
   if (!floor) {
     findings.push(createFinding(path, 1, `${path} must declare engines.node with a >= Node version floor`));
-  } else if (!semver.eq(nvmVersion, floor.version)) {
+  } else if (!VENDORED_PUBLISHED_MANIFESTS.has(path) && !semver.eq(nvmVersion, floor.version)) {
     findings.push(createFinding(
       path,
       1,
@@ -1843,6 +1860,70 @@ function validateNodeVersions(context) {
   return findings;
 }
 
+// Evidence targets deliberately use a stricter inventory than document discovery:
+// only indexed files qualify, including staged files in a repository with no commit.
+function validateEvidenceCitations(context) {
+  const documents = context.documents.filter((doc) => EVIDENCE_DOCUMENTS.has(doc.path));
+  if (documents.length === 0) return [];
+
+  let inventory;
+  try {
+    inventory = context.trackedFiles ?? execFileSync(
+      "git", ["-C", context.root, "ls-files", "--cached", "-z"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+    ).split("\0").filter(Boolean);
+  } catch {
+    return documents.map((doc) => createFinding(doc.path, 1,
+      "evidence citation inventory unavailable: cannot obtain tracked files from Git; supply trackedFiles explicitly"));
+  }
+
+  const tracked = new Set([...inventory].sort());
+  const byBasename = new Map();
+  for (const path of tracked) {
+    const basename = path.split("/").at(-1);
+    const candidates = byBasename.get(basename) ?? [];
+    candidates.push(path);
+    byBasename.set(basename, candidates);
+  }
+  const repositoryRoot = realpathSync(context.root);
+  const findings = [];
+  for (const doc of documents) {
+    const tree = markdownParser.parse(doc.content);
+    walkMarkdown(tree, (node) => {
+      if (node.type !== "inlineCode") return;
+      const token = node.value.trim();
+      if (/^[a-z][a-z\d+.-]*:/i.test(token)
+        || /^(?:npm|npx|node|git|bash|sh|python3?|rg|gh)\s/.test(token)) return;
+      const fileLike = token.includes("/")
+        || /\.[a-z][a-z\d_-]*$/i.test(token)
+        || /^(?:README|LICENSE|Makefile|Dockerfile|\.nvmrc)$/.test(token);
+      if (!fileLike) return;
+
+      const candidates = tracked.has(token)
+        ? [token]
+        : token.includes("/") ? [] : byBasename.get(token) ?? [];
+      let reason;
+      if (candidates.length === 0) {
+        reason = "does not resolve to a tracked file";
+      } else if (candidates.length > 1) {
+        reason = `is ambiguous: ${candidates.join(", ")}`;
+      } else {
+        try {
+          const target = realpathSync(resolve(context.root, candidates[0]));
+          if (!isPathInside(repositoryRoot, target) || !lstatSync(target).isFile()) {
+            reason = "does not exist as a file inside the repository";
+          }
+        } catch {
+          reason = "does not exist as a file inside the repository";
+        }
+      }
+      if (reason) findings.push(createFinding(doc.path, node.position.start.line,
+        `evidence citation "${token}" ${reason}`));
+    });
+  }
+  return findings;
+}
+
 function buildContext(root, options = {}) {
   const resolvedRoot = resolve(root);
   const files = options.files ?? walkFiles(resolvedRoot);
@@ -1858,6 +1939,7 @@ export function validateRepositoryDocs(root, options = {}) {
   const context = buildContext(root, options);
   const findings = [
     ...validateMarkdownLinks(context),
+    ...validateEvidenceCitations(context),
     ...validateNpmScripts(context),
     ...validateCanonicalClaims(context),
     ...validateEntrypoints(context),

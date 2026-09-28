@@ -4,6 +4,7 @@ import http from "node:http";
 import https from "node:https";
 import net from "node:net";
 import path from "node:path";
+import { publicHarnessError } from "./harness-adapter-contract.mjs";
 
 const bridgeTokenHeader = "x-resonantos-bridge-token";
 export const bridgeTokenHeaderName = "X-ResonantOS-Bridge-Token";
@@ -36,6 +37,118 @@ const bridgeCapabilityBootstrapHeaderName = "X-ResonantOS-Capability-Bootstrap-T
 //                            Auth is still enforced via the IP allowlist
 //                            (RESONANTOS_BRIDGE_ALLOWED_IPS) so only
 //                            LAN/Tailscale clients can hit these paths.
+
+// Fixed public errors belong to the transport contract; never serialize arbitrary
+// exception properties, even when a boundary dependency supplies the exception.
+const openCodeStatuses = Object.freeze({
+  OPENCODE_INTERNAL: 500, OPENCODE_BRIDGE_UNAUTHORIZED: 401,
+  OPENCODE_CAPABILITY_REQUIRED: 403, OPENCODE_HOST_REJECTED: 403,
+  OPENCODE_EXECUTION_DISABLED: 403, OPENCODE_REVOKED: 403,
+  OPENCODE_SESSION_UNKNOWN: 404, OPENCODE_ROUTE_UNKNOWN: 404,
+  OPENCODE_INVALID_REQUEST: 400, OPENCODE_UPSTREAM_AUTH: 502,
+  OPENCODE_UPSTREAM_FAILED: 502, OPENCODE_PROTOCOL_ERROR: 502,
+  OPENCODE_TIMEOUT: 504, OPENCODE_STREAM_DISCONNECTED: 503,
+  OPENCODE_UNAVAILABLE: 503, OPENCODE_SLOW_CONSUMER: 503, OPENCODE_LIMIT: 429,
+});
+export function publicOpenCodeError(code) {
+  const safeCode = Object.hasOwn(openCodeStatuses, code) ? code : "OPENCODE_INTERNAL";
+  return { status: openCodeStatuses[safeCode], payload: {
+    ok: false, code: safeCode, error: "OpenCode boundary request failed.",
+  } };
+}
+// Route metadata selects this family; request fields cannot select serializers.
+function publicHarnessTransportError(error, status) {
+  const mapped = {
+    OPENCODE_BRIDGE_UNAUTHORIZED: 'permission-denied', OPENCODE_CAPABILITY_REQUIRED: 'permission-denied',
+    OPENCODE_HOST_REJECTED: 'permission-denied', OPENCODE_INVALID_REQUEST: 'invalid-event',
+  };
+  const safe = publicHarnessError({ code: mapped[error?.code] ?? error?.code });
+  const statuses = { 'invalid-manifest': 400, 'invalid-event': 400, 'permission-denied': 403,
+    'ownership-conflict': 409, 'session-not-found': 404, 'unsupported-operation': 400, 'deadline-exceeded': 504 };
+  return { status: status ?? statuses[safe.code] ?? 503, payload: { ok: false, code: safe.code, error: safe.message } };
+}
+// A mixed legacy/governed handler opts in only after selecting governance.
+// Plain provider errors must retain the legacy status and message.
+export class HarnessTransportError extends Error {
+  constructor(error) {
+    const safe = publicHarnessError(error);
+    super(safe.message);
+    this.name = 'HarnessTransportError';
+    this.code = safe.code;
+  }
+}
+function routeError(error, family) {
+  return family === 'harness' ? publicHarnessTransportError(error) : boundaryError(error);
+}
+export class OpenCodeBoundaryError extends Error {
+  constructor(code, status) {
+    const mapped = publicOpenCodeError(code);
+    super(mapped.payload.error);
+    this.name = "OpenCodeBoundaryError";
+    this.code = mapped.payload.code;
+    this.status = mapped.status;
+  }
+}
+function boundaryPath(url) {
+  // Absolute targets still belong to the boundary and must fail the Host guard.
+  const pathname = String(url ?? "/").replace(/^https?:\/\/[^/]+/i, "").split("?")[0];
+  return pathname === "/opencode/session" || pathname.startsWith("/opencode/session/") ||
+    ["/opencode/sessions/list", "/opencode/agents/list", "/opencode/web/url"].includes(pathname);
+}
+function boundaryError(error) {
+  return publicOpenCodeError(error?.code);
+}
+export function validateLoopbackHost(request, {listenerPort = request.socket?.localPort, getPublicPort = () => undefined} = {}) {
+  const target = request.url ?? "/";
+  if (!/^\/(?!\/)[^\s#]*$/.test(target) || target.includes("\\")) return false;
+  const hosts = [];
+  const raw = request.rawHeaders ?? [];
+  for (let i = 0; i < raw.length; i += 2) if (String(raw[i]).toLowerCase() === "host") hosts.push(raw[i + 1]);
+  if (hosts.length !== 1 || typeof hosts[0] !== "string") return false;
+  const match = /^(127\.0\.0\.1|localhost|\[::1\]):([1-9][0-9]{0,4})$/i.exec(hosts[0]);
+  if (!match || !isLoopbackBridgeHost(match[1]) || Number(match[2]) > 65535) return false;
+  const headerHost = normalizeHeaders(request.headers).host;
+  if (headerHost !== hosts[0]) return false;
+  return match[2] === String(listenerPort) || match[2] === getPublicPort();
+}
+export function authorizeBridgeRoute(request, {
+  routes = [], bridgeToken, bridgeCapabilityTokens = {}, capabilityBootstrapToken,
+  listenerPort = request.socket?.localPort, getPublicPort = () => undefined, extensionOrigin, allowedOrigins = [],
+} = {}) {
+  const route = compileRoutes(routes).get(routeKey(request.method, request.url));
+  const owned = boundaryPath(request.url) || route?.loopbackHostOnly;
+  const refuse = (status, code, error) => route?.errorFamily === "harness" ? publicHarnessTransportError({ code }, status) : owned ? publicOpenCodeError(code) : {status, payload:{ok:false,error}};
+  if (!isAuthorizedBridgeRequest(request, bridgeToken)) return refuse(401, "OPENCODE_BRIDGE_UNAUTHORIZED", "Unauthorized browser-first bridge request.");
+  if (!route) return refuse(404, "OPENCODE_ROUTE_UNKNOWN", "Unknown browser-first bridge route.");
+  if (route.requiredCapabilityBootstrap && !isAuthorizedCapabilityBootstrapRequest(request, capabilityBootstrapToken))
+    return refuse(403, "OPENCODE_CAPABILITY_REQUIRED", "Bridge route requires capability bootstrap authorization.");
+  if (!route.requiredCapability && !route.requiredCapabilityBootstrap)
+    return refuse(403, "OPENCODE_CAPABILITY_REQUIRED", "Bridge route declares no capability; refused by default.");
+  if (route.requiredCapability && !isAuthorizedCapabilityRequest(request, bridgeCapabilityTokens, route.requiredCapability))
+    return refuse(403, "OPENCODE_CAPABILITY_REQUIRED", `Bridge route requires ${route.requiredCapability} capability.`);
+  if (route.loopbackHostOnly && !validateLoopbackHost(request, {listenerPort,getPublicPort})) return refuse(403, "OPENCODE_HOST_REJECTED", "Host rejected.");
+  if (route.errorFamily === 'harness' && request.headers?.origin &&
+      pickAllowedOrigin(request.headers, extensionOrigin, allowedOrigins) !== request.headers.origin) {
+    return refuse(403, "OPENCODE_HOST_REJECTED", "Origin rejected.");
+  }
+  return {route};
+}
+
+// Explicitly select draining before ending a refusal. A peer that never finishes
+// its body cannot hold the connection forever.
+function drainRefusedRequest(request, response) {
+  let timer;
+  const cleanup = () => { clearTimeout(timer); request.off("end", cleanup); request.off("error", failed); response.off("close", responseClosed); };
+  const failed = () => { cleanup(); response.destroy(); };
+  const responseClosed = () => { if (request.destroyed || request.readableEnded) cleanup(); };
+  request.once("end", cleanup);
+  request.once("error", failed);
+  response.once("close", responseClosed);
+  timer = setTimeout(() => { cleanup(); request.destroy(); }, 1000);
+  timer.unref?.();
+  request.resume();
+  if (request.readableEnded) cleanup();
+}
 
 function parseAllowedList(value) {
   if (!value) return [];
@@ -231,28 +344,111 @@ function shouldDropUpstreamResponseHeader(headerName) {
   return HOP_BY_HOP_HEADERS.has(lower) || lower.startsWith("access-control-") || lower === "vary";
 }
 
-function writeJson(response, status, payload, extensionOrigin, requestHeaders, allowedOrigins) {
+export function bridgeCorsHeaders(extensionOrigin, requestHeaders, allowedOrigins) {
   const allowOrigin = pickAllowedOrigin(requestHeaders, extensionOrigin, allowedOrigins);
-  const headers = {
-    "Content-Type": "application/json",
+  return {
     "Access-Control-Allow-Headers": `Content-Type, ${bridgeTokenHeaderName}, ${bridgeCapabilityHeaderName}, ${bridgeCapabilityBootstrapHeaderName}`,
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
     "Vary": "Origin",
+    ...(allowOrigin ? {"Access-Control-Allow-Origin": allowOrigin} : {}),
   };
-  if (allowOrigin) {
-    headers["Access-Control-Allow-Origin"] = allowOrigin;
-  }
-  response.writeHead(status, headers);
+}
+function writeJson(response, status, payload, extensionOrigin, requestHeaders, allowedOrigins) {
+  response.writeHead(status, {"Content-Type": "application/json", ...bridgeCorsHeaders(extensionOrigin, requestHeaders, allowedOrigins)});
   response.end(JSON.stringify(payload));
 }
 
-async function readJsonBody(request) {
+export async function writeBridgeEventStream(response, request, subscription, {extensionOrigin,allowedOrigins,terminalEventFamily} = {}) {
+  const harness = terminalEventFamily === "harness";
+  const disconnectedCode = harness ? "runtime-unavailable" : "OPENCODE_STREAM_DISCONNECTED";
+  const slowCode = harness ? "runtime-unavailable" : "OPENCODE_SLOW_CONSUMER";
+  const MAX_BYTES = 1048576;
+  const APPLICATION_BYTES = MAX_BYTES - 4096;
+  let terminal = false, blocked = false, timer, detach = () => {}, wakeDrain;
+  let resolveClosed, resolveTerminal;
+  const closed = new Promise(resolve => { resolveClosed = resolve; });
+  const terminated = new Promise(resolve => { resolveTerminal = resolve; });
+  const sessionId = new URL(request.url, "http://127.0.0.1").searchParams.get("sessionId");
+  const onClose = () => { clearTimeout(timer); terminal = true; resolveTerminal(); wakeDrain?.(); resolveClosed(); };
+  const onError = () => response.destroy();
+  response.once("close", onClose);
+  response.once("error", onError);
+  const terminate = (code) => {
+    if (terminal) return closed;
+    terminal = true;
+    const wasBlocked = blocked;
+    resolveTerminal();
+    wakeDrain?.();
+    const {payload} = harness ? publicHarnessTransportError({code}) : publicOpenCodeError(code);
+    const frame = harness
+      ? `event: harness.close\ndata: ${JSON.stringify({sessionId,code:payload.code,error:payload.error})}\n\n`
+      : `event: opencode.close\ndata: ${JSON.stringify({version:1,sessionId,source:"governed",event:{type:"bridge.closed",properties:{code:payload.code,error:payload.error}}})}\n\n`;
+    timer = setTimeout(() => response.destroy(), 1000);
+    timer.unref?.();
+    if (response.destroyed || wasBlocked || response.writableLength + Buffer.byteLength(frame) > MAX_BYTES) {
+      response.destroy();
+    } else {
+      if (!response.headersSent) response.writeHead(200, {"Content-Type":"text/event-stream","Cache-Control":"no-store",...bridgeCorsHeaders(extensionOrigin,request.headers,allowedOrigins)});
+      response.write(frame);
+      response.end();
+    }
+    return closed;
+  };
+  try {
+    detach = subscription.attachTransport({bufferedBytes:() => response.writableLength,terminate,closed});
+    if (response.destroyed) { onClose(); return; }
+    if (subscription.terminalCode) { await terminate(subscription.terminalCode); return; }
+    response.writeHead(200, {"Content-Type":"text/event-stream","Cache-Control":"no-store",...bridgeCorsHeaders(extensionOrigin,request.headers,allowedOrigins)});
+    response.flushHeaders();
+    const iterator = subscription.events[Symbol.asyncIterator]();
+    while (!terminal && !subscription.terminalCode) {
+      const next = await Promise.race([iterator.next(),terminated.then(() => ({done:true}))]);
+      if (terminal || subscription.terminalCode) break;
+      if (next.done) { await subscription.close(disconnectedCode); break; }
+      const frame = `data: ${JSON.stringify(next.value)}\n\n`;
+      if (subscription.queuedBytes + response.writableLength + Buffer.byteLength(frame) > APPLICATION_BYTES) {
+        await subscription.close(slowCode); break;
+      }
+      if (!response.write(frame)) {
+        blocked = true;
+        await new Promise(resolve => {
+          const finish = () => { response.off("drain", finish); wakeDrain = undefined; blocked = false; resolve(); };
+          wakeDrain = finish;
+          response.once("drain", finish);
+          if (terminal || subscription.terminalCode) finish();
+        });
+      }
+    }
+    if (subscription.terminalCode && !terminal) await terminate(subscription.terminalCode);
+    if (terminal) await closed;
+  } catch (error) {
+    response.destroy();
+    await closed;
+    throw error;
+  } finally {
+    detach();
+    clearTimeout(timer);
+    response.off("close", onClose);
+    response.off("error", onError);
+    // Release pending iterator work without waiting on a detached transport.
+    void subscription.close(subscription.terminalCode ?? disconnectedCode);
+  }
+}
+
+async function readJsonBody(request, boundaryOwned = false) {
   return new Promise((resolve, reject) => {
-    let body = "";
+    let body = "", bytes = 0, rejected = false;
     request.setEncoding("utf8");
     request.on("data", (chunk) => {
+      if (rejected) return;
+      bytes += Buffer.byteLength(chunk);
+      if (boundaryOwned && bytes > 1048576) {
+        rejected = true; body = "";
+        reject(new OpenCodeBoundaryError("OPENCODE_INVALID_REQUEST"));
+        return;
+      }
       body += chunk;
-      if (body.length > 1_000_000) {
+      if (!boundaryOwned && body.length > 1_000_000) {
         reject(new Error("Request body is too large."));
         request.destroy();
       }
@@ -956,7 +1152,7 @@ export function getBridgeAllowedCidrs() {
   return parseAllowedList(process.env.RESONANTOS_BRIDGE_ALLOWED_IPS);
 }
 
-function isLoopbackBridgeHost(host) {
+export function isLoopbackBridgeHost(host) {
   const value = String(host ?? "").trim().toLowerCase();
   return value === "localhost" || value === "127.0.0.1" || value === "::1" || value === "[::1]";
 }
@@ -1040,48 +1236,28 @@ export function scopedCapabilityTokenPayload(requestedCapabilities, bridgeCapabi
 }
 
 export async function evaluateBridgeRequestForSelfTest({
-  method = "GET",
-  url = "/",
-  headers = {},
-  body = {},
-  bridgeToken,
-  bridgeCapabilityTokens = {},
-  capabilityBootstrapToken,
-  routes = [],
+  method = "GET", url = "/", headers = {}, rawHeaders = [], body = {},
+  bridgeToken, bridgeCapabilityTokens = {}, capabilityBootstrapToken, routes = [],
+  listenerPort, getPublicPort = () => undefined, selfTest = true, extensionOrigin, allowedOrigins = [],
 } = {}) {
+  let errorFamily;
+  let owned = boundaryPath(url) || routes.some(route => route.loopbackHostOnly && route.path === String(url).split("?")[0]);
   try {
-    const request = {
-      method,
-      url,
-      headers: normalizeHeaders(headers),
-    };
-    if (method === "OPTIONS") {
-      return { status: 204, payload: {} };
-    }
-    if (!isAuthorizedBridgeRequest(request, bridgeToken)) {
-      return { status: 401, payload: { ok: false, error: "Unauthorized browser-first bridge request." } };
-    }
-    const route = compileRoutes(routes).get(routeKey(method, url));
-    if (!route) {
-      return { status: 404, payload: { ok: false, error: "Unknown browser-first bridge route." } };
-    }
-    if (route.requiredCapabilityBootstrap && !isAuthorizedCapabilityBootstrapRequest(request, capabilityBootstrapToken)) {
-      return { status: 403, payload: { ok: false, error: "Bridge route requires capability bootstrap authorization." } };
-    }
-    if (!route.requiredCapability && !route.requiredCapabilityBootstrap) {
-      return {
-        status: 403,
-        payload: { ok: false, error: "Bridge route declares no capability; refused by default." },
-      };
-    }
-    if (route.requiredCapability && !isAuthorizedCapabilityRequest(request, bridgeCapabilityTokens, route.requiredCapability)) {
-      return { status: 403, payload: { ok: false, error: `Bridge route requires ${route.requiredCapability} capability.` } };
-    }
-    const payload = method === "POST" ? body : {};
-    const result = await route.handler(payload, request);
-    return { status: 200, payload: { ok: true, ...result } };
+    errorFamily = compileRoutes(routes).get(routeKey(method, url))?.errorFamily;
+    const request = {method, url, headers:normalizeHeaders(headers), rawHeaders, selfTest,
+      openCodeTransport:{listenerPort,getPublicPort},
+      bridgeTransport:{listenerPort,getPublicPort,extensionOrigin,allowedOrigins}};
+    if (method === "OPTIONS") return {status:204,payload:{}};
+    const authorization = authorizeBridgeRoute(request, {routes,bridgeToken,bridgeCapabilityTokens,capabilityBootstrapToken,listenerPort,getPublicPort,extensionOrigin,allowedOrigins});
+    if (!authorization.route) return authorization;
+    const {route} = authorization;
+    owned ||= route.loopbackHostOnly;
+    const result = await route.handler(method === "POST" ? body : {}, request);
+    if (route.responseType === "sse" && result?.stream !== true) throw new OpenCodeBoundaryError("OPENCODE_INTERNAL");
+    return {status:200,payload:route.responseType === "sse" ? {stream:true} : {ok:true,...result}};
   } catch (error) {
-    return { status: 500, payload: { ok: false, error: error instanceof Error ? error.message : String(error) } };
+    if (error instanceof HarnessTransportError) return publicHarnessTransportError(error);
+    return owned ? routeError(error, errorFamily) : {status:500,payload:{ok:false,error:error instanceof Error ? error.message : String(error)}};
   }
 }
 
@@ -1093,7 +1269,8 @@ export function createBridgeRequestHandler({
   bridgeCapabilityTokens = {},
   capabilityBootstrapToken,
   extensionOrigin,
-  routes,
+  routes = [],
+  getPublicPort = () => undefined,
   allowedOrigins = getBridgeAllowedOrigins(),
   allowedCidrs = getBridgeAllowedCidrs(),
   dashboardProxyHandler = null,
@@ -1127,53 +1304,71 @@ export function createBridgeRequestHandler({
       // upstream of this check.
       openPathPrefixes,
     });
-  return async function handleBridgeRequest(request, response) {
+  const subscriptions = new Map();
+  const handleBridgeRequest = async function handleBridgeRequest(request, response) {
+    let errorFamily;
+    let owned = boundaryPath(request.url) || internalRoutes.some(route => route.loopbackHostOnly && route.path === String(request.url).split("?")[0]);
     try {
-      // IP allowlist (in addition to bridge-token auth). Returns 403 early
-      // so a probe from a non-allowlisted network never sees a real response.
-      if (!clientIpAllowed(request.socket?.remoteAddress, allowedCidrs)) {
-        writeJson(
-          response,
-          403,
-          { ok: false, error: "Client IP not allowlisted for browser-first bridge." },
-          extensionOrigin,
-          request.headers,
-          allowedOrigins,
-        );
+      errorFamily = compileRoutes(internalRoutes).get(routeKey(request.method, request.url))?.errorFamily;
+      if (request.method === "OPTIONS") {
+        drainRefusedRequest(request, response);
+        writeJson(response, 204, {}, extensionOrigin, request.headers, allowedOrigins);
         return;
       }
-      // Streaming reverse-proxy for embedded addons (e.g. Hermes dashboard
-      // iframe). The proxy handler is responsible for token auth, so we hand
-      // off the request before the JSON route evaluator. We dispatch to the
-      // proxy for any path that matches one of the dashboard proxy's mirror
-      // entries (e.g. /hermes-dashboard/*, /api/*, /assets/*, etc.).
-      const proxyPath = (request.url ?? "/").split("?")[0] ?? "/";
-      if (proxyHandler && !reservedInternalPaths.has(proxyPath) && dashboardProxyPathMatches(proxyPath)) {
+      if (!clientIpAllowed(request.socket?.remoteAddress, allowedCidrs)) {
+        drainRefusedRequest(request, response);
+        writeJson(response, 403, {ok:false,error:"Client IP not allowlisted for browser-first bridge."}, extensionOrigin, request.headers, allowedOrigins);
+        return;
+      }
+      const proxyPath = (request.url ?? "/").split("?")[0];
+      if (!owned && proxyHandler && !reservedInternalPaths.has(proxyPath) && dashboardProxyPathMatches(proxyPath)) {
         proxyHandler(request, response);
         return;
       }
-      const body = request.method === "POST" ? await readJsonBody(request) : {};
-      const result = await evaluateBridgeRequestForSelfTest({
-        method: request.method,
-        url: request.url,
-        headers: request.headers,
-        body,
-        bridgeToken,
-        bridgeCapabilityTokens,
-        capabilityBootstrapToken,
-        routes: internalRoutes,
-      });
+      const listenerPort = request.socket?.localPort;
+      request.openCodeTransport = {listenerPort,getPublicPort};
+      request.selfTest = false;
+      const authorization = authorizeBridgeRoute(request, {routes:internalRoutes,bridgeToken,bridgeCapabilityTokens,capabilityBootstrapToken,listenerPort,getPublicPort,extensionOrigin,allowedOrigins});
+      if (!authorization.route) {
+        drainRefusedRequest(request, response);
+        writeJson(response, authorization.status, authorization.payload, extensionOrigin, request.headers, allowedOrigins);
+        return;
+      }
+      const {route} = authorization;
+      owned ||= route.loopbackHostOnly;
+      if (route.errorFamily === 'harness' && request.method === 'GET' &&
+          (request.headers['transfer-encoding'] || Number(request.headers['content-length'] ?? 0) !== 0)) {
+        throw new OpenCodeBoundaryError("OPENCODE_INVALID_REQUEST");
+      }
+      if (route.responseType === "sse") {
+        const subscription = await route.handler({}, request);
+        subscriptions.set(subscription, route.terminalEventFamily);
+        try { await writeBridgeEventStream(response, request, subscription, {extensionOrigin,allowedOrigins,terminalEventFamily:route.terminalEventFamily}); }
+        finally { subscriptions.delete(subscription); }
+        return;
+      }
+      let body = {};
+      try { if (request.method === "POST") body = await readJsonBody(request, owned); }
+      catch (error) { if (owned) throw new OpenCodeBoundaryError("OPENCODE_INVALID_REQUEST"); throw error; }
+      const result = await evaluateBridgeRequestForSelfTest({method:request.method,url:request.url,
+        headers:request.headers,rawHeaders:request.rawHeaders,body,bridgeToken,bridgeCapabilityTokens,
+        capabilityBootstrapToken,routes:internalRoutes,listenerPort,getPublicPort,selfTest:false,extensionOrigin,allowedOrigins});
       writeJson(response, result.status, result.payload, extensionOrigin, request.headers, allowedOrigins);
     } catch (error) {
-      writeJson(
-        response,
-        500,
-        { ok: false, error: error instanceof Error ? error.message : String(error) },
-        extensionOrigin,
-        request.headers,
-        allowedOrigins,
-      );
+      if (response.headersSent) { response.destroy(); return; }
+      const result = owned ? routeError(error, errorFamily) : {status:500,payload:{ok:false,error:error instanceof Error ? error.message : String(error)}};
+      drainRefusedRequest(request, response);
+      writeJson(response, result.status, result.payload, extensionOrigin, request.headers, allowedOrigins);
     }
+  };
+  handleBridgeRequest.closeStreams = () => Promise.allSettled([...subscriptions].map(([sub, family]) => sub.close(family === "harness" ? "runtime-unavailable" : "OPENCODE_UNAVAILABLE")));
+  return handleBridgeRequest;
+}
+function closeStreamsWithServer(server, handle) {
+  const close = server.close.bind(server);
+  server.close = function(callback) {
+    void handle.closeStreams();
+    return close(callback);
   };
 }
 
@@ -1189,6 +1384,7 @@ export async function startBridgeServer({
   allowedCidrs = getBridgeAllowedCidrs(),
   dashboardProxyHandler = null,
   openPathPrefixes,
+  getPublicPort,
 }) {
   const bindHost = host ?? getBridgeHost();
   const effectiveOpenPathPrefixes = openPathPrefixes ?? getBridgeOpenProxyPrefixes({ host: bindHost, allowedCidrs });
@@ -1210,8 +1406,10 @@ export async function startBridgeServer({
     allowedCidrs,
     dashboardProxyHandler: effectiveProxyHandler,
     openPathPrefixes: effectiveOpenPathPrefixes,
+    getPublicPort,
   });
   const server = http.createServer(handle);
+  closeStreamsWithServer(server, handle);
   // WebSocket upgrade support. Node's http server emits "upgrade"
   // (not "request") for WebSocket handshakes, so the request
   // handler above is bypassed for those. Register a parallel
@@ -1273,6 +1471,7 @@ export async function startBridgeServersWithTls({
   allowedCidrs,
   dashboardProxyHandler = null,
   openPathPrefixes,
+  getPublicPort,
 }) {
   const bindHost = host ?? getBridgeHost();
   const effectiveAllowedCidrs = allowedCidrs ?? getBridgeAllowedCidrs();
@@ -1287,8 +1486,10 @@ export async function startBridgeServersWithTls({
     allowedCidrs: effectiveAllowedCidrs,
     dashboardProxyHandler,
     openPathPrefixes: effectiveOpenPathPrefixes,
+    getPublicPort,
   });
   const httpServer = http.createServer(handle);
+  closeStreamsWithServer(httpServer, handle);
   await new Promise((resolve, reject) => {
     const onError = (error) => { httpServer.off("listening", onListening); reject(error); };
     const onListening = () => { httpServer.off("error", onError); resolve(); };
@@ -1301,6 +1502,7 @@ export async function startBridgeServersWithTls({
   let httpsActualPort = null;
   if (tls && tls.key && tls.cert) {
     httpsServer = https.createServer({ key: tls.key, cert: tls.cert }, handle);
+    closeStreamsWithServer(httpsServer, handle);
     await new Promise((resolve, reject) => {
       const onError = (error) => { httpsServer.off("listening", onListening); reject(error); };
       const onListening = () => { httpsServer.off("error", onError); resolve(); };
@@ -1365,6 +1567,7 @@ export async function startBridgeServerWithFallback({
   httpsPort,
   fallbackPorts = [0],
   openPathPrefixes,
+  getPublicPort,
 }) {
   const attempts = [port, ...fallbackPorts].filter((candidate, index, list) =>
     Number.isInteger(Number(candidate)) && list.indexOf(candidate) === index
@@ -1390,6 +1593,7 @@ export async function startBridgeServerWithFallback({
         allowedOrigins,
         allowedCidrs,
         openPathPrefixes,
+        getPublicPort,
       });
       return {
         server: result.httpServer,

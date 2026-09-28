@@ -11,22 +11,25 @@ Open a course page (or several), capture the syllabus and assessment plan,
 summarise upcoming milestones, and save a continuing-learning intake to the
 Living Archive that survives a session restart.
 
+Goals and prompts describe intended workflows, not certified end-to-end
+automation. Check generated claims against separately captured source content.
+
 ## Augmentor features used
 
-- [#237 Multi-step workflows](../augmentor-future-list-acceptance-matrix.md#automation)
-  — supported
+- [#237 Workflow recipe documentation](../augmentor-future-list-acceptance-matrix.md#automation)
+  — available; execution depends on the bounded capabilities below
 - [#218 Page content analysis / Q&A](../augmentor-future-list-acceptance-matrix.md#web-understanding)
   — supported
 - [#221 One-click / question-driven summaries](../augmentor-future-list-acceptance-matrix.md#summarization-research)
   — supported
 - [#222 Session summary artifact with restart-safe context](../augmentor-future-list-acceptance-matrix.md#cross-tab-intelligence)
-  — needs hardening
+  — saved-state foundation; broader continuity needs hardening
 - [#227 Research-trail save and archive review handoff](../augmentor-future-list-acceptance-matrix.md#summarization-research)
-  — future
+  — partial save/review foundation; broader acceptance remains open
 - [#228 Living Archive context continuity acceptance proof](../augmentor-future-list-acceptance-matrix.md#cross-tab-intelligence)
-  — needs hardening
+  — restores saved state; does not reopen or verify live tabs
 - [epic #212 beta.1 — Living Archive and context continuity proof](../augmentor-future-list-acceptance-matrix.md#milestone-epics)
-  — open epic
+  — closed tracking epic; broader workflow acceptance is separate
 
 ## Safe automated steps
 
@@ -36,10 +39,10 @@ The Augmentor can:
   assessment plan from a course page.
 - Summarise the syllabus into a week-by-week reading list with citations
   (`#218` and `#221`).
-- Save a continuing-learning intake to the Living Archive that lists
-  the open tabs and the human's chosen milestones (per `#227`).
-- Resume after a restart and confirm the previously captured syllabus and
-  intake match the open tabs (per `#228`).
+- Capture readable course pages as a research trail for Living Archive review
+  (`#227`); the human checks any generated milestone plan separately.
+- Restore explicitly saved context after a restart (`#228`); the human reopens
+  relevant pages and verifies the syllabus and milestones against current content.
 - Search local browser history for prior course-related searches to avoid
   duplication (`/history` command).
 
@@ -67,10 +70,10 @@ takes to the platform.
 - "Summarise this course page as title, provider, weeks, prerequisites,
   assessments. Cite each section you read."
 - "Build a week-by-week reading list from this syllabus. Cite each week."
-- "Save the syllabus and my chosen milestones to my Living Archive intake
-  as a continuing-learning capture."
-- "After I restart, confirm the syllabus and milestones still match the
-  open tabs."
+- "Capture these course pages for archive review. I will check the proposed
+  milestones and retain the reviewed plan separately."
+- "After I restart, show the restored saved context so I can check the
+  syllabus and milestones against the live tabs myself."
 
 ## Evidence to capture
 

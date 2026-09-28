@@ -70,21 +70,70 @@ export function createProviderBridgeService({
     return error?.name === "AbortError";
   }
 
-  async function fetchProviderResponse(url, init, { timeoutMs, label }) {
+  async function fetchProviderResponse(url, init, { timeoutMs, label, signal, consume }) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    const requestSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
     try {
-      return await fetch(url, {
-        ...init,
-        signal: controller.signal,
-      });
+      requestSignal.throwIfAborted();
+      const response = await fetch(url, { ...init, signal: requestSignal });
+      // Keep the deadline and caller cancellation alive through body consumption.
+      return consume ? await consume(response, requestSignal) : response;
     } catch (error) {
+      signal?.throwIfAborted();
       if (isAbortError(error)) {
         throw new Error(`${label} timed out after ${Math.round(timeoutMs / 1000)}s.`);
       }
       throw error;
     } finally {
       clearTimeout(timeout);
+    }
+  }
+
+  async function readChatResponse(response, signal, maxBytes = Infinity) {
+    signal.throwIfAborted();
+    const reader = response.body?.getReader?.();
+    let onAbort;
+    const aborted = new Promise((_, reject) => {
+      onAbort = () => {
+        // Cancel wakes a pending read even when the transport does not do so.
+        if (reader) void reader.cancel().catch(() => {});
+        reject(signal.reason);
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+    try {
+      let payload;
+      if (reader) {
+        const chunks = [];
+        let bytes = 0;
+        while (true) {
+          signal.throwIfAborted();
+          const { done, value } = await Promise.race([reader.read(), aborted]);
+          signal.throwIfAborted();
+          if (done) break;
+          bytes += value.byteLength;
+          if (bytes > maxBytes) throw Object.assign(new Error("Invalid runtime event."), { code: "invalid-event" });
+          chunks.push(Buffer.from(value));
+        }
+        try { payload = JSON.parse(Buffer.concat(chunks).toString("utf8")); }
+        catch { payload = {}; }
+      } else {
+        // Compatibility with provider response doubles that expose json only.
+        payload = await Promise.race([response.json().catch(() => ({})), aborted]);
+        if (Buffer.byteLength(JSON.stringify(payload)) > maxBytes) {
+          throw Object.assign(new Error("Invalid runtime event."), { code: "invalid-event" });
+        }
+      }
+      signal.throwIfAborted();
+      return { response, responsePayload: payload };
+    } finally {
+      signal.removeEventListener("abort", onAbort);
+      if (reader) {
+        // Do not retain a reader or continue consuming an aborted/oversize body.
+        void reader.cancel().catch(() => {});
+        reader.releaseLock();
+      }
     }
   }
 
@@ -1146,7 +1195,15 @@ export function createProviderBridgeService({
       .replace(/&#39;/g, "'");
   }
 
-  async function executeBridgeChat(payload) {
+  // Legacy compatibility may use the configured fallback chain. Harness turns
+  // use the raw entrypoint, which permits exactly one upstream attempt.
+  // Route dispatch passes request metadata as its second argument. Cancellation
+  // options belong only to the explicit raw-provider entrypoint.
+  const executeBridgeChat = payload => executeChat(payload);
+  const executeRawProviderChat = (payload, { signal } = {}) => executeChat(payload, { signal, singleAttempt: true });
+
+  async function executeChat(payload, { signal, singleAttempt = false } = {}) {
+    signal?.throwIfAborted();
     const routeDecision = await providerRouteForWorkload(payload.workload || "augmentor-chat", payload.model);
     if (!routeDecision.route) {
       if (routeDecision.source === "manual" && routeDecision.requestedModel) {
@@ -1184,11 +1241,12 @@ export function createProviderBridgeService({
       return true;
     });
     const failures = [];
-    for (const { model: attemptModel, route } of uniqueAttempts) {
+    for (const { model: attemptModel, route } of (singleAttempt ? uniqueAttempts.slice(0, 1) : uniqueAttempts)) {
+      signal?.throwIfAborted();
       const sendsCredential = !["none", "local-runtime"].includes(String(route.authType ?? "api-key").toLowerCase());
       const apiKey = sendsCredential ? secrets[route.providerId] : "local-runtime";
       if (sendsCredential && !apiKey) {
-        if (routeDecision.source !== "strategy") {
+        if (singleAttempt || routeDecision.source !== "strategy") {
           // A manually selected, catalog-valid model whose provider has no
           // credential: name it and point to recovery, instead of the generic
           // exhausted-route error.
@@ -1197,9 +1255,9 @@ export function createProviderBridgeService({
         failures.push(`${route.label} credential missing`);
         continue;
       }
-      let response;
+      let response, responsePayload;
       try {
-        response = await fetchProviderResponse(
+        ({ response, responsePayload } = await fetchProviderResponse(
           providerRequestUrl(route, "/chat/completions", { sendsCredential }),
           {
             method: "POST",
@@ -1218,21 +1276,24 @@ export function createProviderBridgeService({
           {
             timeoutMs: providerTimeoutMs("RESONANTOS_PROVIDER_CHAT_TIMEOUT_MS", providerTimeoutDefaults.chatAttempt),
             label: `${route.wireModel} chat request`,
+            signal,
+            consume: (response, requestSignal) => readChatResponse(response, requestSignal, singleAttempt ? 1_048_576 : Infinity),
           },
-        );
+        ));
       } catch (error) {
+        signal?.throwIfAborted();
+        if (singleAttempt) throw error;
         const message = error instanceof Error ? error.message : String(error);
         failures.push(`${route.wireModel}: ${message}`);
-        if (routeDecision.source !== "strategy") {
+        if (singleAttempt || routeDecision.source !== "strategy") {
           throw new Error(message);
         }
         continue;
       }
-      const responsePayload = await response.json().catch(() => ({}));
       if (!response.ok) {
         const message = responsePayload?.error?.message ?? `Provider request failed with HTTP ${response.status}.`;
         failures.push(`${route.wireModel}: ${message}`);
-        if (routeDecision.source !== "strategy") {
+        if (singleAttempt || routeDecision.source !== "strategy") {
           throw new Error(message);
         }
         continue;
@@ -1240,7 +1301,7 @@ export function createProviderBridgeService({
       const reply = sanitizeAssistantContent(route.providerType, extractAssistantContent(responsePayload));
       if (!reply) {
         failures.push(`${route.wireModel}: Provider returned an empty reply.`);
-        if (routeDecision.source !== "strategy") {
+        if (singleAttempt || routeDecision.source !== "strategy") {
           throw new Error("Provider returned an empty reply.");
         }
         continue;
@@ -1393,6 +1454,7 @@ export function createProviderBridgeService({
     allModelCatalog,
     allProviderProfiles,
     executeBridgeChat,
+    executeRawProviderChat,
     executeInlineAssistant,
     executeProviderAccountSave,
     executeProviderAccountRemove,

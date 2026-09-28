@@ -13,20 +13,27 @@
 // file.edited, …) rather than a brittle exact string — the precise names are
 // pinned at integration time against the running server's /doc.
 
-export function createOpenCodeSessionState() {
+export function createOpenCodeSessionState({ sessionId } = {}) {
   return {
+    sessionId: typeof sessionId === "string" ? sessionId : "",
+    transportError: null,
+    metadataSource: "",
     title: "",
     agent: "build",
     model: "",
     status: "idle", // idle | running | waiting-approval | done | error
     seq: 0, // monotonic tick, used to mark the most-recently-touched file
     entries: [], // ordered transcript: { type: "text"|"reasoning"|"tool", id, ... }
-    changedFiles: {}, // path -> { added, removed, status, touchedAt }
-    approvals: [], // { id, tool, title, detail }
-    todos: [], // { label, state }
+    changedFiles: {}, // [path, source] -> { path, added, removed, status, touchedAt, source }
+    approvals: [], // { id, tool, title, detail, source }
+    todos: [], // { label, state, source }
     context: { tokens: 0, cost: 0 },
     roles: {} // messageId -> "user" | "assistant" (from message.updated; filters user echo)
   };
+}
+
+function provenanceSource(value) {
+  return value === "governed" ? "governed" : "external";
 }
 
 const has = (type, needle) => String(type ?? "").toLowerCase().includes(needle);
@@ -81,7 +88,7 @@ export function normalizeOpenCodeEvent(raw) {
   }
   if (has(type, "session.diff") || has(type, "session-diff")) {
     const files = Array.isArray(p.files) ? p.files : (Array.isArray(p.diff) ? p.diff : (Array.isArray(p) ? p : []));
-    return { kind: "session-diff", files: files.map((f) => ({ path: f.path ?? f.file ?? "", added: Number(f.added ?? f.additions ?? 0), removed: Number(f.removed ?? f.deletions ?? 0) })) };
+    return { kind: "session-diff", files: files.map((f) => ({ path: f.path ?? f.file ?? "", added: Number(f.added ?? f.additions ?? 0), removed: Number(f.removed ?? f.deletions ?? 0), source: f.source })) };
   }
   if (has(type, "permission") && (has(type, "asked") || has(type, "ask"))) {
     return { kind: "permission-asked", id: p.id ?? p.permissionID ?? "", tool: p.tool ?? p.type ?? "action", title: p.title ?? p.tool ?? "Approval needed", detail: p.detail ?? p.description ?? p.command ?? "" };
@@ -145,6 +152,38 @@ export function normalizeOpenCodeEvent(raw) {
   return null;
 }
 
+export function normalizeGovernedOpenCodeEvent(envelope, sessionId) {
+  if (!envelope || typeof envelope !== "object") return null;
+  if (envelope.version !== 1) return null;
+  if (typeof envelope.sessionId !== "string" || !envelope.sessionId || envelope.sessionId !== sessionId) return null;
+  if (envelope.source !== "governed" && envelope.source !== "external") return null;
+  const event = envelope.event;
+  if (!event || typeof event !== "object") return null;
+  const type = String(event.type ?? event.kind ?? "");
+  const properties = event.properties ?? event.payload ?? event;
+  if (type === "bridge.closed") {
+    return {
+      kind: "transport-error",
+      source: envelope.source,
+      code: typeof properties.code === "string" ? properties.code : "OPENCODE_STREAM_DISCONNECTED",
+      error: typeof properties.error === "string" && properties.error
+        ? properties.error
+        : "OpenCode boundary request failed."
+    };
+  }
+  if (type === "bridge.ready" || type === "bridge.operation") {
+    return {
+      kind: "session-meta",
+      source: envelope.source,
+      operation: type === "bridge.operation" ? properties.operation : undefined,
+      ready: type === "bridge.ready"
+    };
+  }
+  const normalized = normalizeOpenCodeEvent(event);
+  if (!normalized) return null;
+  return { ...normalized, source: envelope.source };
+}
+
 function lastEntryOfType(entries, type, messageId) {
   for (let i = entries.length - 1; i >= 0; i -= 1) {
     const entry = entries[i];
@@ -157,8 +196,15 @@ function lastEntryOfType(entries, type, messageId) {
 export function applyOpenCodeEvent(state, event) {
   if (!event) return state;
   const next = { ...state, seq: state.seq + 1 };
+  const source = provenanceSource(event.source);
 
   switch (event.kind) {
+    case "transport-error": {
+      next.transportError = { code: event.code, error: event.error };
+      next.status = "error";
+      if (event.source) next.metadataSource = provenanceSource(event.source);
+      return next;
+    }
     case "message-info": {
       next.roles = { ...state.roles, [event.id]: event.role };
       if (event.context) next.context = event.context;
@@ -172,11 +218,11 @@ export function applyOpenCodeEvent(state, event) {
       const type = event.kind === "reasoning-delta" ? "reasoning" : "text";
       const entries = [...state.entries];
       const current = lastEntryOfType(entries, type, event.messageId);
-      if (current && (!event.messageId || current.id === event.messageId)) {
+      if (current && (!event.messageId || current.id === event.messageId) && provenanceSource(current.source) === source) {
         const idx = entries.lastIndexOf(current);
-        entries[idx] = { ...current, text: (current.text ?? "") + (event.text ?? "") };
+        entries[idx] = { ...current, text: (current.text ?? "") + (event.text ?? ""), source };
       } else {
-        entries.push({ type, id: event.messageId || `msg-${next.seq}`, text: event.text ?? "" });
+        entries.push({ type, id: event.messageId || `msg-${next.seq}`, text: event.text ?? "", source });
       }
       next.entries = entries;
       next.status = state.approvals.length ? "waiting-approval" : "running";
@@ -191,11 +237,12 @@ export function applyOpenCodeEvent(state, event) {
       // by part id when known, else by message id), never append — this keeps
       // mixed delta+snapshot streams idempotent.
       const idx = entries.findIndex((entry) => entry.type === type
+        && provenanceSource(entry.source) === source
         && ((event.partId && entry.partId === event.partId) || (!entry.partId && entry.id === event.messageId)));
       if (idx >= 0) {
-        entries[idx] = { ...entries[idx], partId: event.partId || entries[idx].partId, text: event.text ?? "" };
+        entries[idx] = { ...entries[idx], partId: event.partId || entries[idx].partId, text: event.text ?? "", source };
       } else {
-        entries.push({ type, id: event.messageId || `msg-${next.seq}`, partId: event.partId, text: event.text ?? "" });
+        entries.push({ type, id: event.messageId || `msg-${next.seq}`, partId: event.partId, text: event.text ?? "", source });
       }
       next.entries = entries;
       next.status = state.approvals.length ? "waiting-approval" : "running";
@@ -203,37 +250,40 @@ export function applyOpenCodeEvent(state, event) {
     }
     case "tool-called": {
       const id = event.id || `tool-${next.seq}`;
-      const idx = state.entries.findIndex((entry) => entry.type === "tool" && entry.id === id);
+      const idx = state.entries.findIndex((entry) => entry.type === "tool" && entry.id === id && provenanceSource(entry.source) === source);
       if (idx >= 0) {
         next.entries = state.entries.map((entry, entryIdx) =>
           entryIdx === idx
-            ? { ...entry, tool: event.tool, input: event.input, state: "running", output: "", error: "" }
+            ? { ...entry, tool: event.tool, input: event.input, state: "running", output: "", error: "", source }
             : entry
         );
       } else {
-        next.entries = [...state.entries, { type: "tool", id, tool: event.tool, input: event.input, state: "running" }];
+        next.entries = [...state.entries, { type: "tool", id, tool: event.tool, input: event.input, state: "running", source }];
       }
       next.status = state.approvals.length ? "waiting-approval" : "running";
       return next;
     }
     case "tool-completed": {
       next.entries = state.entries.map((entry) =>
-        entry.type === "tool" && entry.id === event.id
-          ? { ...entry, state: event.ok ? "completed" : "error", output: event.output ?? "", error: event.error ?? "" }
+        entry.type === "tool" && entry.id === event.id && provenanceSource(entry.source) === source
+          ? { ...entry, state: event.ok ? "completed" : "error", output: event.output ?? "", error: event.error ?? "", source }
           : entry
       );
       return next;
     }
     case "file-edited": {
       if (!event.path) return next;
-      const prev = state.changedFiles[event.path];
+      const key = JSON.stringify([event.path, source]);
+      const prev = state.changedFiles[key];
       next.changedFiles = {
         ...state.changedFiles,
-        [event.path]: {
+        [key]: {
+          path: event.path,
           added: (prev?.added ?? 0) + event.added,
           removed: (prev?.removed ?? 0) + event.removed,
           status: "edited",
-          touchedAt: next.seq
+          touchedAt: next.seq,
+          source
         }
       };
       return next;
@@ -242,11 +292,16 @@ export function applyOpenCodeEvent(state, event) {
       const changedFiles = { ...state.changedFiles };
       for (const file of event.files) {
         if (!file.path) continue;
-        changedFiles[file.path] = {
+        const fileSource = provenanceSource(file.source ?? event.source);
+        const key = JSON.stringify([file.path, fileSource]);
+        const prev = changedFiles[key];
+        changedFiles[key] = {
+          path: file.path,
           added: file.added,
           removed: file.removed,
           status: "edited",
-          touchedAt: changedFiles[file.path]?.touchedAt ?? next.seq
+          touchedAt: prev?.touchedAt ?? next.seq,
+          source: fileSource
         };
       }
       next.changedFiles = changedFiles;
@@ -254,7 +309,7 @@ export function applyOpenCodeEvent(state, event) {
     }
     case "permission-asked": {
       if (state.approvals.some((a) => a.id === event.id)) return next;
-      next.approvals = [...state.approvals, { id: event.id, tool: event.tool, title: event.title, detail: event.detail }];
+      next.approvals = [...state.approvals, { id: event.id, tool: event.tool, title: event.title, detail: event.detail, source }];
       next.status = "waiting-approval";
       return next;
     }
@@ -264,7 +319,10 @@ export function applyOpenCodeEvent(state, event) {
       return next;
     }
     case "todos": {
-      next.todos = event.todos;
+      next.todos = (event.todos ?? []).map((todo) => ({
+        ...todo,
+        source: provenanceSource(todo.source ?? event.source)
+      }));
       return next;
     }
     case "session-meta": {
@@ -273,6 +331,7 @@ export function applyOpenCodeEvent(state, event) {
       if (event.model !== undefined) next.model = event.model;
       if (event.status !== undefined) next.status = event.status;
       if (event.context) next.context = event.context;
+      if (event.source) next.metadataSource = provenanceSource(event.source);
       return next;
     }
     default:

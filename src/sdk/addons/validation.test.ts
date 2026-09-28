@@ -1,7 +1,8 @@
 // Intent citation: docs/architecture/ADR-018-addon-sdk-v0.md
 
 import { describe, expect, it } from "vitest";
-import type { AddOnManifest } from "../../core/contracts";
+import { readFileSync } from "node:fs";
+import type { AddOnManifest, HarnessPublicError } from "../../core/contracts";
 import { validateAddOnManifest } from "./validation";
 
 const validManifest = (overrides: Partial<AddOnManifest> = {}): AddOnManifest => ({
@@ -756,7 +757,7 @@ describe("add-on SDK manifest validation", () => {
   it("rejects a systemSlot claim whose backing capability is not declared (P1-b ungated slot bypass)", () => {
     const result = validateAddOnManifest(
       validManifest({
-        // Claims the primary-agent slot but does NOT declare agent-delegation,
+        // Claims the primary-agent slot but does NOT declare agent-runtime,
         // so the runtime grant gate (activeSystemSlotProvider) can never apply.
         systemSlots: [
           { id: "primary-agent", role: "default-provider", replaceable: true },
@@ -785,23 +786,168 @@ describe("add-on SDK manifest validation", () => {
     expect(result.issues.some((issue) => issue.code === "system-slot-unknown")).toBe(true);
   });
 
-  it("accepts a properly capability-gated systemSlot claim", () => {
-    const base = validManifest();
-    const result = validateAddOnManifest(
-      validManifest({
-        // primary-agent's backing capability (agent-delegation) is declared, so
-        // the runtime grant gate can apply -> covered.
+  it.each(["agent-runtime", "agent-delegation"] as const)(
+    "primary execution requires runtime rather than delegation consent: %s",
+    (capability) => {
+      const result = validateAddOnManifest(validManifest({
         requestedCapabilities: [
-          ...base.requestedCapabilities,
-          { capability: "agent-delegation", granted: false, scope: "system", revocationBehavior: "hard-stop" },
+          ...validManifest().requestedCapabilities,
+          { capability, granted: false, scope: "system", revocationBehavior: "hard-stop" },
         ],
-        systemSlots: [
-          { id: "primary-agent", role: "default-provider", replaceable: true },
-        ],
-      }),
-    );
+        systemSlots: [{ id: "primary-agent", role: "default-provider", replaceable: true }],
+      }));
+      expect(result.valid).toBe(capability === "agent-runtime");
+      expect(result.issues.some((issue) => issue.code === "system-slot-undeclared-capability"))
+        .toBe(capability === "agent-delegation");
+    },
+  );
 
-    expect(result.issues.filter((issue) => issue.code.startsWith("system-slot"))).toEqual([]);
-    expect(result.valid).toBe(true);
+  it("ships primary runtime requests with an explicit Augmentor recommended grant", () => {
+    const manifest = JSON.parse(readFileSync("public/addons/augmentor-chat.json", "utf8")) as AddOnManifest;
+    const request = { capability: "agent-runtime", granted: false, scope: "system", revocationBehavior: "hard-stop" };
+    expect(manifest.requestedCapabilities).toContainEqual(request);
+    expect(manifest.grantPresets?.find((preset) => preset.id === "recommended-primary-chat")?.grants)
+      .toContainEqual({ ...request, granted: true });
+    expect(validateAddOnManifest(manifest).valid).toBe(true);
+  });
+
+  it.each(["deepseek-harness", "provider-chat-demo"])("validates %s without transitional delegation", (name) => {
+    const manifest = JSON.parse(readFileSync(`browser-first/host/harness-examples/${name}.json`, "utf8")) as AddOnManifest;
+    expect(manifest.requestedCapabilities.some((grant) => grant.capability === "agent-delegation")).toBe(false);
+    expect(validateAddOnManifest(manifest).valid).toBe(true);
+  });
+});
+
+
+// Bound adapters extend the legacy runtime contract; grants remain host-owned.
+const boundHarness = () => ({
+  ...validManifest(),
+  requestedCapabilities: [
+    ...validManifest().requestedCapabilities,
+    { capability: "agent-runtime", granted: false, scope: "system", revocationBehavior: "hard-stop" },
+  ],
+  agentRuntime: {
+    invocationTool: "browser.open_url",
+    chatAuthorLabel: "Harness",
+    displayNameSource: "manifest",
+    supportsStreaming: true,
+    supportsCancellation: true,
+    supportsModelSelection: false,
+    outputFiltering: "structured-events",
+    requiredCapabilities: ["agent-runtime", "network"],
+    adapterVersion: 1,
+    adapterId: "dsh-typert-v1",
+    endpoint: "http://127.0.0.1:3080",
+    authScheme: "dsh-action-token",
+    credentialBinding: "dsh.main",
+    supportedOperations: ["createSession", "invoke", "cancel", "history", "status"],
+    contextRoleFidelity: "text-only",
+    toolCallbacks: false,
+  },
+});
+
+describe("bound harness contracts", () => {
+  it("validates bound harness contracts without inline credentials", () => {
+    expect(validateAddOnManifest(boundHarness()).issues.filter(issue => issue.severity === "error")).toEqual([]);
+  });
+
+  it.each([
+    [{ adapterVersion: 2 }, "agent-runtime-adapter-version"],
+    [{ adapterVersion: undefined }, "agent-runtime-adapter-version"],
+    [{ adapterId: "./adapter.mjs" }, "agent-runtime-adapter-id"],
+    [{ adapterId: "" }, "agent-runtime-adapter-id"],
+    [{ token: "private-canary" }, "agent-runtime-adapter-field"],
+    [{ headers: { Authorization: "private-canary" } }, "agent-runtime-adapter-field"],
+    [{ credentialFile: "/tmp/private-token" }, "agent-runtime-adapter-field"],
+    [{ importPath: "./adapter.mjs" }, "agent-runtime-adapter-field"],
+    [{ credentialBinding: "/tmp/private-token" }, "agent-runtime-credential-binding"],
+    [{ credentialBinding: "file:///tmp/token" }, "agent-runtime-credential-binding"],
+    [{ credentialBinding: undefined }, "agent-runtime-credential-binding"],
+    [{ endpoint: "http://user:private-canary@localhost:3080" }, "agent-runtime-endpoint"],
+    [{ endpoint: "http://localhost:3080/?token=private-canary" }, "agent-runtime-endpoint"],
+    [{ endpoint: "file:///tmp/token" }, "agent-runtime-endpoint"],
+    [{ endpoint: "http://localhost:3080/#private-canary" }, "agent-runtime-endpoint"],
+    [{ endpoint: undefined }, "agent-runtime-endpoint"],
+    [{ authScheme: "arbitrary-headers" }, "agent-runtime-auth-scheme"],
+    [{ toolCallbacks: true }, "agent-runtime-tool-callbacks"],
+    [{ contextRoleFidelity: "system-role-guaranteed" }, "agent-runtime-context-fidelity"],
+    [{ supportedOperations: ["invoke"] }, "agent-runtime-operations"],
+    [{ supportedOperations: ["createSession", "invoke", "cancel", "browser_execute"] }, "agent-runtime-operations"],
+    [{ supportedOperations: ["createSession", "invoke", "cancel", "cancel"] }, "agent-runtime-operations"],
+    [{ supportedOperations: "invoke" }, "agent-runtime-operations"],
+    [{ supportsCancellation: false }, "agent-runtime-operation-consistency"],
+    [{ supportedOperations: ["createSession", "invoke"] }, "agent-runtime-operation-consistency"],
+    [{ supportedOperations: ["createSession", "invoke", "cancel", "selectModel"] }, "agent-runtime-operation-consistency"],
+    [{ requiredCapabilities: ["network"] }, "agent-runtime-capability-required"],
+  ])("rejects unsafe or inconsistent adapter fields %j", (patch, code) => {
+    const manifest = boundHarness();
+    const result = validateAddOnManifest({ ...manifest, agentRuntime: { ...manifest.agentRuntime, ...patch } });
+    expect(result.valid).toBe(false);
+    expect(result.issues.map(issue => issue.code)).toContain(code);
+    expect(JSON.stringify(result.issues)).not.toContain("private-canary");
+  });
+
+  it("does not accept an adapter extension without a requested agent-runtime capability", () => {
+    const manifest = boundHarness();
+    manifest.requestedCapabilities = manifest.requestedCapabilities.filter(grant => grant.capability !== "agent-runtime");
+    expect(validateAddOnManifest(manifest).issues.map(issue => issue.code)).toContain("agent-runtime-unrequested-capability");
+  });
+
+  it("accepts in-process provider adapters without an endpoint or binding", () => {
+    const manifest = boundHarness();
+    const { endpoint, credentialBinding, ...runtime } = manifest.agentRuntime;
+    expect(validateAddOnManifest({ ...manifest, agentRuntime: { ...runtime, adapterId: "provider-fabric-v1", authScheme: "none", contextRoleFidelity: "structured-messages" } }).valid).toBe(true);
+  });
+});
+
+
+describe("harness review regressions", () => {
+  it("locates unknown fields at their containing object without echoing field names", () => {
+    const manifest = boundHarness();
+    const result = validateAddOnManifest({
+      ...manifest,
+      agentRuntime: { ...manifest.agentRuntime, "private-canary": "private-value" },
+    });
+    expect(result.issues.filter(issue => issue.code === "agent-runtime-adapter-field")).toEqual([{
+      severity: "error",
+      code: "agent-runtime-adapter-field",
+      path: "agentRuntime",
+      message: expect.any(String),
+    }]);
+    expect(JSON.stringify(result.issues)).not.toMatch(/private-canary|private-value/);
+  });
+
+  it("types public errors with the fixed message belonging to their code", () => {
+    const safeError: HarnessPublicError = { code: "invalid-event", message: "Invalid runtime event." };
+    // @ts-expect-error Public errors cannot contain arbitrary upstream messages.
+    const unsafeError: HarnessPublicError = { code: "invalid-event", message: "private-canary" };
+    // @ts-expect-error Even another safe message must match the selected code.
+    const mismatchedError: HarnessPublicError = { code: "invalid-event", message: "Runtime unavailable." };
+    expect(safeError.message).not.toBe(unsafeError.message);
+    expect(safeError.message).not.toBe(mismatchedError.message);
+  });
+});
+
+describe("replacement and revocation dependency validation", () => {
+  it.each([undefined, null, "false", 0])("rejects invalid replaceable %s", replaceable => {
+    const manifest = validManifest();
+    manifest.requestedCapabilities.push({ capability: "chat-interface", scope: "system", granted: false, revocationBehavior: "degrade" });
+    const candidate = { ...manifest, systemSlots: [{ id: "chat-interface", role: "alternative-provider", replaceable }] };
+    expect(validateAddOnManifest(candidate).issues.some(issue => issue.code === "system-slot-replaceable-boolean")).toBe(true);
+  });
+  it("requires hide-surface to name a dependent surface", () => {
+    const manifest = validManifest();
+    manifest.requestedCapabilities[0].revocationBehavior = "hide-surface";
+    expect(validateAddOnManifest(manifest).issues.some(issue => issue.code === "revocation-surface-dependency")).toBe(true);
+    manifest.surfaces[0].shellNavigation = { sectionId: "browser", dockIcon: "browser", eyebrow: "Browser", requiredCapabilities: ["network"] };
+    expect(validateAddOnManifest(manifest).valid).toBe(true);
+  });
+  it("rejects unknown revocation behavior and unrequested model-selection capabilities", () => {
+    const manifest = JSON.parse(readFileSync(new URL("../../../public/addons/hermes.json", import.meta.url), "utf8"));
+    manifest.requestedCapabilities[0].revocationBehavior = "preserve";
+    expect(validateAddOnManifest(manifest).issues.map(issue => issue.code)).toEqual(["unknown-enum"]);
+    manifest.requestedCapabilities[0].revocationBehavior = "hard-stop";
+    manifest.agentRuntime.modelSelection.requiredCapabilities = ["agent-runtime"];
+    expect(validateAddOnManifest(manifest).issues.map(issue => issue.code)).toEqual(["model-selection-unrequested-capability"]);
   });
 });

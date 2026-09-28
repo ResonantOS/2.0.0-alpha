@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { AddOnManifest, ChannelDefinition, ConversationThread } from "../../core/contracts";
+import type { AddOnManifest, ChannelDefinition, ConversationThread, HarnessRegistryProjection } from "../../core/contracts";
+import augmentor from "../../../public/addons/augmentor-chat.json";
 import { buildDefaultState } from "../../core/defaults";
 import {
   buildShellViewModel,
@@ -71,6 +72,55 @@ describe("channelAllowedByOwningAddon", () => {
 });
 
 describe("buildShellViewModel", () => {
+  it.each([true, false])("uses acknowledged chat ownership instead of contradictory local availability (host available: %s)", available => {
+    const manifest = augmentor as AddOnManifest;
+    const state = buildDefaultState([manifest]);
+    state.uiPreferences.activeSection = "overview";
+    if (!available) {
+      state.installations[manifest.id] = { ...state.installations[manifest.id], installed: true, enabled: true,
+        grantedCapabilities: manifest.requestedCapabilities.map(grant => ({ ...grant, granted: true })) };
+      state.activeSystemSlotProviderIds = { "chat-interface": manifest.id };
+    }
+    const before = structuredClone(state);
+    const harnessProjection: HarnessRegistryProjection = {
+      bootEpoch: "first-run", revision: 3, governanceActivated: true, candidates: [manifest],
+      installations: { [manifest.id]: { addonId: manifest.id, installed: true, enabled: true,
+        grantedCapabilities: manifest.requestedCapabilities.map(grant => ({ ...grant, granted: true })),
+        disabledOperations: [], hiddenSurfaceIds: [] } },
+      slots: { "chat-interface": { addonId: available ? manifest.id : null, generation: 1, available } },
+    };
+    const input = { state, bundled: [manifest], sideloaded: [], deferredSearch: "", selectedAddonId: "",
+      composer: "Hello after first run", attachments: [], selectedChatModel: "", harnessProjection };
+    const viewModel = buildShellViewModel(input);
+    if (available) expect(viewModel.activeThread).not.toBeNull();
+    else expect(viewModel.activeThread).toBeNull();
+    expect(state).toEqual(before);
+    // An unowned slot remains vacant even when local state claims consent.
+    expect(buildShellViewModel({ ...input, harnessProjection: { ...harnessProjection, slots: {} } }).activeThread === null)
+      .toBe(true);
+  });
+
+  it("surfaces and labels agree with projected governance despite forged local identity", () => {
+    const manifest = { ...augmentor as AddOnManifest, id: "addon.projected-agent", name: "Projected Agent" };
+    const state = buildDefaultState([manifest]);
+    state.strategistIdentity.customName = "Forged local agent";
+    state.activeSystemSlotProviderIds = { "primary-agent": "addon.forged" };
+    const harnessProjection: HarnessRegistryProjection = {
+      bootEpoch: "identity", revision: 1, governanceActivated: true, candidates: [manifest],
+      installations: { [manifest.id]: { addonId: manifest.id, installed: true, enabled: true,
+        grantedCapabilities: [], disabledOperations: [], hiddenSurfaceIds: [] } },
+      slots: { "primary-agent": { addonId: manifest.id, generation: 1, available: true },
+        "chat-interface": { addonId: manifest.id, generation: 1, available: true } },
+    };
+    const input = { state, bundled: [manifest], sideloaded: [], deferredSearch: "", selectedAddonId: "",
+      composer: "", attachments: [], selectedChatModel: "", harnessProjection };
+    expect(buildShellViewModel(input).displayedStrategistName).toBe("Projected Agent");
+    expect(buildShellViewModel({ ...input, harnessProjection: { ...harnessProjection, slots: {} } }).displayedStrategistName)
+      .toBe("No active agent");
+    const chatOnly = { ...harnessProjection, slots: { "chat-interface": harnessProjection.slots["chat-interface"]! } };
+    expect(buildShellViewModel({ ...input, harnessProjection: chatOnly }).displayedStrategistName).toBe("Projected Agent");
+  });
+
   it("filters manifests by search query", () => {
     const state = buildDefaultState([]);
     const bundled: AddOnManifest[] = [
@@ -206,8 +256,17 @@ describe("Hermes chat model selection", () => {
     state.uiPreferences.activeChatThreadId = hermesThread.id;
 
     const selectable = resolveSelectableChatModelsForSelection(state, hermesThread.id);
+    const manifest = augmentor as AddOnManifest;
+    const harnessProjection: HarnessRegistryProjection = {
+      bootEpoch: "hermes-chat", revision: 1, governanceActivated: true, candidates: [manifest],
+      installations: { [manifest.id]: { addonId: manifest.id, installed: true, enabled: true,
+        grantedCapabilities: manifest.requestedCapabilities.map(grant => ({ ...grant, granted: true })),
+        disabledOperations: [], hiddenSurfaceIds: [] } },
+      slots: { "chat-interface": { addonId: manifest.id, generation: 1, available: true } },
+    };
     const viewModel = buildShellViewModel({
       state,
+      harnessProjection,
       bundled: [],
       sideloaded: [],
       deferredSearch: "",

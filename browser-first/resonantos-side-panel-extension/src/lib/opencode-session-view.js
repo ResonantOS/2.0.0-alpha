@@ -182,6 +182,15 @@ function renderMarkdown(text, d) {
   return root;
 }
 
+function appendSourceBadge(parent, source, d) {
+  const badge = d.createElement("span");
+  badge.className = "oc-badge";
+  const resolved = source === "governed" ? "governed" : "external";
+  badge.dataset.source = resolved;
+  badge.textContent = resolved === "governed" ? "Governed" : "External";
+  parent.append(badge);
+}
+
 function displayValue(value) {
   if (typeof value === "string") return value;
   if (value == null) return "";
@@ -203,7 +212,10 @@ function truncateOutput(text) {
 export function renderChangedFiles(listEl, titleEl, files = [], { document: doc, onRevert } = {}) {
   const d = view(doc);
   if (!listEl || !d) return 0;
-  if (titleEl) titleEl.textContent = files.length ? `Changed files · ${files.length}` : "No changes yet";
+  if (titleEl) {
+    titleEl.textContent = files.length ? `Changed files · ${new Set(files.map((file) => file.path)).size}` : "No changes yet";
+    if (files.length) appendSourceBadge(titleEl, files.every((file) => file.source === "governed") ? "governed" : "external", d);
+  }
   listEl.replaceChildren();
   for (const file of files) {
     const row = d.createElement("li");
@@ -228,6 +240,7 @@ export function renderChangedFiles(listEl, titleEl, files = [], { document: doc,
     revert.textContent = "Revert";
     revert.addEventListener("click", () => onRevert?.(file.path));
     row.append(name, stat, revert);
+    appendSourceBadge(row, file.source, d);
     listEl.append(row);
   }
   return files.length;
@@ -235,7 +248,7 @@ export function renderChangedFiles(listEl, titleEl, files = [], { document: doc,
 
 // Inline approval cards — the governance boundary. Reply routes to
 // POST /session/:id/permissions/:permissionID via onReply(id, decision).
-export function renderApprovals(container, approvals = [], { document: doc, onReply } = {}) {
+export function renderApprovals(container, approvals = [], { document: doc, onReply, disabled } = {}) {
   const d = view(doc);
   if (!container || !d) return 0;
   container.replaceChildren();
@@ -261,6 +274,7 @@ export function renderApprovals(container, approvals = [], { document: doc, onRe
       b.type = "button";
       if (cls) b.className = cls;
       b.textContent = label;
+      if (disabled) b.disabled = true;
       b.addEventListener("click", () => onReply?.(approval.id, decision));
       return b;
     };
@@ -270,6 +284,7 @@ export function renderApprovals(container, approvals = [], { document: doc, onRe
       make("Deny", { approved: false }, "oc-no")
     );
     card.append(head, actions);
+    appendSourceBadge(card, approval.source, d);
     container.append(card);
   }
   return approvals.length;
@@ -287,7 +302,10 @@ export function renderTranscript(container, entries = [], { document: doc, clipb
       const block = d.createElement("div");
       block.className = entry.type === "reasoning" ? "oc-msg oc-reasoning" : "oc-msg";
       if (entry.type === "reasoning") {
-        block.textContent = entry.text ?? "";
+        const content = d.createElement("div");
+        content.className = "oc-msg-content";
+        content.textContent = entry.text ?? "";
+        block.append(content);
       } else {
         const copy = d.createElement("button");
         copy.type = "button";
@@ -300,6 +318,7 @@ export function renderTranscript(container, entries = [], { document: doc, clipb
         content.append(renderMarkdown(entry.text ?? "", d));
         block.append(copy, content);
       }
+      appendSourceBadge(block, entry.source, d);
       container.append(block);
     } else if (entry.type === "tool") {
       const card = d.createElement("div");
@@ -318,6 +337,7 @@ export function renderTranscript(container, entries = [], { document: doc, clipb
       sr.className = "oc-tool-sr";
       sr.textContent = ` — ${entry.state ?? "running"}`;
       card.append(glyph, name, meta, sr);
+      appendSourceBadge(card, entry.source, d);
       const output = entry.state === "error" ? entry.error : entry.output;
       if (output) {
         const details = d.createElement("details");
@@ -378,6 +398,7 @@ export function renderDiffContent(container, diff = [], { document: doc } = {}) 
       pre.append(row);
     }
     details.append(summary, pre);
+    appendSourceBadge(details, entry.source, d);
     container.append(details);
   }
   return entries.length;
@@ -395,4 +416,6 @@ export function renderTodoChecklist(container, todos = [], { document: doc } = {
     todos.map((t) => ({ label: t.label, state: TODO_STATE[t.state] ?? "pending" })),
     { document: d }
   );
+  const items = [...container.querySelectorAll(".step-list-item")];
+  items.forEach((item, index) => appendSourceBadge(item, todos[index]?.source, d));
 }

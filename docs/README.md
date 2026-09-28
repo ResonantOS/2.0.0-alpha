@@ -61,6 +61,10 @@ Read the browser-control sections of the
 [Module Ownership](architecture/MODULE-OWNERSHIP.md). Use the issue and Project 2
 item to determine required live-browser proof and human-only actions.
 
+Read [ADR-038: Guardian/Engineer Boundary And Core-Only Invariants](architecture/ADR-038-guardian-engineer-core-only-invariants.md)
+for recovery authority, the first-party privilege split, and policy boundaries
+that cannot be requested through manifests or presets.
+
 ## Change Living Archive
 
 Read [ADR-007: Living Archive Boundaries](architecture/ADR-007-living-archive-boundaries.md),
@@ -77,6 +81,10 @@ Read [ADR-006: Add-On Runtime SDK](architecture/ADR-006-addon-runtime-sdk.md),
 and [Module Ownership](architecture/MODULE-OWNERSHIP.md). For the separate
 controlled Chromium package, use its
 [component README](../addons/resonant-browser-host/README.md).
+
+The opt-in [Harness Adapter Demo](addons/harness-adapter-demo.md) documents
+host-approved credential bindings, React swaps, governance checks, and the
+separation between fixture receipts and live runtime evidence.
 
 ## Change Documentation
 
@@ -115,3 +123,17 @@ the exact commands and live Chrome checks performed.
 Use the [ADR Index](architecture/README.md). An ADR's decision status and its
 applicability to the current Alpha are separate facts; historical and deferred
 records do not redefine the runtime boundary.
+
+## Planning And Future Architecture
+
+The post-consolidation architecture and SDK/DAO governance program is planned in
+[Planning & Architecture Governance](planning/README.md). It contains the
+[project state review](planning/00-project-state-review.md), the
+[post-consolidation architecture roadmap](planning/01-post-consolidation-architecture-roadmap.md),
+the [SDK + DAO governance roadmap](planning/02-sdk-dao-governance-roadmap.md), the
+[master implementation plan](planning/03-master-implementation-plan.md), the
+[roadmap review](planning/04-roadmap-review.md), the
+[Tom report](planning/05-tom-report-ros-sdk-demo-and-buildout.md), the
+[SDK demo test results](planning/06-sdk-demo-test-results.md), and the
+[daily summary protocol](planning/daily/README.md). These are proposals and
+schedules, not shipped runtime facts.

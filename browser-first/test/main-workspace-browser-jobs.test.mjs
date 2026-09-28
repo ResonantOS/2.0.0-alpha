@@ -314,3 +314,124 @@ test("main workspace browser jobs render per-job approval review cards", () => {
 
   assert.deepEqual(events, [["focus", "job-approval"]]);
 });
+
+test("workspace history failure exposes Retry and suppresses stale actions", { timeout: 2000 }, async (t) => {
+  const { createMainWorkspaceBrowserJobController } = await import("../resonantos-side-panel-extension/src/lib/main-workspace-browser-job-controller.js");
+  const dom = new JSDOM('<section id="jobs"></section>');
+  t.after(() => dom.window.close());
+  const container = dom.window.document.querySelector("#jobs");
+  let fail = true;
+  let jobs = [];
+  let pending;
+  let reads = 0;
+  let writes = 0;
+  const controller = createMainWorkspaceBrowserJobController({ storage: {
+    async get() { reads++; if (pending) await pending.promise; if (fail) throw Error("private"); return { augmentorBrowserJobs: jobs }; },
+    async set() { writes++; }
+  } });
+  let snapshot;
+  let inflight;
+  const render = () => renderMainBrowserJobStatus({ ...snapshot, container, onRetryHistory: retry,
+    onCancelFocused: () => assert.fail("stale Stop"), onFocusJob: () => assert.fail("stale Focus") });
+  const refresh = async () => { snapshot = await controller.readJobs(); render(); };
+  const retry = () => {
+    if (inflight) return inflight;
+    snapshot = { ...snapshot, historyState: "loading" }; render();
+    inflight = refresh().finally(() => { inflight = null; });
+    return inflight;
+  };
+  const assertError = () => {
+    assert.equal(container.hidden, false, "failed empty history stays visible");
+    assert.match(container.textContent, /Browser job history could not be loaded\./);
+    assert.ok(container.querySelector('[data-status="blocked"]'));
+    assert.deepEqual([...container.querySelectorAll("button")].map((b) => b.textContent), ["Retry"]);
+  };
+  await refresh(); assertError();
+  container.querySelector("button").click(); await inflight; assertError();
+  fail = false; jobs = [{ id: "saved", goal: "Saved task", status: "running" }];
+  container.querySelector("button").click(); await inflight;
+  assert.match(container.textContent, /Saved task/);
+  fail = true; await refresh(); assertError();
+  pending = Promise.withResolvers(); t.after(() => pending.resolve());
+  const before = reads;
+  const oldRetry = container.querySelector("button");
+  oldRetry.click(); oldRetry.click();
+  assert.equal(container.querySelector("button").disabled, true);
+  assert.match(container.textContent, /Loading browser job history/);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(reads, before + 1);
+  fail = false; jobs = []; pending.resolve(); await inflight;
+  assert.equal(container.hidden, true, "successful empty history restores normal rendering");
+  assert.equal(writes, 0, "workspace Retry reads only");
+});
+
+test("workspace composition shares checked Jobs and Control refresh and attention", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../resonantos-side-panel-extension/src/main-workspace.js", import.meta.url), "utf8");
+  assert.match(source, /onRetryHistory: retryBrowserJobHistory/);
+  assert.match(source, /retry\.addEventListener\("click", retryBrowserJobHistory\)/);
+  assert.match(source, /snapshot\.historyState !== "ready" \|\|\s*hasBlockingBrowserJob\(snapshot\.jobs\)/);
+  assert.match(source, /dockTabs\.signalActivity\("jobs", \{ blocking \}\)/);
+  assert.match(source, /dockTabs\.signalActivity\("control", \{ blocking \}\)/);
+  assert.doesNotMatch(source, /changes\[STORAGE_KEYS\.browserJobs\]\?\.newValue/);
+  assert.equal((source.match(/mainBrowserJobController\.readJobs\(/g) ?? []).length, 1);
+});
+
+test("composed workspace refresh renders both surfaces from one read and coalesces both Retry buttons", { timeout: 2000 }, async (t) => {
+  const { readFile } = await import("node:fs/promises");
+  const { runInNewContext } = await import("node:vm");
+  const { createMainWorkspaceBrowserJobController } = await import("../resonantos-side-panel-extension/src/lib/main-workspace-browser-job-controller.js");
+  const { renderDockControl } = await import("../resonantos-side-panel-extension/src/lib/main-workspace-dock-panels.js");
+  const { hasBlockingBrowserJob } = await import("../resonantos-side-panel-extension/src/lib/browser-job-store.js");
+  const source = await readFile(new URL("../resonantos-side-panel-extension/src/main-workspace.js", import.meta.url), "utf8");
+  const composition = source.slice(source.indexOf("let browserJobHistory ="), source.indexOf("const chatRenderers ="));
+  const dom = new JSDOM('<section id="jobs"></section><section id="control"><strong></strong><span></span><div></div></section>');
+  t.after(() => dom.window.close());
+  const document = dom.window.document;
+  let fail = false; let pending; let reads = 0; let writes = 0;
+  let jobs = [{ id: "saved", status: "running", goal: "Saved task", steps: [{ label: "Stale step", state: "active" }] }];
+  const controller = createMainWorkspaceBrowserJobController({ storage: {
+    async get() { reads++; if (pending) await pending.promise; if (fail) throw Error("private"); return { augmentorBrowserJobs: jobs }; },
+    async set() { writes++; }
+  } });
+  const signals = [];
+  const mainBrowserJobs = document.querySelector("#jobs");
+  const dockControlEls = { titleEl: document.querySelector("#control strong"), statusEl: document.querySelector("#control span"), stepListEl: document.querySelector("#control div") };
+  const context = { document, mainBrowserJobs, dockControlEls, mainBrowserJobController: controller,
+    renderMainBrowserJobStatus, renderDockControl, hasBlockingBrowserJob, activeWorkspace: "answer",
+    dockTabs: { signalActivity: (name, options) => signals.push([name, options.blocking]) } };
+  runInNewContext(composition, context);
+  await context.renderMainBrowserJobStatusFromStorage();
+  assert.match(dockControlEls.stepListEl.textContent, /Stale step/);
+  fail = true;
+  await context.renderMainBrowserJobStatusFromStorage();
+  assert.match(mainBrowserJobs.textContent, /could not be loaded/);
+  assert.match(dockControlEls.titleEl.textContent, /could not be loaded/);
+  assert.doesNotMatch(dockControlEls.stepListEl.textContent, /Stale step/);
+  assert.equal(dockControlEls.statusEl.dataset.status, "blocked");
+  assert.deepEqual(signals.slice(-2), [["jobs", true], ["control", true]]);
+  pending = Promise.withResolvers(); t.after(() => pending.resolve());
+  const before = reads;
+  const controlRetry = dockControlEls.stepListEl.querySelector("button");
+  assert.equal(controlRetry.title, "Reload browser job history");
+  assert.equal(controlRetry.title, mainBrowserJobs.querySelector("button").title);
+  mainBrowserJobs.querySelector("button").click();
+  controlRetry.click();
+  const complete = context.renderMainBrowserJobStatusFromStorage();
+  assert.equal(mainBrowserJobs.querySelector("button").disabled, true);
+  assert.equal(dockControlEls.stepListEl.querySelector("button").disabled, true);
+  assert.equal(dockControlEls.stepListEl.querySelector("button").title, "Reload browser job history");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(reads, before + 1);
+  fail = false; jobs = []; pending.resolve(); await complete;
+  assert.equal(mainBrowserJobs.hidden, true);
+  assert.equal(dockControlEls.statusEl.textContent, "idle");
+  assert.equal(dockControlEls.statusEl.hasAttribute("data-status"), false);
+  assert.equal(dockControlEls.stepListEl.children.length, 0);
+  assert.deepEqual(signals.slice(-2), [["jobs", false], ["control", false]]);
+  context.activeWorkspace = "settings"; fail = true;
+  await context.renderMainBrowserJobStatusFromStorage();
+  assert.equal(mainBrowserJobs.hidden, true, "workspace visibility boundary stays in place");
+  assert.match(dockControlEls.titleEl.textContent, /could not be loaded/);
+  assert.equal(writes, 0);
+});

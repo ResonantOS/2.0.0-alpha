@@ -81,3 +81,34 @@ test("retry checks only failed endpoints and keeps successful results visible", 
   assert.equal(ui.retry().hidden, true);
   assert.equal(ui.root.querySelector(".settings-status").getAttribute("role"), "status");
 });
+
+test("diagnostics export sends only settings scope, excluding override credentials from every request body", async (t) => {
+  const { createBridgeClient } = await import("../resonantos-side-panel-extension/src/lib/bridge-client.js");
+  const saved = { bridgeUrl: "https://diagnostics.test", bridgeToken: "Bearer synthetic-diagnostics-fixture", capabilityBootstrapToken: "token=synthetic-diagnostics-bootstrap" };
+  const previousChrome = Object.getOwnPropertyDescriptor(globalThis, "chrome");
+  globalThis.chrome = { storage: { local: { get: async () => ({ bridgeTargetOverride: saved }) } } };
+  t.after(() => {
+    if (previousChrome) Object.defineProperty(globalThis, "chrome", previousChrome);
+    else delete globalThis.chrome;
+  });
+  const calls = [];
+  const ui = await setup(t, createBridgeClient({ ...saved, fetchImpl: async (target, options) => {
+    calls.push({ target, ...options });
+    return { ok: true, status: 200, json: async () => ({ ...ready, path: "fixture-report.json" }) };
+  } }));
+  [...ui.root.querySelectorAll("button")].find((button) => button.textContent === "Export Redacted Report").click();
+  await setImmediate();
+  assert.equal(calls.length, 6);
+  const exported = calls.find((call) => call.target.endsWith("/diagnostics/report"));
+  assert.ok(exported);
+  assert.equal(exported.method, "POST");
+  assert.equal(exported.body, '{"scope":"settings"}');
+  for (const call of calls) {
+    assert.equal(call.headers["X-ResonantOS-Bridge-Token"], saved.bridgeToken);
+    assert.equal(call.headers["X-ResonantOS-Capability-Bootstrap-Token"], undefined);
+    assert.ok(!(call.body ?? "").includes(saved.bridgeToken));
+    assert.ok(!(call.body ?? "").includes(saved.capabilityBootstrapToken));
+  }
+  assert.ok(!ui.root.textContent.includes(saved.bridgeToken));
+  assert.ok(!ui.root.textContent.includes(saved.capabilityBootstrapToken));
+});

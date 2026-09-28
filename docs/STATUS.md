@@ -10,7 +10,7 @@ it only from the current worktree, deterministic checks, GitHub issues, and
 | --- | --- | --- |
 | Package | `resonantos-vnext` `2.0.0-beta.1` | `package.json` |
 | Extension | Manifest V3 `0.1.14`; Chrome 116 minimum | `browser-first/resonantos-side-panel-extension/manifest.json` |
-| Node.js | `>=22.13.0` | `package.json` and `.nvmrc` |
+| Node.js | `>=24.21.0` | `package.json` and `.nvmrc` |
 | Alpha runtime | Chrome extension plus local Node.js bridge | `browser-first/resonantos-side-panel-extension/`, `browser-first/host/`, `run-bridge-minimal.mjs` |
 | Development branch | `dev`; changes use a feature branch and a PR into `dev` | `AGENTS.md` |
 | Release planning | GitHub issues organized in Project 2 | [Project 2](https://github.com/orgs/ResonantOS/projects/2) |
@@ -116,7 +116,7 @@ The **beta.2** gate is **open**. Its exit criteria — the committed feature tra
 ([#227](https://github.com/ResonantOS/2.0.0-alpha/issues/227),
 [#232](https://github.com/ResonantOS/2.0.0-alpha/issues/232),
 [#252](https://github.com/ResonantOS/2.0.0-alpha/issues/252)), the security line
-([#321](https://github.com/ResonantOS/2.0.0-alpha/issues/321),
+([#321](https://github.com/ResonantOS/2.0.0-alpha/issues/321) — bridge-only OpenCode boundary with capability/Host checks, session-scoped source attribution and live revocation; passing Live SDK evidence recorded in Project 2; full cockpit disabled,
 [#326](https://github.com/ResonantOS/2.0.0-alpha/issues/326),
 [#373](https://github.com/ResonantOS/2.0.0-alpha/issues/373),
 [#180](https://github.com/ResonantOS/2.0.0-alpha/issues/180)), the
@@ -134,3 +134,14 @@ criteria, and the release evidence — are tracked in
 Future work belongs in the [roadmap](./ROADMAP.md), and the actual reviewer
 delivery path is documented in
 [Alpha Distribution](./release/ALPHA_DISTRIBUTION.md).
+
+## Development Surface
+
+Issue [#429](https://github.com/ResonantOS/2.0.0-alpha/issues/429) part 2
+provides opt-in, authenticated bridge-config delivery to the React shell at
+http://127.0.0.1:1430. Delivery is disabled by default, requires a separate
+developer page key, and requires the bridge operator's exact-origin CORS
+opt-in. Generated bridge credentials remain denied through Vite filesystem
+routes and are excluded from builds. This is development tooling, not a new
+Alpha runtime component. See
+[Opt-in React shell development](../browser-first/README.md#opt-in-react-shell-development).

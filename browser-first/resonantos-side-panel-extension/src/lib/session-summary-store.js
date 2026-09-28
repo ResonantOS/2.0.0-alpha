@@ -2,13 +2,20 @@
 //
 // Uses chrome.storage.local so the artifact survives an extension reload; the
 // storage is the source of truth, so deletion is honored on restart. The
-// artifact is redacted by session-summary-artifact.js before it reaches here.
+// production caller already redacts and bounds artifacts with
+// session-summary-artifact.js. Redact a detached copy here as defense in depth
+// for direct callers, preserving the caller's object and lowercase sentinels.
+import { redactTraceValue } from "./trace-redaction.js";
 
 export const SESSION_SUMMARY_ARTIFACT_KEY = "augmentorSessionSummaryArtifact";
 
 export async function saveSessionSummaryArtifact(chrome, artifact) {
   if (!chrome?.storage?.local?.set) return false;
-  await chrome.storage.local.set({ [SESSION_SUMMARY_ARTIFACT_KEY]: artifact });
+  const redactedArtifact = redactTraceValue(artifact, {
+    replacement: "[redacted]",
+    tokenReplacement: "[redacted]"
+  });
+  await chrome.storage.local.set({ [SESSION_SUMMARY_ARTIFACT_KEY]: redactedArtifact });
   return true;
 }
 

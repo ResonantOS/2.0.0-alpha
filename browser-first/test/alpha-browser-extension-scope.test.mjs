@@ -84,10 +84,10 @@ test("2.0.0 alpha release scope is Chrome extension and bridge only", async () =
     "connect-src must permit the user's bridge host (remote LAN/Tailscale deployments)",
   );
   const contentScriptFiles = manifest.content_scripts[0].js;
-  assert.equal(contentScriptFiles[0], "src/lib/resonant-context.js");
+  assert.equal(contentScriptFiles[0], "src/lib/trace-redaction-core.js");
   assert.deepEqual(
-    contentScriptFiles.slice(0, 3),
-    ["src/lib/resonant-context.js", "src/lib/context-plugins.js", "src/lib/resonator.js"],
+    contentScriptFiles.slice(0, 4),
+    ["src/lib/trace-redaction-core.js", "src/lib/resonant-context.js", "src/lib/context-plugins.js", "src/lib/resonator.js"],
   );
   assert.ok(contentScriptFiles.includes("src/lib/content-field-safety.js"));
   assert.ok(contentScriptFiles.includes("src/lib/content-inline-action-surface-gate.js"));
@@ -111,4 +111,12 @@ test("2.0.0 alpha release scope excludes local credential artifacts", () => {
   );
 
   assert.deepEqual(forbidden, [], "alpha must not track credential, bridge-token, env, or local user-state artifacts");
+});
+
+test('both context add-on declarations load redaction before the SDK', async () => {
+  for (const file of ['browser-first/addons/resonant-context/addon.json',
+    'browser-first/resonantos-side-panel-extension/src/addons/resonant-context/addon.json']) {
+    const addon = await readJson(file);
+    assert.deepEqual(addon.contentScripts, ['trace-redaction-core.js', 'resonant-context.js', 'context-plugins.js']);
+  }
 });

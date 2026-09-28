@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AddOnManifest, CapabilityGrant, SystemSlotId } from "./contracts";
-import { buildDefaultState } from "./defaults";
+import { buildDefaultState, selectRecommendedDefaultSystemSlotProviderIds } from "./defaults";
 
 const capability = (name: CapabilityGrant["capability"]): CapabilityGrant => ({
   capability: name,
@@ -33,7 +33,7 @@ const manifestForSlot = (
 });
 
 describe("buildDefaultState", () => {
-  it("selects recommended default providers for system slots", () => {
+  it("keeps recommended default providers as suggestions without consent or owners", () => {
     const first = manifestForSlot("addon.first", "primary-agent", "default-provider", true);
     const second = manifestForSlot("addon.second", "primary-agent", "default-provider", true);
     const notRecommended = manifestForSlot("addon.not-recommended", "chat-interface", "default-provider", false);
@@ -41,6 +41,10 @@ describe("buildDefaultState", () => {
 
     const state = buildDefaultState([first, second, notRecommended, alternative]);
 
-    expect(state.activeSystemSlotProviderIds).toEqual({ "primary-agent": "addon.first" });
+    expect(selectRecommendedDefaultSystemSlotProviderIds([first, second, notRecommended, alternative]))
+      .toEqual({ "primary-agent": "addon.first" });
+    expect(state.activeSystemSlotProviderIds).toEqual({});
+    expect(Object.values(state.installations).every(item => !item.installed && !item.enabled &&
+      item.grantedCapabilities.every(grant => !grant.granted))).toBe(true);
   });
 });

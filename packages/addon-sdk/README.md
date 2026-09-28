@@ -26,7 +26,7 @@ This package provides the **add-on author-facing** portion of REF V0.1:
   `createAddOnRegistrySnapshot`) — combine manifests and installations
   into a registry snapshot.
 - Surface routing (`createAddOnSurfaceDockRoutes`) — compute the dock
-  routes for an enabled-and-installed add-on set.
+  routes for an enabled-and-installed add-on set. The installations argument is retained for signature compatibility and is not consulted; the host projection is the sole authority, and a missing projection yields no dock routes.
 
 ## Out of scope (V0.1)
 

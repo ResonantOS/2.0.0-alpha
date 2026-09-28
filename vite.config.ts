@@ -1,9 +1,10 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import { DEV_SERVER_FS_DENY } from "./src/dev-server-policy";
+import { devBridgeConfigPlugin } from "./scripts/vite-dev-bridge-config.mjs";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [devBridgeConfigPlugin(), react()],
   build: {
     rollupOptions: {
       output: {
@@ -32,6 +33,8 @@ export default defineConfig({
     host: "127.0.0.1",
     port: 1430,
     strictPort: true,
+    allowedHosts: ["127.0.0.1"],
+    cors: false,
     fs: {
       strict: true,
       deny: DEV_SERVER_FS_DENY,
@@ -40,6 +43,8 @@ export default defineConfig({
       ignored: [
         "**/dist/**",
         "**/node_modules/**",
+        "**/bridge-config.generated.js",
+        "**/ResonantOS_User/**",
       ],
     },
   },

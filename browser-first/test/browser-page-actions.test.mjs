@@ -844,3 +844,34 @@ test("page understanding fixtures: the REAL content.js read_page extracts the ex
   const visible = String(mediaOnly.snapshot.text ?? "").trim();
   assert.ok(visible.length < 40, "media-only page yields no substantial visible text (got: " + visible.slice(0, 60) + ")");
 });
+
+for (const action of ["typeIntoActivePage", "clickActivePageText"]) {
+  test(`D3: ${action} refusal is presented as a human handoff`, async () => {
+    const reason = "This control was not recognised, so a human performs it on the page.";
+    const harness = createHarness({
+      sendMessage: () => ({ ok: false, approvalRequired: true, deniedToAutomation: true, humanHandoff: true, error: reason })
+    });
+    const result = await harness.actions[action]({ text: "Topic", field: "Topic", userApproved: true });
+    assert.equal(result.humanHandoff, true);
+    assert.ok(harness.events.some((event) => event[0] === "status" && event[1] === "Human action required"));
+    assert.ok(harness.events.some((event) => event[0] === "message" && event[2] === `Human action required: ${reason}`));
+    assert.ok(harness.events.some((event) => event[0] === "activity" && event[1] === "waiting-for-human"));
+    assert.equal(harness.events.some((event) => event[0] === "status" && event[1] === "Page action failed"), false);
+  });
+}
+
+
+test('recovery injection loads redaction immediately before context, plugins and resonator', async () => {
+  const harness = createHarness({ sendMessage: (calls) => {
+    if (calls === 1) throw new Error('Receiving end does not exist.');
+    return { ok: true, snapshot: { title: 'Example', url: 'https://example.test/', text: 'hello' } };
+  } });
+  await harness.actions.readActivePage({ announce: false });
+  const injections = harness.events.filter(([name]) => name === 'inject');
+  assert.equal(injections.length, 1);
+  assert.deepEqual(injections[0][1].target, { tabId: 1 });
+  assert.deepEqual(injections[0][1].files.slice(0, 4), [
+    'src/lib/trace-redaction-core.js', 'src/lib/resonant-context.js',
+    'src/lib/context-plugins.js', 'src/lib/resonator.js'
+  ]);
+});

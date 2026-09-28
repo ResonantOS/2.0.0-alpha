@@ -38,6 +38,9 @@ import {
   requestArchiveSemanticLint,
 } from "./runtime";
 
+import type { HarnessProjection } from "./harness-client";
+import { activeSystemSlotProvider } from "./system-slots";
+
 export type MemoryProviderKind = "living-archive" | "http-json" | "unsupported";
 
 export type MemoryProviderBroker = {
@@ -158,34 +161,6 @@ export type MemoryProviderBroker = {
   }): Promise<ArchivePromoteReviewArtifactResult>;
 };
 
-const capabilityGranted = (
-  state: ResonantShellState,
-  addonId: string,
-  capability: string,
-): boolean =>
-  Boolean(
-    state.installations[addonId]?.enabled &&
-      state.installations[addonId]?.grantedCapabilities.some(
-        (grant) => grant.capability === capability && grant.granted,
-      ),
-  );
-
-const memorySlotManifest = (manifest: AddOnManifest): boolean =>
-  Boolean(manifest.systemSlots?.some((slot) => slot.id === "memory-system"));
-
-const activeMemoryManifest = (
-  state: ResonantShellState,
-  manifests: AddOnManifest[],
-): { manifest: AddOnManifest; installation: AddOnInstallation } | null => {
-  for (const manifest of manifests.filter(memorySlotManifest)) {
-    const installation = state.installations[manifest.id];
-    if (installation?.enabled && capabilityGranted(state, manifest.id, "memory-provider")) {
-      return { manifest, installation };
-    }
-  }
-  return null;
-};
-
 const unavailable = (label: string, operation: string): never => {
   throw new Error(
     `${label} does not expose the ${operation} memory-provider operation yet. Select Living Archive or install a compatible memory add-on.`,
@@ -222,7 +197,7 @@ export const livingArchiveMemoryProvider = (): MemoryProviderBroker => ({
 
 const endpointFromInstallation = (
   manifest: AddOnManifest,
-  installation: AddOnInstallation,
+  installation: Pick<AddOnInstallation, "config">,
 ): string | null => {
   const configured =
     typeof installation.config?.memoryServiceUrl === "string"
@@ -237,7 +212,7 @@ const endpointFromInstallation = (
   return raw.replace(/\/+$/, "");
 };
 
-const tokenFromInstallation = (installation: AddOnInstallation): string => {
+const tokenFromInstallation = (installation: Pick<AddOnInstallation, "config">): string => {
   const configured =
     typeof installation.config?.memoryServiceToken === "string"
       ? installation.config.memoryServiceToken
@@ -280,7 +255,7 @@ const postMemoryJson = async <Result>(
 
 export const httpJsonMemoryProvider = (
   manifest: AddOnManifest,
-  installation: AddOnInstallation,
+  installation: Pick<AddOnInstallation, "config">,
 ): MemoryProviderBroker => {
   const endpoint = endpointFromInstallation(manifest, installation);
   if (!endpoint) {
@@ -355,19 +330,16 @@ export const unsupportedMemoryProvider = (
 export const resolveMemoryProviderBroker = (
   state: ResonantShellState,
   manifests: AddOnManifest[],
+  projection?: HarnessProjection | null,
 ): MemoryProviderBroker => {
-  const slotManifests = manifests.filter(memorySlotManifest);
-  if (!slotManifests.length) {
-    // Legacy/test manifest sets predate replaceable memory slots.
-    return livingArchiveMemoryProvider();
-  }
-
-  const activeProvider = activeMemoryManifest(state, manifests);
+  const activeProvider = activeSystemSlotProvider(state, manifests, "memory-system", projection);
   if (!activeProvider) {
     return unsupportedMemoryProvider("memory-system.none", "No active memory provider");
   }
 
-  const { manifest, installation } = activeProvider;
+  const { manifest } = activeProvider;
+  // Transport configuration remains local; it cannot select or enable a provider.
+  const installation = state.installations[manifest.id] ?? {};
   if (manifest.id === "addon.living-archive") {
     return livingArchiveMemoryProvider();
   }

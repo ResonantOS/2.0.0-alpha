@@ -7,7 +7,7 @@
   "mode": "awareness-engine",
   "trust": "page-observer",
   "entry": null,
-  "contentScripts": ["resonant-context.js", "context-plugins.js"],
+  "contentScripts": ["trace-redaction-core.js", "resonant-context.js", "context-plugins.js"],
   "commands": [],
   "messageChannel": "resonantos.context",
   "capabilities": ["viewport-observer", "dwell-tracking", "form-state", "domain-plugins", "top-frame-ownership", "safe-context-sanitization"],

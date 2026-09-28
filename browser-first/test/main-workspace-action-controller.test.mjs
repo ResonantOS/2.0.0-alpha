@@ -3,6 +3,8 @@ import test from "node:test";
 
 import { createMainWorkspaceActionController } from "../resonantos-side-panel-extension/src/lib/main-workspace-action-controller.js";
 
+import { createSidePanelLifecycleController } from "../resonantos-side-panel-extension/src/lib/side-panel-lifecycle-controller.js";
+
 function createHarness(overrides = {}) {
   const events = [];
   const commandInput = { value: overrides.prompt ?? "" };
@@ -260,4 +262,86 @@ test("main workspace action controller delegates natural Hermes work through gov
   const delegateCall = harness.events.find((event) => event[0] === "bridge" && event[1] === "/addons/delegate");
   assert.deepEqual(delegateCall[2], { target: "hermes", mission: "research the add-on strategy" });
   assert.ok(harness.events.some((event) => event[0] === "message" && /Boundary: the add-on receives/.test(event[2])));
+});
+
+const handoffTime = "2026-09-19T12:00:00.000Z";
+const reentryNotice = "Sensitive text was removed from this handoff. Enter the command directly in the sidebar to continue.";
+
+for (const fallback of [false, true]) {
+  test(`workspace handoff persists only a redacted preview and preserves original ${fallback ? "fallback" : "runtime"} navigation`, async (t) => {
+    t.mock.timers.enable({ apis: ["Date"], now: new Date(handoffTime) });
+    const originalUrl = "https://example.test/docs?token=synthetic-fixture-value";
+    const harness = createHarness({
+      prompt: `go to ${originalUrl} and summarize it`,
+      runtimeHandoffResponse: { ok: !fallback }
+    });
+
+    await harness.controller.handleSubmit({ preventDefault() {} });
+
+    const writes = harness.events.filter(([type]) => type === "storage-set");
+    assert.equal(writes.length, 1);
+    assert.deepEqual(writes[0][1], {
+      augmentorPendingSidebarPrompt: {
+        prompt: "/control go to https://example.test/docs?token=REDACTED and summarize it",
+        createdAt: handoffTime,
+        requiresReentry: true
+      }
+    });
+    assert.equal(JSON.stringify(writes).includes("synthetic-fixture-value"), false);
+    assert.deepEqual(harness.events.filter(([type]) => type === "runtime-message"), [["runtime-message", {
+      channel: "resonantos.browser_first",
+      type: "browser_control_handoff",
+      targetUrl: originalUrl
+    }]]);
+    assert.deepEqual(harness.events.filter(([type]) => type === "tab-update"),
+      fallback ? [["tab-update", { url: originalUrl }]] : []);
+
+    // Round-trip the actual producer write through durable storage into a fresh panel.
+    const storageState = JSON.parse(JSON.stringify(writes[0][1]));
+    const executions = [];
+    const messages = [];
+    const commandInput = { value: "" };
+    const storage = {
+      get: async (key) => ({ [key]: storageState[key] }),
+      remove: async (key) => { delete storageState[key]; }
+    };
+    const createPanel = () => createSidePanelLifecycleController({
+      storage,
+      commandInput,
+      addMessage: async (...message) => messages.push(message),
+      respondToCommand: async (prompt) => executions.push(prompt)
+    });
+    assert.equal(await createPanel().consumePendingSidebarPrompt(), true);
+    assert.deepEqual(storageState, {});
+    assert.deepEqual(executions, []);
+    assert.deepEqual(messages, [["system", reentryNotice]]);
+    assert.equal(commandInput.value, "");
+    assert.equal(await createPanel().consumePendingSidebarPrompt(), false);
+    assert.deepEqual(executions, []);
+  });
+}
+
+test("workspace handoff preserves the exact ordinary prompt payload without a reentry marker", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date(handoffTime) });
+  const harness = createHarness();
+  await harness.controller.runPrompt("/control go to https://example.test/docs and summarize it");
+  assert.deepEqual(harness.events.filter(([type]) => type === "storage-set"), [["storage-set", {
+    augmentorPendingSidebarPrompt: {
+      prompt: "/control go to https://example.test/docs and summarize it",
+      createdAt: handoffTime
+    }
+  }]]);
+});
+
+test("public runPrompt redacts pasted sensitive text before persisting a control handoff", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date(handoffTime) });
+  const harness = createHarness();
+  await harness.controller.runPrompt('/control read this page with password="synthetic pasted secret"');
+  assert.deepEqual(harness.events.filter(([type]) => type === "storage-set"), [["storage-set", {
+    augmentorPendingSidebarPrompt: {
+      prompt: '/control read this page with password="REDACTED"',
+      createdAt: handoffTime,
+      requiresReentry: true
+    }
+  }]]);
 });

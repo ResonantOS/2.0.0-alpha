@@ -1,3 +1,5 @@
+import { redactTraceText, redactTraceValue } from "./trace-redaction.js";
+
 const TERMINAL_JOB_STATUSES = ["completed", "blocked", "denied", "cancelled", "failed"];
 const ACTIVE_JOB_STATUSES = ["queued", "running", "paused", "approval"];
 const LOCK_HOLDING_JOB_STATUSES = ["queued", "running", "approval"];
@@ -353,6 +355,173 @@ export function browserJobSchedulerState(jobs = [], { maxConcurrent = 1 } = {}) 
   };
 }
 
+// Admission uses the original JSON sizes first, then checks sanitized sizes.
+// A rejected executable step must never reappear because redaction shrank it.
+function sanitizedJobInput(input) {
+  const clean = redactTraceValue(input);
+  if (Object.hasOwn(input, "pendingApproval")) {
+    const admitted = normalizePendingApproval(input.pendingApproval);
+    clean.pendingApproval = admitted ? normalizePendingApproval({
+      ...redactTraceValue(admitted),
+      reason: redactTraceText(String(input.pendingApproval.reason ?? "This browser action requires human approval."))
+    }) : null;
+  }
+  return clean;
+}
+
+const SAVED_TARGET_REDACTED = "Saved target details were redacted. Check the page before resuming.";
+const changedRouting = (value, fields) => Boolean(value && fields.some((field) => {
+  const text = String(value[field] ?? "");
+  return redactTraceText(text) !== text;
+}));
+
+function selectSafeId(value, reserved, nextReplacement) {
+  const original = String(value);
+  if (redactTraceText(original) === original && !reserved.has(original)) return original;
+  let id;
+  do { id = `job-redacted-${nextReplacement()}`; } while (reserved.has(id));
+  return id;
+}
+
+function durableRecord(input, live, previous = null) {
+  const clean = sanitizedJobInput(input);
+  const unsafeLock = Object.hasOwn(input, "pageLock")
+    ? changedRouting(input.pageLock, ["url", "siteKey"]) : previous?.unsafeLock ?? false;
+  const unsafePreflight = Object.hasOwn(input, "preflightDecision")
+    ? changedRouting(input.preflightDecision, ["id", "siteKey", "taskClass"]) : previous?.unsafePreflight ?? false;
+  const candidate = {
+    ...previous?.job, ...clean,
+    id: live.id, status: live.status,
+    createdAt: redactTraceValue(live.createdAt),
+    updatedAt: redactTraceValue(live.updatedAt),
+    completedAt: redactTraceValue(live.completedAt)
+  };
+  if (unsafeLock) candidate.pageLock = null;
+  if (unsafePreflight) candidate.preflightDecision = null;
+  if ((unsafeLock || unsafePreflight) && LOCK_HOLDING_JOB_STATUSES.includes(candidate.status)) {
+    candidate.status = "paused";
+    candidate.pageLock = null;
+    candidate.pendingApproval = null;
+    candidate.lastError = SAVED_TARGET_REDACTED;
+  }
+  return { job: normalizeBrowserJob(candidate, { now: () => live.updatedAt }), unsafeLock, unsafePreflight };
+}
+
+// External mutations coordinate only within this realm, adapter and jobs key.
+// Live stores retain their own hydration/write queues and failed-read guards.
+const externalMutationQueues = new WeakMap();
+class BrowserJobMutationError extends Error {
+  constructor(message, code = "storage") { super(message); this.code = code; }
+}
+const unsafeFocus = () => new BrowserJobMutationError(
+  "This saved browser job cannot be focused safely. Reopen the side panel to reload and repair browser job history.",
+  "unsafe-focus"
+);
+const focusableId = (id) => typeof id === "string" && id.length > 0 &&
+  !/[\s\u0000-\u001f\u007f-\u009f]/u.test(id) && redactTraceText(id) === id;
+const objectRecord = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+
+export function mutateBrowserJobStorage({ storage, storageKeys, mutation, now = defaultNow }) {
+  if (typeof storage?.get !== "function" || typeof storage?.set !== "function") {
+    return Promise.reject(new BrowserJobMutationError("Browser job storage is unavailable."));
+  }
+  const jobsKey = storageKeys?.browserJobs ?? "augmentorBrowserJobs";
+  const activeKey = storageKeys?.activeBrowserJob ?? "augmentorActiveBrowserJob";
+  const promptKey = storageKeys?.pendingSidebarPrompt ?? "augmentorPendingSidebarPrompt";
+  const operation = async () => {
+    try {
+      // Settings adapters accept string keys; Chrome storage and workspace
+      // adapters accept them too. Missing history is unknown, never empty.
+      const history = await storage.get(jobsKey);
+      if (!objectRecord(history) || !Object.hasOwn(history, jobsKey) || !Array.isArray(history[jobsKey])) {
+        throw new BrowserJobMutationError("Browser job history could not be read safely.");
+      }
+      const originals = history[jobsKey];
+      for (const record of originals) {
+        if (!objectRecord(record)) throw new BrowserJobMutationError("Browser job history could not be read safely.");
+      }
+      const active = Object.hasOwn(history, activeKey) ? history : await storage.get(activeKey);
+      if (!objectRecord(active)) {
+        throw new BrowserJobMutationError("Browser job history could not be read safely.");
+      }
+      const stored = { [activeKey]: active[activeKey] };
+      const { type, jobId, command } = mutation;
+      if (!["cancel", "clear-settings-terminal", "focus"].includes(type)) {
+        throw new BrowserJobMutationError("Browser job mutation is unavailable.");
+      }
+      const matches = originals.filter((job) => job.id === jobId);
+      if (type === "focus") {
+        if (matches.length !== 1 || !focusableId(jobId)) throw unsafeFocus();
+        if (!["jobs focus", "pause", "continue"].includes(command)) throw unsafeFocus();
+        const envelope = redactTraceValue({
+          [activeKey]: jobId,
+          [promptKey]: { createdAt: now(), prompt: `/${command} ${jobId}` }
+        });
+        await storage.set(envelope);
+        return { changed: true, job: null, removed: 0, activeJobId: jobId };
+      }
+      if (type === "cancel" && matches.length > 1) {
+        throw new BrowserJobMutationError("Browser job identity could not be resolved safely.");
+      }
+      const target = matches[0];
+      if (type === "cancel" && (!target || isTerminalBrowserJobStatus(target.status))) {
+        return { changed: false, job: null, removed: 0, activeJobId: redactTraceValue(stored[activeKey] ?? null) };
+      }
+      const timestamp = now();
+      const reserved = new Set(originals.map((job) => String(job.id ?? "")));
+      const counts = new Map();
+      for (const job of originals) counts.set(job.id, (counts.get(job.id) ?? 0) + 1);
+      let replacementIndex = 0;
+      const mapped = new Map();
+      let removed = 0;
+      const jobs = [];
+      for (const original of originals) {
+        // Settings selects by original status, before invalid-status quarantine.
+        if (type === "clear-settings-terminal" && isTerminalBrowserJobStatus(original.status)) {
+          removed++; continue;
+        }
+        const id = focusableId(original.id) && counts.get(original.id) === 1
+          ? original.id : selectSafeId(original.id ?? "", reserved, () => ++replacementIndex);
+        reserved.add(id);
+        let input = { ...original, id };
+        if (type === "cancel" && original === target) {
+          input = { ...input, status: "cancelled", updatedAt: timestamp, completedAt: timestamp, pageLock: null };
+        } else if (!VALID_JOB_STATUSES.includes(original.status)) {
+          input = { ...input, status: "paused", pendingApproval: null, pageLock: null, preflightDecision: null,
+            lastError: "Saved job status was invalid. Review this job before continuing." };
+        }
+        const live = normalizeBrowserJob(sanitizedJobInput(input), { now: () => timestamp });
+        const job = durableRecord(input, live).job;
+        mapped.set(original, job);
+        jobs.push(job);
+      }
+      const activeMatches = originals.filter((job) => job.id === stored[activeKey]);
+      const focused = stored[activeKey] != null && stored[activeKey] !== "" && activeMatches.length === 1
+        ? mapped.get(activeMatches[0]) : null;
+      const committedTarget = type === "cancel" ? mapped.get(target) : null;
+      const activeJobId = focused?.id ?? committedTarget?.id ?? null;
+      const envelope = redactTraceValue({
+        [jobsKey]: jobs,
+        ...(type === "cancel" || activeJobId !== (stored[activeKey] ?? null) ? { [activeKey]: activeJobId } : {})
+      });
+      const result = redactTraceValue({ changed: true, job: committedTarget, removed, activeJobId });
+      await storage.set(envelope);
+      return result;
+    } catch (error) {
+      if (error instanceof BrowserJobMutationError) throw error;
+      throw new BrowserJobMutationError("Browser job history could not be updated safely.");
+    }
+  };
+  let queues = externalMutationQueues.get(storage);
+  if (!queues) { queues = new Map(); externalMutationQueues.set(storage, queues); }
+  const previous = queues.get(jobsKey);
+  const result = previous ? previous.then(operation) : operation();
+  const settled = () => { if (queues.get(jobsKey) === tail) queues.delete(jobsKey); };
+  const tail = result.then(settled, settled);
+  queues.set(jobsKey, tail);
+  return result;
+}
+
 export function createBrowserJobStore({
   storage,
   storageKeys,
@@ -361,6 +530,39 @@ export function createBrowserJobStore({
   createId = defaultId
 }) {
   let jobs = [];
+  // Each immutable identity pairs a live record with its pre-truncation
+  // sanitized durable record and routing invalidation state.
+  let durableJobs = new Map();
+  let hydrationQueue = null;
+  let writeQueue = null;
+  let historyReadBlocked = false;
+  const enqueue = (operation) => (...args) => {
+    // Ordinary mutations update live state immediately, as scheduler callers
+    // require. Only hydration gates them; writes serialize detached snapshots.
+    const barrier = hydrationQueue ?? (operation === hydrate ? writeQueue : null);
+    const result = barrier ? barrier.then(() => operation(...args)) : operation(...args);
+    if (operation === hydrate) {
+      const settled = () => { if (hydrationQueue === tail) hydrationQueue = null; };
+      const tail = result.then(settled, settled);
+      hydrationQueue = tail;
+    }
+    return result;
+  };
+  function writeEnvelope(envelope, { hydration = false } = {}) {
+    const save = () => historyReadBlocked && !hydration
+      ? undefined
+      : storage?.set?.(envelope).catch(() => undefined);
+    const result = writeQueue ? writeQueue.then(save) : Promise.resolve(save());
+    const settled = () => { if (writeQueue === tail) writeQueue = null; };
+    const tail = result.then(settled, settled);
+    writeQueue = tail;
+    return result;
+  }
+  let replacementIndex = 0;
+  function safeId(value, reserved) {
+    return selectSafeId(value, reserved, () => ++replacementIndex);
+  }
+
   let activeJobId = null;
   let monitorCollapsed = true;
 
@@ -369,6 +571,7 @@ export function createBrowserJobStore({
       .map((job) => normalizeBrowserJob(job, { now }))
       .sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))
       .slice(0, maxJobs);
+    durableJobs = new Map(jobs.map((job) => [job.id, durableJobs.get(job.id)]));
     if (activeJobId && !jobs.some((job) => job.id === activeJobId)) {
       activeJobId = null;
     }
@@ -377,33 +580,90 @@ export function createBrowserJobStore({
 
   async function persist() {
     compact();
-    await storage?.set?.({
+    await writeEnvelope({
       [storageKeys.activeBrowserJob]: activeJobId,
-      [storageKeys.browserJobs]: jobs,
+      [storageKeys.browserJobs]: redactTraceValue(jobs.map((job) => durableJobs.get(job.id).job)),
       [storageKeys.jobMonitorCollapsed]: monitorCollapsed
-    }).catch(() => undefined);
+    });
     return snapshot();
   }
 
   async function hydrate() {
-    const stored = await storage?.get?.([
-      storageKeys.browserJobs,
-      storageKeys.activeBrowserJob,
-      storageKeys.jobMonitorCollapsed
-    ]).catch(() => ({}));
-    jobs = Array.isArray(stored?.[storageKeys.browserJobs])
-      ? stored[storageKeys.browserJobs].map((job) => normalizeBrowserJob(job, { now }))
-      : [];
-    monitorCollapsed = typeof stored?.[storageKeys.jobMonitorCollapsed] === "boolean"
-      ? stored[storageKeys.jobMonitorCollapsed]
-      : true;
-    compact();
-    const storedActiveJobId = String(stored?.[storageKeys.activeBrowserJob] ?? "");
-    const storedActiveJob = jobs.find((job) => job.id === storedActiveJobId) ?? null;
-    activeJobId = storedActiveJob && isActiveBrowserJobStatus(storedActiveJob.status)
-      ? storedActiveJob.id
-      : firstActiveJobId() ?? storedActiveJob?.id ?? null;
-    return snapshot();
+    // A mutation queued behind an earlier hydration may have started a write
+    // since this hydration was queued. Read only after that snapshot settles.
+    if (writeQueue) await writeQueue;
+    const previousReplacementIndex = replacementIndex;
+    try {
+      let readSucceeded = false;
+      let stored;
+      if (typeof storage?.get === "function") {
+        try {
+          stored = await storage.get([
+            storageKeys.browserJobs,
+            storageKeys.activeBrowserJob,
+            storageKeys.jobMonitorCollapsed
+          ]);
+          readSucceeded = true;
+        } catch {
+          stored = {};
+          historyReadBlocked = true;
+        }
+      }
+      const originals = Array.isArray(stored?.[storageKeys.browserJobs]) ? stored[storageKeys.browserJobs] : [];
+      const reserved = new Set(originals.map((job) => String(job?.id ?? "")));
+      const used = new Set();
+      const identities = new Map();
+      const candidates = originals.map((original) => {
+        const originalId = String(original?.id ?? createId());
+        const id = redactTraceText(originalId) === originalId && !used.has(originalId)
+          ? originalId : safeId(originalId, new Set([...reserved, ...used]));
+        used.add(id); reserved.add(id);
+        if (!identities.has(originalId)) identities.set(originalId, id);
+        const input = { ...original, id };
+        const clean = sanitizedJobInput(input);
+        const live = normalizeBrowserJob(clean, { now });
+        return durableRecord(input, live).job;
+      }).sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt))).slice(0, maxJobs);
+      const collapsed = typeof stored?.[storageKeys.jobMonitorCollapsed] === "boolean"
+        ? stored[storageKeys.jobMonitorCollapsed] : true;
+      const storedActiveId = identities.get(String(stored?.[storageKeys.activeBrowserJob] ?? ""));
+      const storedActive = candidates.find((job) => job.id === storedActiveId);
+      const nextActiveId = storedActive && isActiveBrowserJobStatus(storedActive.status)
+        ? storedActive.id
+        : candidates.find((job) => isActiveBrowserJobStatus(job.status))?.id ?? storedActive?.id ?? null;
+      const envelope = {
+        [storageKeys.activeBrowserJob]: nextActiveId,
+        [storageKeys.browserJobs]: candidates,
+        [storageKeys.jobMonitorCollapsed]: collapsed
+      };
+      // Missing keys already represent these defaults. Migrate only a changed
+      // effective value, including newly selected focus or sanitized job records.
+      const defaults = {
+        [storageKeys.activeBrowserJob]: null,
+        [storageKeys.browserJobs]: [],
+        [storageKeys.jobMonitorCollapsed]: true
+      };
+      // Prepare the complete state before migration or any live installation.
+      const nextDurableJobs = new Map(candidates.map((job) => [job.id, { job: redactTraceValue(job), unsafeLock: false, unsafePreflight: false }]));
+      if (readSucceeded && Object.entries(envelope).some(([key, value]) => {
+        const previous = stored?.[key] === undefined ? defaults[key] : stored[key];
+        return JSON.stringify(value) !== JSON.stringify(previous);
+      })) {
+        // Recovery may migrate this validated envelope while ordinary writes
+        // remain blocked until hydration completes.
+        await writeEnvelope(redactTraceValue(envelope), { hydration: true });
+      }
+      jobs = candidates;
+      durableJobs = nextDurableJobs;
+      activeJobId = nextActiveId;
+      monitorCollapsed = collapsed;
+      if (readSucceeded) historyReadBlocked = false;
+      return snapshot();
+    } catch (error) {
+      historyReadBlocked = true;
+      replacementIndex = previousReplacementIndex;
+      throw error;
+    }
   }
 
   function snapshot() {
@@ -467,23 +727,28 @@ export function createBrowserJobStore({
   }
 
   async function createJob({ goal, planner = "observe-act-verify-loop", summary = "", preflightDecision = null, pageLock = null, status = "running", activate = true }) {
+    // A failed history read cannot safely admit a new durable job.
+    // The controller converts this fulfilled null into a reported refusal.
+    if (historyReadBlocked) return null;
     const normalizedLock = normalizePageLock(pageLock, { now });
     const conflict = conflictingActiveJobForLock(normalizedLock);
     const initialStatus = VALID_JOB_STATUSES.includes(status) ? status : "running";
     if (conflict && initialStatus !== "queued") {
       throw new Error(`Browser target is already controlled by ${conflict.id}: ${conflict.goal}`);
     }
-    const job = normalizeBrowserJob({
-      id: createId(),
+    const input = {
+      id: safeId(createId(), new Set(jobs.map((job) => job.id))),
       goal,
       planner,
       summary,
       preflightDecision,
-      pageLock: normalizedLock,
+      pageLock: pageLock ? { ...pageLock, acquiredAt: normalizedLock?.acquiredAt } : null,
       status: initialStatus,
       createdAt: now(),
       updatedAt: now()
-    }, { now });
+    };
+    const job = normalizeBrowserJob(input, { now: () => input.updatedAt });
+    durableJobs.set(job.id, durableRecord(input, job));
     jobs = compact([job, ...jobs.filter((item) => item.id !== job.id)]);
     if (activate) {
       activeJobId = job.id;
@@ -514,6 +779,7 @@ export function createBrowserJobStore({
       updated = normalizeBrowserJob({
         ...job,
         ...patch,
+        id: job.id,
         status,
         pageLock: normalizedPatchLock !== undefined
           ? normalizedPatchLock
@@ -521,6 +787,11 @@ export function createBrowserJobStore({
         updatedAt: now(),
         completedAt: patch.completedAt ?? (isTerminalBrowserJobStatus(patch.status) ? now() : job.completedAt)
       }, { now });
+      const durablePatch = { ...patch, id: job.id };
+      if (normalizedPatchLock !== undefined) {
+        durablePatch.pageLock = patch.pageLock ? { ...patch.pageLock, acquiredAt: normalizedPatchLock?.acquiredAt } : null;
+      }
+      durableJobs.set(job.id, durableRecord(durablePatch, updated, durableJobs.get(job.id)));
       return updated;
     });
     if (updated && activeJobId === jobId && isTerminalBrowserJobStatus(updated.status)) {
@@ -548,6 +819,7 @@ export function createBrowserJobStore({
         lastError: reason,
         updatedAt: now()
       }, { now });
+      durableJobs.set(job.id, durableRecord({ lastError: reason }, recoveredJob, durableJobs.get(job.id)));
       recovered = [...recovered, recoveredJob];
       return recoveredJob;
     });
@@ -584,10 +856,10 @@ export function createBrowserJobStore({
   }
 
   return {
-    activateJob,
-    clearCompletedJobs,
+    activateJob: enqueue(activateJob),
+    clearCompletedJobs: enqueue(clearCompletedJobs),
     conflictingActiveJobForLock,
-    createJob,
+    createJob: enqueue(createJob),
     currentJob,
     findJob,
     getActiveJobId,
@@ -595,12 +867,13 @@ export function createBrowserJobStore({
     getMonitorCollapsed,
     getSchedulerState,
     getStaleJobs,
-    hydrate,
-    persist,
-    recoverInterruptedJobs,
-    setMonitorCollapsed,
+    hydrate: enqueue(hydrate),
+    isHistoryReadBlocked: () => historyReadBlocked,
+    persist: enqueue(persist),
+    recoverInterruptedJobs: enqueue(recoverInterruptedJobs),
+    setMonitorCollapsed: enqueue(setMonitorCollapsed),
     snapshot,
-    toggleMonitorCollapsed,
-    updateJob
+    toggleMonitorCollapsed: enqueue(toggleMonitorCollapsed),
+    updateJob: enqueue(updateJob)
   };
 }

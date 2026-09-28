@@ -13,6 +13,7 @@ export const ALPHA_COMMANDS = [
   { command: "npm", args: ["run", "test:docs"] },
   { command: "npm", args: ["run", "build"] },
   { command: "npm", args: ["test", "--", "--run"] },
+  { command: "npm", args: ["run", "test:dev-bridge-config"] },
   { command: "npm", args: ["run", "test:browser-first"] },
   { command: "npm", args: ["run", "test:browser-host"] },
   { command: "npm", args: ["run", "test:living-archive-mcp"] },

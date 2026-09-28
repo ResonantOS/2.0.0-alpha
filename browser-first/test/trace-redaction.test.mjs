@@ -1,7 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { redactTraceText } from "../resonantos-side-panel-extension/src/lib/trace-redaction.js";
+import * as esmApi from "../resonantos-side-panel-extension/src/lib/trace-redaction.js";
+import { readFileSync } from "node:fs";
+import { createContext, runInContext } from "node:vm";
+
+function registerCorpus(test, assert, { redactTraceText, redactTraceValue }) {
 
 test("redactTraceText redacts secret URL query parameters and preserves benign ones", () => {
   const input = "https://example.test/login?token=abc123&email=a@b.com&api_key=sekrit&ref=home";
@@ -79,4 +83,176 @@ test("redactTraceText leaves clean trace text unchanged", () => {
     "Intake artifact only."
   ].join("\n");
   assert.equal(redactTraceText(clean), clean);
+});
+
+const secretNames = [
+  'password', 'passwd', 'pwd', 'token', 'secret', 'otp', 'pin', 'signature', 'jwt', 'session', 'sid', 'csrf', 'key', 'code',
+  ...['api:key', 'access:token', 'refresh:token', 'auth:code', 'client:secret', 'client:id', 'client:token',
+    'session:id', 'session:token', 'session:key', 'id:token', 'csrf:token', 'jwt:token']
+    .flatMap((parts) => ['', '_', '-'].map((separator) => parts.replace(':', separator)))
+];
+for (const options of [{}, { replacement: '[redacted]', tokenReplacement: '[redacted]' }]) {
+  const replacement = options.replacement ?? 'REDACTED';
+  test(`shared redaction preserves the strict union in ${replacement} output style`, () => {
+    for (const name of secretNames) {
+      for (const spelling of [name, name.toUpperCase()]) {
+        for (const [input, expected] of [
+          [`?${spelling}=synthetic-value&view=wide`, `?${spelling}=${replacement}&view=wide`],
+          [`%3F${spelling}%3Dsynthetic-value%26view%3Dwide`, `%3F${spelling}%3D${replacement}%26view%3Dwide`],
+          [`${spelling}=synthetic-value done`, `${spelling}=${replacement} done`],
+          [`{"${spelling}":"synthetic-value","view":"wide"}`, `{"${spelling}":"${replacement}","view":"wide"}`]
+        ]) {
+          assert.equal(redactTraceText(input, options), expected, input);
+          assert.equal(redactTraceText(expected, options), expected, `idempotence: ${input}`);
+        }
+      }
+    }
+    const tokens = ['sk_live_' + 'X'.repeat(8), 'AKIA' + 'X'.repeat(16), 'AIza' + 'x'.repeat(25),
+      ...'pousr'.split('').map((c) => `gh${c}_` + 'x'.repeat(20)),
+      ...'abp'.split('').map((c) => `xox${c}-` + 'x'.repeat(10)), 'Z'.repeat(40), 'a'.repeat(32)];
+    for (const token of tokens) assert.equal(redactTraceText(`before ${token} after`, options), `before ${options.tokenReplacement ?? '[REDACTED-TOKEN]'} after`);
+    const benign = 'job-123 control-abc https://example.test/?view=wide&ref=home abcdef sk_live_short ghp_short xoxb-short';
+    assert.equal(redactTraceText(benign, options), benign);
+  });
+  test(`Bearer and quoted credentials are consumed completely in ${replacement} style`, () => {
+    for (const [input, expected] of [
+      ['Token: Bearer synthetic-a1-value done', `Token: ${replacement} done`],
+      ['client_secret="left: right" done', `client_secret="${replacement}" done`],
+      ['password="left \\"middle\\" right" done', `password="${replacement}" done`],
+      ["client_secret='left: right' done", `client_secret='${replacement}' done`],
+      ['?token=Bearer synthetic-a1-value&view=wide', `?token=${replacement}&view=wide`],
+      ['%3Fclient_secret%3Dleft%3A%20right%26view%3Dwide', `%3Fclient_secret%3D${replacement}%26view%3Dwide`],
+      ['password=left,right;end done', `password=${replacement} done`]
+    ]) assert.equal(redactTraceText(input, options), expected);
+  });
+}
+
+test('recursive trace redaction detaches and safely handles arbitrary JSON', async () => {
+  assert.equal(typeof redactTraceValue, 'function', 'recursive redactor exists');
+  let reads = 0;
+  const input = { nested: [{ password: 'x', pin: 7, client_secret: { private: true }, note: 'token=synthetic-value' }], count: 2, ok: true, empty: null };
+  Object.defineProperty(input, 'getter', { enumerable: true, get() { reads++; return 'secret'; } });
+  Object.defineProperty(input, '__proto__', { enumerable: true, value: { note: 'safe' } });
+  input['token=first'] = 'first'; input['token=second'] = 'second'; input.self = input;
+  input.unsupported = () => {}; input.infinity = Infinity;
+  const output = redactTraceValue(input);
+  assert.equal(reads, 0);
+  assert.notEqual(output, input); assert.notEqual(output.nested, input.nested);
+  assert.deepEqual(output.nested, [{ password: 'REDACTED', pin: 'REDACTED', client_secret: 'REDACTED', note: 'token=REDACTED' }]);
+  assert.equal(output.count, 2); assert.equal(output.ok, true); assert.equal(output.empty, null);
+  assert.equal(output.getter, null); assert.equal(output.self, null); assert.equal(output.unsupported, null); assert.equal(output.infinity, null);
+  assert.equal(Object.getPrototypeOf(output), Object.prototype);
+  assert.ok(Object.hasOwn(output, '__proto__')); assert.deepEqual(output.__proto__, { note: 'safe' });
+  assert.deepEqual(Object.entries(output).filter(([key]) => key.startsWith('token=')).map(([, value]) => value), ['first', 'second']);
+  assert.doesNotMatch(JSON.stringify(output), /synthetic-value|token=first|token=second/);
+  assert.deepEqual(redactTraceValue(output), output);
+});
+
+test('quoted JSON numeric credentials retain benign neighboring fields', () => {
+  assert.equal(redactTraceText('{"pin":1234,"view":"wide"}'), '{"pin":REDACTED,"view":"wide"}');
+});
+
+test('provider and heuristic boundaries retain below-threshold benign text', () => {
+  const benign = ['sk_live_' + 'X'.repeat(7), 'AKIA' + 'X'.repeat(15), 'AIza' + 'x'.repeat(24),
+    'ghp_' + 'x'.repeat(19), 'xoxb-' + 'x'.repeat(9), 'Z'.repeat(39), 'Z'.repeat(91), 'a'.repeat(31)];
+  for (const text of benign) assert.equal(redactTraceText(text), text);
+});
+
+test('quoted names preserve full unquoted comma and semicolon secret coverage', () => {
+  assert.equal(redactTraceText('"token":left,right;end done'), '"token":REDACTED done');
+  assert.equal(redactTraceText('{"pin":1234,"view":"wide"}'), '{"pin":REDACTED,"view":"wide"}');
+  assert.equal(redactTraceText('{"pin":REDACTED,"view":"wide"}'), '{"pin":REDACTED,"view":"wide"}');
+});
+
+test('base58 includes i and o at every supported length without losing legacy l coverage', () => {
+  for (const options of [{}, { replacement: '[redacted]', tokenReplacement: '[redacted]' }]) {
+    const marker = options.tokenReplacement ?? '[REDACTED-TOKEN]';
+    for (let length = 40; length <= 90; length++) {
+      for (const letter of 'io') {
+        for (const position of [0, Math.floor(length / 2), length - 1]) {
+          const token = 'Z'.repeat(position) + letter + 'Z'.repeat(length - position - 1);
+          assert.equal(redactTraceText(`before ${token} after`, options), `before ${marker} after`,
+            `base58 ${letter} at ${position}, length ${length}`);
+        }
+      }
+      for (const alphabet of ['123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz',
+        '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjklmnpqrstuvwxyz']) {
+        const token = alphabet.repeat(2).slice(0, length);
+        assert.equal(redactTraceText(token, options), marker);
+      }
+      assert.equal(redactTraceText('l'.repeat(length), options), marker, 'legacy l remains redacted');
+    }
+  }
+  for (const length of [39, 91]) {
+    for (const letter of 'io') {
+      const text = letter + 'Z'.repeat(length - 1);
+      assert.equal(redactTraceText(text), text);
+    }
+  }
+});
+
+test('base58 alphabet expansion retains benign prose, hex, URLs and paths of 40–90 characters', () => {
+  const benign = [
+    'ordinary information about navigation options and browser history',
+    'pneumonoultramicroscopicsilicovolcanoconiosis',
+    'hex colors #abcdef #012345 #fedcba #987654 are ordinary values',
+    'https://example.test/navigation/options?view=history&ref=home',
+    '/documentation/browser/navigation/options/history/overview.md',
+  ];
+  for (const text of benign) {
+    assert.ok(text.length >= 40 && text.length <= 90, text);
+    assert.equal(redactTraceText(text), text);
+  }
+  // Long contiguous hex was already redacted; it cannot be exempted here.
+  for (const length of [40, 64, 90]) {
+    const hex = '0123456789abcdef'.repeat(6).slice(0, length);
+    assert.equal(redactTraceText(hex), '[REDACTED-TOKEN]');
+  }
+  for (const excluded of '0OIl') {
+    const text = 'Zi' + excluded + 'Z'.repeat(40);
+    assert.equal(redactTraceText(text), text, 'do not broaden to a union alphabet');
+  }
+});
+
+}
+
+registerCorpus((name, fn) => test(`ESM: ${name}`, fn), assert, esmApi);
+test('classic entry point runs the complete strict corpus in its own realm', async (t) => {
+  const realm = createContext({ assert, register: (name, fn) => t.test(name, fn) });
+  runInContext(readFileSync(new URL('../resonantos-side-panel-extension/src/lib/trace-redaction-core.js', import.meta.url), 'utf8'), realm);
+  // Evaluate the corpus in the core's realm, including all recursive fixtures.
+  const pending = [];
+  realm.register = (name, fn) => pending.push(t.test(name, fn));
+  runInContext(`(${registerCorpus.toString()})(register, assert, globalThis.__RESONANTOS_TRACE_REDACTION__)`, realm);
+  await Promise.all(pending);
+});
+
+test('differential: existing corpus and new cases preserve every legacy text redaction', async () => {
+  const source = readFileSync(new URL('../resonantos-side-panel-extension/src/lib/trace-redaction-core.js', import.meta.url), 'utf8');
+  // Freeze only the pre-fix heuristic; all other policy remains the same.
+  const legacySource = source.replace(/const BASE58_HEURISTIC_PATTERN = .*;/,
+    String.raw`const BASE58_HEURISTIC_PATTERN = /\b[A-HJ-NP-Za-hj-np-z1-9]{40,90}\b/g;`);
+  const realm = createContext({});
+  runInContext(legacySource, realm);
+  const legacy = realm.__RESONANTOS_TRACE_REDACTION__.redactTraceText;
+  for (const letter of 'io') {
+    const token = letter + 'Z'.repeat(39);
+    assert.equal(legacy(token), token, 'differential baseline must retain the pre-fix omission');
+  }
+  assert.equal(legacy('l'.repeat(40)), '[REDACTED-TOKEN]');
+  const cases = [];
+  let comparisons = 0;
+  registerCorpus((_name, fn) => cases.push(fn), assert, {
+    ...esmApi,
+    redactTraceText(input, options) {
+      const previous = legacy(input, options);
+      const current = esmApi.redactTraceText(input, options);
+      assert.equal(current, esmApi.redactTraceText(previous, options),
+        `legacy redaction must survive: ${String(input)}`);
+      comparisons++;
+      return current;
+    },
+  });
+  for (const runCase of cases) await runCase();
+  assert.ok(comparisons > 1000, 'compare the full corpus, including generated credential and alphabet cases');
 });

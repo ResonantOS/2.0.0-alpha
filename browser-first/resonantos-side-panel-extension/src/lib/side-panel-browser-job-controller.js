@@ -4,6 +4,7 @@ export function createSidePanelBrowserJobController({
   browserJobStore,
   consumeNextControlPreflightDecision = () => null,
   getCurrentControlRun = () => null,
+  onHistoryLoadStateChange = () => undefined,
   prepareBrowserJobPageLock = async () => null,
   renderControlMonitor = () => undefined,
   renderJobMonitor = () => undefined,
@@ -14,24 +15,54 @@ export function createSidePanelBrowserJobController({
     throw new Error("createSidePanelBrowserJobController requires browserJobStore.");
   }
 
-  const loadBrowserJobs = async () => {
-    await browserJobStore.hydrate();
-    const recovered = await browserJobStore.recoverInterruptedJobs({
-      from: ["running", "approval"],
-      to: "paused",
-      reason: "Recovered after browser host reload. Use /resume <job> to continue from persisted step history."
-    });
+  let historyLoadState = "loading";
+  let historyLoad = null;
+  const getHistoryLoadState = () => historyLoadState;
+  const setHistoryLoadState = (state) => {
+    historyLoadState = state;
     renderJobMonitor();
-    if (recovered.length) {
-      await addMessage(
-        "system",
-        `Recovered ${recovered.length} interrupted browser job${recovered.length === 1 ? "" : "s"} after reload. Use /resume <job> to continue from persisted step history.`
-      );
-    }
-    return recovered;
+    onHistoryLoadStateChange(state);
+  };
+
+  const loadBrowserJobs = () => {
+    if (historyLoad) return historyLoad;
+    // Install the shared promise before rendering, so even reentrant requests
+    // use this one normal hydration/recovery path.
+    historyLoad = Promise.resolve().then(async () => {
+      let recovered;
+      try {
+        await browserJobStore.hydrate();
+        if (browserJobStore.isHistoryReadBlocked?.()) {
+          setHistoryLoadState("error");
+          return [];
+        }
+        recovered = await browserJobStore.recoverInterruptedJobs({
+          from: ["running", "approval"],
+          to: "paused",
+          reason: "Recovered after browser host reload. Use /resume <job> to continue from persisted step history."
+        });
+      } catch {
+        setHistoryLoadState("error");
+        return [];
+      }
+      setHistoryLoadState("ready");
+      if (recovered.length) {
+        await addMessage(
+          "system",
+          `Recovered ${recovered.length} interrupted browser job${recovered.length === 1 ? "" : "s"} after reload. Use /resume <job> to continue from persisted step history.`
+        );
+      }
+      return recovered;
+    }).finally(() => { historyLoad = null; });
+    setHistoryLoadState("loading");
+    return historyLoad;
   };
 
   const createBrowserJob = async ({ existingJob = null, goal, planner = "observe-act-verify-loop", summary = "", status = "running" }) => {
+    const historyFailureMessage = "Browser job history could not be loaded. No browser job was started.";
+    if (browserJobStore.isHistoryReadBlocked?.()) {
+      throw new Error(historyFailureMessage);
+    }
     const pageLock = await prepareBrowserJobPageLock({ goal, existingJob, status });
     if (existingJob?.id) {
       await browserJobStore.activateJob(existingJob.id);
@@ -43,6 +74,9 @@ export function createSidePanelBrowserJobController({
         pageLock,
         preflightDecision: consumeNextControlPreflightDecision() ?? existingJob.preflightDecision ?? null
       });
+      if (browserJobStore.isHistoryReadBlocked?.()) {
+        throw new Error(historyFailureMessage);
+      }
       renderJobMonitor();
       return updated ?? existingJob;
     }
@@ -55,6 +89,10 @@ export function createSidePanelBrowserJobController({
       preflightDecision: consumeNextControlPreflightDecision(),
       status
     });
+    // The store may resolve null when admission is blocked; return a job or reject.
+    if (job === null) {
+      throw new Error(historyFailureMessage);
+    }
     renderJobMonitor();
     return job;
   };
@@ -93,6 +131,7 @@ export function createSidePanelBrowserJobController({
   return {
     createBrowserJob,
     focusBrowserJobRun,
+    getHistoryLoadState,
     loadBrowserJobs,
     updateBrowserJob
   };

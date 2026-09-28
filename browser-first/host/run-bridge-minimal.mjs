@@ -9,6 +9,7 @@ import {
   createBridgeToken,
   getBridgeHost,
   getBridgePublicUrl,
+  isLoopbackBridgeHost,
   startBridgeServerWithFallback,
   writeBridgeConfig,
 } from "./bridge-server.mjs";
@@ -35,7 +36,8 @@ import { createAgentControlHostService } from "./agent-control-host-service.mjs"
 import { buildBridgeCapabilityTokens } from "./bridge-capability-tokens.mjs";
 import { createAddonDelegationHostService } from "./addon-delegation-host-service.mjs";
 import { createAddonDelegationService } from "./addon-delegation-service.mjs";
-import { createOpencodeHttpClient, ensureOpencodeServer } from "./opencode-client.mjs";
+import { createOpencodeHttpClient, ensureOpencodeServer, forgetOpencodeServer } from "./opencode-client.mjs";
+import { createOpenCodeBoundary } from "./opencode-boundary.mjs";
 import { createOpencodeSessionHandlers, createOpencodeSessionHostService } from "./opencode-session-host-service.mjs";
 import { createArchiveReviewHostService } from "./archive-review-host-service.mjs";
 import { createBrowserDiagnosticsHostService } from "./browser-diagnostics-host-service.mjs";
@@ -49,6 +51,7 @@ import {
   hermesHome,
   hermesPythonRuntimeDiagnostics,
 } from "./hermes-runtime.mjs";
+import { createHarnessHostService } from "./harness-host-service.mjs";
 import { createProviderHostService } from "./provider-host-service.mjs";
 import {
   memorySourceMoveHistoryPath as sourceMoveHistoryPath,
@@ -157,11 +160,12 @@ const setAddonRuntimeSelfTestHomeDir = (homeDir) => {
     : null;
 };
 
+const providerHostService = createProviderHostService({ redactDiagnosticText, extractJsonObject });
 const {
   executeProviderStatus,
   extractAssistantContent,
   openAiReasoningEffort,
-  providerBridgeRoutes,
+  providerBridgeRoutes: legacyProviderBridgeRoutes,
   providerRouteForModel,
   allModelCatalog,
   allProviderProfiles,
@@ -169,10 +173,7 @@ const {
   runArchiveIngestWriter,
   runArchiveSemanticVerifier,
   sanitizeAssistantContent,
-} = createProviderHostService({
-  redactDiagnosticText,
-  extractJsonObject,
-});
+} = providerHostService;
 
 const addonDelegationService = createAddonDelegationService({
   browserFirstRoot,
@@ -200,11 +201,26 @@ const addonDelegationService = createAddonDelegationService({
 const { executeAddonsStatus } = addonDelegationService;
 const { addonDelegationRoutes } = createAddonDelegationHostService(addonDelegationService);
 
-// Live OpenCode session: the bridge starts (reuses) `opencode serve` on an
-// ephemeral loopback port with a bridge-minted credential and proxies
-// session/prompt/permission; the extension streams the server's /event bus
-// directly (host_permissions cover 127.0.0.1).
-const opencodeSessionHandlers = createOpencodeSessionHandlers({
+function getPublicPort() {
+  const publicUrl = getBridgePublicUrlValue();
+  if (!publicUrl) return undefined;
+  try {
+    const parsed = new URL(publicUrl);
+    if (!isLoopbackBridgeHost(parsed.hostname) || parsed.username || parsed.password) return undefined;
+    if (parsed.port) return parsed.port;
+    if (parsed.protocol === "http:") return "80";
+    if (parsed.protocol === "https:") return "443";
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function logOpenCodeBoundary({ code, operation } = {}) {
+  console.error(JSON.stringify({ event: "opencode.boundary", code, operation }));
+}
+
+const openCodeBoundary = createOpenCodeBoundary({
   ensureServer: () => ensureOpencodeServer({
     fetchImpl: (...args) => fetch(...args),
     spawnImpl: (cmd, cmdArgs, opts) => spawn(cmd, cmdArgs, opts),
@@ -214,7 +230,15 @@ const opencodeSessionHandlers = createOpencodeSessionHandlers({
     env: process.env,
   }),
   createClient: (baseUrl, opts = {}) => createOpencodeHttpClient({ fetchImpl: (...args) => fetch(...args), baseUrl, ...opts }),
+  fetchImpl: (...args) => fetch(...args),
+  executionEnabled: () => addonDelegationService.openCodeProxyExecutionEnabled(),
+  forgetServer: forgetOpencodeServer,
+  log: logOpenCodeBoundary,
 });
+const unsubscribeOpenCodeExecution = addonDelegationService.subscribeOpenCodeExecution(
+  (enabled) => (enabled ? undefined : openCodeBoundary.revoke()),
+);
+const opencodeSessionHandlers = createOpencodeSessionHandlers({ boundary: openCodeBoundary });
 const { opencodeSessionRoutes } = createOpencodeSessionHostService(opencodeSessionHandlers);
 
 const memorySourceSettingsService = createMemorySourceSettingsService({
@@ -376,6 +400,16 @@ const { agentControlRoutes } = createAgentControlHostService({
 
 const { extensionPrefsRoutes, flushPendingExtensionPrefs } = createExtensionPrefsHostService({ userRoot });
 
+// Bindings are operator configuration only. Demo manifests never authorize a
+// credential name, endpoint, or port. Invalid host configuration fails startup.
+const harnessService = await createHarnessHostService({
+  userRoot: userRoot(), providerHost: providerHostService,
+  bindings: JSON.parse(process.env.RESONANTOS_HARNESS_BINDINGS ?? "[]"),
+  env: process.env,
+});
+const { harnessRoutes } = harnessService;
+const providerBridgeRoutes = harnessService.composeProviderRoutes(legacyProviderBridgeRoutes);
+
 const bridgeRoutes = [
   ...browserDiagnosticsRoutes,
   ...providerBridgeRoutes,
@@ -384,6 +418,7 @@ const bridgeRoutes = [
   ...addonDelegationRoutes,
   ...opencodeSessionRoutes,
   ...extensionPrefsRoutes,
+  ...harnessRoutes,
 ];
 
 const bridgeToken = args.get("bridge-token") ?? process.env.RESONANTOS_BROWSER_FIRST_BRIDGE_TOKEN ?? createBridgeToken();
@@ -397,6 +432,8 @@ const invokeBridgeRouteForSelfTest = createBridgeRouteSelfTestInvoker({
   bridgeCapabilityTokens,
   capabilityBootstrapToken,
   routes: bridgeRoutes,
+  listenerPort: Number(args.get("bridge-port") ?? process.env.RESONANTOS_BROWSER_FIRST_BRIDGE_PORT ?? defaultBridgePort),
+  getPublicPort,
 });
 
 const selfTestHandled = await runBrowserFirstSelfTest({
@@ -434,6 +471,7 @@ const bridgeInfo = await startBridgeServerWithFallback({
   extensionOrigin: resonantExtensionOrigin,
   routes: bridgeRoutes,
   host: getBridgeHost(),
+  getPublicPort,
 });
 
 const activeBridgePort = bridgeInfo.actualPort;
@@ -461,6 +499,9 @@ console.log(`Load ${resonantExtension} in Chrome as an unpacked extension.`);
 
 const shutdown = async () => {
   await flushPendingExtensionPrefs().catch(() => undefined);
+  try { unsubscribeOpenCodeExecution(); } catch { /* noop */ }
+  await openCodeBoundary.dispose().catch(() => undefined);
+  await harnessService.close();
   await new Promise((resolve) => bridgeInfo.server.close(resolve));
 };
 

@@ -95,6 +95,28 @@ function eventTriggersDiff(raw, mountedSessionId = "") {
   return type.includes("file.edited") || type.includes("file-edited") || type.includes("session.diff") || type.includes("session-diff");
 }
 
+function isOwnEnvelope(envelope, sessionId) {
+  return Boolean(
+    envelope
+    && envelope.version === 1
+    && envelope.sessionId === sessionId
+    && (envelope.source === "governed" || envelope.source === "external")
+    && envelope.event
+    && typeof envelope.event === "object"
+  );
+}
+
+function wrapHostHistory(messages, sessionId) {
+  const seeds = [];
+  for (const message of messages ?? []) {
+    const source = message?.source === "governed" ? "governed" : "external";
+    for (const event of seedEventsFromMessages([message])) {
+      seeds.push({ version: 1, sessionId, source, event });
+    }
+  }
+  return seeds;
+}
+
 export function renderOpenCodeWorkspace({ container, bridgeRequest, getBridgeRequest, initialMission = "", confirmSessionDelete } = {}) {
   // Resolve at call time. The module-level `bridgeRequest` may be
   // null at construction (rebind still in flight); the getter lets
@@ -197,7 +219,7 @@ export function renderOpenCodeWorkspace({ container, bridgeRequest, getBridgeReq
       statusBody.textContent = status.detail;
       statusMeta.textContent = openCodeStatusMeta(status);
       statusCard.dataset.ready = status.installed ? "true" : "false";
-      startSessionButton.hidden = !status.installed;
+      startSessionButton.hidden = !(status.installed && status.proxyExecutionEnabled === true);
       cockpitButton.hidden = status.executionEnabled !== true;
       if (cockpitButton.hidden) cockpitConfirm.hidden = true;
       if (!status.installed || !executionEnabled) {
@@ -252,7 +274,7 @@ export function renderOpenCodeWorkspace({ container, bridgeRequest, getBridgeReq
       const result = await bridge()("/opencode/web/url", { method: "POST", body: {} });
       if (result?.requiresCredential) {
         cockpitConfirm.hidden = true;
-        cockpitStatus.textContent = "OpenCode cockpit handoff is disabled while the server is credential-protected (restored by #321).";
+        cockpitStatus.textContent = "OpenCode cockpit handoff is disabled while the server is credential-protected.";
         return;
       }
       const url = String(result?.url ?? "");
@@ -308,12 +330,10 @@ export function renderOpenCodeWorkspace({ container, bridgeRequest, getBridgeReq
   });
 
   // Live workspace: a desktop-app-style two-pane shell — session browser rail
-  // (search, Today/Older groups, resume-on-click, New session) on the left,
-  // the streaming session element on the right. The bridge starts (reuses)
-  // `opencode serve`; the element streams events directly from the server
-  // (host_permissions cover 127.0.0.1) and routes prompts/permissions back
-  // through the bridge. Resume replays history through the SAME event path the
-  // live stream uses, so both render identically.
+  // on the left, the streaming session element on the right. Session HTTP and
+  // events stay on capability-scoped bridge routes; the extension never receives
+  // the OpenCode server URL or Basic credential. Resume replays host-attributed
+  // history through the same envelope path the live stream uses.
   const ide = document.createElement("div");
   ide.className = "opencode-ide";
   ide.hidden = true;
@@ -406,13 +426,24 @@ export function renderOpenCodeWorkspace({ container, bridgeRequest, getBridgeReq
     activeSession?.destroy?.();
     sessionArea.replaceChildren();
     const sessionId = info.sessionId;
+    let mountAlive = true;
+    let session = null;
     const source = createOpenCodeBridgeSource({
-      // Idempotent: return the already-known session so subscribe + prompt share it.
-      startSession: async () => ({ sessionId, eventUrl: info.eventUrl, eventAuthorization: info.eventAuthorization }),
-      openEventStream: (eventUrl) => fetch(eventUrl, info.eventAuthorization ? { headers: { Authorization: info.eventAuthorization } } : undefined),
-      postJson: (path, body) => bridge()(path, { method: "POST", body })
+      startSession: async () => ({ sessionId }),
+      openEventStream: (id, { signal } = {}) => bridge()(
+        `/opencode/session/events?sessionId=${encodeURIComponent(id)}`,
+        { responseType: "sse", signal }
+      ),
+      postJson: (path, body) => bridge()(path, { method: "POST", body }),
+      onError: (err) => {
+        if (!mountAlive) return;
+        session?.setTransportError?.({
+          code: err?.code,
+          error: err?.error || "OpenCode boundary request failed."
+        });
+      }
     });
-    const seeds = seedEventsFromMessages(seedMessages);
+    const seeds = wrapHostHistory(seedMessages, sessionId);
     let patchMount = null;
     let diffTimer = null;
     const refreshDiff = async () => {
@@ -430,19 +461,22 @@ export function renderOpenCodeWorkspace({ container, bridgeRequest, getBridgeReq
       diffTimer = setTimeout(() => void refreshDiff(), 1000);
     };
     const subscribe = (onEvent) => {
-      for (const event of seeds) {
-        onEvent(event);
-        if (eventTriggersDiff(event, sessionId)) scheduleDiff();
+      for (const envelope of seeds) {
+        if (!isOwnEnvelope(envelope, sessionId)) continue;
+        onEvent(envelope);
+        if (eventTriggersDiff(envelope.event, sessionId)) scheduleDiff();
       }
-      return source.subscribe((event) => {
-        onEvent(event);
-        if (eventTriggersDiff(event, sessionId)) scheduleDiff();
+      return source.subscribe((envelope) => {
+        if (!mountAlive || !isOwnEnvelope(envelope, sessionId)) return;
+        onEvent(envelope);
+        if (eventTriggersDiff(envelope.event, sessionId)) scheduleDiff();
       });
     };
-    const session = createOpenCodeSession({
+    session = createOpenCodeSession({
       document,
       container: sessionArea,
       scope: "",
+      sessionId,
       subscribe,
       sendPrompt: (text) => source.sendPrompt(text, selectionFor(sessionId)),
       onAbort: () => source.abort(),
@@ -452,6 +486,7 @@ export function renderOpenCodeWorkspace({ container, bridgeRequest, getBridgeReq
     activeSession = {
       ...session,
       destroy: () => {
+        mountAlive = false;
         if (diffTimer) clearTimeout(diffTimer);
         diffTimer = null;
         patchMount = null;
@@ -514,7 +549,7 @@ export function renderOpenCodeWorkspace({ container, bridgeRequest, getBridgeReq
       const list = await bridge()("/opencode/sessions/list", { method: "POST", body: {} });
       const history = await bridge()("/opencode/session/messages", { method: "POST", body: { sessionId } });
       await loadPickerOptions();
-      mountSession({ sessionId, eventUrl: list.eventUrl, baseUrl: list.baseUrl, eventAuthorization: list.eventAuthorization }, history.messages ?? [], { loadDiffOnMount: true });
+      mountSession({ sessionId }, history.messages ?? [], { loadDiffOnMount: true });
       setStatus(taskStatus, "");
     } catch (error) {
       setStatus(taskStatus, opencodeStatusMessage(error, "Could not resume OpenCode session"), "error");

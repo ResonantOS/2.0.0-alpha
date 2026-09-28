@@ -10,33 +10,36 @@ Open several candidate hotels, flights, or itinerary pages in tabs, gather
 their price ranges, cancellation policies, and review summaries, and produce
 a single decision packet the human can review before booking.
 
+Goals and prompts describe intended workflows, not certified end-to-end
+automation. Check generated claims against separately captured source content.
+
 ## Augmentor features used
 
-- [#237 Multi-step workflows](../augmentor-future-list-acceptance-matrix.md#automation)
-  — supported
+- [#237 Workflow recipe documentation](../augmentor-future-list-acceptance-matrix.md#automation)
+  — available; execution depends on the bounded capabilities below
 - [#218 Page content analysis / Q&A](../augmentor-future-list-acceptance-matrix.md#web-understanding)
   — supported
 - [#220 Cross-tab comparison with tab provenance](../augmentor-future-list-acceptance-matrix.md#cross-tab-intelligence)
-  — needs hardening
+  — needs hardening; provenance does not establish captured-content comparison
 - [#227 Research-trail save and archive review handoff](../augmentor-future-list-acceptance-matrix.md#summarization-research)
-  — future
+  — partial save/review foundation; broader acceptance remains open
 - [#228 Living Archive context continuity acceptance proof](../augmentor-future-list-acceptance-matrix.md#cross-tab-intelligence)
-  — needs hardening
+  — restores saved state; does not reopen or verify live tabs
 
 ## Safe automated steps
 
 The Augmentor can:
 
-- Read each open tab and extract the price, cancellation policy, included
-  amenities, and review summary.
-- Compare two or three options side-by-side with each tab cited.
-- Save the comparison as a research-trail capture to the Living Archive
-  intake (per `#227`).
-- Build a decision packet listing the human's chosen constraints (dates,
-  budget, party size, accessibility needs) and the candidates ranked against
-  those constraints.
-- Continue a chat after a restart and recover the open tabs and the decision
-  packet (per `#228`).
+- Read each readable candidate page separately and extract price, cancellation
+  policy, amenities, and review text with source citations.
+- Save captured source pages as a research trail for archive review (`#227`);
+  that capture does not itself save a generated comparison or decision packet.
+- Restore explicitly saved state after a restart (`#228`); the human reopens
+  and verifies live tabs.
+
+Option ranking and decision packets are goals requiring human checking against
+the captured sources and current prices. They are not shipped booking-packet
+functionality under deferred #244.
 
 ## Human-only checkpoints
 
@@ -57,18 +60,19 @@ takes to the booking site.
 
 ## Suggested prompts
 
-- "For each open tab, extract: nightly rate, total cost for our dates,
-  cancellation policy, and review-score. Cite each tab."
-- "Rank these three hotels against my constraints: under $250/night,
-  free cancellation, walkable to the venue."
-- "Save this comparison to my Living Archive intake as a research trail."
-- "Resume this decision packet after I restart and confirm the open tabs
-  match what we agreed on."
+- "Summarise this candidate page: nightly rate, total cost for our dates,
+  cancellation policy, and review-score. Cite the source; flag missing details."
+- "Using my separately captured summaries, propose a ranking for human review:
+  under $250/night, free cancellation, walkable to the venue."
+- "Capture the source pages as a research trail for archive review; I will
+  retain and check the proposed comparison separately."
+- "Show the restored saved context after restart so I can reopen and verify
+  the live pages and prices myself."
 
 ## Evidence to capture
 
-- The side-by-side comparison with each tab cited.
-- The Living Archive intake item id for the decision packet.
+- The human-checked option ranking with captured source citations.
+- The Living Archive intake item id for the captured research trail.
 - A screenshot of the human-only checklist above being shown in the side
   panel after the human reviews the decision packet.
 

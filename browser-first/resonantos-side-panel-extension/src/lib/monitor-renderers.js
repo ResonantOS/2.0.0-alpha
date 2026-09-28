@@ -199,6 +199,8 @@ export function createMonitorRenderers({
   controlStepLabel,
   elements,
   getBrowserJobs,
+  getHistoryLoadState = () => "ready",
+  onRetryHistory,
   getActiveBrowserJobId = () => null,
   getBrowserJobSchedulerState = () => null,
   getContextDockExpanded,
@@ -240,6 +242,7 @@ export function createMonitorRenderers({
     controlStepList,
     jobList,
     jobMonitor,
+    jobMonitorClear,
     jobMonitorTitle,
     jobMonitorToggle,
     permissionManagerList,
@@ -626,6 +629,36 @@ export function createMonitorRenderers({
   }
 
   function renderJobMonitor() {
+    const historyState = getHistoryLoadState();
+    const unavailable = historyState !== "ready";
+    if (jobMonitorClear) jobMonitorClear.disabled = unavailable;
+    jobMonitorToggle.disabled = unavailable;
+    if (unavailable) {
+      jobMonitor.hidden = false;
+      jobMonitorTitle.textContent = "Browser job history";
+      jobList.hidden = false;
+      jobList.replaceChildren();
+      const item = document.createElement("li");
+      item.dataset.status = "blocked";
+      const title = document.createElement("strong");
+      title.textContent = historyState === "loading"
+        ? "Loading browser job history…"
+        : "Browser job history could not be loaded.";
+      const actions = document.createElement("div");
+      actions.className = "job-actions";
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.textContent = "Retry";
+      retry.title = "Reload browser job history";
+      retry.disabled = historyState === "loading";
+      retry.addEventListener("click", () => onRetryHistory?.());
+      actions.append(retry);
+      item.append(title, actions);
+      jobList.append(item);
+      updateContextDockVisibility();
+      return;
+    }
+    jobList.replaceChildren();
     const browserJobs = getBrowserJobs();
     const activeJobId = getActiveBrowserJobId();
     const jobMonitorCollapsed = getJobMonitorCollapsed();

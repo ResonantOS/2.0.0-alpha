@@ -16,11 +16,11 @@ function createEventTarget() {
   };
 }
 
-function createHarness({ pendingPrompt = "", turnBusy = false, statusLabel = "Ready" } = {}) {
+function createHarness({ pendingPrompt = "", pendingRecord, storedState, turnBusy = false, statusLabel = "Ready" } = {}) {
   const events = [];
-  const storageState = pendingPrompt ? {
-    augmentorPendingSidebarPrompt: { prompt: pendingPrompt }
-  } : {};
+  const storageState = storedState ?? (pendingRecord || pendingPrompt ? {
+    augmentorPendingSidebarPrompt: pendingRecord ?? { prompt: pendingPrompt }
+  } : {});
   let busy = turnBusy;
   const storageChanged = {
     handler: null,
@@ -89,6 +89,7 @@ function createHarness({ pendingPrompt = "", turnBusy = false, statusLabel = "Re
     controller,
     events,
     getBusy: () => busy,
+    setBusy: (value) => { busy = value; },
     sendButton,
     storageChanged,
     storageState
@@ -168,3 +169,57 @@ test("side panel lifecycle controller turns send button into stop while busy", (
 
   assert.deepEqual(stopEvents, ["prevent", "stop"]);
 });
+
+const reentryNotice = "Sensitive text was removed from this handoff. Enter the command directly in the sidebar to continue.";
+
+for (const prompt of ["/control go to https://example.test/?token=REDACTED", ""]) {
+  test(`marked sidebar handoff is removed without execution or prefill, including reload (${prompt ? "preview" : "empty preview"})`, async () => {
+    const record = { prompt, createdAt: "2026-09-19T12:00:00.000Z", requiresReentry: true };
+    // A newly constructed controller with a serialized record models a panel reload.
+    const harness = createHarness({ pendingRecord: JSON.parse(JSON.stringify(record)) });
+    harness.commandInput.value = "unfinished draft";
+    assert.equal(await harness.controller.consumePendingSidebarPrompt(), true);
+    assert.deepEqual(harness.events.filter(([type]) => type === "respond"), []);
+    assert.deepEqual(harness.events, [
+      ["remove", "augmentorPendingSidebarPrompt"],
+      ["message", "system", reentryNotice]
+    ]);
+    assert.equal(harness.commandInput.value, "unfinished draft");
+    assert.equal(harness.getBusy(), false);
+    assert.deepEqual(harness.storageState, {});
+
+    const reloaded = createHarness({ storedState: JSON.parse(JSON.stringify(harness.storageState)) });
+    assert.equal(await reloaded.controller.consumePendingSidebarPrompt(), false);
+    assert.deepEqual(reloaded.events, []);
+  });
+}
+
+test("marked sidebar handoff stays deferred while busy and never executes when idle", async () => {
+  const record = { prompt: "/control token=REDACTED", requiresReentry: true };
+  const harness = createHarness({ pendingRecord: record, turnBusy: true });
+  assert.equal(await harness.controller.consumePendingSidebarPrompt(), false);
+  assert.deepEqual(harness.storageState, { augmentorPendingSidebarPrompt: record });
+  assert.deepEqual(harness.events, []);
+  harness.setBusy(false);
+  assert.equal(await harness.controller.consumePendingSidebarPrompt(), true);
+  assert.deepEqual(harness.events, [
+    ["remove", "augmentorPendingSidebarPrompt"],
+    ["message", "system", reentryNotice]
+  ]);
+});
+
+for (const prompt of ["/jobs", "/jobs focus job-1", "/control go to https://example.test/docs"]) {
+  test(`unmarked sidebar handoff still executes once: ${prompt}`, async () => {
+    const harness = createHarness({ pendingPrompt: prompt });
+    assert.equal(await harness.controller.consumePendingSidebarPrompt(), true);
+    assert.deepEqual(harness.events, [
+      ["remove", "augmentorPendingSidebarPrompt"],
+      ["busy", true],
+      ["message", "user", prompt],
+      ["respond", prompt],
+      ["busy", false]
+    ]);
+    assert.equal(await harness.controller.consumePendingSidebarPrompt(), false);
+    assert.equal(harness.events.filter(([type]) => type === "respond").length, 1);
+  });
+}

@@ -415,12 +415,19 @@ const renderJobMonitor = () => {
   monitorRenderers.renderJobMonitor();
 };
 
+const browserJobHistoryNotice = "Browser job history could not be loaded. Open Jobs to retry.";
 const browserJobController = createSidePanelBrowserJobController({
   activateJobTab: (job) => activateJobTab(job),
   addMessage: (...args) => addMessage(...args),
   browserJobStore,
   consumeNextControlPreflightDecision: () => consumeNextControlPreflightDecision(),
   getCurrentControlRun: () => currentControlRun,
+  onHistoryLoadStateChange: (state) => {
+    if (state === "error") setComposerNotice(browserJobHistoryNotice);
+    else if (state === "ready" && composerNotice?.textContent === browserJobHistoryNotice) {
+      setComposerNotice("");
+    }
+  },
   prepareBrowserJobPageLock: (request) => prepareBrowserJobPageLock(request),
   renderControlMonitor: () => renderControlMonitor(),
   renderJobMonitor,
@@ -638,6 +645,7 @@ monitorRenderers = createMonitorRenderers({
     controlStepList,
     jobList,
     jobMonitor,
+    jobMonitorClear,
     jobMonitorTitle,
     jobMonitorToggle,
     permissionManagerList,
@@ -654,6 +662,8 @@ monitorRenderers = createMonitorRenderers({
   getActiveBrowserJobId: () => browserJobStore.getActiveJobId(),
   getBrowserJobSchedulerState: () => browserJobStore.getSchedulerState({ maxConcurrent: 2 }),
   getBrowserJobs: () => browserJobStore.getJobs(),
+  getHistoryLoadState: browserJobController.getHistoryLoadState,
+  onRetryHistory: loadBrowserJobs,
   getContextDockExpanded: () => contextDockExpanded,
   getCurrentControlRun: () => currentControlRun,
   getJobMonitorCollapsed: () => browserJobStore.getMonitorCollapsed(),
@@ -1129,6 +1139,10 @@ browserJobScheduler.start();
 const showBrowserJobsCommand = async (body) => {
   contextDockExpanded = true;
   await persistContextDockExpanded();
+  if (browserJobController.getHistoryLoadState() !== "ready") {
+    renderJobMonitor();
+    return "Browser job history could not be loaded. Open Jobs to retry.";
+  }
   await browserJobStore.setMonitorCollapsed(false);
   renderJobMonitor();
   return runJobsCommand(body);

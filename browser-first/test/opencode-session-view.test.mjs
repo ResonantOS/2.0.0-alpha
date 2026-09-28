@@ -22,7 +22,7 @@ test("renderChangedFiles rows carry path, counts, and highlight the newest edit"
   ], { document: d });
 
   assert.equal(n, 2);
-  assert.equal(d.querySelector("#t").textContent, "Changed files · 2");
+  assert.equal(d.querySelector("#t").firstChild.textContent, "Changed files · 2");
   const rows = [...d.querySelectorAll("#l .oc-file")];
   assert.equal(rows[0].dataset.path, "jwt.ts");
   assert.equal(rows[0].dataset.touched, "true", "the newest edit is highlighted");
@@ -71,7 +71,9 @@ test("renderTranscript renders prose blocks and tool cards with live state", () 
     { type: "tool", id: "c2", tool: "shell", input: "npm test", state: "completed" }
   ], { document: d });
 
-  assert.equal(d.querySelector("#t .oc-msg").textContent, "Refactoring auth.");
+  assert.equal(d.querySelector("#t .oc-msg .oc-msg-content").textContent, "Refactoring auth.");
+  assert.equal(d.querySelector("#t .oc-msg .oc-badge").textContent, "External");
+  assert.equal(d.querySelector("#t .oc-msg .oc-badge").dataset.source, "external");
   const tools = [...d.querySelectorAll("#t .oc-tool")];
   assert.deepEqual(tools.map((c) => c.dataset.state), ["running", "completed"]);
   assert.equal(tools[0].querySelector(".oc-tool-name").textContent, "edit");
@@ -108,7 +110,7 @@ test("renderTranscript keeps snake_case identifiers literal while allowing delim
     { type: "text", id: "m1", text: "Keep snake_case_identifier literal, but _emphasize this_ here." }
   ], { document: d });
 
-  const message = d.querySelector("#t .oc-msg");
+  const message = d.querySelector("#t .oc-msg-content");
   assert.equal(message.textContent, "Keep snake_case_identifier literal, but emphasize this here.");
   assert.deepEqual([...message.querySelectorAll("em")].map((node) => node.textContent), ["emphasize this"]);
 });

@@ -1,0 +1,122 @@
+{
+  "id": "addon.openai-compatible-harness",
+  "name": "OpenAI Compatible Harness",
+  "version": "0.1.0",
+  "author": "ResonantOS",
+  "category": "agent",
+  "sdkVersion": "0.1.0",
+  "description": "Opt-in harness example. Host installation, explicit consent and slot ownership are required; this manifest grants no authority.",
+  "runtimeType": "local-service",
+  "surfaces": [],
+  "requestedCapabilities": [
+    {
+      "capability": "agent-runtime",
+      "granted": false,
+      "scope": "system",
+      "revocationBehavior": "hard-stop"
+    },
+    {
+      "capability": "network",
+      "granted": false,
+      "scope": "system",
+      "revocationBehavior": "hard-stop"
+    },
+    {
+      "capability": "chat-interface",
+      "granted": false,
+      "scope": "system",
+      "revocationBehavior": "hard-stop"
+    }
+  ],
+  "systemSlots": [
+    {
+      "id": "primary-agent",
+      "role": "alternative-provider",
+      "replaceable": true
+    },
+    {
+      "id": "chat-interface",
+      "role": "alternative-provider",
+      "replaceable": true
+    }
+  ],
+  "tools": [
+    {
+      "name": "harness.invoke",
+      "description": "Submit one turn through the selected host-owned runtime.",
+      "requiredCapabilities": [
+        "agent-runtime",
+        "network",
+        "chat-interface"
+      ],
+      "inputSchema": {
+        "type": "object"
+      },
+      "outputSchema": {
+        "type": "object"
+      },
+      "audit": {
+        "artifactTypes": []
+      }
+    }
+  ],
+  "agentRuntime": {
+    "invocationTool": "harness.invoke",
+    "chatAuthorLabel": "OpenAI Compatible Harness",
+    "displayNameSource": "manifest",
+    "supportsStreaming": false,
+    "supportsCancellation": true,
+    "supportsModelSelection": true,
+    "outputFiltering": "assistant-reply-only",
+    "requiredCapabilities": [
+      "agent-runtime",
+      "network",
+      "chat-interface"
+    ],
+    "adapterVersion": 1,
+    "adapterId": "openai-compatible-v1",
+    "authScheme": "bearer",
+    "supportedOperations": [
+      "createSession",
+      "invoke",
+      "cancel",
+      "history",
+      "status",
+      "selectModel"
+    ],
+    "contextRoleFidelity": "structured-messages",
+    "toolCallbacks": false,
+    "endpoint": "http://127.0.0.1:8000",
+    "credentialBinding": "openai.compatible",
+    "modelSelection": {
+      "source": "runtime-audit",
+      "currentModelField": "currentModel",
+      "selectable": true,
+      "requiredCapabilities": [
+        "agent-runtime"
+      ]
+    }
+  },
+  "providerRequirements": {
+    "sharedProfiles": [],
+    "supportsPrivateCredentials": false
+  },
+  "archiveIntegration": {
+    "readScopes": [],
+    "intakeWriteScopes": [],
+    "canRequestIngest": false,
+    "canWriteKnowledgePages": false
+  },
+  "health": {
+    "strategy": "host-command-ready"
+  },
+  "installHooks": {},
+  "compatibility": {
+    "shellVersion": "^0.1.0",
+    "platforms": [
+      "macOS",
+      "linux",
+      "windows"
+    ]
+  }
+}

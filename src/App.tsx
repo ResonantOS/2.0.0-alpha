@@ -1,7 +1,9 @@
 // Intent citation: docs/architecture/ADR-002-modular-codebase.md
 // Intent citation: docs/architecture/ADR-003-engineering-standards.md
 
-import { Suspense, lazy, startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
+import { Suspense, lazy, startTransition, useDeferredValue, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { createHarnessClient } from "./core/harness-client";
+import { createHarnessChatRuntime, selectHarnessModel } from "./modules/chat/harness-turn";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import type {
   AddOnManifest,
@@ -62,6 +64,7 @@ import {
   describeUninstallBlock,
   executeSideloadManifest,
   grantAddonCapabilities,
+  grantWorkspaceAccess,
   runAddonLogicianHook,
   runAddonLogicianScript,
   toggleAddonCapabilityGrant,
@@ -104,7 +107,7 @@ import {
   toggleComposerDictation,
 } from "./modules/chat/composer-controller";
 import { saveChatMessageToArchiveIntake } from "./modules/chat/archive-intake-controller";
-import { executeChatTurn } from "./modules/chat/controller";
+import { executeChatTurn, primaryHarnessChatRoute } from "./modules/chat/controller";
 import { claimChatRun, releaseChatRun } from "./modules/chat/run-guard";
 import { StrategistChatRail } from "./modules/chat/StrategistChatRail";
 import { appendTranscriptEvent } from "./core/context-memory";
@@ -143,6 +146,7 @@ import { PaperclipWorkspace } from "./modules/paperclip/PaperclipWorkspace";
 import { promoteRecoveryRoute, RECOVERY_RUNBOOK_PROMPT, setRecoveryMode } from "./modules/recovery/controller";
 import {
   applyFirstRunRecommendedAddOns,
+  firstRunRecommendedAddOns,
   loadInitialShellState,
   loadRecoveryRuntimeSnapshot,
   markFirstRunRecommendedAddOnsReviewed,
@@ -156,7 +160,6 @@ import {
 import {
   activeSystemSlotProvider,
   hasSystemSlotManifest,
-  recommendedSystemSlotManifests,
   systemSlotAvailable,
 } from "./modules/shell/system-slots";
 import { createAddOnSurfaceDockRoutes } from "./sdk/addons";
@@ -286,6 +289,11 @@ const errorMessageOf = (error: unknown, fallback: string): string =>
   typeof error === "string" ? error : error instanceof Error ? error.message : fallback;
 
 export function App() {
+  const [harnessClient] = useState(createHarnessClient);
+  const [harnessRuntime] = useState(() => harnessClient ? createHarnessChatRuntime(harnessClient) : undefined);
+  const harnessProjection = useSyncExternalStore(
+    harnessClient?.subscribe ?? (() => () => {}), harnessClient?.getSnapshot ?? (() => null),
+  );
   const surfaceMode = appSurfaceMode();
   const isFloatingChatSurface = surfaceMode === "floating-chat";
   const [loadState, setLoadState] = useState<LoadState>({ phase: "loading" });
@@ -293,6 +301,8 @@ export function App() {
   const [search, setSearch] = useState("");
   const [sideloadPath, setSideloadPath] = useState("");
   const [selectedAddonId, setSelectedAddonId] = useState<string>("");
+  const [firstRunPending, setFirstRunPending] = useState(false);
+  const [firstRunError, setFirstRunError] = useState("");
   const [firstRunSelections, setFirstRunSelections] = useState<Record<string, boolean>>({});
   const [archiveFocusTarget, setArchiveFocusTarget] = useState<"review" | null>(null);
   const [composer, setComposer] = useState("");
@@ -379,7 +389,7 @@ export function App() {
   useEffect(() => {
     void (async () => {
       try {
-        const booted = await loadInitialShellState();
+        const booted = await loadInitialShellState(harnessClient);
         setLoadState({
           phase: "ready",
           state: booted.state,
@@ -551,15 +561,16 @@ export function App() {
       return;
     }
     const manifests = [...loadState.bundled, ...loadState.sideloaded];
-    const activeProvider = activeSystemSlotProvider(loadState.state, manifests, "memory-system");
-    if (hasSystemSlotManifest(manifests, "memory-system") && activeProvider?.manifest.id !== "addon.living-archive") {
+    const activeProvider = activeSystemSlotProvider(loadState.state, manifests, "memory-system", harnessProjection);
+    if (activeProvider?.manifest.id !== "addon.living-archive" ||
+        harnessProjection?.installations[activeProvider.manifest.id]?.hiddenSurfaceIds.includes("living-archive-workspace")) {
       return;
     }
     if (archiveStatusBusy || archiveStatus) {
       return;
     }
     void refreshArchiveRuntime();
-  }, [loadState, archiveStatusBusy, archiveStatus]);
+  }, [loadState, archiveStatusBusy, archiveStatus, harnessProjection]);
 
   useEffect(() => {
     if (loadState.phase !== "ready") {
@@ -569,15 +580,16 @@ export function App() {
       return;
     }
     const manifests = [...loadState.bundled, ...loadState.sideloaded];
-    const activeProvider = activeSystemSlotProvider(loadState.state, manifests, "memory-system");
-    if (hasSystemSlotManifest(manifests, "memory-system") && activeProvider?.manifest.id !== "addon.living-archive") {
+    const activeProvider = activeSystemSlotProvider(loadState.state, manifests, "memory-system", harnessProjection);
+    if (activeProvider?.manifest.id !== "addon.living-archive" ||
+        harnessProjection?.installations[activeProvider.manifest.id]?.hiddenSurfaceIds.includes("living-archive-workspace")) {
       return;
     }
     if (archiveQueueBusy || archiveQueue.length) {
       return;
     }
     void refreshArchiveQueue();
-  }, [loadState, archiveQueueBusy, archiveQueue.length]);
+  }, [loadState, archiveQueueBusy, archiveQueue.length, harnessProjection]);
 
   if (loadState.phase === "loading") {
     return (
@@ -645,6 +657,7 @@ export function App() {
     dictationAvailable,
   } = buildShellViewModel({
     state,
+    harnessProjection,
     bundled,
     sideloaded,
     deferredSearch,
@@ -653,17 +666,20 @@ export function App() {
     attachments,
     selectedChatModel,
   });
-  const chatSlotAvailable = systemSlotAvailable(state, allManifests, "chat-interface");
+  const harnessChatActive = primaryHarnessChatRoute({ projection: harnessProjection, state, thread: activeThread,
+    outgoing: composer }) === "harness";
+  const chatSlotAvailable = systemSlotAvailable(state, allManifests, "chat-interface", harnessProjection);
   const engineerSettingsConsoleActive = !recoveryModeActive && !chatSlotAvailable && currentSection === "settings";
   const chatInterfaceAvailable = recoveryModeActive || chatSlotAvailable || engineerSettingsConsoleActive;
-  const memorySystemAvailable = systemSlotAvailable(state, allManifests, "memory-system");
+  const memorySystemAvailable = systemSlotAvailable(state, allManifests, "memory-system", harnessProjection);
   const memorySlotHasProviders = hasSystemSlotManifest(allManifests, "memory-system");
-  const activeMemoryProvider = activeSystemSlotProvider(state, allManifests, "memory-system");
+  const activeMemoryProvider = activeSystemSlotProvider(state, allManifests, "memory-system", harnessProjection);
   const livingArchiveMemoryActive =
-    !memorySlotHasProviders || activeMemoryProvider?.manifest.id === "addon.living-archive";
-  const memoryProviderBroker = resolveMemoryProviderBroker(state, allManifests);
+    activeMemoryProvider?.manifest.id === "addon.living-archive" &&
+    !harnessProjection?.installations[activeMemoryProvider.manifest.id]?.hiddenSurfaceIds.includes("living-archive-workspace");
+  const memoryProviderBroker = resolveMemoryProviderBroker(state, allManifests, harnessProjection);
   const archiveAgentThread = state.conversationThreads.find((thread) => thread.id === "thread-living-archive-agent") ?? null;
-  const recommendedAddOns = recommendedSystemSlotManifests(allManifests);
+  const recommendedAddOns = firstRunRecommendedAddOns(bundled);
   const showFirstRunRecommendedAddOns =
     !isFloatingChatSurface && !state.uiPreferences.recommendedAddOnsReviewed && recommendedAddOns.length > 0;
   const firstRunSelectionFor = (manifestId: string): boolean => firstRunSelections[manifestId] ?? true;
@@ -1244,6 +1260,7 @@ export function App() {
     }
     try {
       await executeChatTurn({
+        harnessRuntime,
         snapshot: { state, bundled, sideloaded },
         activeThread,
         composer,
@@ -1333,6 +1350,7 @@ export function App() {
 
     try {
       await executeChatTurn({
+        harnessRuntime,
         snapshot: { state: stateWithThread, bundled, sideloaded },
         activeThread: thread,
         composer: "",
@@ -1422,6 +1440,7 @@ export function App() {
     }
     try {
       await executeChatTurn({
+        harnessRuntime,
         snapshot: { state: nextState, bundled, sideloaded },
         activeThread: thread,
         composer: "",
@@ -1506,28 +1525,15 @@ export function App() {
   const paperclipInstallation = state.installations["addon.paperclip"];
   const hermesManifest = allManifests.find((manifest) => manifest.id === "addon.hermes");
   const hermesInstallation = state.installations["addon.hermes"];
-  const grantBrowserVisibleAccess = () => {
-    if (!browserManifest) {
-      return;
-    }
-    updateRuntimeState((draft) => {
-      const installation = draft.installations[browserManifest.id];
-      if (!installation) {
-        return draft;
-      }
-      installation.installed = true;
-      installation.enabled = true;
-      const existingGrants = new Map(installation.grantedCapabilities.map((grant) => [grant.capability, grant]));
-      const missingRequestedGrants = browserManifest.requestedCapabilities.filter((grant) => !existingGrants.has(grant.capability));
-      installation.grantedCapabilities = [...installation.grantedCapabilities, ...missingRequestedGrants].map((grant) =>
-        ["network", "ui-embedding", "browser-control", "filesystem"].includes(grant.capability) ? { ...grant, granted: true } : grant,
-      );
-      installation.status = "enabled";
-      installation.notes = ["Installed, enabled, and granted network, ui-embedding, browser-control, filesystem through Browser v2 setup."];
-      draft.uiPreferences.activeSection = "browser";
-      return draft;
-    });
+  const addonMutationDeps = {
+    client: harnessClient,
+    getManifest: (addonId: string) => allManifests.find(manifest => manifest.id === addonId),
+    getState: () => currentReadyStateRef.current ?? state,
+    updateRuntimeState,
   };
+  const reportAddonError = (error: unknown) => setChatNotice(errorMessageOf(error, "Host denied add-on change."));
+  const grantBrowserVisibleAccess = () =>
+    grantWorkspaceAccess(browserManifest, addonMutationDeps).catch(reportAddonError);
   const updateBrowserWorkspaceState = (browserWorkspace: ResonantShellState["uiPreferences"]["browserWorkspace"]) => {
     updateRuntimeState((draft) => {
       draft.uiPreferences.browserWorkspace = browserWorkspace;
@@ -1689,61 +1695,10 @@ export function App() {
     });
     return result;
   };
-  const grantObsidianWorkspaceAccess = async () => {
-    if (!obsidianManifest) {
-      return;
-    }
-    const currentVaultPath =
-      typeof obsidianInstallation?.config?.vaultPath === "string" ? obsidianInstallation.config.vaultPath : "";
-    const selectedVaultPath = currentVaultPath || (await requestObsidianVaultFolderSelection());
-    updateRuntimeState((draft) => {
-      const installation = draft.installations[obsidianManifest.id];
-      if (!installation) {
-        return draft;
-      }
-      installation.installed = true;
-      installation.enabled = true;
-      installation.status = "enabled";
-      const existingGrants = new Map(installation.grantedCapabilities.map((grant) => [grant.capability, grant]));
-      const missingRequestedGrants = obsidianManifest.requestedCapabilities.filter((grant) => !existingGrants.has(grant.capability));
-      installation.grantedCapabilities = [...installation.grantedCapabilities, ...missingRequestedGrants].map((grant) =>
-        grant.capability === "filesystem" || grant.capability === "ui-embedding" ? { ...grant, granted: true } : grant,
-      );
-      if (selectedVaultPath) {
-        installation.config = {
-          ...(installation.config ?? {}),
-          vaultPath: selectedVaultPath,
-          lastWorkspaceConnectedAt: new Date().toISOString(),
-        };
-      }
-      installation.notes = selectedVaultPath
-        ? [`Workspace access granted for ${selectedVaultPath}.`]
-        : ["Workspace access granted. Choose a vault to open the Resonant Notes workspace."];
-      return draft;
-    });
-  };
-  const grantOpenCodeWorkspaceAccess = () => {
-    if (!opencodeManifest) {
-      return;
-    }
-    updateRuntimeState((draft) => {
-      const installation = draft.installations[opencodeManifest.id];
-      if (!installation) {
-        return draft;
-      }
-      installation.installed = true;
-      installation.enabled = true;
-      installation.status = "enabled";
-      const existingGrants = new Map(installation.grantedCapabilities.map((grant) => [grant.capability, grant]));
-      const missingRequestedGrants = opencodeManifest.requestedCapabilities.filter((grant) => !existingGrants.has(grant.capability));
-      installation.grantedCapabilities = [...installation.grantedCapabilities, ...missingRequestedGrants].map((grant) =>
-        ["filesystem", "shell", "ui-embedding"].includes(grant.capability) ? { ...grant, granted: true } : grant,
-      );
-      installation.notes = ["Installed, enabled, and granted scoped filesystem, shell, and UI embedding for OpenCode workspace spike."];
-      draft.uiPreferences.activeSection = "opencode";
-      return draft;
-    });
-  };
+  const grantObsidianWorkspaceAccess = () =>
+    grantWorkspaceAccess(obsidianManifest, addonMutationDeps, requestObsidianVaultFolderSelection).catch(reportAddonError);
+  const grantOpenCodeWorkspaceAccess = () =>
+    grantWorkspaceAccess(opencodeManifest, addonMutationDeps).catch(reportAddonError);
   const updateOpenCodeWorkspacePath = (workspacePath: string) => {
     if (!opencodeManifest) {
       return;
@@ -1767,32 +1722,8 @@ export function App() {
       return draft;
     });
   };
-  const grantPaperclipWorkspaceAccess = () => {
-    if (!paperclipManifest) {
-      return;
-    }
-    updateRuntimeState((draft) => {
-      const installation = draft.installations[paperclipManifest.id];
-      if (!installation) {
-        return draft;
-      }
-      installation.installed = true;
-      installation.enabled = true;
-      installation.status = "enabled";
-      const existingGrants = new Map(installation.grantedCapabilities.map((grant) => [grant.capability, grant]));
-      const missingRequestedGrants = paperclipManifest.requestedCapabilities.filter((grant) => !existingGrants.has(grant.capability));
-      installation.grantedCapabilities = [...installation.grantedCapabilities, ...missingRequestedGrants].map((grant) =>
-        ["network", "ui-embedding", "agent-delegation"].includes(grant.capability) ? { ...grant, granted: true } : grant,
-      );
-      installation.config = {
-        ...(installation.config ?? {}),
-        endpoint: typeof installation.config?.endpoint === "string" ? installation.config.endpoint : "http://127.0.0.1:3100",
-      };
-      installation.notes = ["Installed, enabled, and granted local network, UI embedding, and delegation issue creation for Paperclip."];
-      draft.uiPreferences.activeSection = "paperclip";
-      return draft;
-    });
-  };
+  const grantPaperclipWorkspaceAccess = () =>
+    grantWorkspaceAccess(paperclipManifest, addonMutationDeps).catch(reportAddonError);
   const updatePaperclipEndpoint = (endpoint: string) => {
     if (!paperclipManifest) {
       return;
@@ -1810,37 +1741,8 @@ export function App() {
       return draft;
     });
   };
-  const grantHermesWorkspaceAccess = () => {
-    if (!hermesManifest) {
-      return;
-    }
-    updateRuntimeState((draft) => {
-      const installation = draft.installations[hermesManifest.id];
-      if (!installation) {
-        return draft;
-      }
-      installation.installed = true;
-      installation.enabled = true;
-      installation.status = "enabled";
-      const workspaceCapabilities = ["shell", "ui-embedding"];
-      const existingGrants = new Map(installation.grantedCapabilities.map((grant) => [grant.capability, grant]));
-      const missingRequestedGrants = hermesManifest.requestedCapabilities.filter((grant) => !existingGrants.has(grant.capability));
-      installation.grantedCapabilities = [...installation.grantedCapabilities, ...missingRequestedGrants].map((grant) =>
-        workspaceCapabilities.includes(grant.capability)
-          ? { ...grant, granted: true }
-          : grant,
-      );
-      installation.notes = [
-        "Installed, enabled, and granted scoped shell and UI embedding for the Hermes workspace. Provider, network, archive-read, and archive-intake-write remain separately approval-gated.",
-      ];
-      const hermesChannel = draft.channels.find((channel) => channel.id === "desktop-hermes");
-      if (hermesChannel) {
-        hermesChannel.enabled = true;
-      }
-      draft.uiPreferences.activeSection = "hermes";
-      return draft;
-    });
-  };
+  const grantHermesWorkspaceAccess = () =>
+    grantWorkspaceAccess(hermesManifest, addonMutationDeps).catch(reportAddonError);
   const updateHermesProfileHome = (profileHome: string) => {
     if (!hermesManifest) {
       return;
@@ -1878,6 +1780,15 @@ export function App() {
     });
   };
   const handleChatModelChange = (model: string) => {
+    if (harnessChatActive && activeThread && harnessRuntime) {
+      if (model === "Choose host model…") {
+        const choice = window.prompt("Enter the harness provider/model. Availability is checked by the host.");
+        if (choice) void selectHarnessModel(harnessRuntime, activeThread.id, choice)
+          .then(() => setChatNotice("Model selection acknowledged by the host."))
+          .catch(() => setChatNotice("Host model selection unavailable."));
+      }
+      return;
+    }
     setSelectedChatModel(model);
     if (activeThread?.owningAgentId === "hermes.agent") {
       updateHermesModelMetadata(model, selectableChatModels);
@@ -1888,7 +1799,7 @@ export function App() {
   const opencodeDockEnabled = Boolean(opencodeManifest && opencodeInstallation?.installed && opencodeInstallation.enabled);
   const paperclipDockEnabled = Boolean(paperclipManifest && paperclipInstallation?.installed && paperclipInstallation.enabled);
   const hermesDockEnabled = Boolean(hermesManifest && hermesInstallation?.installed && hermesInstallation.enabled);
-  const manifestSurfaceDockItems = createAddOnSurfaceDockRoutes(allManifests, state.installations).map((route) => ({
+  const manifestSurfaceDockItems = createAddOnSurfaceDockRoutes(allManifests, state.installations, harnessProjection).map((route) => ({
     id: route.sectionId as Section,
     label: route.label,
     eyebrow: route.eyebrow,
@@ -1915,11 +1826,11 @@ export function App() {
   ];
   const visibleNavItems = addOnNavItems.length
     ? [
-        ...navItems.slice(0, 4),
+        ...navItems.slice(0, 4).filter((item) => item.id !== "archive" || livingArchiveMemoryActive),
         ...addOnNavItems,
         ...navItems.slice(4),
       ]
-    : navItems;
+    : navItems.filter((item) => item.id !== "archive" || livingArchiveMemoryActive);
 
   return (
     <div className="app-zoom-viewport" style={zoomStyle}>
@@ -2419,29 +2330,32 @@ export function App() {
               }
             >
               <AddOnsWorkspace
+                harnessClient={harnessClient}
                 search={search}
                 sideloadPath={sideloadPath}
                 filteredManifests={filteredManifests}
                 installations={state.installations}
                 selectedManifest={selectedManifest}
                 selectedInstallation={selectedInstallation}
-                uninstallBlock={selectedManifest ? describeUninstallBlock(state, selectedManifest) : null}
+                uninstallBlock={selectedManifest ? describeUninstallBlock(state, selectedManifest, harnessProjection) : null}
                 onSearchChange={(value) => {
                   startTransition(() => setSearch(value));
                 }}
                 onSideloadPathChange={setSideloadPath}
                 onSideload={() => void handleSideload()}
                 onSelectManifest={setSelectedAddonId}
-                onToggleAddonInstall={(manifest) => toggleAddonInstallation(manifest, updateRuntimeState)}
+                onToggleAddonInstall={(manifest) => void toggleAddonInstallation(manifest, addonMutationDeps).catch(reportAddonError)}
                 onToggleGrant={(manifestId, capability) =>
-                  toggleAddonCapabilityGrant(manifestId, capability, updateRuntimeState)
+                  void toggleAddonCapabilityGrant(manifestId, capability, addonMutationDeps).catch(reportAddonError)
                 }
-                onGrantCapabilities={(manifestId, capabilities, requestedCapabilities) =>
-                  grantAddonCapabilities(manifestId, capabilities, requestedCapabilities, updateRuntimeState)
-                }
+                onGrantCapabilities={(manifestId, capabilities) => {
+                  const manifest = allManifests.find(item => item.id === manifestId);
+                  if (manifest) void grantAddonCapabilities(manifest, capabilities, addonMutationDeps).catch(reportAddonError);
+                }}
                 onUpdateAddonConfig={(manifestId, config) => updateAddonConfig(manifestId, config, updateRuntimeState)}
                 onUninstallAddon={(manifest) =>
                   uninstallAddon(manifest, {
+                    client: harnessClient,
                     getState: () => {
                       const readyState = currentReadyStateRef.current;
                       if (!readyState) {
@@ -2451,6 +2365,9 @@ export function App() {
                     },
                     updateRuntimeState,
                     stopRunningWork: addonWorkRegistry.stopRunningWork,
+                  }).catch(error => {
+                    reportAddonError(error);
+                    return { outcome: "blocked" as const };
                   })
                 }
                 onRunLogicianScript={async (manifest, installation, script) =>
@@ -2573,7 +2490,7 @@ export function App() {
         channels={state.channels}
         chatBusy={chatBusy}
         chatCanStop={chatRunPhase !== "idle"}
-        chatSupportsAbort={activeRoute.executionAdapter?.supportsAbort === true}
+        chatSupportsAbort={harnessChatActive || activeRoute.executionAdapter?.supportsAbort === true}
         chatRunPhase={chatRunPhase}
         chatRunEvents={chatRunEvents}
         chatNotice={chatNotice}
@@ -2581,8 +2498,8 @@ export function App() {
         attachments={attachments}
         dictating={dictating}
         dictationAvailable={dictationAvailable}
-        activeChatModel={activeChatModel}
-        availableModels={selectableChatModels.length ? selectableChatModels : activeProvider?.allowedModels ?? []}
+        activeChatModel={harnessChatActive ? "Host-selected model" : activeChatModel}
+        availableModels={harnessChatActive ? ["Host-selected model", "Choose host model…"] : selectableChatModels.length ? selectableChatModels : activeProvider?.allowedModels ?? []}
         thinkingDepth={thinkingDepth}
         contextUsageLabel={contextUsageLabel}
         contextUsageRatio={contextUsageRatio}
@@ -2702,6 +2619,7 @@ export function App() {
         onSend={() => void sendStrategistMessage()}
         onStopGeneration={() => {
           stopChatGenerationAction({
+            harnessRuntime,
             chatBusy,
             activeThread,
             activeChatRunTokenRef,
@@ -2735,7 +2653,7 @@ export function App() {
           void saveChatMessageToArchiveIntake({
             thread: activeThread,
             message,
-            memoryProvider: resolveMemoryProviderBroker(state, allManifests),
+            memoryProvider: resolveMemoryProviderBroker(state, allManifests, harnessProjection),
             setChatNotice,
             setArchiveQueueBusy,
             setArchiveQueue,
@@ -2805,6 +2723,7 @@ export function App() {
                 <label key={manifest.id} className="first-run-choice">
                   <input
                     type="checkbox"
+                    disabled={firstRunPending}
                     checked={firstRunSelectionFor(manifest.id)}
                     onChange={(event) =>
                       setFirstRunSelections((current) => ({
@@ -2820,21 +2739,36 @@ export function App() {
                 </label>
               ))}
             </div>
+            {firstRunError && <p role="alert">{firstRunError}</p>}
             <div className="first-run-actions">
               <button
                 type="button"
+                disabled={firstRunPending}
                 className="button-primary touch-action"
                 onClick={() => {
                   const selectedIds = recommendedAddOns
                     .filter((manifest) => firstRunSelectionFor(manifest.id))
                     .map((manifest) => manifest.id);
-                  commitReadyState(applyFirstRunRecommendedAddOns(state, allManifests, selectedIds));
+                  setFirstRunPending(true);
+                  setFirstRunError("");
+                  void applyFirstRunRecommendedAddOns(state, bundled, selectedIds, harnessClient)
+                    .then(next => updateRuntimeState(current => ({ ...current, uiPreferences: {
+                      ...current.uiPreferences,
+                      recommendedAddOnsReviewed: next.uiPreferences.recommendedAddOnsReviewed,
+                      chatSidebarOpen: next.uiPreferences.chatSidebarOpen,
+                    } })))
+                    .catch(async () => {
+                      await harnessClient.refresh().catch(() => {});
+                      setFirstRunError("First-run setup could not be completed. Review the acknowledged add-ons and retry.");
+                    })
+                    .finally(() => setFirstRunPending(false));
                 }}
               >
                 Apply Selection
               </button>
               <button
                 type="button"
+                disabled={firstRunPending}
                 className="button-secondary touch-action"
                 onClick={() => {
                   const nextState = markFirstRunRecommendedAddOnsReviewed(state);
@@ -2847,6 +2781,7 @@ export function App() {
               </button>
               <button
                 type="button"
+                disabled={firstRunPending}
                 className="button-secondary touch-action"
                 onClick={() => commitReadyState(markFirstRunRecommendedAddOnsReviewed(state))}
               >

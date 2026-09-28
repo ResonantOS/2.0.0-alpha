@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AddOnManifest, ResonantShellState } from "./contracts";
+import { createHarnessClient, type HarnessProjection } from "./harness-client";
 import { buildDefaultState } from "./defaults";
 import { resolveMemoryProviderBroker } from "./memory-provider";
 
@@ -73,22 +74,55 @@ const enableMemoryProvider = (state: ResonantShellState, manifest: AddOnManifest
   },
 });
 
+const projectionFor = (manifests: AddOnManifest[], owner: string | null): HarnessProjection => {
+  const client = createHarnessClient();
+  client.applySnapshot({ bootEpoch: "memory-test", revision: 1, governanceActivated: true,
+    candidates: manifests,
+    installations: Object.fromEntries(manifests.map(manifest => [manifest.id, {
+      addonId: manifest.id, installed: true, enabled: true,
+      grantedCapabilities: manifest.requestedCapabilities.map(grant => ({ ...grant, granted: true })),
+      disabledOperations: [], hiddenSurfaceIds: [],
+    }])),
+    slots: { "memory-system": { addonId: owner, generation: 1, available: owner !== null } },
+  });
+  return client.getSnapshot()!;
+};
+
 describe("memory provider broker", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("uses Living Archive for legacy manifest sets without memory slots", () => {
+  it("does not implicitly enable Living Archive for legacy manifest sets without memory slots", () => {
     const state = buildDefaultState([]);
 
-    expect(resolveMemoryProviderBroker(state, []).kind).toBe("living-archive");
+    expect(resolveMemoryProviderBroker(state, []).kind).toBe("unsupported");
+  });
+
+  it("memory dispatch follows the projected owner", async () => {
+    const first = httpMemoryManifest();
+    const second = { ...httpMemoryManifest(), id: "addon.second-memory", name: "Second Memory",
+      service: { ...httpMemoryManifest().service!, entrypoint: "http://127.0.0.1:4990" } };
+    const manifests = [first, second];
+    const state = enableMemoryProvider(enableMemoryProvider(buildDefaultState(manifests), first), second);
+    state.activeSystemSlotProviderIds = { "memory-system": first.id };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true,
+      json: async () => ({ query: "owner", pages: [], sources: [] }) } as Response);
+    const broker = resolveMemoryProviderBroker(state, manifests, projectionFor(manifests, second.id));
+    await broker.search("owner");
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(["http://127.0.0.1:4990/memory/search"]);
+    expect(broker.providerId).toBe(second.id);
+    fetchMock.mockClear();
+    const vacant = resolveMemoryProviderBroker(state, manifests, projectionFor(manifests, null));
+    await expect(vacant.search("owner")).rejects.toThrow("No active memory provider");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("resolves enabled Living Archive as the concrete broker", () => {
     const manifest = memoryManifest("addon.living-archive", "Living Archive");
     const state = enableMemoryProvider(buildDefaultState([manifest]), manifest);
 
-    const broker = resolveMemoryProviderBroker(state, [manifest]);
+    const broker = resolveMemoryProviderBroker(state, [manifest], projectionFor([manifest], manifest.id));
 
     expect(broker.providerId).toBe("addon.living-archive");
     expect(broker.kind).toBe("living-archive");
@@ -99,7 +133,7 @@ describe("memory provider broker", () => {
     const manifest = memoryManifest("addon.alt-memory", "Alternative Memory");
     const state = enableMemoryProvider(buildDefaultState([manifest]), manifest);
 
-    const broker = resolveMemoryProviderBroker(state, [manifest]);
+    const broker = resolveMemoryProviderBroker(state, [manifest], projectionFor([manifest], manifest.id));
 
     expect(broker.providerId).toBe("addon.alt-memory");
     expect(broker.kind).toBe("unsupported");
@@ -118,7 +152,7 @@ describe("memory provider broker", () => {
       }),
     } as Response);
 
-    const broker = resolveMemoryProviderBroker(state, [manifest]);
+    const broker = resolveMemoryProviderBroker(state, [manifest], projectionFor([manifest], manifest.id));
     const result = await broker.search("augmentor", 3);
 
     expect(broker.kind).toBe("http-json");
@@ -149,7 +183,7 @@ describe("memory provider broker", () => {
       }),
     } as Response);
 
-    const broker = resolveMemoryProviderBroker(state, [manifest]);
+    const broker = resolveMemoryProviderBroker(state, [manifest], projectionFor([manifest], manifest.id));
     const result = await broker.read("reference://note");
 
     expect(result.title).toBe("Reference Note");
@@ -172,7 +206,7 @@ describe("memory provider broker", () => {
       json: async () => ({ artifactPath: "INTAKE/mcp/default/note.md", metadataPath: "" }),
     } as Response);
 
-    const broker = resolveMemoryProviderBroker(state, [manifest]);
+    const broker = resolveMemoryProviderBroker(state, [manifest], projectionFor([manifest], manifest.id));
     await broker.intakeWrite({
       actorId: "tester",
       bucket: "default",
@@ -195,7 +229,7 @@ describe("memory provider broker", () => {
         json: async () => ({ requestFile: "INTAKE/review-queue/1.json", queuedAt: "" }),
       } as Response);
 
-      const broker = resolveMemoryProviderBroker(state, [manifest]);
+      const broker = resolveMemoryProviderBroker(state, [manifest], projectionFor([manifest], manifest.id));
       await broker.ingestRequest({
         actorId: "tester",
         sourcePath: "EXTERNAL_KNOWLEDGE/doc.md",
@@ -226,7 +260,7 @@ describe("memory provider broker", () => {
         json: async () => ({ query: "augmentor", pages: [], sources: [] }),
       } as Response);
 
-      const broker = resolveMemoryProviderBroker(state, [manifest]);
+      const broker = resolveMemoryProviderBroker(state, [manifest], projectionFor([manifest], manifest.id));
       await broker.search("augmentor", 3);
 
       const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];

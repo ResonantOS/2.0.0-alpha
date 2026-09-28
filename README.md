@@ -10,7 +10,7 @@ part of this Alpha runtime.
 
 ## Five-Minute Quick Start
 
-Prerequisites: Node.js 22.13.0 or newer and Google Chrome 116 or newer.
+Prerequisites: Node.js 24.21.0 or newer and Google Chrome 116 or newer.
 
 ```bash
 npm install

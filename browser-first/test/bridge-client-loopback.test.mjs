@@ -82,3 +82,16 @@ test("isCapabilityScopedBridgeReply recognizes only the capability-scoped 403 sh
   assert.equal(isCapabilityScopedBridgeReply(200, { ok: true }), false);
   assert.equal(isCapabilityScopedBridgeReply(403, null), false);
 });
+
+test("OpenCode routes use config.bridgeUrl", async () => {
+  const { createBridgeClient } = await import("../resonantos-side-panel-extension/src/lib/bridge-client.js");
+  const { randomBytes } = await import("node:crypto");
+  const routes = ["/opencode/session/start", "/opencode/sessions/list", "/opencode/session/messages", "/opencode/agents/list"];
+  const destinations = [];
+  const bridgeUrl = "http://127.0.0.1:45125";
+  const client = createBridgeClient({bridgeUrl,httpsBridgeUrl:"https://localhost:45126",bridgeToken:randomBytes(32).toString("hex"),fetchImpl:async url => {
+    destinations.push(url); return new Response(JSON.stringify({ok:true}),{status:200});
+  }});
+  for (const route of routes) await client(route,{method:"POST",body:{}});
+  assert.deepEqual(destinations,routes.map(route=>bridgeUrl+route));
+});

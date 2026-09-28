@@ -10,16 +10,19 @@ Open several job postings across tabs, summarise each role in consistent
 shape, draft a cover-letter outline that quotes the human's chosen experience,
 and list the open tabs in a single review pane.
 
+Goals and prompts describe intended workflows, not certified end-to-end
+automation. Check generated claims against separately captured source content.
+
 ## Augmentor features used
 
-- [#237 Multi-step workflows](../augmentor-future-list-acceptance-matrix.md#automation)
-  — supported
+- [#237 Workflow recipe documentation](../augmentor-future-list-acceptance-matrix.md#automation)
+  — available; execution depends on the bounded capabilities below
 - [#221 One-click / question-driven summaries](../augmentor-future-list-acceptance-matrix.md#summarization-research)
   — supported
 - [#222 Session summary artifact with restart-safe context](../augmentor-future-list-acceptance-matrix.md#cross-tab-intelligence)
-  — needs hardening
+  — saved-state foundation; broader continuity needs hardening
 - [#220 Cross-tab comparison with tab provenance](../augmentor-future-list-acceptance-matrix.md#cross-tab-intelligence)
-  — needs hardening (provenance is a step-citation contract, not page editing)
+  — needs hardening; provenance does not establish captured-content comparison
 - [#31 Form reading & autofill guard (closed)](../augmentor-future-list-acceptance-matrix.md#automation)
   — supported
 
@@ -29,8 +32,8 @@ The Augmentor can:
 
 - Extract the job title, company, location, and required experience from a
   readable job-posting page.
-- Compare two or three open tabs and produce a side-by-side summary with
-  each tab cited (using `#220`-style tab provenance).
+- Summarise each posting separately with its source cited. Use those captured
+  summaries as input to a comparison that the human checks against each page.
 - Draft a cover-letter outline that quotes the human's chosen experience
   (templated by `#221`, never sent).
 - Save each summary as a Living Archive intake item for the human to review.
@@ -58,17 +61,17 @@ Every one of those steps stops for an explicit human handoff per
 
 - "Summarise this job posting as title, company, location, must-have
   experience, and nice-to-have experience. Cite the section you read."
-- "Compare these three open tabs of job postings in a table. Cite each tab
-  by title and URL fragment."
+- "Using these separately captured posting summaries, draft a comparison
+  table with source citations for me to check against the original pages."
 - "Draft a 200-word cover-letter outline that references my 'eight years of
   platform engineering' profile block. Do not add any facts I have not
   given you."
-- "Save the current comparison to my Living Archive intake as a
-  research-trail capture."
+- "Capture the source pages as a research trail for archive review. I will
+  separately retain and check the generated comparison."
 
 ## Evidence to capture
 
-- The side-by-side comparison with each tab cited.
+- The separately captured summaries and human-checked comparison with source citations.
 - The saved Living Archive intake item id.
 - A screenshot of the human-only checklist above being shown in the side
   panel after the human reviews the outline.

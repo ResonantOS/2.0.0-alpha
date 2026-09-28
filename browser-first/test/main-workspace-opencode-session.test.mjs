@@ -4,6 +4,12 @@ import { JSDOM } from "jsdom";
 
 import { createOpenCodeSession } from "../resonantos-side-panel-extension/src/lib/main-workspace-opencode-session.js";
 
+const SESSION_ID = "ses_test";
+
+function envelope(event, source = "governed") {
+  return { version: 1, sessionId: SESSION_ID, source, event };
+}
+
 function mount(overrides = {}) {
   const dom = new JSDOM(`<!doctype html><div id="host"></div>`);
   const d = dom.window.document;
@@ -13,6 +19,7 @@ function mount(overrides = {}) {
     document: d,
     container: d.getElementById("host"),
     scope: "~/proj/api/auth",
+    sessionId: SESSION_ID,
     subscribe: (handler) => { emit = handler; return () => { emit = () => {}; }; },
     sendPrompt: async (t) => calls.prompts.push(t),
     onAbort: async () => { calls.aborts += 1; },
@@ -20,7 +27,7 @@ function mount(overrides = {}) {
     revert: async (p) => calls.reverts.push(p),
     ...overrides
   });
-  return { d, emit: (raw) => emit(raw), session, calls };
+  return { d, emit: (raw) => emit(raw?.version === 1 ? raw : envelope(raw)), session, calls };
 }
 
 test("the session element streams events into the transcript and rolling diff pane", () => {
@@ -36,11 +43,11 @@ test("the session element streams events into the transcript and rolling diff pa
   assert.equal(d.querySelector(".oc-status-pill").dataset.status, "running");
   assert.equal(d.querySelector(".oc-model-pill").textContent, "claude-sonnet");
   assert.equal(d.querySelector(".oc-context-pill").hidden, true);
-  assert.equal(d.querySelector(".oc-thread .oc-msg").textContent, "Adding JWT rotation.");
+  assert.equal(d.querySelector(".oc-thread .oc-msg .oc-msg-content").textContent, "Adding JWT rotation.");
   const tool = d.querySelector(".oc-thread .oc-tool");
   assert.equal(tool.dataset.state, "completed");
   // Rolling diff pane picked up the edit.
-  assert.equal(d.querySelector(".oc-diff-title").textContent, "Changed files · 1");
+  assert.equal(d.querySelector(".oc-diff-title").firstChild.textContent, "Changed files · 1");
   const row = d.querySelector(".oc-file-list .oc-file");
   assert.equal(row.dataset.path, "jwt.ts");
   assert.equal(row.dataset.touched, "true");

@@ -43,6 +43,7 @@ operations cross the bridge.
 | `memory-source-intake-host-service.mjs` | Intake, synchronization, search, versioning, diff, wiki health, and lint orchestration |
 | `archive-review-host-service.mjs` and archive policy modules | Intake, review artifacts, verification, promotion, restore, and trusted-memory policy |
 | `addon-delegation-host-service.mjs` and `addon-delegation-service.mjs` | Optional add-on status, bounded local runtime control, delegation records, artifacts, and goals |
+| `opencode-boundary.mjs`, `opencode-event-bus.mjs`, `opencode-session-host-service.mjs`, and `opencode-client.mjs` | OpenCode credential custody, allowlisted session HTTP, one global upstream event reader with per-session delivery, and execution revocation. |
 | `browser-diagnostics-host-service.mjs` | Redacted system/workspace diagnostics and capability-gated report/download actions |
 | `extension-prefs-host-service.mjs` | External user-state persistence for extension preferences |
 | `browser-first-*-utils.mjs` and focused policy modules | Shared pure helpers and narrow host implementation details |
@@ -70,13 +71,13 @@ future product work. They are not additional required Alpha processes.
 | `src/core/` | Shared contracts, provider/memory policies, state helpers, delegation shapes, and pure domain logic | Supporting source and tests; not a separate runtime process |
 | `src/sdk/addons/` | Add-on manifest, capability, protocol, and validation contracts | Governs bundled and sideloaded add-on metadata |
 | [`packages/addon-sdk/`](../../packages/addon-sdk/README.md) | Public add-on SDK package (ADR-055 §12.1 C12) — canonical home of the contracts re-exported by the `src/sdk/addons/` shims | Supporting source; not published to npm |
-| `src/sdk/resonant-context/` | Resonant Context contracts and SDK surface | Optional integration support |
 | `src/modules/*/` | React domain workspaces and controllers from the broader product codebase | Feature reservoir/supporting source; not the MV3 Alpha UI unless explicitly imported by the extension |
 | `src/App.tsx` | React composition shell for the broader source tree | Not an Alpha entrypoint |
 | `public/addons/` | Bundled add-on manifests and catalog indexes | Read by add-on tooling and optional service discovery |
 | `addons/resonant-browser-host/` | Separate browser-host add-on package and tests | Optional/supporting; not a required Alpha host |
 | `examples/` | MCP and service examples | Optional, never required Alpha runtime |
 | `scripts/` | Build, test, health, security, docs, and release validation | Development and verification only |
+| `scripts/vite-dev-bridge-config.mjs` | Opt-in, authenticated development-page config delivery; may read bridge-generated config at request time and write only authorized HTTP responses and in-memory nonce state | Development tooling only; must not own bridge auth, capabilities, CORS defaults, provider credentials, extension state, or production artifacts |
 
 ## Domain Ownership In Shared Source
 

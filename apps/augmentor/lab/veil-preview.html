@@ -1,0 +1,194 @@
+<!doctype html>
+
+<!-- Augmentor — dsh-augmentor plugin, pipe, and Chromium extension
+     Copyright © 2026 Manolo Remiddi
+     SPDX-License-Identifier: MIT
+     License: MIT — see LICENSE at the repository root. -->
+
+<html>
+<head>
+<meta charset="utf-8">
+<title>Augmentor — frost veil preview</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0; font-family: system-ui, -apple-system, sans-serif;
+    background: #f4f5f2; color: #1c1e1d;
+  }
+  html.dark body { background: #0b0f0e; color: #d8e2dc; }
+  .page { max-width: 720px; margin: 0 auto; padding: 56px 28px 140px; }
+  h1 { font-size: 38px; line-height: 1.15; margin: 0 0 8px; letter-spacing: -0.5px; }
+  .sub { opacity: 0.62; margin: 0 0 28px; font-size: 15px; }
+  h2 { font-size: 20px; margin: 32px 0 8px; }
+  p { line-height: 1.65; margin: 0 0 14px; font-size: 15px; }
+  .card {
+    border: 1px solid rgba(120, 130, 124, 0.35); border-radius: 12px;
+    padding: 18px 20px; margin: 22px 0;
+  }
+  html.dark .card { border-color: rgba(160, 180, 170, 0.3); }
+  .img {
+    height: 190px; border-radius: 12px; margin: 22px 0;
+    background: linear-gradient(135deg, #b8c4bc 0%, #8fa398 40%, #6e8a7d 70%, #57705f 100%);
+  }
+  html.dark .img { background: linear-gradient(135deg, #22302a, #141d18 60%, #0e1512); }
+  a { color: #0f7a4d; }
+  html.dark a { color: #4ade80; }
+  #bar {
+    position: fixed; top: 14px; left: 14px; z-index: 10;
+    display: flex; gap: 8px; flex-wrap: wrap;
+  }
+  #bar button {
+    font: 600 12px/1 ui-monospace, monospace; padding: 7px 12px;
+    border-radius: 9px; border: 1px solid rgba(120, 130, 124, 0.5);
+    background: rgba(255, 255, 255, 0.92); color: #22302a; cursor: pointer;
+  }
+  html.dark #bar button { background: rgba(20, 30, 25, 0.92); color: #cfe5da; border-color: rgba(120, 150, 135, 0.5); }
+  #acc { display: inline-flex; align-items: center; gap: 6px;
+    font: 600 12px/1 ui-monospace, monospace; color: #55605a; padding: 0 4px; }
+  html.dark #acc { color: #9db8ab; }
+  #accent { width: 120px; accent-color: #55605a; cursor: pointer; }
+  #accval { font-variant-numeric: tabular-nums; }
+  #dbg {
+    position: fixed; top: 14px; right: 14px; z-index: 10;
+    font: 11px/1.5 ui-monospace, monospace; white-space: pre;
+    background: rgba(5, 10, 8, 0.78); color: #9fe8c0;
+    padding: 8px 12px; border-radius: 9px; pointer-events: none;
+  }
+</style>
+</head>
+<body>
+  <div id="bar">
+    <button data-act="show">show: Clicking…</button>
+    <button data-act="type">show: Typing…</button>
+    <button data-act="done">done (melt)</button>
+    <button data-act="fade">fade (remove)</button>
+    <button data-act="dark">dark page</button>
+    <button data-act="var-frost">frost</button>
+    <button data-act="var-glyphs">glyphs</button>
+    <button data-act="var-fog">fog (v0.1.6)</button>
+    <label id="acc">accent hue <input id="accent" type="range" min="0" max="360" value="142"> <span id="accval">142</span></label>
+    <label id="acc">accent bright <input id="accbright" type="range" min="-15" max="15" value="0"> <span id="accbrightval">0</span></label>
+  </div>
+  <div id="dbg">veil: loading…</div>
+
+  <article class="page">
+    <h1>The quiet science of weather</h1>
+    <p class="sub">A field guide to clouds, fronts, and the strange mathematics of storms.</p>
+    <p>Long before instruments, people read the sky the way sailors still read the
+    sea: as a surface with depth. The low scud streaming across a winter evening
+    is not merely information about tomorrow — it is the visible edge of a
+    three-dimensional machine of heat and vapor, turning above the ground.</p>
+    <div class="img"></div>
+    <h2>Why frost looks alive</h2>
+    <p>Frost forms in fractals because water, freezing, has opinions. Each crystal
+    branches in six because the ice lattice is hexagonal, and the branches branch
+    again because the tips of the crystals grow faster than their flanks. The
+    result is a surface that records its entire weather history in a single
+    flake — a document written in the language of diffusion and diffusion-limited
+    growth.</p>
+    <div class="card">
+      <h2 style="margin-top:0">Note from the editor</h2>
+      <p>This article is a stand-in page for visual testing. It carries ordinary
+      text, a placeholder image, and a bordered card so the overlay can be judged
+      against real content: contrast, legibility, and how the material reads over
+      light and dark backgrounds.</p>
+    </div>
+    <p>Fluids, by contrast, leave no record at all. A snowflake is a noun; a
+    vortex is a verb. What the atmosphere is best at is being both at once —
+    solid where it can be, liquid where it must, and quietly, imperceptibly,
+    changing its mind.</p>
+    <p><a href="#">Read the full field guide →</a></p>
+  </article>
+
+  <script>
+    // ?mode=fog forces the CSS fallback (the v0.1.6 effect) for A/B metrics.
+    // ?mode=glyphs / ?mode=frost force a variation (set BEFORE veil.js loads).
+    // With no ?mode, veil.js defaults to the glyph field (the new default).
+    if (location.search.includes('mode=fog')) window.__dshAugForceFog = true;
+    if (location.search.includes('mode=glyphs')) window.__dshAugVariation = 'glyphs';
+    if (location.search.includes('mode=frost')) window.__dshAugVariation = 'frost';
+  </script>
+  <script>
+    // Load the live theme-tokens.js + veil.js on every page load. The local
+    // http.server sends no cache headers, so browsers heuristic-cache the
+    // script and A/B runs silently compare the same stale file. A fresh ?t=
+    // per load defeats that. Order matters (F6): veil.js reads the palette
+    // from globalThis.__dshAugTheme and skips without theme-tokens.js.
+    const t = Date.now();
+    document.write('<script src="../extension/theme-tokens.js?t=' + t + '"><\/script>');
+    document.write('<script src="../extension/veil.js?t=' + t + '"><\/script>');
+  </script>
+  <script>
+    const V = () => window.__dshAugVeil;
+    // Accent hue: the same control the side panel has (default 142 = the
+    // original green, for A/B parity against the pre-accent effect).
+    // ?accent=<0..360> presets it. Passed to every show() call.
+    let accent = 142;
+    {
+      const raw = new URLSearchParams(location.search).get('accent');
+      // guard raw first: Number(null) is 0, which would silently mean red
+      if (raw != null) {
+        const a = Number(raw);
+        if (Number.isFinite(a) && a >= 0 && a < 360) accent = a;
+      }
+    }
+    // Accent brightness: same control the side panel has (default 0 = no
+    // offset). ?accbright=<-15..15> presets it. Passed to every show() call.
+    let accbright = 0;
+    {
+      const raw = new URLSearchParams(location.search).get('accbright');
+      if (raw != null) {
+        const b = Number(raw);
+        if (Number.isFinite(b) && b >= -15 && b <= 15) accbright = b;
+      }
+    }
+    const signed = (n) => (n > 0 ? `+${n}` : String(n));
+    const accentEl = document.getElementById('accent');
+    const accval = document.getElementById('accval');
+    accentEl.value = accent;
+    accval.textContent = String(accent);
+    accentEl.addEventListener('input', () => {
+      accent = Number(accentEl.value);
+      accval.textContent = String(accent);
+      // re-apply live if the veil is already up
+      if (V()) V().show('Clicking…', false, accent, accbright);
+    });
+    const accbrightEl = document.getElementById('accbright');
+    const accbrightval = document.getElementById('accbrightval');
+    accbrightEl.value = accbright;
+    accbrightval.textContent = signed(accbright);
+    accbrightEl.addEventListener('input', () => {
+      accbright = Number(accbrightEl.value);
+      accbrightval.textContent = signed(accbright);
+      if (V()) V().show('Clicking…', false, accent, accbright);
+    });
+    const show = (text, done) => V().show(text, done, accent, accbright);
+    document.querySelectorAll('#bar button').forEach((b) => {
+      b.addEventListener('click', () => {
+        const a = b.dataset.act;
+        if (a === 'show') show('Clicking…', false);
+        if (a === 'type') show('Typing…', false);
+        if (a === 'done') show('Done', true);
+        if (a === 'fade') V().fade();
+        if (a === 'dark') document.documentElement.classList.toggle('dark');
+        if (a === 'var-frost' || a === 'var-glyphs' || a === 'var-fog') {
+          const q = new URLSearchParams(location.search);
+          q.delete('mode');
+          if (a === 'var-frost') q.set('mode', 'frost');
+          if (a === 'var-glyphs') q.set('mode', 'glyphs');
+          if (a === 'var-fog') q.set('mode', 'fog');
+          q.set('v', String((parseInt(q.get('v') || '0', 10) + 1))); // cache-bust
+          location.search = q.toString();
+        }
+      });
+    });
+    const dbg = document.getElementById('dbg');
+    setInterval(() => {
+      const d = V() && V().debug();
+      dbg.textContent = d ? 'veil: ' + JSON.stringify(d) : 'veil: not loaded';
+    }, 400);
+    // auto-start: condense after the page settles
+    setTimeout(() => show('Clicking…', false), 350);
+  </script>
+</body>
+</html>

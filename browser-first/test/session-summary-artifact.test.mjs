@@ -199,3 +199,12 @@ test("buildSessionSummaryArtifact does not double-redact when secrets already pr
   const b = buildSessionSummaryArtifact({ included: [{ title: "T", url: a.included[0].url }] });
   assert.equal(b.included[0].url, a.included[0].url, "stable idempotent redaction");
 });
+test('summary provenance uses shared Bearer quoted and encoded redaction', () => {
+  const text = 'Token: Bearer synthetic-a1-value client_secret="left: right" %3Fclient_secret%3Dcompound-value%26view%3Dwide';
+  const expected = 'Token: [redacted] client_secret="[redacted]" %3Fclient_secret%3D[redacted]%26view%3Dwide';
+  const artifact = buildSessionSummaryArtifact({ summary: text, included: [{ title: text, url: text }], skipped: [{ title: text, url: text, reason: text }] });
+  assert.equal(artifact.summary, expected);
+  assert.deepEqual(artifact.included, [{ title: expected, url: expected }]);
+  assert.deepEqual(artifact.skipped, [{ title: expected, url: expected, reason: expected }]);
+  assert.equal(redactSecrets(expected), expected);
+});
