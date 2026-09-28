@@ -66,6 +66,59 @@ charges. No tool callbacks are enabled by the harness adapter. Provider Chat
 Demo remains an optional catalog candidate; it is not one of the three owners
 in the final certification.
 
+## DSH supplied by the macOS Augmentor bundle
+
+An operator may already run DSH through Manolo Remiddi's macOS Augmentor
+preview instead of starting `dsh web` by hand. That service is equivalent for
+this demonstration, and three of the values above change.
+
+The app provisions its own DSH under a private directory and picks a free
+loopback port once, at first run. **It is not `127.0.0.1:3080`, and its
+`DSH_HOME` is not `~/.dsh`.** Read the endpoint the app saved rather than
+assuming either:
+
+```bash
+python3 -c 'import json,os;p=os.path.expanduser("~/Library/Application Support/Augmentor/config/augmentor/harnesses.json");print(json.load(open(p))["dsh"]["endpoint"])'
+```
+
+`DSH_HOME` is the `home` value beside it, by default
+`~/Library/Application Support/Augmentor/data/augmentor/managed-dsh/home`, and
+the action-channel token is `augmentor-ws-token` inside it, with the same
+owner-only requirement as any other token file. Approve the binding against
+that exact endpoint:
+
+```bash
+export DSH_HOME="$(python3 -c 'import json,os;p=os.path.expanduser("~/Library/Application Support/Augmentor/config/augmentor/harnesses.json");print(json.load(open(p))["dsh"]["home"])')"
+export DSH_ENDPOINT="$(python3 -c 'import json,os;p=os.path.expanduser("~/Library/Application Support/Augmentor/config/augmentor/harnesses.json");print(json.load(open(p))["dsh"]["endpoint"])')"
+export RESONANTOS_HARNESS_BINDINGS="$(node --input-type=module -e '
+import path from "node:path";
+console.log(JSON.stringify([{
+  name: "dsh.main",
+  addonId: "addon.deepseek-harness",
+  adapterId: "dsh-typert-v1",
+  authScheme: "dsh-action-token",
+  endpoint: process.env.DSH_ENDPOINT,
+  source: { file: path.join(process.env.DSH_HOME, "augmentor-ws-token") }
+}]));
+')"
+```
+
+The approved endpoint must equal the manifest's, so the catalog example cannot
+be used unchanged: copy
+[DeepSeek Harness](../../browser-first/host/harness-examples/deepseek-harness.json),
+set `agentRuntime.endpoint` to the saved endpoint, and import that copy through
+**Import JSON manifest** in the harness management surface. Everything after
+that is identical: installing grants nothing, each capability is granted
+explicitly, and the primary-agent slot is assigned separately.
+
+Two further notes for this configuration. The bundled DSH is `0.1.5-rc.1` with
+the Augmentor plugin the app ships; the adapter targets those Typert shapes, and
+a hand-installed `0.1.7-rc.2` with `dsh-augmentor@0.2.11` also works. And the
+plugin routes browser actions to the **most recently connected** action pipe, so
+an operator running the Augmentor browser companion at the same time as this
+host will find the companion stops receiving them while the host is connected;
+close the companion for the duration of a certification run.
+
 ## OpenAI-compatible endpoint and bearer binding
 
 The SDK-valid [OpenAI-compatible example](../../examples/addons/openai-compatible-harness.json)
