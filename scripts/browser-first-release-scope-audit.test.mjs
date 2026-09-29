@@ -480,16 +480,27 @@ test('harness documentation is included without widening neighboring scope', () 
   const result = auditModule.main({
     argv: ['--committed', '--strict'], processRef: {},
     gitRunner: args => args[0] === 'rev-parse' ? hashes.shift() :
-      ['A', approved, 'M', 'browser-first/README.md', 'M', 'docs/README.md', 'A', 'scripts/harness-swap-demo.mjs', ''].join('\0'),
+      ['A', approved, 'M', 'browser-first/README.md', 'M', 'docs/README.md',
+        'A', 'scripts/harness-swap-demo.mjs', 'A', 'examples/harness-openai-compatible-relay.md',
+        'A', 'examples/harness-openai-compatible-relay.mjs',
+        'A', 'examples/harness-openai-compatible-relay.test.mjs', ''].join('\0'),
     stdout: { write: text => { output += text; } }, stderr: { write: text => { output += text; } },
   });
   assert.equal(result, 0);
   assert.match(output, /Needs manual review: 0/);
 });
 
-test('only the governed OpenAI example gains release inclusion', () => {
+test('only the reviewed OpenAI-compatible examples gain release inclusion', () => {
   assert.equal(auditModule.classify('examples/addons/openai-compatible-harness.json', 'added').bucket, 'include');
-  for (const path of ['examples/addons/other-harness.json', 'examples/addons/openai-compatible-harness.json.bak', 'examples/addons/nested/openai-compatible-harness.json']) {
+  for (const path of ['examples/harness-openai-compatible-relay.md',
+    'examples/harness-openai-compatible-relay.mjs',
+    'examples/harness-openai-compatible-relay.test.mjs']) {
+    assert.equal(auditModule.classify(path, 'added').bucket, 'include');
+  }
+  for (const path of ['examples/addons/other-harness.json', 'examples/addons/openai-compatible-harness.json.bak',
+    'examples/addons/nested/openai-compatible-harness.json',
+    'examples/harness-openai-compatible-relay.mjs.bak',
+    'examples/nested/harness-openai-compatible-relay.mjs']) {
     assert.equal(auditModule.classify(path, 'added').bucket, 'review');
   }
 });
