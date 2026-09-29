@@ -154,6 +154,10 @@ binding names from the host-approved bindings. It adds an invocation-only
 history and status remain independent of that permission. The driver neither
 edits the example nor adds public catalog entries or adapter code.
 
+An [optional loopback relay](../../examples/harness-openai-compatible-relay.md)
+normalizes observed OpenAI-compatible provider request and SSE quirks. It does
+not redact prompts before forwarding them to the configured provider.
+
 ## Run and inspect evidence
 
 Stop another development server using port 1430 first. Supply a **new absolute
