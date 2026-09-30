@@ -1,8 +1,11 @@
 # Security observe workflow.
 #
 # Runs the security-pipeline check registry in OBSERVE mode (non-gating) while
-# the committed-private-key-material job gates private key material. Additive
-# alongside alpha-build.yml, which this workflow does not touch.
+# the committed-private-key-material and repository-hygiene jobs gate their
+# checks. One further gating exception: the subprocess-no-shell-string job
+# executes its registry check (policy "block") without continue-on-error, so
+# a new string-to-shell construction fails CI. Additive alongside
+# alpha-build.yml, which this workflow does not touch.
 #
 # Action refs are pinned to full 40-char commit SHAs per
 # docs/security-pipeline/sha-pin-policy.md (lead by example).
@@ -85,3 +88,27 @@ jobs:
         run: node --test scripts/check-repo-hygiene.test.mjs
       - name: Run repository hygiene guard
         run: npm run -s repo:hygiene
+
+  # Gating counterweight to the observe job above: one check, registered with
+  # policy "block", runs WITHOUT continue-on-error so a new instance of the
+  # pattern class fails CI. The registry stays the single source of truth.
+  subprocess-no-shell-string-gate:
+    name: "subprocess no shell-string (gate)"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        # pin: full 40-char commit SHA per sha-pin-policy.md.
+        # NOTE: verify this SHA at the commit gate before merge.
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Setup Node.js
+        # pin: full 40-char commit SHA per sha-pin-policy.md.
+        # NOTE: verify this SHA at the commit gate before merge.
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version-file: .nvmrc
+      - name: Test subprocess-no-shell-string check
+        run: node --test scripts/security-pipeline/checks/subprocess-no-shell-string.test.mjs
+      - name: Run subprocess-no-shell-string check (gating)
+        run: node scripts/security-pipeline/run-check.mjs --config .github/security-pipeline/checks.yml --check subprocess-no-shell-string
