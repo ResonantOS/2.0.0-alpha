@@ -1807,7 +1807,7 @@ test("validateAdrIndex requires every tracked ADR to have an allowed status and 
       "",
       "| ADR | Decision status | Alpha applicability | Superseded by | Owner | Notes |",
       "| --- | --- | --- | --- | --- | --- |",
-      "| [ADR-001: Fixture decision](ADR-001-fixture.md) | Proposed | Applies | - | Core architecture | Accepted historically |",
+      "| [ADR-001: Fixture decision](ADR-001-fixture.md) | Draft | Applies | - | Core architecture | Accepted historically |",
       "| [ADR-002: Missing index entry](ADR-002-missing.md) | Accepted | | - | Core architecture | Historical |",
     ].join("\n"));
     const metadata = messages(validateAdrIndex({ root }));
@@ -1953,14 +1953,14 @@ test("validateAdrIndex rejects unsupported status and Alpha applicability values
       "",
       "| ADR | Decision status | Alpha applicability | Superseded by | Owner |",
       "| --- | --- | --- | --- | --- |",
-      "| [ADR-001: Fixture decision](ADR-001-fixture.md) | Proposed | Experimental | - | Core architecture |",
+      "| [ADR-001: Fixture decision](ADR-001-fixture.md) | Draft | Experimental | - | Core architecture |",
     ].join("\n"));
     writeFixture(root, "docs/architecture/ADR-001-fixture.md", [
       "# ADR-001: Fixture decision",
       "",
       "## Decision Metadata",
       "",
-      "- Decision status: Proposed",
+      "- Decision status: Draft",
       "- Alpha applicability: Experimental",
       "- Superseded by: None",
       "- Owner: Core architecture",
@@ -2583,4 +2583,26 @@ test("repository matrix validation detects an injected missing citation and reso
     citationFinding(matrix.content.split("\n").length + 1, sentinel),
   ]);
   assert.deepEqual(evidenceFindings(root, { files: trackedFiles, trackedFiles, documents }), []);
+});
+
+test("validateAdrIndex accepts Proposed as a decision status in the index and in the ADR", () => {
+  withRepository((root) => {
+    writeFixture(root, "docs/architecture/ADR-001-fixture.md", [
+      "# ADR-001: Fixture decision",
+      "",
+      "- Decision status: Proposed",
+      "- Alpha applicability: Not applicable",
+      "- Superseded by: None",
+      "- Owner: Core architecture",
+    ].join("\n"));
+    writeFixture(root, "docs/architecture/README.md", [
+      "# Architecture Decisions",
+      "",
+      "| ADR | Decision status | Alpha applicability | Superseded by | Owner |",
+      "| --- | --- | --- | --- | --- |",
+      "| [ADR-001: Fixture decision](ADR-001-fixture.md) | Proposed | Not applicable | None | Core architecture |",
+    ].join("\n"));
+    const output = messages(validateAdrIndex({ root }));
+    assert(!output.some((message) => message.includes("decision status")), output.join("\n"));
+  });
 });
