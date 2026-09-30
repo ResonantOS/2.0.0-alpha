@@ -274,6 +274,7 @@ async function certification({ fixture, manifests, createHost, connect = async (
       const invocation = await call('/agent/turn', { ...invokeBody(session), input: { ...invokeBody(session).input, model: models[B] } });
       await until(() => dispatched > count, 'accepted policy dispatch', 150000);
       assert(!receipts.some(r => r.kind === 'event' && r.event.turnId === invocation.result.turnId && r.event.type === 'final'), 'Turn finished before revocation; rerun for mid-response proof.');
+      if (name !== 'degrade') stream.expectClose?.(); // hard-stop: the host will close this stream; anything else stays a failure
       const revocation = await grants(locked, capability);
       const dispatch = receipts.slice(receiptStart).find(r => r.kind === 'adapter-dispatch');
       const aborted = receipts.slice(receiptStart).find(r => r.kind === 'adapter-abort' && r.dispatchId === dispatch?.dispatchId);
@@ -344,6 +345,53 @@ export async function runFixtureCertification() {
   return certification({ fixture: true, manifests, createHost: await fixtureComposition(manifests), models: { [A]: 'fixture-a', [B]: 'fixture-b' } });
 }
 
+/**
+ * Bridge client for the live driver. The HTTP method and the capability token come from the
+ * host's own route table, so the driver cannot drift from what the bridge enforces: the read
+ * routes /agent/history and /agent/status are POSTs, and guessing the token from the verb
+ * sent the control token there, which the bridge correctly refused on every live run.
+ */
+export function createBridgeClient({ bridgeUrl, routes, headers, fetchImpl = fetch }) {
+  const route = operation => { const found = routes.find(r => r.path === operation); assert(found, `Unknown harness route ${operation}`); return found; };
+  return {
+    async request(operation, payload) {
+      const { method, requiredCapability } = route(operation);
+      const get = method === 'GET';
+      const url = `${bridgeUrl}${operation}${operation === '/agent/events' ? `?${new URLSearchParams(payload)}` : ''}`;
+      const response = await fetchImpl(url, { method, headers: headers(requiredCapability), ...(get ? {} : { body: JSON.stringify(payload) }) });
+      return response.json();
+    },
+    async subscribe(session) {
+      const controller = new AbortController();
+      const response = await fetchImpl(`${bridgeUrl}/agent/events?${new URLSearchParams(session)}`, { headers: headers(route('/agent/events').requiredCapability), signal: controller.signal });
+      assert.equal(response.status, 200);
+      let expected = false;
+      const done = observeEventStream(response.body, controller.signal, () => expected);
+      return { done, expectClose: () => { expected = true; }, close: async () => { controller.abort(); await done; } };
+    },
+  };
+}
+
+/** The host ends a hard-stopped stream by closing the socket; undici reports that as `terminated`. */
+const closedByPeer = error => (error?.name === 'TypeError' && error?.message === 'terminated')
+  || ['UND_ERR_SOCKET', 'ECONNRESET'].includes(error?.cause?.code ?? error?.code);
+
+/**
+ * Drain an event stream until it ends. Our own abort resolves, and so does a closure by the host
+ * once the driver has said it expects one (the hard-stop leg); any other failure, including an
+ * unexpected disconnection, is delivered to whoever awaits the result — and only there. The stream is
+ * consumed in the background between phases, so a rejection with no listener yet would be an
+ * unhandled rejection and Node would exit before the evidence bundle is written.
+ */
+export function observeEventStream(body, signal, expectingClose = () => false) {
+  const done = (async () => {
+    try { for await (const chunk of body) { void chunk; } }
+    catch (error) { if (!signal.aborted && !(expectingClose() && closedByPeer(error))) throw error; }
+  })();
+  done.catch(() => {});
+  return done;
+}
+
 /** Actual React shell, authenticated bridge, persisted external registry and reload. */
 export async function runDemo({ evidenceDir, fixture = false, headed = false } = {}) {
   const output = await externalEvidenceDirectory(evidenceDir);
@@ -410,19 +458,7 @@ export async function runDemo({ evidenceDir, fixture = false, headed = false } =
         } else await page.reload();
         const headers = capability => ({ 'content-type': 'application/json', 'X-ResonantOS-Bridge-Token': bridgeToken, 'X-ResonantOS-Bridge-Capability-Token': capabilities[capability] });
         return {
-          async request(operation, payload) {
-            const get = ['/addons/registry', '/agent/events'].includes(operation);
-            const url = `${bridgeConfig.bridgeUrl}${operation}${operation === '/agent/events' ? `?${new URLSearchParams(payload)}` : ''}`;
-            const response = await fetch(url, { method: get ? 'GET' : 'POST', headers: headers(get ? 'addon-runtime-read' : 'addon-runtime-control'), ...(get ? {} : { body: JSON.stringify(payload) }) });
-            return response.json();
-          },
-          async subscribe(session) {
-            const controller = new AbortController();
-            const response = await fetch(`${bridgeConfig.bridgeUrl}/agent/events?${new URLSearchParams(session)}`, { headers: headers('addon-runtime-read'), signal: controller.signal });
-            assert.equal(response.status, 200);
-            const done = (async () => { try { for await (const chunk of response.body) { void chunk; } } catch (error) { if (!controller.signal.aborted) throw error; } })();
-            return { done, close: async () => { controller.abort(); await done; } };
-          },
+          ...createBridgeClient({ bridgeUrl: bridgeConfig.bridgeUrl, routes: host.harnessRoutes, headers }),
           async answer(manifest, prompt, completed) {
             await page.getByRole('button', { name: /Add-ons/ }).first().click();
             await page.getByRole('button', { name: 'Refresh harnesses' }).click();

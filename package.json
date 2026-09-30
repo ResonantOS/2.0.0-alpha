@@ -18,6 +18,7 @@
     "test:browser-first:live": "node browser-first/test/agent-control-live.mjs",
     "test:browser-first:settings-shapes": "node browser-first/test/settings-shapes-live.mjs",
     "test:browser-first:live-sdk": "node browser-first/test/live-sdk-lane.mjs",
+    "test:browser-first:harness-demo": "node --test browser-first/test/harness-swap-demo-bridge.live.mjs",
     "browser-first:dev": "node run-bridge-minimal.mjs",
     "browser-first:bridge": "node run-bridge-minimal.mjs",
     "health": "node scripts/health-check.mjs",
