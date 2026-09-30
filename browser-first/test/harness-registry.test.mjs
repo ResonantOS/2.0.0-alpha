@@ -421,3 +421,120 @@ test('pending revocation denies dependent operations before durability and proje
   assert.ok(restored.snapshot().installations[value.id].disabledOperations.includes('invoke'));
   assert.throws(() => restored.assertOperation(restored.authorize('primary-agent', value.id), 'invoke'), { code: 'permission-denied' });
 });
+
+// The adapter a manifest names decides what that add-on can actually reach. Before the floor,
+// a manifest could name the reviewed provider adapter and simply not mention `providers`:
+// installation succeeded, the consent screen never showed it, and the operator had nothing to
+// revoke. Installation now refuses a manifest that understates its own adapter. The fixtures are
+// the repository's own reviewed examples, so only the declaration differs.
+const exampleFor = {
+  'provider-fabric-v1': '../host/harness-examples/provider-chat-demo.json',
+  'openai-compatible-v1': '../../examples/addons/openai-compatible-harness.json',
+  'dsh-typert-v1': '../host/harness-examples/deepseek-harness.json',
+};
+const examples = Object.fromEntries(await Promise.all(Object.entries(exampleFor)
+  .map(async ([adapterId, path]) => [adapterId, JSON.parse(await readFile(new URL(path, import.meta.url)))])));
+function shrink(value, capability) {
+  const copy = structuredClone(value);
+  copy.requestedCapabilities = copy.requestedCapabilities.filter(grant => grant.capability !== capability);
+  copy.agentRuntime.requiredCapabilities = copy.agentRuntime.requiredCapabilities.filter(item => item !== capability);
+  for (const tool of copy.tools ?? []) tool.requiredCapabilities = (tool.requiredCapabilities ?? []).filter(item => item !== capability);
+  return copy;
+}
+const reviewedRegistry = store => createHarnessRegistry({ store,
+  reviewedAdapterIds: Object.keys(exampleFor),
+  bindings: Object.values(examples).filter(value => value.agentRuntime.endpoint).map(value => ({
+    name: value.agentRuntime.credentialBinding, addonId: value.id, adapterId: value.agentRuntime.adapterId,
+    authScheme: value.agentRuntime.authScheme, endpoint: value.agentRuntime.endpoint })) });
+
+test('installation refuses a manifest that understates what its adapter reaches', async () => {
+  for (const [adapterId, hidden] of [['provider-fabric-v1', 'providers'], ['openai-compatible-v1', 'network'], ['dsh-typert-v1', 'network']]) {
+    const honest = examples[adapterId];
+    const registry = await reviewedRegistry(memoryStore());
+    await assert.rejects(registry.install(shrink(honest, hidden), { enabled: true }), error => error.code === 'invalid-manifest',
+      `${adapterId} must not install while omitting ${hidden}`);
+    assert.deepEqual(Object.keys(registry.snapshot().installations), [], 'a refused install must leave no entry');
+
+    await registry.install(structuredClone(honest), { enabled: true });
+    const shown = registry.snapshot().installations[honest.id].grantedCapabilities.map(grant => grant.capability);
+    assert.ok(shown.includes(hidden), `${adapterId}: the honest manifest installs and shows ${hidden} to the operator`);
+  }
+});
+
+test('legacy import refuses a manifest that understates what its adapter reaches', async () => {
+  // Migration is an authority path like any other: a record that predates the floor must not be
+  // a way around it.
+  const registry = await reviewedRegistry(memoryStore());
+  const honest = examples['provider-fabric-v1'];
+  await assert.rejects(registry.importLegacy([{ manifest: shrink(honest, 'providers'), enabled: true, grantedCapabilities: [] }]),
+    error => error.code === 'invalid-manifest', 'a legacy record must not import while omitting providers');
+  assert.deepEqual(Object.keys(registry.snapshot().installations), [], 'a refused import must leave no entry');
+  await registry.importLegacy([{ manifest: structuredClone(honest), enabled: true, grantedCapabilities: [] }]);
+  assert.ok(registry.snapshot().installations[honest.id], 'the honest record still imports');
+});
+
+test('an add-on with no agent runtime is unaffected by the adapter floor', async () => {
+  const registry = await open(memoryStore());
+  const value = manifest();
+  delete value.agentRuntime;
+  await registry.install(value, { enabled: true });
+  assert.ok(registry.snapshot().installations['addon.one'], 'non-harness add-ons must still install');
+});
+
+test('an adapter id that names an Object prototype member has no floor', async () => {
+  // `constructor` satisfies the adapter-name syntax check; a plain object lookup would return
+  // Object.prototype.constructor and throw while spreading it.
+  const registry = await reviewedRegistry(memoryStore());
+  const value = structuredClone(examples['provider-fabric-v1']);
+  value.agentRuntime.adapterId = 'constructor';
+  await assert.rejects(registry.install(value, { enabled: true }), error => error.code === 'permission-denied',
+    'an unreviewed adapter is refused by the reviewed-adapter check, not by a type error');
+  // Legacy import accepts candidates with every grant denied; an unreviewed adapter is stopped
+  // where it matters, at slot assignment. What must never happen is a TypeError from the lookup.
+  await registry.importLegacy([{ manifest: value, enabled: true, grantedCapabilities: [] }]);
+  assert.ok(registry.snapshot().installations[value.id], 'the candidate imports with no floor and no grants');
+  await assert.rejects(registry.assignSlot('primary-agent', value.id, { expectedGeneration: 0 }),
+    error => error.code === 'permission-denied', 'an unreviewed adapter can never take the primary slot');
+});
+
+test('an installation persisted before the floor can be removed even when it owned a slot', async () => {
+  // Fail-closed is right, but it must not strand the operator: the entry is disabled, its slot
+  // is vacated, and removal then works. The missing capability is never granted.
+  const honest = examples['provider-fabric-v1'];
+  const shrunken = shrink(honest, 'providers');
+  shrunken.systemSlots = shrunken.systemSlots.map(slot => ({ ...slot, replaceable: false }));
+  const store = memoryStore();
+  await store.write({ version: 1, phase: 'committed', state: {
+    revision: 1, governanceActivated: true,
+    installations: { [shrunken.id]: { manifest: shrunken, enabled: true,
+      grants: shrunken.requestedCapabilities.map(grant => ({ ...grant, granted: true })) } },
+    slots: { 'primary-agent': { addonId: shrunken.id, generation: 1 } } } });
+
+  const registry = await reviewedRegistry(store);
+  const snapshot = registry.snapshot();
+  assert.equal(snapshot.installations[shrunken.id].enabled, false, 'the understating installation is disabled on load');
+  assert.equal(snapshot.slots['primary-agent'].addonId, null, 'its slot is vacated so it no longer blocks removal');
+  assert.ok(!snapshot.installations[shrunken.id].grantedCapabilities.some(grant => grant.capability === 'providers'),
+    'the missing capability is never granted on the operator behalf');
+  await registry.remove(shrunken.id);
+  assert.deepEqual(Object.keys(registry.snapshot().installations), [], 'the operator can now remove it and install a corrected manifest');
+});
+
+test('a slot is not advertised available when the floor leaves every operation disabled', async () => {
+  // A manifest may REQUEST a capability — satisfying the install floor — while leaving it out of
+  // its runtime requirements. Policy still gates invoke on the floor, so without the floor in
+  // eligibility the slot would report itself available while every operation was disabled.
+  const value = structuredClone(examples['provider-fabric-v1']);
+  value.agentRuntime.requiredCapabilities = value.agentRuntime.requiredCapabilities.filter(item => item !== 'providers');
+  for (const tool of value.tools ?? []) tool.requiredCapabilities = (tool.requiredCapabilities ?? []).filter(item => item !== 'providers');
+  const registry = await reviewedRegistry(memoryStore());
+  await registry.install(value, { enabled: true });  // still requests providers, so the floor check passes
+  const granted = registry.snapshot().installations[value.id].grantedCapabilities
+    .map(grant => ({ ...grant, granted: grant.capability !== 'providers' }));
+  await registry.setGrants(value.id, granted, { consent: true, expectedRevision: registry.snapshot().revision });
+  assert.ok(registry.snapshot().installations[value.id].disabledOperations.includes('invoke'),
+    'policy already denies invoke without the floor capability');
+  await assert.rejects(registry.assignSlot('primary-agent', value.id, { expectedGeneration: 0 }),
+    error => error.code === 'permission-denied', 'so the slot must refuse the owner rather than advertise it available');
+  assert.ok(!registry.snapshot().slots['primary-agent']?.addonId, 'and the slot stays empty');
+});

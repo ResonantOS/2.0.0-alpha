@@ -86,3 +86,51 @@ for (const behavior of ['hard-stop', 'degrade', 'hide-surface']) {
     assert.deepEqual(essential.disabledOperations, manifest.agentRuntime.supportedOperations);
   });
 }
+
+// A manifest declares what it needs, and the same manifest's declarations decide what the
+// operator is asked to consent to and can later revoke. Nothing bound those declarations to
+// what the adapter the manifest names actually reaches, so an add-on could name the reviewed
+// provider adapter, omit `providers`, and spend the operator's credential with that capability
+// never appearing on the consent screen — and no lever to withdraw it. Demonstrated end to end
+// against a real host on 2026-09-28.
+const floorManifest = (adapterId, declared) => ({
+  id: 'addon.floor-fixture',
+  requestedCapabilities: declared.map(capability => ({ capability, granted: false, scope: 'system', revocationBehavior: 'hard-stop' })),
+  systemSlots: [{ id: 'primary-agent', replaceable: true }],
+  agentRuntime: { adapterId, adapterVersion: 1, requiredCapabilities: declared, invocationTool: 'harness.invoke',
+    supportedOperations: ['createSession', 'invoke', 'cancel', 'history', 'status'] },
+  tools: [{ name: 'harness.invoke', requiredCapabilities: declared }],
+});
+const allGranted = value => value.requestedCapabilities.map(grant => ({ ...grant, granted: true }));
+
+test('every reviewed adapter declares the capabilities it actually reaches', () => {
+  assert.deepEqual(policy.adapterCapabilityFloor({ agentRuntime: { adapterId: 'provider-fabric-v1' } }), ['agent-runtime', 'providers']);
+  assert.deepEqual(policy.adapterCapabilityFloor({ agentRuntime: { adapterId: 'openai-compatible-v1' } }), ['agent-runtime', 'network']);
+  assert.deepEqual(policy.adapterCapabilityFloor({ agentRuntime: { adapterId: 'dsh-typert-v1' } }), ['agent-runtime', 'network']);
+  // An add-on with no runtime, or one naming an adapter the host does not review, has no floor
+  // to enforce; the reviewed-adapter check refuses those separately.
+  assert.deepEqual(policy.adapterCapabilityFloor({}), []);
+  assert.deepEqual(policy.adapterCapabilityFloor({ agentRuntime: { adapterId: 'not-reviewed' } }), []);
+});
+
+test('a manifest that omits what its adapter reaches is reported as undeclared', () => {
+  assert.deepEqual(policy.undeclaredAdapterCapabilities(floorManifest('provider-fabric-v1', ['agent-runtime', 'chat-interface'])), ['providers']);
+  assert.deepEqual(policy.undeclaredAdapterCapabilities(floorManifest('openai-compatible-v1', ['agent-runtime', 'chat-interface'])), ['network']);
+  assert.deepEqual(policy.undeclaredAdapterCapabilities(floorManifest('provider-fabric-v1', ['agent-runtime', 'providers', 'chat-interface'])), []);
+});
+
+test('omitting a capability the adapter reaches cannot buy an operation the honest manifest loses', () => {
+  for (const [adapterId, hidden] of [['provider-fabric-v1', 'providers'], ['openai-compatible-v1', 'network'], ['dsh-typert-v1', 'network']]) {
+    const honest = floorManifest(adapterId, ['agent-runtime', hidden, 'chat-interface']);
+    const shrunken = floorManifest(adapterId, ['agent-runtime', 'chat-interface']);
+    // The operator grants everything each manifest asks for. The honest one still cannot invoke
+    // once the hidden capability is withheld; the shrunken one must not be better off for
+    // never having asked.
+    const withheld = allGranted(honest).map(grant => ({ ...grant, granted: grant.capability !== hidden }));
+    const honestPolicy = policy.evaluateHarnessPolicy(honest, withheld);
+    const shrunkenPolicy = policy.evaluateHarnessPolicy(shrunken, allGranted(shrunken));
+    assert.ok(honestPolicy.disabledOperations.includes('invoke'), `${adapterId}: honest manifest should lose invoke`);
+    assert.deepEqual(shrunkenPolicy.disabledOperations, honestPolicy.disabledOperations,
+      `${adapterId}: a manifest that never asked for ${hidden} must be gated exactly as one that asked and was refused`);
+  }
+});
