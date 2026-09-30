@@ -114,10 +114,10 @@ explicitly, and the primary-agent slot is assigned separately.
 Two further notes for this configuration. The bundled DSH is `0.1.5-rc.1` with
 the Augmentor plugin the app ships; the adapter targets those Typert shapes, and
 a hand-installed `0.1.7-rc.2` with `dsh-augmentor@0.2.11` also works. And the
-plugin routes browser actions to the **most recently connected** action pipe, so
-an operator running the Augmentor browser companion at the same time as this
-host will find the companion stops receiving them while the host is connected;
-close the companion for the duration of a certification run.
+host does not join the plugin's browser-action pipe: it exchanges the action
+token once at `/api/augmentor/auth` for a DSH session cookie and then speaks to
+DSH's own `/api/remote.mux`, so the Augmentor browser companion keeps its
+actions while this host is connected. Both can run at once.
 
 ## OpenAI-compatible endpoint and bearer binding
 
