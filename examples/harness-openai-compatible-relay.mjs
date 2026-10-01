@@ -30,9 +30,10 @@ function scrubContent(content, state, index, secret, flush = false) {
     state.contentPending.delete(index);
     return scrubString(combined, secret);
   }
-  const held = markerPrefix(combined, secret);
-  state.contentPending.set(index, combined.slice(combined.length - held));
-  return scrubString(combined.slice(0, combined.length - held), secret);
+  const scrubbed = scrubString(combined, secret);
+  const held = markerPrefix(scrubbed, secret);
+  state.contentPending.set(index, scrubbed.slice(scrubbed.length - held));
+  return scrubbed.slice(0, scrubbed.length - held);
 }
 
 function endpoint(raw, label) {
@@ -256,12 +257,6 @@ async function relayChat(upstream, res, upstreamKey) {
       const allChoicesFinished = state.choices.size > 0 && [...state.choices.values()].every(choice => choice.finished);
       if (state.think.inside || state.think.pending || !allChoicesFinished) throw new Error('incomplete upstream stream');
     }
-    if (!state.sawDone) {
-      for (const index of state.contentPending.keys()) {
-        const content = scrubContent('', state, index, upstreamKey, true);
-        if (content) res.write(`data: ${JSON.stringify({ choices: [{ index, delta: { content }, finish_reason: null }] })}\n\n`);
-      }
-    }
     res.write('data: [DONE]\n\n');
     res.end();
   } finally {
@@ -364,7 +359,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
         relayBearer: process.env.RELAY_BEARER,
       });
       server.once('error', () => { console.error('relay failed to listen'); process.exitCode = 1; });
-      server.listen(port, '127.0.0.1', () => console.log(`relay listening on 127.0.0.1:${port}`));
+      server.listen(port, '127.0.0.1', () => {
+        const { address, port: boundPort } = server.address();
+        console.log(`relay listening on ${address}:${boundPort}`);
+      });
     } catch {
       console.error('invalid relay configuration; set UPSTREAM_CHAT, UPSTREAM_KEY and RELAY_BEARER');
       process.exitCode = 2;

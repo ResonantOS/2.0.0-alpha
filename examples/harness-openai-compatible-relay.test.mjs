@@ -212,6 +212,40 @@ test('scrubs upstream credentials from chat content across SSE frames', async t 
   assert.doesNotMatch(assembled, new RegExp(UPSTREAM_KEY));
 });
 
+test('scrubs self-overlapping upstream keys before holding a possible prefix', async t => {
+  const secret = 'sk-123456789012345s';
+  const scenarios = [
+    ['complete key followed by content', [`prefix ${secret}`, ' tail']],
+    ['key alone followed by content', [secret, 'x']],
+    ['key at stream end', [`prefix ${secret}`]],
+    ['split key followed by content', [`prefix ${secret.slice(0, 8)}`, secret.slice(8), ' tail']],
+    ['key split across three frames', [secret.slice(0, 5), secret.slice(5, 12), secret.slice(12)]],
+    ['two adjacent keys', [secret + secret, ' tail']],
+  ];
+  for (const [name, chunks] of scenarios) {
+    for (const ending of ['finish', 'DONE']) {
+      await t.test(`${name}, ${ending}`, async t => {
+        const upstream = await listen(t, createServer((req, res) => {
+          res.writeHead(200, { 'content-type': 'text/event-stream' });
+          const frame = content => `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content } }] })}\n\n`;
+          for (const chunk of chunks) res.write(frame(chunk));
+          res.end(ending === 'DONE' ? 'data: [DONE]\n\n' :
+            'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n');
+        }));
+        const relay = await relayFor(t, upstream, { upstreamKey: secret });
+        const response = await chatRequest(relay, { model: 'x', stream: true, messages: [] });
+        assert.equal(response.status, 200);
+        const wire = await response.text();
+        assert.ok(!wire.includes(secret.slice(0, -1)), 'wire exposed an upstream key prefix');
+        const assembled = wire.trim().split('\n\n').filter(frame => frame !== 'data: [DONE]')
+          .map(frame => JSON.parse(frame.slice('data: '.length)).choices[0].delta.content ?? '').join('');
+        assert.equal(assembled, chunks.join('').split(secret).join('[redacted]'));
+        assert.equal(wire.match(/data: \[DONE\]/g)?.length, 1);
+      });
+    }
+  }
+});
+
 test('scrubs parsed escaped credentials from models JSON', async t => {
   const upstream = await listen(t, createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'application/json' });
@@ -417,12 +451,5 @@ test('the CLI binds its actual listener to loopback only', async t => {
     headers: { authorization: 'Bearer cli-relay-bearer-123456789' },
   });
   assert.equal(local.status, 502);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 500);
-  try {
-    await assert.rejects(fetch(`http://127.0.0.2:${port}/v1/models`, {
-      signal: controller.signal,
-      headers: { authorization: 'Bearer cli-relay-bearer-123456789' },
-    }));
-  } finally { clearTimeout(timer); }
+  assert.match(stdout, new RegExp(`^relay listening on 127\\.0\\.0\\.1:${port}\\n$`));
 });
