@@ -408,7 +408,7 @@ export async function runDemo({ evidenceDir, fixture = false, headed = false } =
   const { createServer } = await import('vite');
   const { default: react } = await import('@vitejs/plugin-react');
   const { chromium } = await import('playwright');
-  const store = createHarnessRegistryStore({ userRoot: path.join(output, 'user') });
+  const store = createHarnessRegistryStore({ userRoot: path.join(output, 'user'), stateRoot: path.join(output, 'state') });
   const makeFixtureHost = fixture ? await fixtureComposition(manifests) : null;
   let server, vite, browser, page, bridgeConfig, bridgeToken, capabilities;
   const origin = 'http://127.0.0.1:1430';

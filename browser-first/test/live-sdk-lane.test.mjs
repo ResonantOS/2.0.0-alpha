@@ -296,6 +296,8 @@ test("run-bridge-minimal honors RESONANTOS_EXTENSION_ROOT without writing checko
       cwd: repoRoot,
       env: {
         ...process.env,
+        HOME: tempRoot,
+        USERPROFILE: tempRoot,
         RESONANTOS_BROWSER_FIRST_USER_ROOT: tempUserRoot,
         RESONANTOS_EXTENSION_ROOT: tempExtension,
       },

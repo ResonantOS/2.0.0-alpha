@@ -111,7 +111,7 @@ export function createHarnessStreamSubscription(reader) {
   return subscription;
 }
 
-export async function createHarnessHostService({ userRoot, store = createHarnessRegistryStore({ userRoot }),
+export async function createHarnessHostService({ userRoot, stateRoot, store = createHarnessRegistryStore({ userRoot, stateRoot }),
   bindings = [], env = process.env, providerHost, cleanupTimeoutMs = 1000, onReceipt = () => {}, fixtureSigningKey,
   transportFactory = createHarnessTransport, dshAdapterFactory = createDshTypertAdapter, openaiAdapterFactory = createOpenAICompatibleAdapter } = {}) {
   if (!Number.isSafeInteger(cleanupTimeoutMs) || cleanupTimeoutMs < 1 || cleanupTimeoutMs > 30000) throw new TypeError('Bounded cleanup required.');
@@ -126,6 +126,9 @@ export async function createHarnessHostService({ userRoot, store = createHarness
       return document;
     },
     write: document => store.write(document),
+    watermark: () => store.watermark?.() ?? null,
+    raise: revision => store.raise?.(revision),
+    watermarkPath: store.watermarkPath ?? null,
   };
   const registry = await createHarnessRegistry({ store: trackedStore, reviewedAdapterIds: ['dsh-typert-v1', 'provider-fabric-v1', 'openai-compatible-v1'],
     bindings: approvedBindings.map(({ name, addonId, adapterId, authScheme, endpoint }) => ({ name, addonId, adapterId, authScheme, endpoint })) });

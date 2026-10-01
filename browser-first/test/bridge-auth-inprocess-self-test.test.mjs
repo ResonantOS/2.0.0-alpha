@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import test from "node:test";
+import { withSandboxedLauncherHome } from "./launcher-sandbox.mjs";
 
 import { createBridgeRouteSelfTestInvoker } from "../host/bridge-self-test-invoker.mjs";
 
@@ -57,15 +58,16 @@ test("minimal bridge self-test adapter enforces live default-deny and scoped cap
 });
 
 test("browser-first bridge auth passes in-process deterministic smoke test", async () => {
-  const { stdout } = await execFileAsync(process.execPath, [
+  const { stdout } = await withSandboxedLauncherHome(env => execFileAsync(process.execPath, [
     "browser-first/host/run-browser-first.mjs",
     "--bridge-auth-inprocess-self-test=true",
     "--bridge-token=test-token",
   ], {
     cwd: process.cwd(),
+    env,
     timeout: 30_000,
     maxBuffer: 1024 * 1024,
-  });
+  }));
   const result = JSON.parse(stdout);
   assert.equal(result.ok, true);
   assert.equal(result.mode, "in-process");

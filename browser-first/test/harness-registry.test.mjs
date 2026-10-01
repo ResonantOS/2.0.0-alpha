@@ -1,10 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readFile, mkdtemp, rm, stat } from 'node:fs/promises';
+import { readFile, writeFile, copyFile, cp, mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname, basename, resolve } from 'node:path';
 import { createHarnessRegistry } from '../host/harness-registry.mjs';
 import { createHarnessRegistryStore } from '../host/harness-registry-store.mjs';
+import * as registryStore from '../host/harness-registry-store.mjs';
+
+async function roots(t) {
+  const root = await mkdtemp(join(tmpdir(), 'harness-registry-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  return { userRoot: join(root, 'user'), stateRoot: join(root, 'state') };
+}
 
 const base = JSON.parse(await readFile(new URL('../../public/addons/hermes.json', import.meta.url)));
 function manifest(id = 'addon.one') {
@@ -126,19 +133,153 @@ test('binding authorization checks identity, adapter and exact endpoint without 
 });
 
 test('durable store atomically replaces private files and reloads governance', async t => {
-  const userRoot = await mkdtemp(join(tmpdir(), 'harness-registry-'));
-  t.after(() => rm(userRoot, { recursive: true, force: true }));
-  const store = createHarnessRegistryStore({ userRoot });
+  const { userRoot, stateRoot } = await roots(t);
+  const store = createHarnessRegistryStore({ stateRoot, userRoot });
   const registry = await open(store);
   await installGranted(registry);
   await assign(registry);
-  const restored = await open(createHarnessRegistryStore({ userRoot }));
+  const restored = await open(createHarnessRegistryStore({ stateRoot, userRoot }));
   assert.equal(restored.snapshot().slots['primary-agent'].addonId, 'addon.one');
   assert.equal((await stat(store.path)).mode & 0o777, 0o600);
   const document = await store.read();
   await store.write({ ...document, phase: 'pending' });
   assert.throws(() => (restored.authorize('primary-agent', 'addon.foreign')), { code: 'permission-denied' });
   assert.equal((await open(store)).snapshot().slots['primary-agent'].available, false);
+});
+
+test('a rolled-back registry file fails closed and resurrects no consent', async t => {
+  const { userRoot, stateRoot } = await roots(t);
+  const store = createHarnessRegistryStore({ stateRoot, userRoot }), registry = await open(store);
+  await installGranted(registry); await assign(registry);
+  await copyFile(store.path, store.path + '.old');
+  await registry.setGrants('addon.one', manifest().requestedCapabilities.map(grant => ({ ...grant, granted: false })), { consent: true, expectedRevision: registry.snapshot().revision });
+  await copyFile(store.path + '.old', store.path);
+  const restored = await open(createHarnessRegistryStore({ stateRoot, userRoot }));
+  assert.equal(restored.snapshot().governanceActivated, true);
+  assert.deepEqual(restored.snapshot().installations, {});
+  assert.equal(restored.snapshot().slots['primary-agent'].addonId, null);
+  assert.equal(restored.snapshot().slots['primary-agent'].available, false);
+  await assert.rejects(restored.install(manifest(), { enabled: true }), { code: 'runtime-unavailable' });
+  assert.throws(() => restored.authorize('primary-agent', 'addon.one'), { code: 'runtime-unavailable' });
+});
+
+test('a lagging watermark is healed on load', async t => {
+  const { userRoot, stateRoot } = await roots(t);
+  const store = createHarnessRegistryStore({ stateRoot, userRoot }), registry = await open(store);
+  await installGranted(registry); await assign(registry);
+  const path = store.watermarkPath;
+  for (const revision of [null, registry.snapshot().revision - 1, registry.snapshot().revision]) {
+    const before = await store.read();
+    if (revision === null) await rm(path, { force: true });
+    else await writeFile(path, JSON.stringify({ version: 1, revision }));
+    const restored = await open(createHarnessRegistryStore({ stateRoot, userRoot }));
+    assert.equal(restored.snapshot().revision, before.state.revision);
+    assert.equal(restored.authorize('primary-agent', 'addon.one').addonId, 'addon.one');
+    assert.equal(await store.watermark(), before.state.revision);
+    assert.equal(await store.watermark(), restored.snapshot().revision);
+  }
+  const document = await store.read(), revision = document.state.revision - 1;
+  await store.write({ ...document, phase: 'pending' });
+  await writeFile(path, JSON.stringify({ version: 1, revision }));
+  const pending = await open(store);
+  assert.equal(pending.snapshot().slots['primary-agent'].available, false);
+  assert.throws(() => pending.authorize('primary-agent', 'addon.one'), { code: 'runtime-unavailable' });
+  assert.equal(await store.watermark(), revision);
+});
+
+test('a failed heal is diagnosed and never disables the registry', async t => {
+  const fs = await import('node:fs/promises');
+  const { userRoot, stateRoot } = await roots(t);
+  const store = createHarnessRegistryStore({ stateRoot, userRoot }), registry = await open(store);
+  await installGranted(registry); await assign(registry);
+  const document = await store.read(), lines = [], original = console.error;
+  console.error = line => lines.push(JSON.parse(line));
+  t.after(() => { console.error = original; });
+  for (const revision of [null, document.state.revision - 1]) {
+    if (revision === null) await rm(store.watermarkPath, { force: true });
+    else await writeFile(store.watermarkPath, JSON.stringify({ version: 1, revision }));
+    const unwritable = createHarnessRegistryStore({ stateRoot, userRoot, fs: { ...fs, mkdir: async (path, ...args) => {
+      if (path === dirname(store.watermarkPath)) throw new Error('state root unwritable');
+      return fs.mkdir(path, ...args);
+    } } });
+    const restored = await open(unwritable);
+    assert.equal(restored.snapshot().revision, document.state.revision);
+    assert.equal(restored.authorize('primary-agent', 'addon.one').addonId, 'addon.one', 'authority the document proves must survive a failed heal');
+    assert.equal(await store.watermark(), revision, 'a failed heal leaves the watermark as it was');
+    assert.deepEqual(lines.splice(0), [{ event: 'harness.registry_watermark_unwritable', revision: document.state.revision, watermarkPath: store.watermarkPath }]);
+  }
+});
+
+test('a malformed watermark fails closed', async t => {
+  const { userRoot, stateRoot } = await roots(t);
+  const store = createHarnessRegistryStore({ stateRoot, userRoot }), registry = await open(store);
+  await installGranted(registry); await assign(registry);
+  for (const value of ['null', 'garbage', '{"version":2,"revision":3}', '{"version":1,"revision":1.5}', '{"version":1,"revision":"3"}', '{"version":1,"revision":-1}', '{"version":1,"revision":9007199254740991}', ' '.repeat(8 * 1024 * 1024 + 1)]) {
+    await writeFile(store.watermarkPath, value);
+    const restored = await open(store);
+    assert.deepEqual(restored.snapshot().installations, {});
+    assert.equal(restored.snapshot().governanceActivated, true);
+    assert.equal(restored.snapshot().slots['primary-agent'].addonId, null);
+    assert.equal(restored.snapshot().slots['primary-agent'].available, false);
+    await assert.rejects(restored.install(manifest(), { enabled: true }), { code: 'runtime-unavailable' });
+    assert.throws(() => restored.authorize('primary-agent', 'addon.one'), { code: 'runtime-unavailable' });
+    await assert.rejects(store.watermark());
+  }
+});
+
+test('the watermark is raised only on commit and never lowered', async t => {
+  const { userRoot, stateRoot } = await roots(t);
+  const store = createHarnessRegistryStore({ stateRoot, userRoot });
+  await store.write({ version: 1, phase: 'pending', state: { revision: 6 } });
+  assert.equal(await store.watermark(), null);
+  await store.write({ version: 1, phase: 'committed', state: { revision: 5 } });
+  assert.equal(await store.watermark(), 5);
+  const path = store.watermarkPath;
+  assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), { version: 1, revision: 5 });
+  assert.equal((await stat(path)).mode & 0o777, 0o600);
+  await store.write({ version: 1, phase: 'pending', state: { revision: 6 } });
+  assert.equal(await store.watermark(), 5);
+  await store.write({ version: 1, phase: 'committed', state: { revision: 4 } });
+  assert.equal(await createHarnessRegistryStore({ stateRoot, userRoot }).watermark(), 5);
+  await store.raise(3);
+  assert.equal(await store.watermark(), 5);
+  await store.raise(7);
+  assert.equal(await store.watermark(), 7);
+  await assert.rejects(store.raise('9'), TypeError);
+  assert.equal(await store.watermark(), 7);
+});
+
+test('crash ordering: a document rename that succeeds with a failing watermark write still loads', async t => {
+  const fs = await import('node:fs/promises');
+  const { userRoot, stateRoot } = await roots(t);
+  const store = createHarnessRegistryStore({ stateRoot, userRoot }), registry = await open(store);
+  await installGranted(registry); await assign(registry);
+  const path = store.watermarkPath;
+  for (const stage of ['open', 'rename']) {
+    for (const lower of [false, true]) {
+      // Write a genuinely newer document so the surviving rename is observable, not a no-op rewrite.
+      const persisted = await store.read(), document = { ...persisted, state: { ...persisted.state, revision: persisted.state.revision + 1 } };
+      const revision = lower ? persisted.state.revision : null;
+      if (revision === null) await rm(path, { force: true });
+      else await writeFile(path, JSON.stringify({ version: 1, revision }));
+      const faulty = createHarnessRegistryStore({ stateRoot, userRoot, fs: {
+        ...fs,
+        open: async (path, flags, ...args) => {
+          if (flags === 'wx' && dirname(path) === dirname(store.watermarkPath) && stage === 'open') throw new Error('watermark failed');
+          return fs.open(path, flags, ...args);
+        },
+        rename: async (...args) => {
+          if (args[1] === store.watermarkPath && stage === 'rename') throw new Error('watermark failed');
+          return fs.rename(...args);
+        },
+      } });
+      await assert.rejects(faulty.write(document), /watermark failed/);
+      assert.deepEqual(await store.read(), document);
+      const restored = await open(createHarnessRegistryStore({ stateRoot, userRoot }));
+      assert.equal(restored.authorize('primary-agent', 'addon.one').addonId, 'addon.one');
+      assert.equal(await store.watermark(), document.state.revision);
+    }
+  }
 });
 
 test('stale consent revisions and undeclared slots cannot mutate authority', async () => {
@@ -173,12 +314,11 @@ test('ownership is fenced while durability is pending and no acknowledgement pre
 
 test('store rejects sync and rename failures and leaves a readable prior document', async t => {
   const fs = await import('node:fs/promises');
-  const userRoot = await mkdtemp(join(tmpdir(), 'harness-durability-'));
-  t.after(() => rm(userRoot, { recursive: true, force: true }));
-  const store = createHarnessRegistryStore({ userRoot });
+  const { userRoot, stateRoot } = await roots(t);
+  const store = createHarnessRegistryStore({ stateRoot, userRoot });
   await store.write({ old: true });
   for (const stage of ['file-sync', 'rename', 'directory-sync']) {
-    const faulty = createHarnessRegistryStore({ userRoot, fs: {
+    const faulty = createHarnessRegistryStore({ stateRoot, userRoot, fs: {
       ...fs,
       rename: async (...args) => { if (stage === 'rename') throw new Error('rename failed'); return fs.rename(...args); },
       open: async (path, flags, ...args) => {
@@ -196,12 +336,11 @@ for (const stage of ['open', 'sync']) {
   for (const code of ['EISDIR', 'EPERM', 'ENOTSUP', 'EINVAL', 'EBADF', 'ENOSPC']) {
     test(`directory ${stage} ${code} ${code === 'ENOSPC' ? 'rejects' : 'allows'} an already renamed registry write`, async t => {
       const fs = await import('node:fs/promises');
-      const userRoot = await mkdtemp(join(tmpdir(), 'harness-directory-sync-'));
-      t.after(() => rm(userRoot, { recursive: true, force: true }));
+      const { userRoot, stateRoot } = await roots(t);
       const directory = join(userRoot, 'harness-governance');
       let attempted = false, closed = false;
       const failure = Object.assign(new Error(`directory ${stage} failed`), { code });
-      const store = createHarnessRegistryStore({ userRoot, fs: {
+      const store = createHarnessRegistryStore({ stateRoot, userRoot, fs: {
         ...fs,
         open: async (path, ...args) => {
           if (path !== directory) return fs.open(path, ...args);
@@ -537,4 +676,109 @@ test('a slot is not advertised available when the floor leaves every operation d
   await assert.rejects(registry.assignSlot('primary-agent', value.id, { expectedGeneration: 0 }),
     error => error.code === 'permission-denied', 'so the slot must refuse the owner rather than advertise it available');
   assert.ok(!registry.snapshot().slots['primary-agent']?.addonId, 'and the slot stays empty');
+});
+
+test('a whole-directory restore of the user root is refused', async t => {
+  const { userRoot, stateRoot } = await roots(t);
+  const store = createHarnessRegistryStore({ userRoot, stateRoot }), registry = await open(store);
+  await installGranted(registry); await assign(registry);
+  const directory = dirname(store.path), backup = join(dirname(userRoot), 'backup');
+  await cp(directory, backup, { recursive: true });
+  await registry.setGrants('addon.one', manifest().requestedCapabilities.map(grant => ({ ...grant, granted: false })), { consent: true, expectedRevision: registry.snapshot().revision });
+  await rm(directory, { recursive: true });
+  await cp(backup, directory, { recursive: true });
+  const restored = await open(createHarnessRegistryStore({ userRoot, stateRoot }));
+  assert.equal(restored.snapshot().governanceActivated, true);
+  assert.deepEqual(restored.snapshot().installations, {});
+  assert.equal(restored.snapshot().slots['primary-agent'].addonId, null);
+  assert.equal(restored.snapshot().slots['primary-agent'].available, false);
+  await assert.rejects(restored.install(manifest(), { enabled: true }), { code: 'runtime-unavailable' });
+  assert.throws(() => restored.authorize('primary-agent', 'addon.one'), { code: 'runtime-unavailable' });
+});
+
+test('a fresh user root continues the counter from the watermark', async t => {
+  const { userRoot, stateRoot } = await roots(t);
+  const store = createHarnessRegistryStore({ userRoot, stateRoot }), registry = await open(store);
+  await installGranted(registry); await assign(registry);
+  const revision = registry.snapshot().revision;
+  await rm(dirname(store.path), { recursive: true });
+  const restored = await open(store);
+  assert.equal(restored.snapshot().revision, revision);
+  assert.equal(restored.snapshot().governanceActivated, false);
+  await restored.install(manifest(), { enabled: true });
+  assert.equal(restored.snapshot().revision, revision + 1);
+  assert.equal(await store.watermark(), revision + 1);
+  await restored.setGrants('addon.one', manifest().requestedCapabilities, { consent: true, expectedRevision: revision + 1 });
+  await assign(restored);
+  assert.equal((await open(store)).authorize('primary-agent', 'addon.one').addonId, 'addon.one');
+});
+
+test('user roots on one host keep separate watermarks', async t => {
+  const { userRoot, stateRoot } = await roots(t);
+  const a = createHarnessRegistryStore({ userRoot, stateRoot });
+  const b = createHarnessRegistryStore({ userRoot: join(dirname(userRoot), 'other'), stateRoot });
+  const registry = await open(a);
+  await installGranted(registry); await assign(registry); await assign(registry, 'addon.one', 1); await assign(registry, 'addon.one', 2);
+  await (await open(b)).install(manifest(), { enabled: true });
+  assert.equal(await a.watermark(), 5);
+  assert.equal((await open(b)).snapshot().revision, 1);
+  assert.ok((await open(b)).snapshot().installations['addon.one']);
+  assert.notEqual(a.watermarkPath, b.watermarkPath);
+  for (const store of [a, b]) {
+    assert.equal(dirname(store.watermarkPath), join(stateRoot, 'harness-governance'));
+    assert.ok((await stat(store.watermarkPath)).isFile());
+  }
+});
+
+test('the watermark is machine-bound and 0600 under the state root', async t => {
+  const { userRoot, stateRoot } = await roots(t);
+  const store = createHarnessRegistryStore({ userRoot, stateRoot });
+  await installGranted(await open(store));
+  assert.equal(dirname(store.watermarkPath), join(stateRoot, 'harness-governance'));
+  assert.match(basename(store.watermarkPath), /^[a-f0-9]{32}\.watermark\.json$/);
+  const { createHash } = await import('node:crypto');
+  assert.equal(basename(store.watermarkPath), createHash('sha256').update(resolve(userRoot)).digest('hex').slice(0, 32) + '.watermark.json');
+  assert.equal((await stat(store.watermarkPath)).mode & 0o777, 0o600);
+  assert.equal((await stat(dirname(store.watermarkPath))).mode & 0o777, 0o700);
+});
+
+test('defaultHarnessStateRoot resolves per platform', () => {
+  assert.equal(typeof registryStore.defaultHarnessStateRoot, 'function');
+  const home = '/test/home';
+  for (const [platform, env, expected] of [
+    ['darwin', {}, join(home, 'Library', 'Application Support', 'ResonantOS')],
+    ['win32', { LOCALAPPDATA: '/test/local' }, join('/test/local', 'ResonantOS')],
+    ['win32', { LOCALAPPDATA: '' }, join(home, 'AppData', 'Local', 'ResonantOS')],
+    ['win32', {}, join(home, 'AppData', 'Local', 'ResonantOS')],
+    ['linux', { XDG_STATE_HOME: '/test/state' }, join('/test/state', 'resonantos')],
+    ['linux', { XDG_STATE_HOME: '' }, join(home, '.local', 'state', 'resonantos')],
+    ['linux', {}, join(home, '.local', 'state', 'resonantos')],
+  ]) assert.equal(registryStore.defaultHarnessStateRoot({ platform, env, home }), expected);
+});
+
+test('refusal is diagnosed with the watermark path', async t => {
+  const { userRoot, stateRoot } = await roots(t);
+  const store = createHarnessRegistryStore({ userRoot, stateRoot }), registry = await open(store);
+  await installGranted(registry); await assign(registry);
+  const document = await readFile(store.path), documentRevision = registry.snapshot().revision;
+  await registry.setGrants('addon.one', manifest().requestedCapabilities.map(grant => ({ ...grant, granted: false })), { consent: true, expectedRevision: documentRevision });
+  const watermark = await store.watermark();
+  await writeFile(store.path, document);
+  const lines = [], original = console.error;
+  console.error = line => lines.push(JSON.parse(line));
+  t.after(() => { console.error = original; });
+  const fs = await import('node:fs/promises');
+  const unreadable = createHarnessRegistryStore({ userRoot, stateRoot, fs: { ...fs, open: async (path, ...args) => {
+    if (path === store.watermarkPath) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+    return fs.open(path, ...args);
+  } } });
+  for (const [reason, target] of [['rollback', store], ['watermark-unreadable', unreadable], ['watermark-invalid', store]]) {
+    if (reason === 'watermark-invalid') await writeFile(store.watermarkPath, 'null');
+    await open(target);
+    assert.deepEqual(lines.splice(0), [{ event: 'harness.registry_refused', reason, documentRevision, watermark: reason === 'rollback' ? watermark : null, watermarkPath: store.watermarkPath }]);
+  }
+  await rm(dirname(store.path), { recursive: true });
+  const restored = await open(store);
+  assert.deepEqual(lines.splice(0), [{ event: 'harness.registry_refused', reason: 'watermark-invalid', documentRevision: null, watermark: null, watermarkPath: store.watermarkPath }]);
+  await assert.rejects(restored.install(manifest(), { enabled: true }), { code: 'runtime-unavailable' });
 });
