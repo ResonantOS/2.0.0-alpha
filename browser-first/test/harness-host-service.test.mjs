@@ -1,6 +1,9 @@
+import os from 'node:os';
+import path from 'node:path';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readFile } from 'node:fs/promises';
+import { withSandboxedLauncherHome } from './launcher-sandbox.mjs';
+import { mkdtemp, copyFile, readdir, rm, readFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { evaluateBridgeRequestForSelfTest } from '../host/bridge-server.mjs';
@@ -594,11 +597,11 @@ test('boot fingerprint output and receipt sink expose no private key or rejected
 });
 
 test('in-process self-test keeps stdout a single JSON document and announces signer on stderr', async () => {
-  const { stdout, stderr } = await promisify(execFile)(process.execPath, [
+  const { stdout, stderr } = await withSandboxedLauncherHome(env => promisify(execFile)(process.execPath, [
     'browser-first/host/run-browser-first.mjs',
     '--bridge-auth-inprocess-self-test=true',
     '--bridge-token=test-token',
-  ], { cwd: process.cwd(), timeout: 30000, maxBuffer: 1024 * 1024 });
+  ], { cwd: process.cwd(), timeout: 30000, maxBuffer: 1024 * 1024, env }));
   const result = JSON.parse(stdout);
   assert.equal(result.ok, true);
   assert.equal(result.mode, 'in-process');
@@ -629,6 +632,61 @@ test('compatibility chat retains its response shape while issuing a signed recei
   const { canonicalReceipt } = await import('../host/harness-host-service.mjs');
   const { signature, ...body } = receipt;
   assert.equal(verify(null, Buffer.from(canonicalReceipt(body)), createPublicKey(f.host.signer.publicKey), Buffer.from(signature, 'base64')), true);
+});
+
+
+test('the host service refuses a rolled-back registry', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'host-rollback-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  t.mock.method(os, 'homedir', () => root);
+  const userRoot = path.join(root, 'user'), stateRoot = path.join(root, 'state');
+  const f = await fixture(t, { userRoot, stateRoot, store: undefined });
+  const manifest = await installed(f);
+  const file = path.join(userRoot, 'harness-governance', 'registry.json');
+  await copyFile(file, file + '.old');
+  assert.equal((await f.call('/addons/grants', { addonId: manifest.id, grants: manifest.requestedCapabilities.map(g => ({ ...g, granted: false })), consent: true, expectedRevision: f.host.registry.snapshot().revision })).status, 200);
+  await f.host.close();
+  await copyFile(file + '.old', file);
+  const lines = [];
+  t.mock.method(console, 'error', line => {
+    const event = JSON.parse(line);
+    if (event.event === 'harness.registry_refused') lines.push(event);
+  });
+  const second = await fixture(t, { userRoot, stateRoot, store: undefined });
+  const snapshot = second.host.registry.snapshot();
+  assert.equal(snapshot.governanceActivated, true);
+  assert.deepEqual(snapshot.installations, {});
+  assert.equal(snapshot.slots['primary-agent'].available, false);
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0].event, 'harness.registry_refused');
+  assert.equal(lines[0].reason, 'rollback');
+  assert.equal(path.dirname(lines[0].watermarkPath), path.join(stateRoot, 'harness-governance'));
+});
+
+test('the host service forwards stateRoot to the default store', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'host-state-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  t.mock.method(os, 'homedir', () => root);
+  const userRoot = path.join(root, 'user'), stateRoot = path.join(root, 'state');
+  const f = await fixture(t, { userRoot, stateRoot, store: undefined });
+  await installed(f, false);
+  assert.equal((await readdir(path.join(stateRoot, 'harness-governance'))).filter(name => name.endsWith('.watermark.json')).length, 1);
+});
+
+test('the host service heals a lagging watermark on boot', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'host-heal-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  t.mock.method(os, 'homedir', () => root);
+  const userRoot = path.join(root, 'user'), stateRoot = path.join(root, 'state');
+  const f = await fixture(t, { userRoot, stateRoot, store: undefined });
+  await installed(f, false);
+  const revision = f.host.registry.snapshot().revision, directory = path.join(stateRoot, 'harness-governance');
+  const [name] = (await readdir(directory)).filter(entry => entry.endsWith('.watermark.json'));
+  await f.host.close();
+  await rm(path.join(directory, name));
+  const second = await fixture(t, { userRoot, stateRoot, store: undefined });
+  assert.equal(second.host.registry.snapshot().revision, revision);
+  assert.deepEqual(JSON.parse(await readFile(path.join(directory, name), 'utf8')), { version: 1, revision });
 });
 
 for (const operation of ['install', 'remove']) {

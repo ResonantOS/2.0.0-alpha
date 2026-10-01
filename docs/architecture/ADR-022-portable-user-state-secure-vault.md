@@ -93,6 +93,7 @@ Machine-bound state:
 - hardware-backed key handles where the private key cannot be exported
 - temporary build/cache folders
 - per-machine window placement and device-specific preferences unless explicitly synced
+- harness governance rollback watermark under the platform state root, proving the portable registry is not older than this host last committed; a copied root loads normally on a host with no watermark; a refused boot names the watermark file, and deleting it lets the next boot load and re-establish it from the document
 
 Machine-bound state must be recoverable or clearly reconfigured during Setup or Recovery.
 

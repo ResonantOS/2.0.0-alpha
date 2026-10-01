@@ -30,6 +30,14 @@ export async function createHarnessRegistry({ store, reviewedAdapterIds = [], bi
       !grant || Object.keys(grant).some(key => !['capability', 'scope', 'revocationBehavior', 'granted'].includes(key)) ||
       typeof grant.granted !== 'boolean' || !entry.manifest.requestedCapabilities.some(request => sameRequest(request, grant)))) throw fail('permission-denied');
   }
+  function refuse(reason, documentRevision, watermark) {
+    console.error(JSON.stringify({ event: 'harness.registry_refused', reason, documentRevision, watermark, watermarkPath: store.watermarkPath ?? null }));
+    throw fail('runtime-unavailable');
+  }
+  async function readWatermark(documentRevision) {
+    try { return typeof store.watermark === 'function' ? await store.watermark() : null; }
+    catch (error) { refuse(error.code ? 'watermark-unreadable' : 'watermark-invalid', documentRevision, null); }
+  }
   try {
     const document = await store.read();
     if (document !== null) {
@@ -38,6 +46,8 @@ export async function createHarnessRegistry({ store, reviewedAdapterIds = [], bi
       if (!loaded || !counter(loaded.revision) || typeof loaded.governanceActivated !== 'boolean' ||
           !loaded.installations || Array.isArray(loaded.installations) || !loaded.slots || Array.isArray(loaded.slots) ||
           Object.keys(loaded.installations).length > 256) throw fail('runtime-unavailable');
+      const watermark = await readWatermark(loaded.revision);
+      if (watermark !== null && watermark > loaded.revision) refuse('rollback', loaded.revision, watermark);
       for (const [id, entry] of Object.entries(loaded.installations)) {
         // Validate saved consent against its original requests before adding a
         // runtime request. Legacy delegation authority must never be relabelled.
@@ -71,7 +81,15 @@ export async function createHarnessRegistry({ store, reviewedAdapterIds = [], bi
             (owner.addonId !== null && !Object.hasOwn(loaded.installations, owner.addonId))) throw fail('runtime-unavailable');
       }
       state = structuredClone(loaded);
+      if (document.phase === 'committed' && (watermark === null || watermark < loaded.revision)) {
+        // Healing narrows the rollback window; an unwritable state root must not cost authority the document already proves.
+        try { await store.raise?.(loaded.revision); }
+        catch { console.error(JSON.stringify({ event: 'harness.registry_watermark_unwritable', revision: loaded.revision, watermarkPath: store.watermarkPath ?? null })); }
+      }
       disabled = document.phase !== 'committed';
+    } else {
+      const watermark = await readWatermark(null);
+      if (watermark !== null) state = { ...empty(), revision: watermark };
     }
   } catch {
     disabled = true;

@@ -2,19 +2,21 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import test from "node:test";
+import { withSandboxedLauncherHome } from "./launcher-sandbox.mjs";
 
 const execFileAsync = promisify(execFile);
 const toPortablePath = (value) => String(value ?? "").replace(/\\/g, "/");
 
 async function runSelfTest(flag) {
-  const { stdout } = await execFileAsync(process.execPath, [
+  const { stdout } = await withSandboxedLauncherHome(env => execFileAsync(process.execPath, [
     "browser-first/host/run-browser-first.mjs",
     flag,
   ], {
     cwd: process.cwd(),
+    env,
     timeout: 30_000,
     maxBuffer: 1024 * 1024,
-  });
+  }));
   return JSON.parse(stdout);
 }
 

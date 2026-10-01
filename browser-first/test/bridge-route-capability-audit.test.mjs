@@ -151,7 +151,7 @@ async function withBridgeRoutes(callback) {
     // composition guard below can prove each composed array is actually CONSTRUCTED here — not
     // merely named in a list.
     const { createHarnessHostService } = await import('../host/harness-host-service.mjs');
-    const harness = await createHarnessHostService({ userRoot: root, providerHost: provider, env: {} });
+    const harness = await createHarnessHostService({ userRoot: root, stateRoot: path.join(root, 'state'), providerHost: provider, env: {} });
     const routeArrays = {
       harnessRoutes: harness.harnessRoutes,
       browserDiagnosticsRoutes: diagnostics.browserDiagnosticsRoutes,
