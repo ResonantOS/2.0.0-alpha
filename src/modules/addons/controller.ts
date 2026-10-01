@@ -113,7 +113,7 @@ export const toggleAddonInstallation = async (
   const installation = snapshot.installations[manifest.id];
   const next = installation?.installed
     ? await deps.client.setEnabled(manifest.id, !installation.enabled, snapshot.revision)
-    : await deps.client.install(manifest, true);
+    : await deps.client.install(manifest, true, snapshot.revision);
   applyAcknowledgement(manifest.id, next, deps);
 };
 
@@ -195,7 +195,8 @@ export const uninstallAddon = async (
   manifest: AddOnManifest,
   deps: UninstallAddonDependencies,
 ): Promise<UninstallAddonResult> => {
-  const initialDecision = decideUninstall(deps.getState(), manifest, deps.client.getSnapshot());
+  const current = await hostSnapshot(deps);
+  const initialDecision = decideUninstall(deps.getState(), manifest, current);
   if (!initialDecision.ok) {
     return { outcome: "blocked", blockReason: initialDecision.blockReason, blockDetail: initialDecision.blockDetail };
   }
@@ -219,7 +220,18 @@ export const uninstallAddon = async (
     }
   }
 
-  const snapshot = await deps.client.remove(manifest.id);
+  let snapshot: HarnessProjection;
+  try {
+    snapshot = await deps.client.remove(manifest.id, current.revision);
+  } catch (error) {
+    // The host refused because the projection acted on was stale. Refresh it so the next
+    // attempt sees the current revision; never retry the removal — the same rule as the
+    // Add-ons workspace. The refusal itself still surfaces to the caller.
+    if (error && typeof error === "object" && "code" in error && (error as { code?: unknown }).code === "ownership-conflict") {
+      try { await deps.client.refresh(); } catch { /* The refusal stands; Refresh remains available. */ }
+    }
+    throw error;
+  }
   if (snapshot.installations[manifest.id]) throw new Error("Host did not acknowledge removal.");
 
   let result: UninstallAddonResult = {
@@ -283,7 +295,7 @@ export const toggleAddonCapabilityGrant = async (
   if (!snapshot.installations[manifestId]) {
     const manifest = deps.getManifest?.(manifestId);
     if (!manifest) throw new Error("Install the add-on through the host before granting access.");
-    snapshot = await deps.client.install(manifest, true);
+    snapshot = await deps.client.install(manifest, true, snapshot.revision);
     prepared = true;
   }
   if (prepared) applyAcknowledgement(manifestId, snapshot, deps);
@@ -321,7 +333,7 @@ export const grantAddonCapabilities = async (
   let snapshot = await hostSnapshot(deps);
   let prepared = false;
   if (!snapshot.installations[manifest.id]?.installed) {
-    snapshot = await deps.client.install(manifest, true);
+    snapshot = await deps.client.install(manifest, true, snapshot.revision);
     prepared = true;
   } else if (!snapshot.installations[manifest.id].enabled) {
     snapshot = await deps.client.setEnabled(manifest.id, true, snapshot.revision);

@@ -42,7 +42,7 @@ async function fixture(t, options = {}) {
 }
 async function installed(f, granted = true) {
   const manifest = await example('provider-chat-demo');
-  assert.equal((await f.call('/addons/install', { manifest, enabled: true })).status, 200);
+  assert.equal((await f.call('/addons/install', { manifest, enabled: true, expectedRevision: f.host.registry.snapshot().revision })).status, 200);
   if (granted) {
     assert.equal((await f.call('/addons/grants', { addonId: manifest.id, grants: manifest.requestedCapabilities.map(g => ({ ...g, granted: true })), consent: true, expectedRevision: f.host.registry.snapshot().revision })).status, 200);
     assert.equal((await f.call('/addons/slots/assign', { slot: 'primary-agent', addonId: manifest.id, expectedGeneration: 0 })).status, 200);
@@ -51,10 +51,10 @@ async function installed(f, granted = true) {
 }
 const requests = async () => [
   ['/addons/registry', {}],
-  ['/addons/install', { manifest: await example('provider-chat-demo'), enabled: true }],
+  ['/addons/install', { manifest: await example('provider-chat-demo'), enabled: true, expectedRevision: 0 }],
   ['/addons/grants', { addonId: ref.addonId, grants: [], consent: true, expectedRevision: 0 }],
   ['/addons/enabled', { addonId: ref.addonId, enabled: false, expectedRevision: 0 }],
-  ['/addons/remove', { addonId: ref.addonId }],
+  ['/addons/remove', { addonId: ref.addonId, expectedRevision: 0 }],
   ['/addons/slots/assign', { slot: 'primary-agent', addonId: ref.addonId, expectedGeneration: 0 }],
   ['/agent/session', { addonId: ref.addonId }],
   ['/agent/turn', { session: ref, input }],
@@ -93,8 +93,8 @@ test('ordinary add-ons without agentRuntime have a host acknowledgement projecti
   const granted = await f.call('/addons/grants', { addonId: manifest.id, grants: manifest.requestedCapabilities.map(g => ({ ...g, granted: true })), consent: true, expectedRevision: 3 });
   assert.equal(granted.status, 200);
   assert.ok(granted.payload.installations[manifest.id].grantedCapabilities.every(g => g.granted));
-  assert.equal((await f.call('/addons/remove', { addonId: manifest.id })).status, 200);
-  assert.equal((await f.call('/addons/install', { manifest, enabled: false })).status, 200);
+  assert.equal((await f.call('/addons/remove', { addonId: manifest.id, expectedRevision: f.host.registry.snapshot().revision })).status, 200);
+  assert.equal((await f.call('/addons/install', { manifest, enabled: false, expectedRevision: f.host.registry.snapshot().revision })).status, 200);
 });
 
 test('all harness routes enforce transport and add-on authority', async t => {
@@ -160,8 +160,8 @@ test('demo candidates require host opt-in and never confer bindings or grants', 
   assert.deepEqual(snapshot.candidates.map(m => m.id).sort(), ['addon.deepseek-harness', 'addon.provider-chat-demo']);
   assert.deepEqual(snapshot.installations, {});
   const manifest = await example('deepseek-harness');
-  assert.equal((await demo.call('/addons/install', { manifest, enabled: true })).payload.code, 'permission-denied');
-  assert.equal((await demo.call('/addons/install', { manifest, enabled: true, bindings: [{ name: 'dsh.main' }] })).status, 400);
+  assert.equal((await demo.call('/addons/install', { manifest, enabled: true, expectedRevision: demo.host.registry.snapshot().revision })).payload.code, 'permission-denied');
+  assert.equal((await demo.call('/addons/install', { manifest, enabled: true, expectedRevision: demo.host.registry.snapshot().revision, bindings: [{ name: 'dsh.main' }] })).status, 400);
   assert.equal(demo.writes(), 0);
   for (const name of ['index.json', 'dev-index.json']) {
     const catalog = await readFile(new URL(`../../public/addons/${name}`, import.meta.url), 'utf8');
@@ -204,7 +204,7 @@ test('shutdown attempts every session and transport cleanup with bounded throwin
     dshAdapterFactory: () => ({ createSession: async () => ({}), dispose() { disposals.push(true); if (disposals.length === 1) throw new Error('private-canary'); return new Promise(() => {}); } }),
   });
   const manifest = await example('deepseek-harness');
-  await f.call('/addons/install', { manifest, enabled: true });
+  await f.call('/addons/install', { manifest, enabled: true, expectedRevision: f.host.registry.snapshot().revision });
   await f.call('/addons/grants', { addonId: manifest.id, grants: manifest.requestedCapabilities.map(g => ({ ...g, granted: true })), consent: true, expectedRevision: 1 });
   await f.call('/addons/slots/assign', { slot: 'primary-agent', addonId: manifest.id, expectedGeneration: 0 });
   for (let i = 0; i < 2; i++) assert.equal((await f.call('/agent/session', { addonId: manifest.id })).status, 200);
@@ -246,7 +246,7 @@ test('governed compatibility turn errors never retry or fall back to the legacy 
     transportFactory: async () => ({ dispose() {} }),
     dshAdapterFactory: () => ({ createSession: async () => ({}), invoke, dispose() {} }),
   });
-  assert.equal((await f.call('/addons/install', { manifest, enabled: true })).status, 200);
+  assert.equal((await f.call('/addons/install', { manifest, enabled: true, expectedRevision: f.host.registry.snapshot().revision })).status, 200);
   assert.equal((await f.call('/addons/grants', { addonId: manifest.id, grants: manifest.requestedCapabilities.map(g => ({ ...g, granted: true })), consent: true, expectedRevision: 1 })).status, 200);
   assert.equal((await f.call('/addons/slots/assign', { slot: 'primary-agent', addonId: manifest.id, expectedGeneration: 0 })).status, 200);
   await assert.rejects(f.host.executeBridgeChat(input), error => {
@@ -449,7 +449,7 @@ test('approved DSH composition exposes authorized operations and rejects malform
       selectModel: async ({ input }) => { calls.push('selectModel'); return input; },
     }),
   });
-  assert.equal((await f.call('/addons/install', { manifest, enabled: true })).status, 200);
+  assert.equal((await f.call('/addons/install', { manifest, enabled: true, expectedRevision: f.host.registry.snapshot().revision })).status, 200);
   assert.equal((await f.call('/addons/grants', { addonId: manifest.id, grants: manifest.requestedCapabilities.map(g => ({ ...g, granted: true })), consent: true, expectedRevision: 1 })).status, 200);
   assert.equal((await f.call('/addons/slots/assign', { slot: 'primary-agent', addonId: manifest.id, expectedGeneration: 0 })).status, 200);
   const session = (await f.call('/agent/session', { addonId: manifest.id })).payload.session;
@@ -468,9 +468,9 @@ test('approved DSH composition exposes authorized operations and rejects malform
   assert.equal((await events.next()).value.type, 'delta');
   assert.equal((await f.call('/agent/cancel', { session, turnId: turn })).status, 200);
   assert.deepEqual(calls, ['create', 'history', 'status', 'selectModel', 'invoke', 'cancel']);
-  assert.equal((await f.call('/addons/remove', { addonId: manifest.id })).payload.code, 'ownership-conflict');
+  assert.equal((await f.call('/addons/remove', { addonId: manifest.id, expectedRevision: f.host.registry.snapshot().revision })).payload.code, 'ownership-conflict');
   assert.equal((await f.call('/addons/slots/assign', { slot: 'primary-agent', addonId: null, expectedGeneration: 1, replace: true })).status, 200);
-  assert.equal((await f.call('/addons/remove', { addonId: manifest.id })).status, 200);
+  assert.equal((await f.call('/addons/remove', { addonId: manifest.id, expectedRevision: f.host.registry.snapshot().revision })).status, 200);
 });
 
 test('enabled route validates shape and revision before changing state', async t => {
@@ -514,7 +514,7 @@ test('reviewed OpenAI adapter resolves bound bearer credentials; unknown adapter
       const lease = await credentials.acquire({ addonId, runtime }); resolved++;
       return { createSession: async () => ({}), dispose: async () => { disposed++; lease.dispose(); } };
     } });
-  assert.equal((await f.call('/addons/install', { manifest, enabled: true })).status, 200);
+  assert.equal((await f.call('/addons/install', { manifest, enabled: true, expectedRevision: f.host.registry.snapshot().revision })).status, 200);
   await f.host.registry.setGrants(manifest.id, manifest.requestedCapabilities.map(g => ({ ...g, granted: true })), { consent: true, expectedRevision: 1 });
   await f.host.registry.assignSlot('primary-agent', manifest.id, { expectedGeneration: 0 });
   const result = await f.call('/agent/session', { addonId: manifest.id });
@@ -524,7 +524,7 @@ test('reviewed OpenAI adapter resolves bound bearer credentials; unknown adapter
   assert.equal(disposed, 1);
   const other = structuredClone(manifest); other.agentRuntime.adapterId = 'unreviewed-v1';
   const denied = await fixture(t, { bindings: [{ ...binding, adapterId: 'unreviewed-v1' }] });
-  assert.equal((await denied.call('/addons/install', { manifest: other, enabled: true })).payload.code, 'permission-denied');
+  assert.equal((await denied.call('/addons/install', { manifest: other, enabled: true, expectedRevision: denied.host.registry.snapshot().revision })).payload.code, 'permission-denied');
 });
 
 
@@ -536,7 +536,7 @@ test('host signs governance, denied operations and streamed turns with a fresh p
   const key = createPublicKey(f.host.signer.publicKey);
   assert.equal(f.host.signer.fingerprint, createHash('sha256').update(key.export({ type: 'spki', format: 'der' })).digest('hex').slice(0, 32));
   const manifest = await installed(f);
-  await f.call('/addons/remove', { addonId: manifest.id });
+  await f.call('/addons/remove', { addonId: manifest.id, expectedRevision: f.host.registry.snapshot().revision });
   const session = (await f.call('/agent/session', { addonId: manifest.id })).payload.session;
   const stream = await f.host.harnessRoutes.find(r => r.path === '/agent/events').handler({}, { url: `/agent/events?${new URLSearchParams(session)}` });
   await f.call('/agent/turn', { session, input });
@@ -630,3 +630,18 @@ test('compatibility chat retains its response shape while issuing a signed recei
   const { signature, ...body } = receipt;
   assert.equal(verify(null, Buffer.from(canonicalReceipt(body)), createPublicKey(f.host.signer.publicKey), Buffer.from(signature, 'base64')), true);
 });
+
+for (const operation of ['install', 'remove']) {
+  test(`${operation} route rejects missing and stale revisions without mutation`, async t => {
+    const f = await fixture(t), manifest = await installed(f, false);
+    const before = f.host.registry.snapshot();
+    const payload = operation === 'install' ? { manifest, enabled: true } : { addonId: manifest.id };
+    const missing = await f.call(`/addons/${operation}`, payload);
+    assert.equal(missing.status, 400);
+    assert.equal(missing.payload.code, 'invalid-event');
+    const stale = await f.call(`/addons/${operation}`, { ...payload, expectedRevision: before.revision - 1 });
+    assert.equal(stale.status, 409);
+    assert.equal(stale.payload.code, 'ownership-conflict');
+    assert.deepEqual(f.host.registry.snapshot(), before);
+  });
+}

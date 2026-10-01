@@ -40,7 +40,7 @@ async function governed(t, adapter, owner = 'provider-chat-demo') {
     bindings: [{ name: 'dsh.main', addonId: 'addon.deepseek-harness', adapterId: 'dsh-typert-v1', authScheme: 'dsh-action-token', endpoint: 'http://127.0.0.1:3080' }],
   });
   for (const manifest of manifests) {
-    await registry.install(manifest, { enabled: true });
+    await registry.install(manifest, { enabled: true, expectedRevision: registry.snapshot().revision });
     await registry.setGrants(manifest.id, manifest.requestedCapabilities.filter(g => g.capability !== 'agent-delegation').map(g => ({ ...g, granted: true })), { consent: true, expectedRevision: registry.snapshot().revision });
     // Positive check: the grant loop must have produced live agent-runtime authority (the delegation row no longer exists to check).
     assert.equal(registry.snapshot().installations[manifest.id].grantedCapabilities.some(g => g.capability === 'agent-runtime' && g.granted), true);
@@ -241,10 +241,10 @@ test('example manifests validate and reject paths, unreviewed adapters and unapp
     }
   }
   const registry = await createHarnessRegistry({ store: { read: async () => null, write: async () => {} }, reviewedAdapterIds: ['provider-fabric-v1', 'dsh-typert-v1'] });
-  await registry.install(manifests[1], { enabled: true });
+  await registry.install(manifests[1], { enabled: true, expectedRevision: registry.snapshot().revision });
   const unknown = structuredClone(manifests[1]); unknown.agentRuntime.adapterId = 'unreviewed-adapter';
-  await assert.rejects(registry.install(unknown, { enabled: true }), { code: 'permission-denied' });
-  await assert.rejects(registry.install(manifests[0], { enabled: true }), { code: 'permission-denied' });
+  await assert.rejects(registry.install(unknown, { enabled: true, expectedRevision: registry.snapshot().revision }), { code: 'permission-denied' });
+  await assert.rejects(registry.install(manifests[0], { enabled: true, expectedRevision: registry.snapshot().revision }), { code: 'permission-denied' });
 });
 
 test('provider fabric probe uses injected readiness and preserves the default', async () => {

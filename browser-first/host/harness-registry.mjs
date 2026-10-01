@@ -178,10 +178,11 @@ export async function createHarnessRegistry({ store, reviewedAdapterIds = [], bi
   return {
     snapshot, authorize, isCurrent, assertOperation,
     onFence(listener) { listeners.add(listener); return () => listeners.delete(listener); },
-    install(manifest, { enabled } = {}) {
+    install(manifest, { enabled, expectedRevision } = {}) {
       // Capture input before entering the serialized queue to prevent TOCTOU edits.
       const captured = structuredClone(manifest);
       return transact(next => {
+        if (expectedRevision !== state.revision) throw fail('ownership-conflict');
         assertValidHarnessManifest(captured);
         if (typeof enabled !== 'boolean' || (captured.agentRuntime?.adapterVersion !== undefined && !bindingAllowed(captured))) throw fail('permission-denied');
         if (Buffer.byteLength(JSON.stringify(captured)) > 262144) throw fail('invalid-manifest');
@@ -252,9 +253,10 @@ export async function createHarnessRegistry({ store, reviewedAdapterIds = [], bi
         return [slot];
       });
     },
-    remove(addonId) {
+    remove(addonId, { expectedRevision } = {}) {
       return transact(next => {
         entryFor(addonId);
+        if (expectedRevision !== state.revision) throw fail('ownership-conflict');
         if (ownedSlots(next, addonId).length) throw fail('ownership-conflict');
         delete next.installations[addonId];
         return [];

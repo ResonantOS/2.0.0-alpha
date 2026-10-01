@@ -148,6 +148,27 @@ const uninstallDeps = (
 };
 
 describe("uninstallAddon", () => {
+  it("refreshes the projection on a host revision conflict and does not retry the removal", async () => {
+    const manifest = createSystemSlotManifest("addon.stale");
+    const state = buildDefaultState([manifest]);
+    state.installations[manifest.id] = createMinimalInstallation(manifest.id, true, true, "enabled");
+    const conflict = Object.assign(new Error("Host refused."), { code: "ownership-conflict" });
+    const invoke = vi.fn(async (name: string) => {
+      if (name === "harness_remove") throw conflict;
+      return { bootEpoch: "test", revision: 7, governanceActivated: false, candidates: [], installations: {}, slots: {} } as never;
+    });
+    const client = createHarnessClient({ invoke });
+    client.applySnapshot({ bootEpoch: "test", revision: 1, governanceActivated: false, candidates: [], installations: {
+      [manifest.id]: { addonId: manifest.id, installed: true, enabled: true, grantedCapabilities: [], disabledOperations: [], hiddenSurfaceIds: [] },
+    }, slots: {} } as never);
+    await expect(uninstallAddon(manifest, { client, getState: () => state, updateRuntimeState: () => undefined }))
+      .rejects.toBe(conflict);
+    const names = invoke.mock.calls.map(([name]) => name);
+    expect(names.filter((name) => name === "harness_remove")).toHaveLength(1);
+    expect(names.filter((name) => name === "harness_registry")).toHaveLength(1);
+    expect(client.getSnapshot()?.revision).toBe(7);
+  });
+
   it("ignores a forged local owner when the host slot is vacant", () => {
     const manifest = createSystemSlotManifest("addon.forged");
     const state = buildDefaultState([manifest]);
@@ -889,6 +910,7 @@ describe("all add-on and quick-grant actions use host transactions", () => {
     await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
     expect(state).toEqual(before);
     expect(invoke.mock.calls[0][0]).toBe(action === "install" ? "harness_install" : action === "remove" ? "harness_remove" : ["grant", "batch"].includes(action) ? "harness_grants" : "harness_enabled");
+    expect(invoke.mock.calls[0][1]).toHaveProperty("expectedRevision", 4);
     reject(new Error("denied"));
     await rejected;
     expect(state).toEqual(before);
