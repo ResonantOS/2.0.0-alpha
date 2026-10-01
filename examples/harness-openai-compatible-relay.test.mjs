@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer, request as httpRequest } from 'node:http';
 import test from 'node:test';
@@ -43,6 +44,15 @@ async function within(promise, milliseconds, message) {
       timer = setTimeout(() => reject(new Error(message)), milliseconds);
     })]);
   } finally { clearTimeout(timer); }
+}
+
+async function freePort() {
+  const server = createServer();
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const port = server.address().port;
+  await new Promise(resolve => server.close(resolve));
+  return port;
 }
 
 test('the relay accepts only authenticated fixed routes and valid streaming chat requests', async t => {
@@ -127,6 +137,92 @@ test('the real host adapter accepts a normalized relay completion', async t => {
     model: 'example-model', messages: [{ role: 'user', content: 'test' }],
   } })) events.push(event);
   assert.deepEqual(events.at(-1), { type: 'final', data: { text: 'hello safe' } });
+});
+
+test('the real host adapter rejects content that follows a terminal choice', async t => {
+  const upstream = await listen(t, createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    const frame = value => `data: ${JSON.stringify(value)}\n\n`;
+    res.write(frame({ choices: [{ index: 0, delta: { content: 'First.' } }] }));
+    res.write(frame({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }));
+    res.end(frame({ choices: [{ index: 0, delta: { content: 'Second partial' } }] }));
+  }));
+  const relay = await relayFor(t, upstream);
+  const runtime = { adapterId: 'openai-compatible-v1', authScheme: 'bearer',
+    credentialBinding: 'relay.integration', endpoint: relay };
+  const credentials = createHarnessCredentials({
+    bindings: [{ ...runtime, name: runtime.credentialBinding, addonId: 'addon.relay-integration',
+      source: { env: 'TEST_RELAY_BEARER' } }],
+    env: { TEST_RELAY_BEARER: RELAY_BEARER },
+  });
+  const adapter = await createOpenAICompatibleAdapter({ credentials, addonId: 'addon.relay-integration',
+    runtime, lookup: async () => [{ address: '127.0.0.1' }] });
+  t.after(() => adapter.dispose());
+  const session = await adapter.createSession();
+  const events = [];
+  for await (const event of adapter.invoke({ session, input: {
+    model: 'example-model', messages: [{ role: 'user', content: 'test' }],
+  } })) events.push(event);
+  assert.equal(events.at(-1).type, 'error');
+  assert.notEqual(events.at(-1).data?.text, 'First.Second partial');
+});
+
+test('preserves valid content in the same event as its terminal finish', async t => {
+  const upstream = await listen(t, createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end('data: {"choices":[{"index":0,"delta":{"content":"final content"},"finish_reason":"stop"}]}\n\n');
+  }));
+  const relay = await relayFor(t, upstream);
+  const response = await chatRequest(relay, { model: 'x', stream: true, messages: [] });
+  assert.equal(response.status, 200);
+  const wire = await response.text();
+  assert.match(wire, /final content/);
+  assert.match(wire, /data: \[DONE\]/);
+});
+
+test('does not synthesize DONE for an unfinished second choice', async t => {
+  const upstream = await listen(t, createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    const frame = value => `data: ${JSON.stringify(value)}\n\n`;
+    res.write(frame({ choices: [{ index: 0, delta: { content: 'first' }, finish_reason: 'stop' }] }));
+    res.end(frame({ choices: [{ index: 1, delta: { content: 'second partial' } }] }));
+  }));
+  const relay = await relayFor(t, upstream);
+  const response = await chatRequest(relay, { model: 'x', stream: true, messages: [] });
+  assert.equal(response.status, 200);
+  await assert.rejects(response.text());
+});
+
+test('scrubs upstream credentials from chat content across SSE frames', async t => {
+  const upstream = await listen(t, createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    const frame = value => `data: ${JSON.stringify(value)}\n\n`;
+    res.write(frame({ id: UPSTREAM_KEY, choices: [{ index: 0, delta: { content: `before ${UPSTREAM_KEY.slice(0, 8)}` } }] }));
+    res.write(frame({ choices: [{ index: 0, delta: { content: `${UPSTREAM_KEY.slice(8)} after` } }] }));
+    res.end(frame({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }));
+  }));
+  const relay = await relayFor(t, upstream);
+  const response = await chatRequest(relay, { model: 'x', stream: true, messages: [] });
+  assert.equal(response.status, 200);
+  const wire = await response.text();
+  assert.doesNotMatch(wire, new RegExp(UPSTREAM_KEY));
+  const events = wire.trim().split('\n\n').filter(frame => frame !== 'data: [DONE]')
+    .map(frame => JSON.parse(frame.slice('data: '.length)));
+  const assembled = events.map(event => event.choices[0].delta.content ?? '').join('');
+  assert.doesNotMatch(assembled, new RegExp(UPSTREAM_KEY));
+});
+
+test('scrubs parsed escaped credentials from models JSON', async t => {
+  const upstream = await listen(t, createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end('{"data":[{"id":"\\u0065xample-upstream-key"}]}');
+  }));
+  const relay = await relayFor(t, upstream);
+  const response = await fetch(`${relay}/v1/models`, { headers: { authorization: `Bearer ${RELAY_BEARER}` } });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.notEqual(body.data[0].id, UPSTREAM_KEY);
+  assert.doesNotMatch(JSON.stringify(body), new RegExp(UPSTREAM_KEY));
 });
 
 test('refuses redirects and keeps upstream error bodies out of local responses', async t => {
@@ -230,4 +326,64 @@ test('rejects unsafe upstream configuration before listening', () => {
   assert.throws(() => createRelayServer({ ...config, chatUrl: 'https://example.com/v1/chat/completions', modelsUrl: 'https://other.example/v1/models' }), /models endpoint must share/);
   assert.throws(() => createRelayServer({ ...config, chatUrl: 'https://example.com/v1/chat/completions', relayBearer: 'short' }), /invalid relay credentials/);
   assert.throws(() => createRelayServer({ ...config, chatUrl: 'https://example.com/v1/chat/completions', deadlineMs: 0 }), /invalid relay deadline/);
+  assert.throws(() => createRelayServer({ ...config, chatUrl: 'https://example.com/v1/chat/completions', relayBearer: UPSTREAM_KEY }), /must differ/);
+});
+
+test('cancels a successful non-event-stream upstream body immediately', async t => {
+  let upstreamClosed;
+  const closed = new Promise(resolve => { upstreamClosed = resolve; });
+  const upstream = await listen(t, createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.write('{"never":"ending');
+    req.once('close', () => { upstreamClosed(); res.destroy(); });
+  }));
+  const relay = await relayFor(t, upstream, { deadlineMs: 2000 });
+  const response = await chatRequest(relay, { model: 'x', stream: true, messages: [] });
+  assert.equal(response.status, 502);
+  await response.text();
+  await within(closed, 1000, 'non-event-stream upstream body was not cancelled');
+});
+
+test('the CLI binds its actual listener to loopback only', async t => {
+  const port = await freePort();
+  const child = spawn(process.execPath, ['examples/harness-openai-compatible-relay.mjs', String(port)], {
+    cwd: process.cwd(),
+    env: {
+      UPSTREAM_CHAT: 'http://127.0.0.1:9/v1/chat/completions',
+      UPSTREAM_KEY: 'cli-upstream-key',
+      RELAY_BEARER: 'cli-relay-bearer-123456789',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+  child.stdout.on('data', chunk => { stdout += chunk; });
+  child.stderr.on('data', chunk => { stderr += chunk; });
+  t.after(async () => {
+    if (!child.killed) child.kill('SIGTERM');
+    await Promise.race([once(child, 'exit'), new Promise(resolve => setTimeout(resolve, 1000))]);
+  });
+  await within(new Promise((resolve, reject) => {
+    const onData = () => {
+      if (/relay listening on 127\.0\.0\.1:\d+/.test(stdout)) { child.stdout.off('data', onData); resolve(); }
+    };
+    child.stdout.on('data', onData);
+    child.once('error', reject);
+    child.once('exit', code => reject(new Error(`relay CLI exited ${code}: ${stderr}`)));
+  }), 2000, 'relay CLI did not start');
+
+  const local = await fetch(`http://127.0.0.1:${port}/v1/models`, {
+    headers: { authorization: 'Bearer cli-relay-bearer-123456789' },
+  });
+  assert.equal(local.status, 502);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 500);
+  try {
+    await assert.rejects(fetch(`http://127.0.0.2:${port}/v1/models`, {
+      signal: controller.signal,
+      headers: { authorization: 'Bearer cli-relay-bearer-123456789' },
+    }));
+  } finally { clearTimeout(timer); }
 });

@@ -9,6 +9,31 @@ const MAX_WIRE = 1_048_576;
 const MAX_FRAME = 65_536;
 const DEADLINE_MS = 115_000;
 const DROPPED_DELTA_FIELDS = ['name', 'audio_content', 'audio', 'reasoning', 'reasoning_content'];
+const REDACTED = '[redacted]';
+
+function scrubString(value, secret) {
+  return value.split(secret).join(REDACTED);
+}
+
+function scrubValue(value, secret) {
+  if (typeof value === 'string') return scrubString(value, secret);
+  if (Array.isArray(value)) return value.map(item => scrubValue(item, secret));
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [
+    scrubString(key, secret), scrubValue(item, secret),
+  ]));
+}
+
+function scrubContent(content, state, index, secret, flush = false) {
+  const combined = `${state.contentPending.get(index) ?? ''}${content}`;
+  if (flush) {
+    state.contentPending.delete(index);
+    return scrubString(combined, secret);
+  }
+  const held = markerPrefix(combined, secret);
+  state.contentPending.set(index, combined.slice(combined.length - held));
+  return scrubString(combined.slice(0, combined.length - held), secret);
+}
 
 function endpoint(raw, label) {
   let url;
@@ -88,7 +113,7 @@ function withoutThink(content, state) {
   return visible;
 }
 
-function normalizeFrame(frame, state) {
+function normalizeFrame(frame, state, upstreamKey) {
   const data = frame.split('\n').filter(line => line.startsWith('data:'))
     .map(line => line.slice(5).replace(/^ /, '')).join('\n');
   if (!data) return null;
@@ -96,11 +121,17 @@ function normalizeFrame(frame, state) {
     if (state.think.inside) throw new Error('unfinished think span');
     const trailing = state.think.pending;
     state.think.pending = '';
+    const flushed = [];
+    if (trailing) {
+      const content = scrubContent(trailing, state, 0, upstreamKey, true);
+      if (content) flushed.push({ choices: [{ index: 0, delta: { content }, finish_reason: null }] });
+    }
+    for (const index of state.contentPending.keys()) {
+      const content = scrubContent('', state, index, upstreamKey, true);
+      if (content) flushed.push({ choices: [{ index, delta: { content }, finish_reason: null }] });
+    }
     state.sawDone = true;
-    const finalText = trailing
-      ? `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: trailing }, finish_reason: null }] })}\n\n`
-      : '';
-    return `${finalText}data: [DONE]\n\n`;
+    return flushed;
   }
   let event;
   try { event = JSON.parse(data); } catch { throw new Error('invalid upstream event'); }
@@ -113,6 +144,10 @@ function normalizeFrame(frame, state) {
     const delta = choice.delta;
     if (!delta || typeof delta !== 'object' || Array.isArray(delta) ||
         'tool_calls' in delta || 'function_call' in delta) throw new Error('invalid delta');
+    const index = choice.index ?? 0;
+    if (!Number.isSafeInteger(index) || index < 0) throw new Error('invalid choice');
+    const terminal = state.choices.get(index);
+    if (terminal?.finished) throw new Error('content after finish');
     if (delta.content != null && typeof delta.content !== 'string') throw new Error('invalid content');
     for (const field of DROPPED_DELTA_FIELDS) delete delta[field];
     if (typeof delta.content === 'string') delta.content = withoutThink(delta.content, state.think);
@@ -123,45 +158,64 @@ function normalizeFrame(frame, state) {
         delta.content = (delta.content ?? '') + state.think.pending;
         state.think.pending = '';
       }
-      state.sawFinish = true;
+      delta.content = scrubContent(delta.content ?? '', state, index, upstreamKey, true);
+      state.choices.set(index, { finished: true });
+    } else {
+      delta.content = scrubContent(delta.content ?? '', state, index, upstreamKey);
+      if (!terminal) state.choices.set(index, { finished: false });
     }
   }
-  return `data: ${JSON.stringify(event)}\n\n`;
+  return [scrubValue(event, upstreamKey)];
 }
 
-async function relayChat(upstream, res) {
+async function relayChat(upstream, res, upstreamKey) {
   if (!/^text\/event-stream(?:\s*;|$)/i.test(upstream.headers.get('content-type') ?? '') || !upstream.body) {
+    await upstream.body?.cancel().catch(() => {});
     reply(res, 502, 'upstream did not return an event stream');
     return;
   }
   res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store' });
-  const state = { sawDone: false, sawFinish: false, think: { inside: false, pending: '' } };
+  res.flushHeaders();
+  const state = { sawDone: false, choices: new Map(), contentPending: new Map(), think: { inside: false, pending: '' } };
   const decoder = new TextDecoder('utf-8', { fatal: true });
   let pending = '';
   let wireBytes = 0;
-  for await (const chunk of upstream.body) {
-    wireBytes += chunk.byteLength;
-    if (wireBytes > MAX_WIRE) throw new Error('upstream stream too large');
-    pending += decoder.decode(chunk, { stream: true });
-    pending = pending.replace(/\r\n/g, '\n');
-    let end;
-    while ((end = pending.indexOf('\n\n')) !== -1) {
-      const frame = pending.slice(0, end);
-      pending = pending.slice(end + 2);
-      if (Buffer.byteLength(frame) > MAX_FRAME) throw new Error('upstream frame too large');
-      const normalized = normalizeFrame(frame, state);
-      if (normalized) res.write(normalized);
-      if (state.sawDone) { res.end(); return; }
+  try {
+    for await (const chunk of upstream.body) {
+      wireBytes += chunk.byteLength;
+      if (wireBytes > MAX_WIRE) throw new Error('upstream stream too large');
+      pending += decoder.decode(chunk, { stream: true });
+      pending = pending.replace(/\r\n/g, '\n');
+      let end;
+      while ((end = pending.indexOf('\n\n')) !== -1) {
+        const frame = pending.slice(0, end);
+        pending = pending.slice(end + 2);
+        if (Buffer.byteLength(frame) > MAX_FRAME) throw new Error('upstream frame too large');
+        const normalized = normalizeFrame(frame, state, upstreamKey) ?? [];
+        for (const event of normalized) res.write(`data: ${JSON.stringify(event)}\n\n`);
+        if (state.sawDone) break;
+      }
+      if (state.sawDone) break;
+      if (Buffer.byteLength(pending) > MAX_FRAME) throw new Error('upstream frame too large');
     }
-    if (Buffer.byteLength(pending) > MAX_FRAME) throw new Error('upstream frame too large');
+    if (!state.sawDone) {
+      pending += decoder.decode();
+      const allChoicesFinished = state.choices.size > 0 && [...state.choices.values()].every(choice => choice.finished);
+      if (pending.trim() || state.think.inside || state.think.pending || !allChoicesFinished) {
+        throw new Error('incomplete upstream stream');
+      }
+    }
+    if (!state.sawDone) {
+      for (const index of state.contentPending.keys()) {
+        const content = scrubContent('', state, index, upstreamKey, true);
+        if (content) res.write(`data: ${JSON.stringify({ choices: [{ index, delta: { content }, finish_reason: null }] })}\n\n`);
+      }
+    }
+    res.write('data: [DONE]\n\n');
+    res.end();
+  } finally {
+    await upstream.body.cancel().catch(() => {});
   }
-  pending += decoder.decode();
-  if (pending.trim() || state.think.inside || state.think.pending ||
-      (!state.sawDone && !state.sawFinish)) {
-    throw new Error('incomplete upstream stream');
-  }
-  if (!state.sawDone) res.write('data: [DONE]\n\n');
-  res.end();
 }
 
 async function boundedText(upstream) {
@@ -182,6 +236,7 @@ export function createRelayServer({ chatUrl, modelsUrl, upstreamKey, relayBearer
       typeof relayBearer !== 'string' || relayBearer.length < 16 || /\s/.test(relayBearer)) {
     throw new Error('invalid relay credentials');
   }
+  if (upstreamKey === relayBearer) throw new Error('upstream and relay credentials must differ');
   if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1 || deadlineMs > DEADLINE_MS) {
     throw new Error('invalid relay deadline');
   }
@@ -227,11 +282,12 @@ export function createRelayServer({ chatUrl, modelsUrl, upstreamKey, relayBearer
         await upstream.body?.cancel();
         return reply(res, 502, 'upstream request failed');
       }
-      if (isChat) return await relayChat(upstream, res);
+      if (isChat) return await relayChat(upstream, res, upstreamKey);
       const text = await boundedText(upstream);
-      try { JSON.parse(text); } catch { return reply(res, 502, 'invalid upstream response'); }
+      let modelsBody;
+      try { modelsBody = JSON.parse(text); } catch { return reply(res, 502, 'invalid upstream response'); }
       res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-      res.end(text);
+      res.end(JSON.stringify(scrubValue(modelsBody, upstreamKey)));
     } catch {
       if (res.headersSent) res.destroy();
       else reply(res, 502, 'relay upstream failure');
