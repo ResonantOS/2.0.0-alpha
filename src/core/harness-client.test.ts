@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import manifest from "../../public/addons/hermes.json";
 import { loadInitialShellState } from "../modules/shell/controller";
 import { createHarnessClient } from "./harness-client";
-import { HARNESS_PUBLIC_ERROR_MESSAGES, type HarnessEvent, type HarnessRegistryProjection } from "./contracts";
+import { HARNESS_PUBLIC_ERROR_MESSAGES, type AddOnManifest, type HarnessEvent, type HarnessRegistryProjection } from "./contracts";
 
 const snapshot = (revision: number): HarnessRegistryProjection => ({
   bootEpoch: "boot-1", revision, governanceActivated: true, candidates: [], installations: {},
@@ -16,6 +17,15 @@ const deferred = <T,>() => {
 };
 
 describe("harness projection client", () => {
+  it("install and remove send the caller revision", async () => {
+    const invoke = vi.fn().mockResolvedValue(snapshot(8));
+    const client = createHarnessClient({ invoke });
+    await client.install(manifest as AddOnManifest, true, 6);
+    expect(invoke).toHaveBeenLastCalledWith("harness_install", { manifest, enabled: true, expectedRevision: 6 });
+    await client.remove(manifest.id, 7);
+    expect(invoke).toHaveBeenLastCalledWith("harness_remove", { addonId: manifest.id, expectedRevision: 7 });
+  });
+
   it("commands use scoped headers and monotonic projections: rejects older and equal acknowledgements", async () => {
     const client = createHarnessClient();
     const listener = vi.fn();
@@ -78,7 +88,7 @@ describe("harness projection client", () => {
   it("keeps newer same-boot concurrent acknowledgements after the initial read", async () => {
     const late = deferred<HarnessRegistryProjection>();
     const client = createHarnessClient({ invoke: vi.fn().mockReturnValueOnce(late.promise).mockResolvedValueOnce(snapshot(1)) });
-    const write = client.remove(session.addonId);
+    const write = client.remove(session.addonId, 1);
     await client.refresh();
     late.resolve(snapshot(2));
     expect(await write).toEqual(snapshot(2));
@@ -88,8 +98,8 @@ describe("harness projection client", () => {
     const late = deferred<HarnessRegistryProjection>();
     const client = createHarnessClient({ invoke: vi.fn().mockReturnValueOnce(late.promise).mockResolvedValueOnce(snapshot(3)) });
     client.applySnapshot(snapshot(1));
-    const earlier = client.remove("addon.first");
-    await client.remove("addon.second");
+    const earlier = client.remove("addon.first", 1);
+    await client.remove("addon.second", 2);
     late.resolve(snapshot(2));
     expect(await earlier).toEqual(snapshot(3));
   });
@@ -139,7 +149,7 @@ describe("harness projection client", () => {
     const failure = Object.assign(new Error(message), { code });
     const client = createHarnessClient({ invoke: vi.fn().mockRejectedValue(failure) });
     client.applySnapshot(snapshot(2));
-    await expect(client.remove(session.addonId)).rejects.toBe(failure);
+    await expect(client.remove(session.addonId, 2)).rejects.toBe(failure);
     expect(client.getSnapshot()).toEqual(snapshot(2));
   });
 

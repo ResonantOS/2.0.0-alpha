@@ -399,7 +399,7 @@ function HarnessManagement({ client }: { client: HarnessClient }) {
     try { manifest = JSON.parse(text) as AddOnManifest; }
     catch { setNotice("Manifest must be valid JSON."); return; }
     try {
-      await client.install(manifest, true);
+      await client.install(manifest, true, projection!.revision);
     } finally {
       setFile(null);
       if (input.current) input.current.value = "";
@@ -448,7 +448,7 @@ function HarnessManagement({ client }: { client: HarnessClient }) {
             <h4>{nameFor(id)}</h4>
             <p>{installed ? "Installed" : "Not installed"}{current ? " · Current owner" : ""}</p>
             {!installed && candidate && <button type="button" disabled={disabled}
-              onClick={() => void run("Install", () => client.install(candidate, true))}>Install</button>}
+              onClick={() => void run("Install", () => client.install(candidate, true, projection!.revision))}>Install</button>}
             {installed && <>
               <p>Review capabilities before granting access:</p>
               <ul>{installation.grantedCapabilities.map(grant => <li key={grant.capability}>
@@ -464,7 +464,7 @@ function HarnessManagement({ client }: { client: HarnessClient }) {
                   slot: "primary-agent", addonId: id, expectedGeneration: owner?.generation ?? 0, replace: Boolean(owner?.addonId),
                 }))}>{owner?.addonId ? "Replace" : "Make primary"}</button>}
               <button type="button" disabled={disabled}
-                onClick={() => void run("Remove", () => client.remove(id))}>Remove</button>
+                onClick={() => void run("Remove", () => client.remove(id, projection!.revision))}>Remove</button>
             </>}
             {unavailable.length > 0 && <>
               <h5>Unavailable harness operations</h5>

@@ -28,7 +28,11 @@ const same = (a, b) => canonicalReceipt(a) === canonicalReceipt(b);
 
 /** Verify signatures first, then require signed host facts for every certification step. */
 export function verifyEvidence(bundle, { requireLive = true } = {}) {
-  check(bundle?.version === 2, 'unsigned legacy bundle: signatures and fresh execution receipts required');
+  // Version 2 predates compare-and-swap on install and remove; its receipts carry no
+  // expectedRevision and are verified by the rules they were produced under. Version 3
+  // additionally proves every install and the refused removal acted on a current revision.
+  check(bundle?.version === 2 || bundle?.version === 3, 'unsigned legacy bundle: signatures and fresh execution receipts required');
+  const cas = bundle.version >= 3;
   check(['live', 'fixture'].includes(bundle.mode) && (!requireLive || bundle.mode === 'live'), 'fixture is not live proof');
   check(timestamp(bundle.startedAt) && timestamp(bundle.finishedAt) && Date.parse(bundle.startedAt) <= Date.parse(bundle.finishedAt), 'bundle timestamps');
   check(Array.isArray(bundle.boots) && bundle.boots.length === 2, 'two boot epochs required');
@@ -71,7 +75,7 @@ export function verifyEvidence(bundle, { requireLive = true } = {}) {
   check(g && Array.isArray(g.installations) && g.installations.length === 3, 'three installations');
   const installs = g.installations.map((id, i) => {
     const r = route(id, '/addons/install', true, old.bootEpoch);
-    check(r.request.addonId === OWNERS[i] && r.result.installations[OWNERS[i]].grantedCapabilities.every(grant => !grant.granted), 'installation grants nothing');
+    check((!cas || r.request.expectedRevision === r.result.revision - 1) && r.request.addonId === OWNERS[i] && r.result.installations[OWNERS[i]].grantedCapabilities.every(grant => !grant.granted), 'installation grants nothing');
     return r;
   });
   check(installs[1].declaration.agentRuntime.adapterId === 'openai-compatible-v1' && installs[2].declaration.agentRuntime.adapterId === 'openai-compatible-v1' &&
@@ -109,7 +113,7 @@ export function verifyEvidence(bundle, { requireLive = true } = {}) {
   }
   check(sessionEqual(stale.request.session, route(bundle.turns[2].session, '/agent/session').result.session), 'rejected session must have executed before restart');
   const lock = route(g.lockInstall, '/addons/install', true, fresh.bootEpoch);
-  check(lock.request.addonId === B && lock.declaration.systemSlots.find(slot => slot.id === 'primary-agent')?.replaceable === false, 'nonreplaceable incumbent declaration');
+  check((!cas || lock.request.expectedRevision === lock.result.revision - 1) && lock.request.addonId === B && lock.declaration.systemSlots.find(slot => slot.id === 'primary-agent')?.replaceable === false, 'nonreplaceable incumbent declaration');
   const lockOwner = route(g.lockAssign, '/addons/slots/assign', true, fresh.bootEpoch).result.slots['primary-agent'];
   check(lockOwner.addonId === B, 'locked owner assignment');
   const replacement = route(g.replacement, '/addons/slots/assign', false, fresh.bootEpoch);
@@ -149,7 +153,7 @@ export function verifyEvidence(bundle, { requireLive = true } = {}) {
     }
   }
   const removal = route(g.removal, '/addons/remove', false, fresh.bootEpoch);
-  check(removal.request.addonId === B && removal.error.code === 'ownership-conflict' && removal.projection.installations[B].installed &&
+  check((!cas || removal.request.expectedRevision === removal.projection.revision) && removal.request.addonId === B && removal.error.code === 'ownership-conflict' && removal.projection.installations[B].installed &&
     removal.projection.slots['primary-agent'].addonId === B, 'active owner removal refusal');
   return true;
 }
@@ -192,7 +196,7 @@ async function demoManifests(bindings = []) {
 // Both deterministic tests and the actual browser driver execute this same
 // sequence of host transactions. The transport/UI hooks never supply signatures.
 async function certification({ fixture, manifests, createHost, connect = async () => ({}), disconnect = async () => {}, models }) {
-  const bundle = { version: 2, mode: fixture ? 'fixture' : 'live', startedAt: now(), boots: [], turns: [], governance: {} };
+  const bundle = { version: 3, mode: fixture ? 'fixture' : 'live', startedAt: now(), boots: [], turns: [], governance: {} };
   const g = bundle.governance;
   let host, io, receipts, hold = false, dispatched = 0;
   const callbacks = { hold: () => hold, dispatched: () => { dispatched++; } };
@@ -246,7 +250,7 @@ async function certification({ fixture, manifests, createHost, connect = async (
     await boot();
     g.installations = [];
     for (const manifest of manifests) {
-      g.installations.push(ref(await call('/addons/install', { manifest, enabled: true })));
+      g.installations.push(ref(await call('/addons/install', { manifest, enabled: true, expectedRevision: snapshot().revision })));
       if (manifest.id === DSH) g.denied = ref(await call('/addons/slots/assign', { slot: 'primary-agent', addonId: DSH, expectedGeneration: 0 }, false));
       await grants(manifest);
       if (manifest.id === DSH) await call('/addons/slots/assign', { slot: 'chat-interface', addonId: DSH, expectedGeneration: 0 });
@@ -261,7 +265,7 @@ async function certification({ fixture, manifests, createHost, connect = async (
     for (const [i, manifest] of [manifests[2], manifests[0], manifests[1]].entries()) await answer(manifest, i + 3);
     const locked = structuredClone(manifests[2]);
     locked.systemSlots.find(slot => slot.id === 'primary-agent').replaceable = false;
-    g.lockInstall = ref(await call('/addons/install', { manifest: locked, enabled: true }));
+    g.lockInstall = ref(await call('/addons/install', { manifest: locked, enabled: true, expectedRevision: snapshot().revision }));
     await grants(locked); g.lockAssign = ref(await select(locked));
     g.replacement = ref(await call('/addons/slots/assign', { slot: 'primary-agent', addonId: DSH,
       expectedGeneration: snapshot().slots['primary-agent'].generation, replace: true }, false));
@@ -291,7 +295,7 @@ async function certification({ fixture, manifests, createHost, connect = async (
       }
       await stream.close(); await stream.done; hold = false;
     }
-    g.removal = ref(await call('/addons/remove', { addonId: B }, false));
+    g.removal = ref(await call('/addons/remove', { addonId: B, expectedRevision: snapshot().revision }, false));
     bundle.finishedAt = now();
     verifyEvidence(bundle, { requireLive: !fixture });
     return bundle;

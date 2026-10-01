@@ -76,7 +76,7 @@ export const applyFirstRunRecommendedAddOns = async (
   for (const manifest of recommended.filter(item => selected.has(item.id))) {
     let snapshot = client.getSnapshot() ?? await client.refresh();
     const installation = snapshot.installations[manifest.id];
-    if (!installation?.installed) snapshot = await client.install(manifest, true);
+    if (!installation?.installed) snapshot = await client.install(manifest, true, snapshot.revision);
     else if (!installation.enabled) snapshot = await client.setEnabled(manifest.id, true, snapshot.revision);
 
     const capabilities = recommendedGrantCapabilities(manifest);

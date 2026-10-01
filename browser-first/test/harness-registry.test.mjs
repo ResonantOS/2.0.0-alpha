@@ -28,14 +28,14 @@ function memoryStore() {
 }
 const open = store => createHarnessRegistry({ store, reviewedAdapterIds: ['test-adapter'] });
 async function installGranted(registry, value = manifest()) {
-  await registry.install(value, { enabled: true });
+  await registry.install(value, { enabled: true, expectedRevision: registry.snapshot().revision });
   await registry.setGrants(value.id, value.requestedCapabilities.map(grant => ({ ...grant, granted: true })), { consent: true, expectedRevision: registry.snapshot().revision });
 }
 const assign = (registry, id = 'addon.one', expectedGeneration = 0, slot = 'primary-agent') => registry.assignSlot(slot, id, { expectedGeneration, replace: true });
 
 test('installation clears authored consent', async () => {
   const registry = await open(memoryStore());
-  await registry.install(manifest(), { enabled: true });
+  await registry.install(manifest(), { enabled: true, expectedRevision: registry.snapshot().revision });
   assert.ok(registry.snapshot().installations['addon.one'].grantedCapabilities.every(grant => !grant.granted), 'authored consent must never install as granted');
   await assert.rejects(assign(registry), { code: 'permission-denied' });
   assert.throws(() => registry.authorize('primary-agent', 'addon.one'), { code: 'permission-denied' });
@@ -109,9 +109,9 @@ test('every current slot owner blocks uninstall', async () => {
     const value = manifest(`addon.owner-${index}`);
     await installGranted(registry, value);
     await assign(registry, value.id, 0, slot);
-    await assert.rejects(registry.remove(value.id), { code: 'ownership-conflict' });
+    await assert.rejects(registry.remove(value.id, { expectedRevision: registry.snapshot().revision }), { code: 'ownership-conflict' });
     await registry.assignSlot(slot, null, { expectedGeneration: 1, replace: true });
-    await registry.remove(value.id);
+    await registry.remove(value.id, { expectedRevision: registry.snapshot().revision });
     assert.equal(registry.snapshot().installations[value.id], undefined);
   }
   assert.equal(registry.snapshot().governanceActivated, true, 'vacancy retains governance');
@@ -128,7 +128,7 @@ test('binding authorization checks identity, adapter and exact endpoint without 
   for (const patch of [{ id: 'addon.foreign' }, { endpoint: 'http://127.0.0.1:3081' }, { adapterId: 'unreviewed' }]) {
     const other = structuredClone(value);
     if (patch.id) other.id = patch.id; else Object.assign(other.agentRuntime, patch);
-    await assert.rejects(registry.install(other, { enabled: true }), { code: 'permission-denied' });
+    await assert.rejects(registry.install(other, { enabled: true, expectedRevision: registry.snapshot().revision }), { code: 'permission-denied' });
   }
 });
 
@@ -289,7 +289,7 @@ test('stale consent revisions and undeclared slots cannot mutate authority', asy
   await assert.rejects(registry.setGrants(value.id, value.requestedCapabilities, { consent: true, expectedRevision: 0 }), { code: 'ownership-conflict' });
   await assert.rejects(assign(registry, value.id, 0, 'memory-system'), { code: 'permission-denied' });
   const invalid = manifest('addon.invalid'); invalid.agentRuntime.token = 'must-reject';
-  await assert.rejects(registry.install(invalid, { enabled: true }), { code: 'invalid-manifest' });
+  await assert.rejects(registry.install(invalid, { enabled: true, expectedRevision: registry.snapshot().revision }), { code: 'invalid-manifest' });
 });
 
 test('ownership is fenced while durability is pending and no acknowledgement precedes commit', async () => {
@@ -367,7 +367,7 @@ test('unreadable and malformed durable state fail closed instead of resetting co
     const registry = await open(store);
     assert.equal(registry.snapshot().governanceActivated, true, 'unreadable governance must not advertise legacy fallback');
     assert.equal(registry.snapshot().slots['primary-agent'].available, false);
-    await assert.rejects(registry.install(manifest(), { enabled: true }), { code: 'runtime-unavailable' });
+    await assert.rejects(registry.install(manifest(), { enabled: true, expectedRevision: registry.snapshot().revision }), { code: 'runtime-unavailable' });
   }
 });
 
@@ -388,7 +388,7 @@ test('legacy import creates consent candidates only', async () => {
 
 test('selected add-on grant batches are atomic, including invalid and stale batches', async () => {
   const registry = await open(memoryStore()), value = manifest();
-  await registry.install(value, { enabled: true });
+  await registry.install(value, { enabled: true, expectedRevision: registry.snapshot().revision });
   const before = registry.snapshot();
   const grants = value.requestedCapabilities.slice(0, 2).map(g => ({ ...g, granted: true }));
   await assert.rejects(registry.setGrants(value.id, [...grants, { ...grants[0], capability: 'undeclared' }], { consent: true, expectedRevision: before.revision }), { code: 'permission-denied' });
@@ -404,13 +404,13 @@ test('ordinary add-ons can install, disable, enable, grant and remove without ru
   for (const name of ['browser', 'hermes']) {
     const value = JSON.parse(await readFile(new URL(`../../public/addons/${name}.json`, import.meta.url)));
     const registry = await open(memoryStore());
-    await registry.install(value, { enabled: true });
+    await registry.install(value, { enabled: true, expectedRevision: registry.snapshot().revision });
     await registry.setEnabled(value.id, false, { expectedRevision: 1 });
     assert.equal(registry.snapshot().installations[value.id].enabled, false);
     await registry.setEnabled(value.id, true, { expectedRevision: 2 });
     await registry.setGrants(value.id, value.requestedCapabilities.map(g => ({ ...g, granted: true })), { consent: true, expectedRevision: 3 });
     assert.ok(registry.snapshot().installations[value.id].grantedCapabilities.every(g => g.granted));
-    await registry.remove(value.id);
+    await registry.remove(value.id, { expectedRevision: registry.snapshot().revision });
     assert.equal(registry.snapshot().installations[value.id], undefined);
   }
 });
@@ -431,7 +431,7 @@ test('legacy import never overwrites host consent or ownership and survives rest
 
 test('failed persistence cannot partially commit a grant batch', async () => {
   const store = memoryStore(), registry = await open(store), value = manifest();
-  await registry.install(value, { enabled: true });
+  await registry.install(value, { enabled: true, expectedRevision: registry.snapshot().revision });
   store.write = async () => { throw new Error('disk unavailable'); };
   await assert.rejects(registry.setGrants(value.id, value.requestedCapabilities, { consent: true, expectedRevision: 1 }), { code: 'runtime-unavailable' });
   assert.ok(registry.snapshot().installations[value.id].grantedCapabilities.every(g => !g.granted));
@@ -442,7 +442,7 @@ test('Living Archive can own memory-system once granted without an agent runtime
   const value = JSON.parse(await readFile(new URL('../../public/addons/living-archive.json', import.meta.url)));
   const registry = await open(memoryStore());
   assert.equal(value.agentRuntime, undefined);
-  await registry.install(value, { enabled: true });
+  await registry.install(value, { enabled: true, expectedRevision: registry.snapshot().revision });
   await assert.rejects(assign(registry, value.id, 0, 'memory-system'), { code: 'permission-denied' });
   await registry.setGrants(value.id, value.requestedCapabilities.filter(g => g.capability === 'memory-provider').map(g => ({ ...g, granted: true })), { consent: true, expectedRevision: 1 });
   await registry.setEnabled(value.id, false, { expectedRevision: 2 });
@@ -457,7 +457,7 @@ for (const slot of ['chat-interface', 'communication-channel']) {
   test(`${slot} needs only its own grant and declared slot, without an adapter`, async () => {
     const registry = await open(memoryStore()), value = manifest();
     delete value.agentRuntime;
-    await registry.install(value, { enabled: true });
+    await registry.install(value, { enabled: true, expectedRevision: registry.snapshot().revision });
     await assert.rejects(assign(registry, value.id, 0, slot), { code: 'permission-denied' });
     const capability = slot === 'chat-interface' ? slot : 'notifications';
     await registry.setGrants(value.id, value.requestedCapabilities.filter(g => g.capability === capability).map(g => ({ ...g, granted: true })), { consent: true, expectedRevision: 1 });
@@ -474,7 +474,7 @@ test('primary-agent still requires a bound runtime and every adapter capability'
   await installGranted(registry, value);
   await assert.rejects(assign(registry), { code: 'permission-denied' });
   const harness = manifest();
-  await registry.install(harness, { enabled: true });
+  await registry.install(harness, { enabled: true, expectedRevision: registry.snapshot().revision });
   await registry.setGrants(harness.id, harness.requestedCapabilities.filter(g => g.capability === 'agent-runtime'), { consent: true, expectedRevision: 3 });
   await assert.rejects(assign(registry), { code: 'permission-denied' });
   await registry.setGrants(harness.id, harness.requestedCapabilities.filter(g => g.capability === 'chat-interface'), { consent: true, expectedRevision: 4 });
@@ -590,11 +590,11 @@ test('installation refuses a manifest that understates what its adapter reaches'
   for (const [adapterId, hidden] of [['provider-fabric-v1', 'providers'], ['openai-compatible-v1', 'network'], ['dsh-typert-v1', 'network']]) {
     const honest = examples[adapterId];
     const registry = await reviewedRegistry(memoryStore());
-    await assert.rejects(registry.install(shrink(honest, hidden), { enabled: true }), error => error.code === 'invalid-manifest',
+    await assert.rejects(registry.install(shrink(honest, hidden), { enabled: true, expectedRevision: registry.snapshot().revision }), error => error.code === 'invalid-manifest',
       `${adapterId} must not install while omitting ${hidden}`);
     assert.deepEqual(Object.keys(registry.snapshot().installations), [], 'a refused install must leave no entry');
 
-    await registry.install(structuredClone(honest), { enabled: true });
+    await registry.install(structuredClone(honest), { enabled: true, expectedRevision: registry.snapshot().revision });
     const shown = registry.snapshot().installations[honest.id].grantedCapabilities.map(grant => grant.capability);
     assert.ok(shown.includes(hidden), `${adapterId}: the honest manifest installs and shows ${hidden} to the operator`);
   }
@@ -616,7 +616,7 @@ test('an add-on with no agent runtime is unaffected by the adapter floor', async
   const registry = await open(memoryStore());
   const value = manifest();
   delete value.agentRuntime;
-  await registry.install(value, { enabled: true });
+  await registry.install(value, { enabled: true, expectedRevision: registry.snapshot().revision });
   assert.ok(registry.snapshot().installations['addon.one'], 'non-harness add-ons must still install');
 });
 
@@ -626,7 +626,7 @@ test('an adapter id that names an Object prototype member has no floor', async (
   const registry = await reviewedRegistry(memoryStore());
   const value = structuredClone(examples['provider-fabric-v1']);
   value.agentRuntime.adapterId = 'constructor';
-  await assert.rejects(registry.install(value, { enabled: true }), error => error.code === 'permission-denied',
+  await assert.rejects(registry.install(value, { enabled: true, expectedRevision: registry.snapshot().revision }), error => error.code === 'permission-denied',
     'an unreviewed adapter is refused by the reviewed-adapter check, not by a type error');
   // Legacy import accepts candidates with every grant denied; an unreviewed adapter is stopped
   // where it matters, at slot assignment. What must never happen is a TypeError from the lookup.
@@ -655,7 +655,7 @@ test('an installation persisted before the floor can be removed even when it own
   assert.equal(snapshot.slots['primary-agent'].addonId, null, 'its slot is vacated so it no longer blocks removal');
   assert.ok(!snapshot.installations[shrunken.id].grantedCapabilities.some(grant => grant.capability === 'providers'),
     'the missing capability is never granted on the operator behalf');
-  await registry.remove(shrunken.id);
+  await registry.remove(shrunken.id, { expectedRevision: registry.snapshot().revision });
   assert.deepEqual(Object.keys(registry.snapshot().installations), [], 'the operator can now remove it and install a corrected manifest');
 });
 
@@ -667,7 +667,7 @@ test('a slot is not advertised available when the floor leaves every operation d
   value.agentRuntime.requiredCapabilities = value.agentRuntime.requiredCapabilities.filter(item => item !== 'providers');
   for (const tool of value.tools ?? []) tool.requiredCapabilities = (tool.requiredCapabilities ?? []).filter(item => item !== 'providers');
   const registry = await reviewedRegistry(memoryStore());
-  await registry.install(value, { enabled: true });  // still requests providers, so the floor check passes
+  await registry.install(value, { enabled: true, expectedRevision: registry.snapshot().revision });  // still requests providers, so the floor check passes
   const granted = registry.snapshot().installations[value.id].grantedCapabilities
     .map(grant => ({ ...grant, granted: grant.capability !== 'providers' }));
   await registry.setGrants(value.id, granted, { consent: true, expectedRevision: registry.snapshot().revision });
@@ -705,7 +705,7 @@ test('a fresh user root continues the counter from the watermark', async t => {
   const restored = await open(store);
   assert.equal(restored.snapshot().revision, revision);
   assert.equal(restored.snapshot().governanceActivated, false);
-  await restored.install(manifest(), { enabled: true });
+  await restored.install(manifest(), { enabled: true, expectedRevision: revision });
   assert.equal(restored.snapshot().revision, revision + 1);
   assert.equal(await store.watermark(), revision + 1);
   await restored.setGrants('addon.one', manifest().requestedCapabilities, { consent: true, expectedRevision: revision + 1 });
@@ -719,7 +719,8 @@ test('user roots on one host keep separate watermarks', async t => {
   const b = createHarnessRegistryStore({ userRoot: join(dirname(userRoot), 'other'), stateRoot });
   const registry = await open(a);
   await installGranted(registry); await assign(registry); await assign(registry, 'addon.one', 1); await assign(registry, 'addon.one', 2);
-  await (await open(b)).install(manifest(), { enabled: true });
+  const second = await open(b);
+  await second.install(manifest(), { enabled: true, expectedRevision: second.snapshot().revision });
   assert.equal(await a.watermark(), 5);
   assert.equal((await open(b)).snapshot().revision, 1);
   assert.ok((await open(b)).snapshot().installations['addon.one']);
@@ -782,3 +783,23 @@ test('refusal is diagnosed with the watermark path', async t => {
   assert.deepEqual(lines.splice(0), [{ event: 'harness.registry_refused', reason: 'watermark-invalid', documentRevision: null, watermark: null, watermarkPath: store.watermarkPath }]);
   await assert.rejects(restored.install(manifest(), { enabled: true }), { code: 'runtime-unavailable' });
 });
+
+for (const operation of ['install', 'reinstall', 'remove']) {
+  test(`${operation} requires the current revision and preserves state on conflict`, async () => {
+    const registry = await open(memoryStore()), value = manifest();
+    if (operation !== 'install') await installGranted(registry, value);
+    const before = registry.snapshot();
+    const mutate = expectedRevision => operation === 'remove'
+      ? registry.remove(value.id, { expectedRevision })
+      : registry.install(value, { enabled: true, expectedRevision });
+    for (const revision of [undefined, before.revision - 1]) {
+      await assert.rejects(mutate(revision), { code: 'ownership-conflict' });
+      assert.deepEqual(registry.snapshot(), before);
+    }
+    await mutate(before.revision);
+    const after = registry.snapshot();
+    assert.equal(after.revision, before.revision + 1);
+    if (operation === 'remove') assert.equal(after.installations[value.id], undefined);
+    else assert.ok(after.installations[value.id].grantedCapabilities.every(grant => !grant.granted));
+  });
+}
