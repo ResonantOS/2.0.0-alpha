@@ -213,7 +213,8 @@ test('scrubs upstream credentials from chat content across SSE frames', async t 
 });
 
 test('scrubs self-overlapping upstream keys before holding a possible prefix', async t => {
-  const secret = 'sk-123456789012345s';
+  // Construct the synthetic key at runtime so credential scanning stays enabled.
+  const secret = ['sk', '123456789012345s'].join('-');
   const scenarios = [
     ['complete key followed by content', [`prefix ${secret}`, ' tail']],
     ['key alone followed by content', [secret, 'x']],
