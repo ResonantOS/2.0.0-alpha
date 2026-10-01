@@ -267,9 +267,9 @@ export async function createHarnessHostService({ userRoot, store = createHarness
   const read = 'addon-runtime-read', control = 'addon-runtime-control';
   const harnessRoutes = [
     route('GET', '/addons/registry', read, [], [], () => snapshot()),
-    route('POST', '/addons/install', control, ['manifest', 'enabled'], [], async p => {
-      if (typeof p.enabled !== 'boolean') throw fail('invalid-event');
-      await registry.install(p.manifest, { enabled: p.enabled });
+    route('POST', '/addons/install', control, ['manifest', 'enabled', 'expectedRevision'], [], async p => {
+      if (typeof p.enabled !== 'boolean' || !revision(p.expectedRevision)) throw fail('invalid-event');
+      await registry.install(p.manifest, p);
       manifests.set(p.manifest.id, structuredClone(p.manifest)); return snapshot();
     }),
     route('POST', '/addons/grants', control, ['addonId', 'grants', 'consent', 'expectedRevision'], [], async p => {
@@ -280,9 +280,9 @@ export async function createHarnessHostService({ userRoot, store = createHarness
       if (!id(p.addonId) || typeof p.enabled !== 'boolean' || !revision(p.expectedRevision)) throw fail('invalid-event');
       await registry.setEnabled(p.addonId, p.enabled, p); return snapshot();
     }),
-    route('POST', '/addons/remove', control, ['addonId'], [], async p => {
-      if (!id(p.addonId)) throw fail('invalid-event');
-      await registry.remove(p.addonId); manifests.delete(p.addonId); return snapshot();
+    route('POST', '/addons/remove', control, ['addonId', 'expectedRevision'], [], async p => {
+      if (!id(p.addonId) || !revision(p.expectedRevision)) throw fail('invalid-event');
+      await registry.remove(p.addonId, p); manifests.delete(p.addonId); return snapshot();
     }),
     route('POST', '/addons/slots/assign', control, ['slot', 'addonId', 'expectedGeneration'], ['replace'], async p => {
       if (!id(p.slot) || (p.addonId !== null && !id(p.addonId)) || !revision(p.expectedGeneration) || (p.replace !== undefined && typeof p.replace !== 'boolean')) throw fail('invalid-event');

@@ -15,7 +15,7 @@ async function fixture(adapterOverrides = {}, limits = {}, configure = () => {})
   let document = null;
   const store = { read: async () => structuredClone(document), write: async value => { document = structuredClone(value); } };
   const registry = await createHarnessRegistry({ store, reviewedAdapterIds: ['test-adapter'] });
-  await registry.install(manifest, { enabled: true });
+  await registry.install(manifest, { enabled: true, expectedRevision: registry.snapshot().revision });
   await registry.setGrants(manifest.id, manifest.requestedCapabilities.map(grant => ({ ...grant, granted: true })), { consent: true, expectedRevision: 1 });
   await registry.assignSlot('primary-agent', manifest.id, { expectedGeneration: 0 });
   const calls = [];

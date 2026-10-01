@@ -222,7 +222,7 @@ async function compatibleSwap(t, loopback) {
   const host = await createHarnessHostService({ bindings, env, ...(loopback ? {} : { openaiAdapterFactory: options => createOpenAICompatibleAdapter({ ...options, fetchImpl: async (url, init) => new Response(responders.get(url.origin)(url, init.headers.Authorization, JSON.parse(init.body)), { headers: { 'content-type': 'text/event-stream' } }) }) }), store: { read: async () => stored, write: async value => { stored = structuredClone(value); } } });
   t.after(() => host.close());
   for (const [i, manifest] of manifests.entries()) {
-    await host.registry.install(manifest, { enabled: true });
+    await host.registry.install(manifest, { enabled: true, expectedRevision: host.registry.snapshot().revision });
     await host.registry.setGrants(manifest.id, manifest.requestedCapabilities.map(g => ({ ...g, granted: true })), { consent: true, expectedRevision: host.registry.snapshot().revision });
     await host.registry.assignSlot('primary-agent', manifest.id, { expectedGeneration: i, replace: i > 0 });
     const session = await host.boundary.createSession({ addonId: manifest.id });
@@ -314,4 +314,24 @@ test('a host closure resolves only when expected, and no failure is ever an unha
     const controller = new AbortController(); controller.abort();
     await observeEventStream(body(new Error('anything after our own abort')), controller.signal);
   } finally { process.off('unhandledRejection', spy); }
+});
+
+test('a version-2 bundle from before compare-and-swap still verifies; a version-3 bundle must carry the revisions', async () => {
+  // Simon's 27 September certification and any run on a pre-CAS build are version 2: their install
+  // and removal receipts carry no expectedRevision and must stay verifiable by current tooling.
+  const { bundle, keys } = await liveBundle();
+  assert.equal(bundle.version, 3, 'the driver now writes version 3');
+  const legacy = structuredClone(bundle);
+  legacy.version = 2;
+  for (const ref of [...legacy.governance.installations, legacy.governance.lockInstall, legacy.governance.removal]) delete get(legacy, ref).request.expectedRevision;
+  resign(legacy, keys);
+  assert.equal(verifyEvidence(legacy), true, 'version 2 is verified by the rules it was produced under');
+  const stripped = structuredClone(bundle);
+  delete get(stripped, stripped.governance.installations[0]).request.expectedRevision;
+  resign(stripped, keys);
+  assert.throws(() => verifyEvidence(stripped), /installation grants nothing/, 'version 3 proves every install acted on a current revision');
+  const stale = structuredClone(bundle);
+  get(stale, stale.governance.removal).request.expectedRevision += 1;
+  resign(stale, keys);
+  assert.throws(() => verifyEvidence(stale), /evidence/i, 'a refused removal must have acted on the projection it was refused against');
 });

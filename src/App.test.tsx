@@ -3771,7 +3771,7 @@ describe("App boot flow", () => {
     const pending = deferred<typeof snapshot>();
     harnessInvokeMock.mockReturnValueOnce(pending.promise);
     fireEvent.click(within(region).getByRole("button", { name: "Install" }));
-    expect(harnessInvokeMock).toHaveBeenLastCalledWith("harness_install", { manifest: candidate, enabled: true });
+    expect(harnessInvokeMock).toHaveBeenLastCalledWith("harness_install", { manifest: candidate, enabled: true, expectedRevision: 0 });
     expect(screen.getByText("Pending: Install")).toBeTruthy();
     expect(within(region).queryByRole("button", { name: "Remove" })).toBeNull();
     await act(async () => pending.resolve({ ...snapshot, revision: 1 }));

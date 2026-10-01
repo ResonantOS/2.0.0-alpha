@@ -827,6 +827,20 @@ describe("host harness management", () => {
     return value;
   };
 
+  it("install conflict refreshes the projection without retrying", async () => {
+    const { read, invoke, client } = setup();
+    await act(async () => read.resolve(projection(4)));
+    const next = installed(projection(5), dsh);
+    invoke.mockRejectedValueOnce(Object.assign(new Error("Runtime ownership changed."), { code: "ownership-conflict", status: 409 }))
+      .mockResolvedValueOnce(next);
+    fireEvent.click(card("DSH").getByRole("button", { name: "Install" }));
+    await waitFor(() => expect(client.getSnapshot()).toEqual(next));
+    expect(invoke.mock.calls.slice(1)).toEqual([
+      ["harness_install", { manifest: dsh, enabled: true, expectedRevision: 4 }],
+      ["harness_registry"],
+    ]);
+  });
+
   it("management follows host acknowledgements", async () => {
     const { read, invoke } = setup();
     expect(screen.queryByText("Harness management")).toBeNull();
@@ -836,7 +850,7 @@ describe("host harness management", () => {
     const install = deferred();
     invoke.mockReturnValueOnce(install.promise);
     fireEvent.click(card("DSH").getByRole("button", { name: "Install" }));
-    expect(invoke).toHaveBeenLastCalledWith("harness_install", { manifest: dsh, enabled: true });
+    expect(invoke).toHaveBeenLastCalledWith("harness_install", { manifest: dsh, enabled: true, expectedRevision: 0 });
     expect(card("DSH").queryByRole("button", { name: "Grant" })).toBeNull();
     expect(screen.getByText("Pending: Install")).toBeTruthy();
     const first = installed(projection(1), dsh);
@@ -881,7 +895,7 @@ describe("host harness management", () => {
     const remove = deferred();
     invoke.mockReturnValueOnce(remove.promise);
     fireEvent.click(card("DSH").getByRole("button", { name: "Remove" }));
-    expect(invoke).toHaveBeenLastCalledWith("harness_remove", { addonId: dsh.id });
+    expect(invoke).toHaveBeenLastCalledWith("harness_remove", { addonId: dsh.id, expectedRevision: 5 });
     expect(card("DSH").getByText("Granted")).toBeTruthy();
     const sixth = { ...fifth, revision: 6, installations: { [provider.id]: fifth.installations[provider.id] } };
     await act(async () => remove.resolve(sixth));
@@ -984,7 +998,7 @@ describe("host harness management", () => {
     // jsdom's synthetic file selection does not populate the browser's fake path.
     Object.defineProperty(input, "value", { configurable: true, writable: true, value: "C:\\fakepath\\manifest.json" });
     fireEvent.click(install);
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith("harness_install", { manifest: dsh, enabled: true }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("harness_install", { manifest: dsh, enabled: true, expectedRevision: 0 }));
     await act(async () => response.reject(Object.assign(new Error("private-host-detail"), { code })));
     expect(input.value).toBe("");
     expect(install).toBeDisabled();
@@ -999,7 +1013,7 @@ describe("host harness management", () => {
     fireEvent.change(input, { target: { files: [new File([JSON.stringify(provider)], "new.json")] } });
     expect(install).toBeEnabled();
     fireEvent.click(install);
-    await waitFor(() => expect(invoke).toHaveBeenLastCalledWith("harness_install", { manifest: provider, enabled: true }));
+    await waitFor(() => expect(invoke).toHaveBeenLastCalledWith("harness_install", { manifest: provider, enabled: true, expectedRevision: code === "ownership-conflict" ? 1 : 0 }));
     await waitFor(() => expect(install).toBeDisabled());
   });
 
@@ -1013,7 +1027,7 @@ describe("host harness management", () => {
     invoke.mockReturnValueOnce(response.promise);
     fireEvent.change(screen.getByLabelText("Import JSON manifest"), { target: { files: [new File([raw], "manifest.json")] } });
     fireEvent.click(card("Import harness manifest").getByRole("button", { name: "Install" }));
-    await waitFor(() => expect(invoke).toHaveBeenLastCalledWith("harness_install", { manifest: expectedManifest, enabled: true }));
+    await waitFor(() => expect(invoke).toHaveBeenLastCalledWith("harness_install", { manifest: expectedManifest, enabled: true, expectedRevision: 0 }));
     expect(parse.mock.calls.filter(([input]) => input === raw).length).toBe(1);
     expect(screen.queryByText("DSH")).toBeNull();
     expect(document.body.textContent).not.toContain("never-render-this-token");
@@ -1088,7 +1102,7 @@ describe("host harness management", () => {
     const response = deferred();
     invoke.mockReturnValueOnce(response.promise);
     fireEvent.click(card("Import harness manifest").getByRole("button", { name: "Install" }));
-    await waitFor(() => expect(invoke).toHaveBeenLastCalledWith("harness_install", { manifest: dsh, enabled: true }));
+    await waitFor(() => expect(invoke).toHaveBeenLastCalledWith("harness_install", { manifest: dsh, enabled: true, expectedRevision: 0 }));
     expect(screen.getByText("Pending: Install")).toBeTruthy();
     expect(input).toHaveFocus();
     await act(async () => response.resolve(installed(projection(1), dsh)));

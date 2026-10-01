@@ -68,12 +68,12 @@ export function createHarnessClient(transport: Partial<Transport> = {}) {
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     applySnapshot,
     refresh: () => command("harness_registry"),
-    install: (manifest: AddOnManifest, enabled: boolean) => command("harness_install", { manifest, enabled }),
+    install: (manifest: AddOnManifest, enabled: boolean, expectedRevision: number) => command("harness_install", { manifest, enabled, expectedRevision }),
     setEnabled: (addonId: string, enabled: boolean, expectedRevision: number) =>
       command("harness_enabled", { addonId, enabled, expectedRevision }),
     setGrants: (args: { addonId: string; grants: readonly CapabilityGrant[]; consent: boolean; expectedRevision: number }) =>
       command("harness_grants", args),
-    remove: (addonId: string) => command("harness_remove", { addonId }),
+    remove: (addonId: string, expectedRevision: number) => command("harness_remove", { addonId, expectedRevision }),
     assignSlot: (args: { slot: SystemSlotId; addonId: string | null; expectedGeneration: number; replace?: boolean }) =>
       command("harness_assign_slot", args),
     createSession: (addonId: string) => invoke<{ session: HarnessSession }>("harness_session", { addonId }),
