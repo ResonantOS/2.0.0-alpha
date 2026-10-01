@@ -168,6 +168,65 @@ function normalizeFrame(frame, state, upstreamKey) {
   return [scrubValue(event, upstreamKey)];
 }
 
+function createSseParser(onFrame) {
+  let line = '';
+  let lineBytes = 0;
+  let frameBytes = 0;
+  let lines = [];
+  let pendingCR = false;
+  let stopped = false;
+
+  function endLine() {
+    frameBytes += lineBytes + 1;
+    if (frameBytes > MAX_FRAME) throw new Error('upstream frame too large');
+    if (!line) {
+      const frame = lines.join('\n');
+      line = '';
+      lineBytes = 0;
+      lines = [];
+      frameBytes = 0;
+      if (onFrame(frame) === false) stopped = true;
+      return;
+    }
+    lines.push(line);
+    line = '';
+    lineBytes = 0;
+  }
+
+  function feed(text) {
+    if (stopped) return;
+    for (const char of text) {
+      if (pendingCR) {
+        pendingCR = false;
+        endLine();
+        if (stopped) return;
+        if (char === '\n') continue;
+      }
+      if (char === '\r') {
+        pendingCR = true;
+      } else if (char === '\n') {
+        endLine();
+        if (stopped) return;
+      } else {
+        line += char;
+        lineBytes += Buffer.byteLength(char);
+        if (frameBytes + lineBytes > MAX_FRAME) throw new Error('upstream frame too large');
+      }
+    }
+  }
+
+  function finish() {
+    if (stopped) return;
+    if (pendingCR) {
+      pendingCR = false;
+      endLine();
+    }
+    if (line || lines.length) throw new Error('incomplete upstream stream');
+  }
+
+  return { feed, finish };
+}
+
 async function relayChat(upstream, res, upstreamKey) {
   if (!/^text\/event-stream(?:\s*;|$)/i.test(upstream.headers.get('content-type') ?? '') || !upstream.body) {
     await upstream.body?.cancel().catch(() => {});
@@ -178,32 +237,24 @@ async function relayChat(upstream, res, upstreamKey) {
   res.flushHeaders();
   const state = { sawDone: false, choices: new Map(), contentPending: new Map(), think: { inside: false, pending: '' } };
   const decoder = new TextDecoder('utf-8', { fatal: true });
-  let pending = '';
   let wireBytes = 0;
+  const parser = createSseParser(frame => {
+    const normalized = normalizeFrame(frame, state, upstreamKey) ?? [];
+    for (const event of normalized) res.write(`data: ${JSON.stringify(event)}\n\n`);
+    return !state.sawDone;
+  });
   try {
     for await (const chunk of upstream.body) {
       wireBytes += chunk.byteLength;
       if (wireBytes > MAX_WIRE) throw new Error('upstream stream too large');
-      pending += decoder.decode(chunk, { stream: true });
-      pending = pending.replace(/\r\n/g, '\n');
-      let end;
-      while ((end = pending.indexOf('\n\n')) !== -1) {
-        const frame = pending.slice(0, end);
-        pending = pending.slice(end + 2);
-        if (Buffer.byteLength(frame) > MAX_FRAME) throw new Error('upstream frame too large');
-        const normalized = normalizeFrame(frame, state, upstreamKey) ?? [];
-        for (const event of normalized) res.write(`data: ${JSON.stringify(event)}\n\n`);
-        if (state.sawDone) break;
-      }
+      parser.feed(decoder.decode(chunk, { stream: true }));
       if (state.sawDone) break;
-      if (Buffer.byteLength(pending) > MAX_FRAME) throw new Error('upstream frame too large');
     }
     if (!state.sawDone) {
-      pending += decoder.decode();
+      parser.feed(decoder.decode());
+      parser.finish();
       const allChoicesFinished = state.choices.size > 0 && [...state.choices.values()].every(choice => choice.finished);
-      if (pending.trim() || state.think.inside || state.think.pending || !allChoicesFinished) {
-        throw new Error('incomplete upstream stream');
-      }
+      if (state.think.inside || state.think.pending || !allChoicesFinished) throw new Error('incomplete upstream stream');
     }
     if (!state.sawDone) {
       for (const index of state.contentPending.keys()) {

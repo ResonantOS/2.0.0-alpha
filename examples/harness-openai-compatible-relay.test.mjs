@@ -266,6 +266,45 @@ test('passes an explicit DONE and preserves a split marker at completion', async
   assert.equal(wire.match(/data: \[DONE\]/g)?.length, 1);
 });
 
+test('accepts CR-only SSE delimiters with a final delimiter at EOF', async t => {
+  const upstream = await listen(t, createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end('data: {"choices":[{"index":0,"delta":{"content":"cr-only"},"finish_reason":"stop"}]}\r\r' +
+      'data: [DONE]\r\r');
+  }));
+  const relay = await relayFor(t, upstream);
+  const response = await chatRequest(relay, { model: 'x', stream: true, messages: [] });
+  assert.equal(response.status, 200);
+  const wire = await response.text();
+  assert.match(wire, /cr-only/);
+  assert.equal(wire.match(/data: \[DONE\]/g)?.length, 1);
+});
+
+test('accepts split CRLF and mixed CR/LF SSE separators', async t => {
+  const upstream = await listen(t, createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write('data: {"choices":[{"index":0,"delta":{"content":"split"},"finish_reason":"stop"}]}\r');
+    setTimeout(() => res.end('\n\r\ndata: [DONE]\n\n'), 10);
+  }));
+  const relay = await relayFor(t, upstream);
+  const response = await chatRequest(relay, { model: 'x', stream: true, messages: [] });
+  assert.equal(response.status, 200);
+  const wire = await response.text();
+  assert.match(wire, /split/);
+  assert.equal(wire.match(/data: \[DONE\]/g)?.length, 1);
+});
+
+test('rejects an incomplete CR-only SSE frame at EOF', async t => {
+  const upstream = await listen(t, createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end('data: {"choices":[{"index":0,"delta":{"content":"partial"},"finish_reason":"stop"}]}\r');
+  }));
+  const relay = await relayFor(t, upstream);
+  const response = await chatRequest(relay, { model: 'x', stream: true, messages: [] });
+  assert.equal(response.status, 200);
+  await assert.rejects(response.text());
+});
+
 test('aborts an upstream stream when the local client disconnects', async t => {
   let upstreamClosed;
   const closed = new Promise(resolve => { upstreamClosed = resolve; });
