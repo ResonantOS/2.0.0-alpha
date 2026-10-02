@@ -333,11 +333,42 @@ sockets and Playwright Chromium.
 | Network destination | DSH and OpenAI-compatible transports use an approved loopback origin and port, checked DNS answers, pinned connection destination, and refused redirects. |
 | Bridge routes | Bridge authentication, scoped read/control capabilities, loopback Host/origin checks and strict payload validation precede execution. |
 | Runtime identity | Host-issued boot epoch, owner generation, session and turn IDs attribute output; model self-identification confers no authority. |
-| Ownership and persistence | Durable compare-and-swap governs replacement. An active slot owner cannot be removed. Reload preserves consent/owner, not old session authority. |
+| Ownership and persistence | Durable compare-and-swap governs installation, removal and replacement. An active slot owner cannot be removed. Reload preserves consent/owner, not old session authority. A saved registry older than the host last committed is refused at startup. |
 | Revocation | Authority and output are fenced synchronously; cancellation and resource cleanup are attempted. Independently running DSH side effects may continue. |
 | Context and tools | Encoded untrusted context remains text-only in DSH; it does not establish system-role enforcement. Browser and other human-only actions gain no new authority. |
 | Evidence | Host Ed25519 signatures bind receipts to each boot key; fixed fixture keys cannot pass live verification. Witnesses must independently compare boot fingerprints. |
 | Liveness | Evidence is internally consistent; liveness is attested by the operator who ran the demo and by its witnesses, not proven by this verifier |
+
+## When the host refuses the saved registry
+
+The host remembers the newest registry revision it has committed, in a file
+outside the ResonantOS user folder. If the saved registry is older than that,
+for example after restoring a backup of the user folder or after a sync tool
+brings back an older copy, the host refuses it rather than restore consent you
+have since withdrawn. The Add-ons panel then lists no harnesses and shows
+`Current owner: None · Unavailable`, and the bridge terminal prints one line
+that names the file:
+
+```json
+{"event":"harness.registry_refused","reason":"rollback","documentRevision":2,"watermark":3,"watermarkPath":".../harness-governance/<key>.watermark.json"}
+```
+
+- `rollback`: the saved registry is older than this host last committed.
+  Deleting the file at `watermarkPath` does not reset anything: it tells the
+  host to accept the restored registry, including any permission you had
+  since withdrawn. Do it only if you restored the backup on purpose, then
+  restart the bridge and review every grant in the panel. Otherwise, put the
+  newer registry back.
+- `watermark-invalid` or `watermark-unreadable`: the watermark file is damaged
+  or cannot be read. Fix its permissions, or delete it and restart.
+
+Two folders share the name `harness-governance`. The registry is in the one
+inside your ResonantOS user folder. The watermark is in a separate one under
+`~/Library/Application Support/ResonantOS` on macOS,
+`%LOCALAPPDATA%\ResonantOS` on Windows, and `$XDG_STATE_HOME/resonantos` or
+`~/.local/state/resonantos` elsewhere. To start over, empty the one in your
+user folder and leave the watermark alone; that is never refused unless the
+watermark file itself is damaged.
 
 ## Current limitations
 
