@@ -335,3 +335,13 @@ test('a version-2 bundle from before compare-and-swap still verifies; a version-
   resign(stale, keys);
   assert.throws(() => verifyEvidence(stale), /evidence/i, 'a refused removal must have acted on the projection it was refused against');
 });
+
+test('the demo launches the browser CI installed when RESONANTOS_LIVE_CHROME_PATH is set', async () => {
+  const { demoBrowserLaunchOptions } = await import('../../scripts/harness-swap-demo.mjs');
+  assert.equal(typeof demoBrowserLaunchOptions, 'function', 'the driver must expose its browser launch options');
+  assert.deepEqual(demoBrowserLaunchOptions({ headed: false, env: {} }), { headless: true });
+  assert.deepEqual(demoBrowserLaunchOptions({ headed: true, env: {} }), { headless: false });
+  assert.deepEqual(demoBrowserLaunchOptions({ headed: false, env: { RESONANTOS_LIVE_CHROME_PATH: '/opt/chrome/chrome' } }),
+    { headless: true, executablePath: '/opt/chrome/chrome' });
+  assert.deepEqual(demoBrowserLaunchOptions({ headed: false, env: { RESONANTOS_LIVE_CHROME_PATH: '' } }), { headless: true });
+});

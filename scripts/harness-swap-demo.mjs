@@ -397,6 +397,12 @@ export function observeEventStream(body, signal, expectingClose = () => false) {
 }
 
 /** Actual React shell, authenticated bridge, persisted external registry and reload. */
+// CI installs stable Chrome and passes its path, as the other live lanes do; locally
+// Playwright's own Chromium is used. Playwright never downloads a browser on npm ci.
+export function demoBrowserLaunchOptions({ headed = false, env = process.env } = {}) {
+  return { headless: !headed, ...(env.RESONANTOS_LIVE_CHROME_PATH ? { executablePath: env.RESONANTOS_LIVE_CHROME_PATH } : {}) };
+}
+
 export async function runDemo({ evidenceDir, fixture = false, headed = false } = {}) {
   const output = await externalEvidenceDirectory(evidenceDir);
   const bindings = fixture ? [] : JSON.parse(process.env.RESONANTOS_HARNESS_BINDINGS ?? '[]');
@@ -454,7 +460,7 @@ export async function runDemo({ evidenceDir, fixture = false, headed = false } =
             server: { host: '127.0.0.1', port: 1430, strictPort: true, allowedHosts: ['127.0.0.1'], cors: false,
               fs: { strict: true, deny: [...EXPECTED_DEV_SERVER_FS_DENY] }, watch: { ignored: ['**/bridge-config.generated.js', '**/ResonantOS_User/**', '**/.rig-in/**'] } } });
           await vite.listen();
-          browser = await chromium.launch({ headless: !headed });
+          browser = await chromium.launch(demoBrowserLaunchOptions({ headed }));
           const context = await browser.newContext({ httpCredentials: { username: 'dev', password: pageKey }, viewport: { width: 1600, height: 1000 } });
           page = await context.newPage(); page.setDefaultTimeout(30000);
           await page.goto(origin);
