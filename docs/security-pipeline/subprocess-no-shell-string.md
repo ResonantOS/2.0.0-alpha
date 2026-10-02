@@ -51,8 +51,9 @@ toward flagging. Documented limits: an unterminated-looking template literal
 masks until its closing backtick (templates legitimately span lines; no
 instance in this repo), spread values are not resolved (so
 `{ shell: false, ...options }` can re-enable the shell invisibly), and
-provenance tracking is textual, so an import-shaped string literal could
-register a phantom alias in the over-matching direction. Confirmed evasions,
+provenance tracking uses textual bindings rather than full data-flow analysis.
+Import/require patterns run on masked source, with raw-offset verification of
+module specifiers; import-shaped comments or string contents do not register aliases. Confirmed evasions,
 each demonstrated against this checker during maintainer review (2026-09-26) —
 they are limits, not regressions, and they do not block the gate's job:
 an options object held in a variable
@@ -78,8 +79,12 @@ repo's size) falls back to the plain walk — noted as a blind spot.
 ## Allowlisting
 
 Each entry pins file, rule, and the exact trimmed text of the whole call
-(multi-line calls included), so moved or edited code re-flags — including
-edits to later lines of a multi-line call — and forces a fresh look. Entries
+(multi-line calls and their first/last source lines included), so changes to
+the file path, rule, or fingerprinted text
+re-flag — including later lines of a multi-line call — and force a fresh look.
+Moving an unchanged call within the same file or changing data flow outside
+the fingerprinted lines does not change that fingerprint; those changes still
+need review. Entries
 live in the adapter's
 `ALLOWLIST` in
 [subprocess-no-shell-string.mjs](../../scripts/security-pipeline/checks/subprocess-no-shell-string.mjs)

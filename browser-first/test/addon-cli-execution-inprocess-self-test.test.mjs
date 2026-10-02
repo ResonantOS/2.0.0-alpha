@@ -13,7 +13,9 @@ async function runSelfTest(flag) {
     flag,
   ], {
     cwd: process.cwd(),
-    env,
+    // Keep the CLI fixture deterministic even when the operator shell has a
+    // local provider key: the fake runtimes intentionally exercise OpenAI.
+    env: { ...env, MINIMAX_API_KEY: "fixture" },
     timeout: 30_000,
     maxBuffer: 1024 * 1024,
   }));
