@@ -49,6 +49,12 @@ const includeDocs = new Set([
   "docs/addons/harness-adapter-demo.md",
 ]);
 
+const harnessRelayExamplePaths = new Set([
+  "examples/harness-openai-compatible-relay.md",
+  "examples/harness-openai-compatible-relay.mjs",
+  "examples/harness-openai-compatible-relay.test.mjs",
+]);
+
 function readOptionValue(argv, index, name) {
   const value = argv[index + 1];
   if (!value || value.startsWith("--")) {
@@ -252,6 +258,9 @@ export function classify(changedPath, state) {
   }
   if (changedPath === "examples/addons/openai-compatible-harness.json") {
     return { bucket: "include", reason: "governed OpenAI-compatible harness example" };
+  }
+  if (harnessRelayExamplePaths.has(changedPath)) {
+    return { bucket: "include", reason: "reviewed operator-only OpenAI-compatible harness relay example" };
   }
   if (includeDocs.has(changedPath)) {
     return {
