@@ -39,6 +39,14 @@ on:
       - "browser-first/test/live-sdk-lane.mjs"
       - "browser-first/test/live-sdk-lane.test.mjs"
       - "browser-first/host/opencode-version.json"
+      # The harness swap demo drives the Add-ons panel and the chat rail through the real bridge.
+      - "scripts/harness-swap-demo.mjs"
+      - "scripts/vite-dev-bridge-config.mjs"
+      - "browser-first/test/harness-swap-demo-bridge.live.mjs"
+      - "src/App.tsx"
+      - "src/core/harness-client.ts"
+      - "src/modules/addons/**"
+      - "src/modules/chat/**"
       - ".github/workflows/agent-control-live.yml"
       - "package.json"
       - "package-lock.json"
@@ -97,6 +105,12 @@ jobs:
           RESONANTOS_LIVE_ARTIFACT_DIR: ${{ runner.temp }}/agent-control-live/${{ github.run_id }}-${{ github.run_attempt }}
           RESONANTOS_PUBLIC_SUBMIT_CONTRACT: ${{ github.event_name == 'workflow_dispatch' && inputs.public_submit_contract || 'auto' }}
         run: xvfb-run -a npm run test:browser-first:live
+
+      - name: Run the harness swap demo through the real bridge
+        env:
+          CI: "true"
+          RESONANTOS_LIVE_CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        run: npm run test:browser-first:harness-demo
 
       - name: Upload live certification evidence
         if: always()
