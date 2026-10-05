@@ -75,13 +75,19 @@ export function mentionInsertionForTab(candidate) {
   return `@"${title}" `;
 }
 
+let typeaheadInstanceCounter = 0;
+
 export function createTabMentionTypeahead({
   input,
   chrome,
   isReadableBrowserTab = () => false,
   doc = globalThis.document,
   maxCandidates = 8,
-  queryTabs = null
+  queryTabs = null,
+  // #410: debounce input-triggered refreshes so a burst of keystrokes inside a
+  // mention token re-queries tabs once, not per character. 0 keeps the refresh
+  // synchronous (used by unit tests for deterministic timing).
+  debounceMs = 90
 } = {}) {
   if (!input) throw new Error("createTabMentionTypeahead requires an input element.");
   if (!doc) throw new Error("createTabMentionTypeahead requires a document.");
@@ -89,36 +95,87 @@ export function createTabMentionTypeahead({
     ? queryTabs
     : async () => (await chrome?.tabs?.query?.({}).catch(() => [])) ?? [];
   const keydownHost = input.form ?? input;
+  const listboxId = `tab-mention-listbox-${++typeaheadInstanceCounter}`;
+  const optionId = (position) => `${listboxId}-opt-${position}`;
 
   let container = null;
+  let optionEls = [];
   let candidates = [];
   let activeIndex = -1;
   let queryInfo = null;
   let open = false;
+  let refreshTimer = null;
 
   const isOpen = () => open;
+
+  // #410 (a11y): mark the composer as an editable combobox that owns the popup.
+  // Active-option state is conveyed via aria-activedescendant (APG virtual
+  // focus) so focus stays in the input and screen readers still announce the
+  // highlighted option.
+  input.setAttribute("role", "combobox");
+  input.setAttribute("aria-autocomplete", "list");
+  input.setAttribute("aria-expanded", "false");
+
+  function setExpanded(expanded) {
+    input.setAttribute("aria-expanded", expanded ? "true" : "false");
+    if (expanded) {
+      input.setAttribute("aria-controls", listboxId);
+    } else {
+      input.removeAttribute("aria-controls");
+      input.removeAttribute("aria-activedescendant");
+    }
+  }
 
   function close() {
     open = false;
     candidates = [];
+    optionEls = [];
     activeIndex = -1;
     queryInfo = null;
+    if (refreshTimer !== null) {
+      clearTimeout(refreshTimer);
+      refreshTimer = null;
+    }
     container?.remove();
     container = null;
+    setExpanded(false);
+  }
+
+  function paintActive(position, isActive) {
+    const option = optionEls[position];
+    if (!option) return;
+    option.classList.toggle("active", isActive);
+    option.setAttribute("aria-selected", isActive ? "true" : "false");
+  }
+
+  // #410 (perf): move the highlight without rebuilding every option — only the
+  // previously- and newly-active options change, plus aria-activedescendant.
+  function setActiveOption(nextIndex) {
+    if (nextIndex === activeIndex) return;
+    paintActive(activeIndex, false);
+    activeIndex = nextIndex;
+    paintActive(activeIndex, true);
+    const active = optionEls[activeIndex];
+    if (active) {
+      input.setAttribute("aria-activedescendant", active.id);
+      active.scrollIntoView?.({ block: "nearest" });
+    }
   }
 
   function renderList() {
     if (!container) {
       container = doc.createElement("div");
       container.className = "tab-mention-typeahead";
+      container.id = listboxId;
       container.setAttribute("role", "listbox");
       container.setAttribute("aria-label", "Reference an open tab");
       input.insertAdjacentElement("afterend", container);
     }
     container.replaceChildren();
-    candidates.forEach((candidate, position) => {
+    optionEls = candidates.map((candidate, position) => {
       const option = doc.createElement("button");
       option.type = "button";
+      option.id = optionId(position);
       option.className = `tab-mention-option${position === activeIndex ? " active" : ""}`;
       option.setAttribute("role", "option");
       option.setAttribute("aria-selected", position === activeIndex ? "true" : "false");
@@ -133,7 +190,10 @@ export function createTabMentionTypeahead({
         selectCandidate(position);
       });
       container.append(option);
+      return option;
     });
+    const active = optionEls[activeIndex];
+    if (active) input.setAttribute("aria-activedescendant", active.id);
   }
 
   async function refresh() {
@@ -152,7 +212,20 @@ export function createTabMentionTypeahead({
     }
     open = true;
     if (activeIndex < 0 || activeIndex >= candidates.length) activeIndex = 0;
+    setExpanded(true);
     renderList();
+  }
+
+  function scheduleRefresh() {
+    if (debounceMs <= 0) {
+      void refresh();
+      return;
+    }
+    if (refreshTimer !== null) clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(() => {
+      refreshTimer = null;
+      void refresh();
+    }, debounceMs);
   }
 
   function selectCandidate(position) {
@@ -177,17 +250,20 @@ export function createTabMentionTypeahead({
     if (event.key === "ArrowDown") {
       event.preventDefault();
       event.stopPropagation();
-      activeIndex = (activeIndex + 1) % candidates.length;
-      renderList();
+      setActiveOption((activeIndex + 1) % candidates.length);
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
       event.stopPropagation();
-      activeIndex = (activeIndex - 1 + candidates.length) % candidates.length;
-      renderList();
-    } else if (event.key === "Enter" || event.key === "Tab") {
+      setActiveOption((activeIndex - 1 + candidates.length) % candidates.length);
+    } else if (event.key === "Enter") {
       event.preventDefault();
       event.stopPropagation();
       selectCandidate(activeIndex);
+    } else if (event.key === "Tab") {
+      // #410 (keyboard): don't trap the user — Tab dismisses the dropdown and
+      // moves focus to the next control (no preventDefault). Enter or a click
+      // is the deliberate commit path.
+      close();
     } else if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
@@ -195,7 +271,7 @@ export function createTabMentionTypeahead({
     }
   }
 
-  const onInput = () => void refresh();
+  const onInput = () => scheduleRefresh();
   const onBlur = () => close();
 
   input.addEventListener("input", onInput);
@@ -207,6 +283,9 @@ export function createTabMentionTypeahead({
     input.removeEventListener("input", onInput);
     input.removeEventListener("blur", onBlur);
     keydownHost.removeEventListener("keydown", onKeydown, true);
+    input.removeAttribute("role");
+    input.removeAttribute("aria-autocomplete");
+    input.removeAttribute("aria-expanded");
   }
 
   return { close, destroy, isOpen };

@@ -53,7 +53,7 @@ test("mentionInsertionForTab inserts the deliberate quoted form and sanitizes ti
   assert.equal(mentionInsertionForTab({ title: "", index: 3 }), "@tab 3 ", "untitled tab falls back to the ranked form");
 });
 
-function setupDom(tabs) {
+function setupDom(tabs, { debounceMs = 0, queryTabs } = {}) {
   const dom = new JSDOM('<form id="f"><textarea id="c"></textarea></form>', { url: "https://side-panel.test/" });
   const doc = dom.window.document;
   const input = doc.getElementById("c");
@@ -61,7 +61,9 @@ function setupDom(tabs) {
     doc,
     input,
     isReadableBrowserTab: isReadable,
-    queryTabs: async () => tabs
+    // debounceMs 0 keeps refresh synchronous so tests stay deterministic.
+    debounceMs,
+    queryTabs: queryTabs ?? (async () => tabs)
   });
   return { doc, dom, input, typeahead };
 }
@@ -128,4 +130,68 @@ test("typeahead closes when the query stops matching any permitted tab", async (
   await typeAndRefresh(dom, input, "@Alzzzz");
   assert.equal(typeahead.isOpen(), false);
   assert.equal(doc.querySelector(".tab-mention-typeahead"), null);
+});
+
+test("typeahead exposes an editable combobox with aria-activedescendant (#410 a11y)", async () => {
+  const { doc, dom, input } = setupDom(openTabs);
+
+  assert.equal(input.getAttribute("role"), "combobox");
+  assert.equal(input.getAttribute("aria-autocomplete"), "list");
+  assert.equal(input.getAttribute("aria-expanded"), "false");
+
+  await typeAndRefresh(dom, input, "@");
+  const list = doc.querySelector(".tab-mention-typeahead");
+  assert.equal(input.getAttribute("aria-expanded"), "true");
+  assert.equal(input.getAttribute("aria-controls"), list.id);
+  assert.ok(list.id, "listbox has an id for aria-controls");
+  const first = doc.querySelector(".tab-mention-option");
+  assert.equal(input.getAttribute("aria-activedescendant"), first.id, "active option tracked via virtual focus");
+  assert.equal(first.getAttribute("aria-selected"), "true");
+
+  input.dispatchEvent(keydown(dom, "ArrowDown"));
+  const options = [...doc.querySelectorAll(".tab-mention-option")];
+  assert.equal(input.getAttribute("aria-activedescendant"), options[1].id, "aria-activedescendant follows arrow navigation");
+  assert.equal(options[1].getAttribute("aria-selected"), "true");
+  assert.equal(options[0].getAttribute("aria-selected"), "false");
+
+  input.dispatchEvent(keydown(dom, "Escape"));
+  assert.equal(input.getAttribute("aria-expanded"), "false");
+  assert.equal(input.getAttribute("aria-activedescendant"), null, "virtual focus cleared on close");
+  assert.equal(input.getAttribute("aria-controls"), null);
+});
+
+test("Tab dismisses the dropdown without committing so focus can move on (#410 keyboard)", async () => {
+  const { doc, dom, input, typeahead } = setupDom(openTabs);
+
+  await typeAndRefresh(dom, input, "@Al");
+  assert.equal(typeahead.isOpen(), true);
+
+  const event = keydown(dom, "Tab");
+  input.dispatchEvent(event);
+  assert.equal(typeahead.isOpen(), false, "Tab closes the dropdown");
+  assert.equal(input.value, "@Al", "Tab does not insert a mention");
+  assert.equal(event.defaultPrevented, false, "default Tab focus move is preserved");
+  assert.equal(doc.querySelector(".tab-mention-typeahead"), null);
+});
+
+test("input-triggered refresh is debounced so a keystroke burst queries tabs once (#410 perf)", async () => {
+  let queryCount = 0;
+  const { dom, input, typeahead } = setupDom(openTabs, {
+    debounceMs: 15,
+    queryTabs: async () => {
+      queryCount += 1;
+      return openTabs;
+    }
+  });
+
+  for (const value of ["@", "@A", "@Al", "@Alp"]) {
+    input.value = value;
+    input.setSelectionRange(value.length, value.length);
+    input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  }
+  assert.equal(queryCount, 0, "no query fires synchronously during the burst");
+
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(queryCount, 1, "the coalesced refresh queries tabs exactly once");
+  assert.equal(typeahead.isOpen(), true);
 });

@@ -1,11 +1,21 @@
 import { modelConnectionMessage } from "./runtime-error-messages.js";
 
 export const DEFAULT_MAX_HISTORY_MESSAGES = 16;
-const CHAT_TOKEN_PATTERN = /\b(?:sk-[a-z0-9_-]{12,}|sk-ant-[a-z0-9_-]{12,}|gh[pousr]_[a-z0-9_]{12,}|github_pat_[a-z0-9_]{12,}|hf_[a-z0-9_-]{12,}|xox[baprs]-[a-z0-9-]{12,}|AIza[a-z0-9_-]{12,}|AKIA[A-Z0-9]{12,})\b/gi;
+// #410: kept at parity with the content script's _rcSanitizeText (content.js).
+// Referenced-tab ("@tab") text is captured and passed straight through this
+// sanitizer, so it must strip at least as much as a live snapshot does —
+// otherwise scoped-tab context would leak secrets a normal capture redacts.
+const CHAT_PRIVATE_KEY_PATTERN = /-----BEGIN [^-]+ PRIVATE KEY-----[\s\S]*?-----END [^-]+ PRIVATE KEY-----/g;
+const CHAT_JWT_PATTERN = /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g;
+const CHAT_TOKEN_PATTERN = /\b(?:sk-[a-z0-9_-]{12,}|sk-ant-[a-z0-9_-]{12,}|sk-or-v1-[a-z0-9_-]{12,}|gh[pousr]_[a-z0-9_]{12,}|github_pat_[a-z0-9_]{12,}|hf_[a-z0-9_-]{12,}|xox[baprs]-[a-z0-9-]{12,}|xai-[a-z0-9_-]{12,}|gsk_[a-z0-9_-]{12,}|AIza[a-z0-9_-]{12,}|AKIA[A-Z0-9]{12,}|pk_live_[a-z0-9]{12,}|rk_live_[a-z0-9]{12,})\b/gi;
+const CHAT_LABELED_SECRET_PATTERN = /\b(?:api[_-]?key|token|password|secret|authorization|bearer|session|cookie)\s*[:=]\s*['"]?[^'"\s]+/gi;
 
 function safeContextText(value, max = 1000) {
   return String(value ?? "")
+    .replace(CHAT_PRIVATE_KEY_PATTERN, "[redacted]")
+    .replace(CHAT_JWT_PATTERN, "[redacted]")
     .replace(CHAT_TOKEN_PATTERN, "[redacted]")
+    .replace(CHAT_LABELED_SECRET_PATTERN, "[redacted]")
     .replace(/\b(?:\d[ -]?){13,19}\b/g, (candidate) => {
       const digits = candidate.replace(/\D/g, "");
       return digits.length >= 13 && digits.length <= 19 ? "[redacted]" : candidate;

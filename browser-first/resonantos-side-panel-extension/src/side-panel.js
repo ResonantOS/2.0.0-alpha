@@ -53,6 +53,7 @@ import { createSidePanelScheduledBrowserJobRunner } from "./lib/side-panel-sched
 import { createSidePanelUiController } from "./lib/side-panel-ui-controller.js";
 import { readPersonalizationSettings } from "./lib/personalization-settings.js";
 import { createSitePermissionStore } from "./lib/site-permission-store.js";
+import { blockedSiteKeysFromPermissions, createReadableUnblockedTab } from "./lib/readable-unblocked-tab.js";
 import { createTabContextController } from "./lib/tab-context-controller.js";
 import { createTabMentionTypeahead } from "./lib/tab-mention-typeahead.js";
 import { createSessionSummaryController } from "./lib/session-summary-controller.js";
@@ -290,16 +291,6 @@ const browserJobStore = createBrowserJobStore({
 });
 
 const isReadableBrowserTab = (tab) => isControllableTabUrl(tab?.url);
-// @tab mention typeahead (#252): typing `@` lists open, readable tabs; selecting one
-// inserts the deliberate @"…" mention form that the command router treats as an
-// explicit tab scope. Wired here, after isReadableBrowserTab is initialized — on the
-// rebased tree the original placement above ran in the const's temporal dead zone and
-// the panel never reached its ready marker (caught by the live lanes, not unit tests).
-createTabMentionTypeahead({
-  chrome,
-  input: commandInput,
-  isReadableBrowserTab
-});
 const sidePanelUi = createSidePanelUiController({
   activityDetail,
   activityLabel,
@@ -369,6 +360,41 @@ const resetSitePermission = sitePermissionStore.resetSitePermission;
 const setSitePermission = sitePermissionStore.setSitePermission;
 const siteKeyForUrl = sitePermissionStore.siteKeyForUrl;
 const sitePermissions = sitePermissionStore.sitePermissions;
+
+// #410: a blocked site (Settings → site permission "blocked") is http(s), so
+// the scheme-only isReadableBrowserTab would still list it in the @tab
+// typeahead and resolve it, only for capture to fail. Keep a cached set of
+// blocked site keys — refreshed on every site-permission storage change — and
+// compose it with isReadableBrowserTab so the typeahead and the mention
+// resolver drop blocked sites up front. Other readable-tab consumers keep the
+// plain scheme check.
+let blockedSiteKeys = new Set();
+const refreshBlockedSiteKeys = async () => {
+  blockedSiteKeys = blockedSiteKeysFromPermissions(await sitePermissions());
+};
+const isReadableUnblockedTab = createReadableUnblockedTab({
+  isReadableBrowserTab,
+  siteKeyForUrl,
+  getBlockedSiteKeys: () => blockedSiteKeys
+});
+void refreshBlockedSiteKeys();
+chrome.storage?.onChanged?.addListener((changes, area) => {
+  if (area === "local" && changes[STORAGE_KEYS.sitePermissions]) {
+    void refreshBlockedSiteKeys();
+  }
+});
+
+// @tab mention typeahead (#252): typing `@` lists open, readable tabs; selecting
+// one inserts the deliberate @"…" mention form that the command router treats as
+// an explicit tab scope. Wired here, after the site-permission store and the
+// composed predicate exist — the original placement above ran in a temporal dead
+// zone and the panel never reached its ready marker (caught by the live lanes,
+// not unit tests). Uses isReadableUnblockedTab so blocked sites are never listed.
+createTabMentionTypeahead({
+  chrome,
+  input: commandInput,
+  isReadableBrowserTab: isReadableUnblockedTab
+});
 const taskConsentStore = createTaskConsentStore({
   storage: chrome.storage?.local,
   taskConsentAuditStorageKey: STORAGE_KEYS.taskConsentAudit,
@@ -741,7 +767,8 @@ const tabContextController = createTabContextController({
   addMessage,
   chrome,
   getControlledTabId: () => controlledTabId,
-  isReadableBrowserTab,
+  // #410: mention resolution (scoped + comparison) drops blocked sites too.
+  isReadableBrowserTab: isReadableUnblockedTab,
   readTabPage: (tab) => browserPageActions.readSpecificTabPage(tab),
   refreshTabContext,
   renderSitePermissionPanel,
