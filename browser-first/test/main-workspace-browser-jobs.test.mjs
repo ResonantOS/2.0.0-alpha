@@ -435,3 +435,12 @@ test("composed workspace refresh renders both surfaces from one read and coalesc
   assert.match(dockControlEls.titleEl.textContent, /could not be loaded/);
   assert.equal(writes, 0);
 });
+
+test("workspace dock permission reset refuses visibly when the store cannot be read", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../resonantos-side-panel-extension/src/main-workspace.js", import.meta.url), "utf8");
+  const refresh = source.slice(source.indexOf("async function refreshDockPermissions()"), source.indexOf("const dockTabs = createDockTabs("));
+  assert.ok(refresh.length > 0);
+  assert.doesNotMatch(refresh, /resetSitePermission\(siteKey\)\.catch\(\(\) => undefined\)/);
+  assert.match(refresh, /catch[\s\S]*Site permissions could not be read; the change was not saved\./);
+});

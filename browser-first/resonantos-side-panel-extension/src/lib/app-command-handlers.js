@@ -313,10 +313,16 @@ export function createAppCommandHandlers({
       await addMessage("system", `Current site permission: ${tab?.url ? siteKeyForUrl(tab.url) : "no site"} · ${mode}`);
       return;
     }
-    const result = await setSitePermission(tab?.url, sitePermissionModeFromText(normalized), {
-      reason: `Slash command: /site ${normalized}`,
-      source: "slash-command"
-    });
+    let result;
+    try {
+      result = await setSitePermission(tab?.url, sitePermissionModeFromText(normalized), {
+        reason: `Slash command: /site ${normalized}`,
+        source: "slash-command"
+      });
+    } catch {
+      await addMessage("system", "Site permissions could not be read; the change was not saved.");
+      return;
+    }
     await renderSitePermissionPanel(tab);
     await addMessage("system", `Set ${result.key} Assistant permission to ${result.mode}.`);
   }

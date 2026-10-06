@@ -842,3 +842,14 @@ test("site permission panel renders unavailable permissions without throwing", a
   assert.equal(document.querySelector("#mode").disabled, false);
   assert.equal(document.querySelector("#mode").value, "trusted-for-safe-actions");
 });
+
+test("side-panel permission-manager reset refuses with a message when the store cannot be read", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../resonantos-side-panel-extension/src/side-panel.js", import.meta.url), "utf8");
+  const start = source.indexOf("onResetSitePermission: async (siteKey) => {");
+  const handler = source.slice(start, source.indexOf("  permissionForUrl,\n  siteKeyForUrl,", start));
+  assert.ok(start >= 0 && handler.length > 0);
+  assert.match(handler, /try \{[\s\S]*await resetSitePermission\(siteKey/);
+  assert.match(handler, /catch[\s\S]*Site permissions could not be read; the change was not saved\./);
+  assert.ok(handler.indexOf("catch") < handler.indexOf("Reset site permission for"));
+});

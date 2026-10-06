@@ -720,10 +720,15 @@ monitorRenderers = createMonitorRenderers({
     await renderPermissionManager();
   },
   onResetSitePermission: async (siteKey) => {
-    await resetSitePermission(siteKey, {
-      reason: "Reset from permission manager",
-      source: "permission-manager"
-    });
+    try {
+      await resetSitePermission(siteKey, {
+        reason: "Reset from permission manager",
+        source: "permission-manager"
+      });
+    } catch {
+      await addMessage("system", "Site permissions could not be read; the change was not saved.");
+      return;
+    }
     await addMessage("system", `Reset site permission for ${siteKey} to ask-before-action.`);
     await renderSitePermissionPanel();
     await renderPermissionManager();

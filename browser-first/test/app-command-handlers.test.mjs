@@ -108,7 +108,7 @@ function createHarness(overrides = {}) {
       return { path: "INTAKE/browser/job-report.md" };
     },
     setActivity: (...args) => calls.push(["activity", ...args]),
-    setSitePermission: async (_url, mode, audit) => ({ audit, key: "example.com", mode }),
+    setSitePermission: overrides.setSitePermission ?? (async (_url, mode, audit) => ({ audit, key: "example.com", mode })),
     setStatus: (status) => calls.push(["status", status]),
     siteKeyForUrl: () => "example.com",
     tickBrowserJobScheduler: overrides.tickBrowserJobScheduler,
@@ -520,4 +520,11 @@ test("capabilities displays unavailable permissions without throwing", async () 
   await harness.handlers.runCapabilitiesCommand();
   assert.ok(harness.calls.some(([type, role, message]) => type === "message" && /Current site:.*unavailable/.test(message)));
   assert.equal(harness.calls.some((call) => String(call[2]).includes("ask-before-action")), false);
+});
+
+test("site permission command refuses with a message when the store cannot be read", async () => {
+  const harness = createHarness({ setSitePermission: async () => { throw new Error("storage offline"); } });
+  await harness.handlers.runSitePermissionCommand("blocked");
+  assert.ok(harness.calls.some(([type, , message]) => type === "message" && message === "Site permissions could not be read; the change was not saved."));
+  assert.equal(harness.calls.some((call) => /^Set .* permission to/.test(String(call[2]))), false);
 });

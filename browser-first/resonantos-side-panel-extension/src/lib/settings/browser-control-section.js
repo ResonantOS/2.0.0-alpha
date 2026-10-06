@@ -245,6 +245,8 @@ export function renderBrowserControlSection(container, { bridgeRequest, getBridg
       currentCard.querySelector("p").textContent = `${siteKey} · ${error}`;
       modeStatusHost.replaceChildren();
       permissionsList.replaceChildren();
+      downloadsList.replaceChildren();
+      jobsList.replaceChildren();
       setStatus(statusNode, error, "error");
       return;
     }

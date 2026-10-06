@@ -156,4 +156,5 @@ test("browser control settings displays unavailable site permissions without sta
   assert.match(ui.container.textContent, /Site permissions could not be read; capture refused\./);
   assert.equal(ui.container.querySelector(".settings-mode-status-host").textContent, "");
   assert.doesNotMatch(ui.container.textContent, /Agent Control is using ask-before-action defaults/);
+  assert.doesNotMatch(ui.container.textContent, /No browser jobs/);
 });
