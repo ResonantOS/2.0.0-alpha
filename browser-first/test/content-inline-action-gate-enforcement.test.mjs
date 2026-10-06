@@ -23,6 +23,7 @@ async function evalScript(targetWindow, filePath) {
 async function loadContentScript({
   loadGate = true,
   url = "https://example.test/article",
+  exposePermissionGate = false,
 } = {}) {
   const dom = new JSDOM("<!doctype html><main>Selected page text for the inline assistant.</main>", {
     runScripts: "outside-only",
@@ -66,7 +67,16 @@ async function loadContentScript({
   if (loadGate) {
     await evalScript(dom.window, inlineActionSurfaceGateScriptPath);
   }
-  await evalScript(dom.window, contentScriptPath);
+  if (exposePermissionGate) {
+    // Expose closure-local functions only in the evaluated test copy.
+    const source = await readFile(contentScriptPath, "utf8");
+    assert.ok(source.trimEnd().endsWith("})();"));
+    dom.window.eval(source.replace(/\}\)\(\);\s*$/, `
+      window.permissionGateTest = { currentSitePermission, positionInlineButton, runInlineAction };
+    })();`));
+  } else {
+    await evalScript(dom.window, contentScriptPath);
+  }
   assert.equal(typeof listener, "function");
   return { dom, listener, sentMessages };
 }
@@ -149,4 +159,77 @@ test("shortcut controller reads the gate restricted schemes lazily at call time 
 
   assert.equal(result.action, "none");
   assert.equal(result.conflict, "restricted");
+});
+
+const blockedSiteMessage = "Augmentor inline actions are blocked for this site by your saved site permission. Toggle the site permission in the side panel to re-enable inline actions.";
+
+async function loadPermissionGate(t) {
+  const harness = await loadContentScript({ exposePermissionGate: true });
+  t.after(() => harness.dom.window.close());
+  showInlineAssistant(harness.listener);
+  const { window } = harness.dom;
+  const button = window.document.querySelector("#resonantos-inline-button");
+  const panel = window.document.querySelector("#resonantos-inline-assistant");
+  panel.dataset.selection = "Selected page text for the inline assistant.";
+  return { ...harness, window, button, panel, gate: window.permissionGateTest };
+}
+
+async function assertPermissionHidesUi({ window, button, panel, gate }) {
+  button.style.display = "block";
+  panel.style.display = "block";
+  gate.positionInlineButton();
+  await new Promise((resolve) => window.setTimeout(resolve, 0));
+  assert.equal(button.style.display, "none");
+  assert.equal(panel.style.display, "none");
+}
+
+test("T1 storage read throws: permission is blocked and positioning hides button and panel", async (t) => {
+  const harness = await loadPermissionGate(t);
+  harness.window.chrome.storage.local.get = async () => { throw new Error("Storage unavailable"); };
+  assert.equal(await harness.gate.currentSitePermission(), "blocked");
+  await assertPermissionHidesUi(harness);
+});
+
+test("T2 host-keyed blocked permission refuses send without writing an inline draft", async (t) => {
+  const { window, panel, gate } = await loadPermissionGate(t);
+  assert.equal(window.location.hostname, "example.test");
+  window.chrome.storage.local.get = async () => ({ augmentorSitePermissions: { "example.test": "blocked" } });
+  const writes = [];
+  window.chrome.storage.local.set = async (value) => { writes.push(value); };
+  await gate.runInlineAction("send");
+  assert.equal(panel.querySelector(".ros-inline-result").textContent, blockedSiteMessage);
+  assert.equal(writes.some((value) => Object.hasOwn(value, "augmentorInlineDraft")), false);
+});
+
+test("T3 healthy storage with no host entry keeps ask-before-action", async (t) => {
+  const { gate } = await loadPermissionGate(t);
+  assert.equal(await gate.currentSitePermission(), "ask-before-action");
+});
+
+test("T4 healthy blocked permission keeps button and panel hidden", async (t) => {
+  const harness = await loadPermissionGate(t);
+  harness.window.chrome.storage.local.get = async () => ({ augmentorSitePermissions: { "example.test": "blocked" } });
+  assert.equal(await harness.gate.currentSitePermission(), "blocked");
+  await assertPermissionHidesUi(harness);
+});
+
+test("non-callable storage get fails closed", async (t) => {
+  const harness = await loadPermissionGate(t);
+  for (const get of [undefined, null, "unavailable"]) {
+    harness.window.chrome.storage.local.get = get;
+    assert.equal(await harness.gate.currentSitePermission(), "blocked");
+    await assertPermissionHidesUi(harness);
+  }
+});
+
+test("unreadable storage refuses send without writing an inline draft", async (t) => {
+  const { window, panel, gate } = await loadPermissionGate(t);
+  const writes = [];
+  window.chrome.storage.local.set = async (value) => { writes.push(value); };
+  for (const get of [async () => { throw new Error("Storage unavailable"); }, undefined]) {
+    window.chrome.storage.local.get = get;
+    await gate.runInlineAction("send");
+    assert.equal(panel.querySelector(".ros-inline-result").textContent, blockedSiteMessage);
+    assert.equal(writes.length, 0);
+  }
 });

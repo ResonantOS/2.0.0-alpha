@@ -1060,10 +1060,11 @@ const currentSitePermission = async () => {
   const key = location.hostname.replace(/^www\./, "");
   if (!key) return "ask-before-action";
   try {
-    const stored = await chrome.storage?.local?.get?.("augmentorSitePermissions");
+    if (typeof chrome.storage?.local?.get !== "function") return "blocked";
+    const stored = await chrome.storage.local.get("augmentorSitePermissions");
     return stored?.augmentorSitePermissions?.[key] ?? "ask-before-action";
   } catch {
-    return "ask-before-action";
+    return "blocked";
   }
 };
 
@@ -1226,10 +1227,8 @@ const runInlineAction = async (action) => {
     result.textContent = locationGate.message;
     return;
   }
-  const sitePermissionMode = await chrome.storage?.local?.get?.("augmentorSitePermissions")
-    .then((value) => value?.augmentorSitePermissions?.mode)
-    .catch(() => null);
-  if (sitePermissionMode === "blocked") {
+  const mode = await currentSitePermission();
+  if (mode === "blocked") {
     result.textContent = "Augmentor inline actions are blocked for this site by your saved site permission. Toggle the site permission in the side panel to re-enable inline actions.";
     return;
   }
