@@ -233,3 +233,43 @@ test("unreadable storage refuses send without writing an inline draft", async (t
     assert.equal(writes.length, 0);
   }
 });
+
+const inlineAssistantMessage = {
+  channel: "resonantos.browser_first.content",
+  type: "show_inline_assistant_for_text",
+  text: "Selected page text for the inline assistant.",
+  rect: { bottom: 120, left: 24, top: 96, width: 320 },
+};
+
+test("show_inline_assistant_for_text never surfaces the button on a blocked or unreadable site", async (t) => {
+  const cases = [
+    ["blocked", async () => ({ augmentorSitePermissions: { "example.test": "blocked" } })],
+    ["unreadable", async () => { throw new Error("Storage unavailable"); }],
+  ];
+  for (const [label, get] of cases) {
+    const harness = await loadContentScript({ exposePermissionGate: true });
+    t.after(() => harness.dom.window.close());
+    const { window } = harness.dom;
+    window.chrome.storage.local.get = get;
+    const responses = [];
+    harness.listener(inlineAssistantMessage, {}, (response) => responses.push(response));
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    assert.notEqual(window.document.querySelector("#resonantos-inline-button").style.display, "block", label);
+    assert.equal(responses.length, 1, label);
+    assert.equal(responses[0].ok, false, label);
+  }
+});
+
+test("show_inline_assistant_for_text still shows the button on an unblocked site with a healthy store", async (t) => {
+  const harness = await loadContentScript({ exposePermissionGate: true });
+  t.after(() => harness.dom.window.close());
+  const { window } = harness.dom;
+  window.chrome.storage.local.get = async () => ({ augmentorSitePermissions: {} });
+  const responses = [];
+  harness.listener(inlineAssistantMessage, {}, (response) => responses.push(response));
+  await new Promise((resolve) => window.setTimeout(resolve, 0));
+  assert.equal(window.document.querySelector("#resonantos-inline-button").style.display, "block");
+  assert.equal(responses.length, 1);
+  assert.equal(responses[0].ok, true);
+  assert.equal(responses[0].textLength, inlineAssistantMessage.text.length);
+});

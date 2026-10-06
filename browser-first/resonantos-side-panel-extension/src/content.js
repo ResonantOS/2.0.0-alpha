@@ -1464,8 +1464,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     lastInlineSelectionDetails = { activeRef: "", editable: false, rect, text };
     button.style.left = `${Math.min(window.innerWidth - 112, Math.max(8, rect.left))}px`;
     button.style.top = `${Math.min(window.innerHeight - 42, Math.max(8, rect.bottom + 8))}px`;
-    button.style.display = "block";
-    sendResponse({ ok: true, textLength: text.length });
+    // Same per-site gate as positionInlineButton: a blocked (or unreadable)
+    // site never surfaces the button, whoever asked for it.
+    void currentSitePermission().then((mode) => {
+      if (mode === "blocked") {
+        button.style.display = "none";
+        sendResponse({ ok: false, error: "Augmentor inline actions are blocked for this site by your saved site permission." });
+        return;
+      }
+      button.style.display = "block";
+      sendResponse({ ok: true, textLength: text.length });
+    });
     return true;
   }
 
