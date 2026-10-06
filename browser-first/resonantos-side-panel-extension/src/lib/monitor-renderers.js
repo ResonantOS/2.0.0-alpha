@@ -487,7 +487,19 @@ export function createMonitorRenderers({
       updateContextDockVisibility();
       return;
     }
-    const mode = await permissionForUrl(current.url);
+    let mode;
+    try {
+      mode = await permissionForUrl(current.url);
+    } catch {
+      sitePermissionPanel.hidden = false;
+      sitePermissionHost.textContent = siteKeyForUrl(current.url);
+      sitePermissionMode.value = "";
+      sitePermissionMode.disabled = true;
+      sitePermissionNote.textContent = "Site permissions could not be read; capture refused.";
+      updateContextDockVisibility();
+      return;
+    }
+    sitePermissionMode.disabled = false;
     const siteKey = siteKeyForUrl(current.url);
     const activeConsent = activeDelegatedConsentForSite(await getTaskConsents().catch(() => ({})), siteKey);
     sitePermissionPanel.hidden = false;

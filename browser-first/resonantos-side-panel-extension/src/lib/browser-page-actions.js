@@ -289,7 +289,12 @@ export function createBrowserPageActions(deps) {
     if (!tab?.id || !isReadableBrowserTab(tab)) {
       return { ok: false, tab, error: "Tab is not a readable web page." };
     }
-    const siteMode = await permissionForUrl(tab.url);
+    let siteMode;
+    try {
+      siteMode = await permissionForUrl(tab.url);
+    } catch {
+      return { ok: false, tab, error: "Site permissions could not be read; capture refused." };
+    }
     if (siteMode === "blocked" && !includeBlocked) {
       return { ok: false, tab, error: `Assistant is blocked on ${siteKeyForUrl(tab.url)}.` };
     }
@@ -316,7 +321,12 @@ export function createBrowserPageActions(deps) {
     if (!tab?.id || !isReadableBrowserTab(tab)) {
       return { ok: false, error: "No normal web page is active for this browser action." };
     }
-    const siteMode = await permissionForUrl(tab.url);
+    let siteMode;
+    try {
+      siteMode = await permissionForUrl(tab.url);
+    } catch {
+      return { ok: false, error: "Site permissions could not be read; capture refused." };
+    }
     if (siteMode === "blocked") {
       return { ok: false, error: `Assistant is blocked on ${siteKeyForUrl(tab.url)}.` };
     }
@@ -558,7 +568,14 @@ export function createBrowserPageActions(deps) {
       if (announce) await addMessage("system", error);
       return { ok: false, error };
     }
-    const siteMode = await permissionForUrl(tab.url);
+    let siteMode;
+    try {
+      siteMode = await permissionForUrl(tab.url);
+    } catch {
+      const error = "Site permissions could not be read; capture refused.";
+      if (announce) await addMessage("system", error);
+      return { ok: false, error };
+    }
     if (siteMode === "blocked") {
       const error = `Assistant is blocked on ${siteKeyForUrl(tab.url)}.`;
       if (announce) await addMessage("system", error);

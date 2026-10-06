@@ -134,7 +134,7 @@ function createHarness(overrides = {}) {
     onSaveBrowserJobReport: (job) => state.reported.push(job.id),
     onResetSitePermission: (siteKey) => state.resetSites.push(siteKey),
     onRevokeTaskConsent: (consent) => state.revoked.push(consent.taskClass),
-    permissionForUrl: async () => overrides.permission ?? "trusted-for-safe-actions",
+    permissionForUrl: overrides.permissionForUrl ?? (async () => overrides.permission ?? "trusted-for-safe-actions"),
     siteKeyForUrl: (url) => new URL(url).hostname.replace(/^www\./, ""),
     updateContextDockVisibility: () => calls.push("dock")
   });
@@ -820,4 +820,25 @@ test("composed history notice preserves unrelated notices and unavailable jobs c
   assert.deepEqual(mutations, []); assert.deepEqual(commands, []); assert.equal(renders, 2);
   state = "ready"; assert.equal(await show(""), "normal jobs");
   assert.deepEqual(mutations, [false]); assert.deepEqual(commands, [""]);
+});
+
+
+test("site permission panel renders unavailable permissions without throwing", async () => {
+  let unavailable = false;
+  const harness = createHarness({ permissionForUrl: async () => {
+    if (unavailable) throw new Error("storage offline");
+    return "trusted-for-safe-actions";
+  } });
+  const document = harness.dom.window.document;
+  await harness.renderers.renderSitePermissionPanel();
+  unavailable = true;
+  await harness.renderers.renderSitePermissionPanel();
+  assert.equal(document.querySelector("#site").hidden, false);
+  assert.equal(document.querySelector("#mode").disabled, true);
+  assert.equal(document.querySelector("#mode").value, "");
+  assert.equal(document.querySelector("#note").textContent, "Site permissions could not be read; capture refused.");
+  unavailable = false;
+  await harness.renderers.renderSitePermissionPanel();
+  assert.equal(document.querySelector("#mode").disabled, false);
+  assert.equal(document.querySelector("#mode").value, "trusted-for-safe-actions");
 });

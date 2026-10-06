@@ -146,7 +146,14 @@ export function createSidePanelControlCommandController({
     const tab = targetContext.tab;
     const targetUrl = targetContext.targetUrl;
     const targetSiteKey = targetContext.siteKey;
-    const mode = targetUrl ? await permissionForUrl(targetUrl) : "ask-before-action";
+    let mode;
+    try {
+      mode = targetUrl ? await permissionForUrl(targetUrl) : "ask-before-action";
+    } catch {
+      await addMessage("system", "Site permissions could not be read; capture refused.");
+      setStatus("Control blocked");
+      return null;
+    }
     if (mode === "blocked") {
       await addMessage("system", `Agent Control is blocked on ${targetSiteKey}. Change the current-site permission before asking Augmentor to operate this page.`);
       setStatus("Control blocked");
