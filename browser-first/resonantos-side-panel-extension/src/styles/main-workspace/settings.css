@@ -1003,7 +1003,6 @@ body:not([data-density="compact"]):not([data-density="touch"])
 .settings-provider-field textarea {
   min-width: 0;
   border: 1px solid rgba(36, 209, 143, 0.13);
-  border-radius: var(--settings-radius-input);
   background: rgba(0, 0, 0, 0.22);
   color: var(--text);
   font: inherit;
@@ -1014,6 +1013,11 @@ body:not([data-density="compact"]):not([data-density="touch"])
   padding: 10px 11px;
   resize: vertical;
   text-transform: none;
+}
+
+.settings-provider-field input,
+.settings-provider-field select {
+  border-radius: var(--settings-radius-input);
 }
 
 .settings-provider-modal {
