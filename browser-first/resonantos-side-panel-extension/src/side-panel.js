@@ -369,20 +369,21 @@ const sitePermissions = sitePermissionStore.sitePermissions;
 // resolver drop blocked sites up front. Other readable-tab consumers keep the
 // plain scheme check.
 let blockedSiteKeys = new Set();
+// #410: the blocked set loads asynchronously, so until the first load resolves
+// the typeahead/resolver predicate must fail closed (treat keyable sites as
+// blocked) rather than list a site whose permission is not yet known.
+let sitePermissionsLoaded = false;
 const refreshBlockedSiteKeys = async () => {
   blockedSiteKeys = blockedSiteKeysFromPermissions(await sitePermissions());
+  sitePermissionsLoaded = true;
 };
 const isReadableUnblockedTab = createReadableUnblockedTab({
   isReadableBrowserTab,
   siteKeyForUrl,
-  getBlockedSiteKeys: () => blockedSiteKeys
+  getBlockedSiteKeys: () => blockedSiteKeys,
+  isPermissionsLoaded: () => sitePermissionsLoaded
 });
 void refreshBlockedSiteKeys();
-chrome.storage?.onChanged?.addListener((changes, area) => {
-  if (area === "local" && changes[STORAGE_KEYS.sitePermissions]) {
-    void refreshBlockedSiteKeys();
-  }
-});
 
 // @tab mention typeahead (#252): typing `@` lists open, readable tabs; selecting
 // one inserts the deliberate @"…" mention form that the command router treats as
@@ -390,10 +391,18 @@ chrome.storage?.onChanged?.addListener((changes, area) => {
 // composed predicate exist — the original placement above ran in a temporal dead
 // zone and the panel never reached its ready marker (caught by the live lanes,
 // not unit tests). Uses isReadableUnblockedTab so blocked sites are never listed.
-createTabMentionTypeahead({
+const mentionTypeahead = createTabMentionTypeahead({
   chrome,
   input: commandInput,
   isReadableBrowserTab: isReadableUnblockedTab
+});
+// #410: when site permissions change, refresh the blocked set and close any open
+// typeahead popup so it cannot keep showing a now-blocked site; the next
+// keystroke reopens it filtered against the fresh set.
+chrome.storage?.onChanged?.addListener((changes, area) => {
+  if (area === "local" && changes[STORAGE_KEYS.sitePermissions]) {
+    void refreshBlockedSiteKeys().finally(() => mentionTypeahead.close());
+  }
 });
 const taskConsentStore = createTaskConsentStore({
   storage: chrome.storage?.local,

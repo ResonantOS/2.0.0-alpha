@@ -7,16 +7,22 @@
 //
 // The contract (see the comment above CHAT_TOKEN_PATTERN): the chat-side
 // sanitizer must strip AT LEAST as much as a live snapshot does, or scoped-tab
-// context would leak a secret that a normal capture redacts. So we assert every
-// redaction pattern in _rcSanitizeText also appears in safeContextText —
-// i.e. content's pattern set is a SUBSET of chat's. chat may strip more (it also
-// scrubs control characters), which is allowed.
+// context would leak a secret that a normal capture redacts.
 //
-// Neither sanitizer is callable in isolation (both are file-private), so the
-// guard compares the regex literals as they appear in source. The only
-// deliberate, functionally-equivalent difference between the two is the
-// character-class casing (content uses [A-Za-z…] with the /i flag; chat uses
-// [a-z…] with /i), which the normalizer below folds away.
+// Two complementary guards:
+//   1. BEHAVIOURAL (primary): compile both sanitizers from source and run a
+//      golden corpus of secret shapes through both, asserting that every secret
+//      the content script redacts the chat sanitizer also redacts. This fails if
+//      a pattern is declared but no longer applied, or removed, or weakened on
+//      one side — the gap a text-only comparison misses.
+//   2. STRUCTURAL (secondary): the original regex-literal subset check, kept as a
+//      cheap backstop that also catches a divergence on inputs the corpus does
+//      not happen to cover.
+//
+// Both sanitizers stay file-private: we extract each one's source and evaluate
+// it in isolation (content's _rcSanitizeText is self-contained; chat's
+// safeContextText is sliced together with the CHAT_* pattern constants it
+// closes over) rather than adding a production export just for the test.
 
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -43,6 +49,15 @@ function sliceBetween(source, startMarker, endMarker, label) {
   return source.slice(start, end);
 }
 
+// Compile a sanitizer from its extracted source. `slice` ends with (or contains)
+// a declaration named `fnName`; we evaluate it in a fresh function scope — with
+// no access to module globals — and hand back the callable. This runs the REAL
+// redaction code, so a pattern that is declared but never applied is caught.
+function compileSanitizer(slice, fnName) {
+  // eslint-disable-next-line no-new-func
+  return new Function(`"use strict";\n${slice}\nreturn ${fnName};`)();
+}
+
 // Match /…/flags regex literals. Every redaction pattern in both files is
 // single-line and contains no unescaped internal "/", so this stays simple:
 // escaped chars, character classes, then any other non-slash char.
@@ -63,7 +78,104 @@ function patternSet(slice) {
   return new Set((slice.match(REGEX_LITERAL) ?? []).map(normalizePattern));
 }
 
-test("chat-turn sanitizer strips at least as much as the content-script sanitizer (#410 parity)", async () => {
+// Golden corpus: one entry per secret shape both sanitizers must strip. `secret`
+// is the exact substring that must NOT survive sanitization. A large `max` is
+// passed so trailing truncation never masquerades as redaction. Every token
+// value is 12+ chars to clear the {12,} length floors in the patterns.
+const SECRET = {
+  privateKey: "-----BEGIN RSA PRIVATE KEY-----\nMIIBOAIBAAJAabc123def456ghi789\n-----END RSA PRIVATE KEY-----",
+  jwt: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N",
+  openai: "sk-abcdefghijklmnop1234",
+  anthropic: "sk-ant-abcdefghijklmnop1234",
+  openrouter: "sk-or-v1-abcdefghijklmnop1234",
+  github: "ghp_abcdefghijklmnop1234",
+  githubPat: "github_pat_abcdefghijklmnop1234",
+  huggingface: "hf_abcdefghijklmnop1234",
+  slack: "xoxb-abcdefghijklmnop1234",
+  xai: "xai-abcdefghijklmnop1234",
+  groq: "gsk_abcdefghijklmnop1234",
+  google: "AIzaAbCdEfGhIjKlMnOp1234",
+  aws: "AKIAABCDEFGHIJKLMNOP",
+  stripePk: "pk_live_abcdefghijkl1234",
+  stripeRk: "rk_live_abcdefghijkl1234",
+  labelledApiKey: "sixteencharsecretvalue",
+  labelledToken: "anothersecrettokenvalue",
+  labelledPassword: "hunter2hunter2hunter2",
+  labelledAuthorization: "BasicZm9vOmJhcnNlY3JldA",
+  labelledSecret: "topsecretvaluehere12",
+  labelledCookie: "sessioncookievalue1234",
+  creditCard: "4111 1111 1111 1111"
+};
+
+const GOLDEN_VECTORS = [
+  { name: "PEM private key block", input: `key:\n${SECRET.privateKey}\n`, secret: "MIIBOAIBAAJAabc123def456ghi789" },
+  { name: "JWT", input: `authz ${SECRET.jwt} end`, secret: SECRET.jwt },
+  { name: "OpenAI key (sk-)", input: `use ${SECRET.openai} now`, secret: SECRET.openai },
+  { name: "Anthropic key (sk-ant-)", input: `use ${SECRET.anthropic} now`, secret: SECRET.anthropic },
+  { name: "OpenRouter key (sk-or-v1-)", input: `use ${SECRET.openrouter} now`, secret: SECRET.openrouter },
+  { name: "GitHub token (ghp_)", input: `use ${SECRET.github} now`, secret: SECRET.github },
+  { name: "GitHub PAT (github_pat_)", input: `use ${SECRET.githubPat} now`, secret: SECRET.githubPat },
+  { name: "HuggingFace token (hf_)", input: `use ${SECRET.huggingface} now`, secret: SECRET.huggingface },
+  { name: "Slack token (xoxb-)", input: `use ${SECRET.slack} now`, secret: SECRET.slack },
+  { name: "xAI key (xai-)", input: `use ${SECRET.xai} now`, secret: SECRET.xai },
+  { name: "Groq key (gsk_)", input: `use ${SECRET.groq} now`, secret: SECRET.groq },
+  { name: "Google key (AIza)", input: `use ${SECRET.google} now`, secret: SECRET.google },
+  { name: "AWS access key (AKIA)", input: `use ${SECRET.aws} now`, secret: SECRET.aws },
+  { name: "Stripe publishable (pk_live_)", input: `use ${SECRET.stripePk} now`, secret: SECRET.stripePk },
+  { name: "Stripe restricted (rk_live_)", input: `use ${SECRET.stripeRk} now`, secret: SECRET.stripeRk },
+  { name: "labelled api_key=", input: `api_key=${SECRET.labelledApiKey}`, secret: SECRET.labelledApiKey },
+  { name: "labelled token:", input: `token: ${SECRET.labelledToken}`, secret: SECRET.labelledToken },
+  { name: "labelled password=", input: `password=${SECRET.labelledPassword}`, secret: SECRET.labelledPassword },
+  { name: "labelled authorization:", input: `authorization: ${SECRET.labelledAuthorization}`, secret: SECRET.labelledAuthorization },
+  { name: "labelled secret=", input: `secret=${SECRET.labelledSecret}`, secret: SECRET.labelledSecret },
+  { name: "labelled cookie=", input: `cookie=${SECRET.labelledCookie}`, secret: SECRET.labelledCookie },
+  { name: "credit-card number", input: `card ${SECRET.creditCard} exp`, secret: SECRET.creditCard }
+];
+
+test("chat-turn sanitizer redacts every secret shape the content-script sanitizer redacts (#410 parity, behavioural)", async () => {
+  const [contentSource, chatSource] = await Promise.all([
+    readFile(contentScriptPath, "utf8"),
+    readFile(chatTurnControllerPath, "utf8")
+  ]);
+
+  // content's _rcSanitizeText is self-contained; chat's safeContextText is
+  // sliced together with the CHAT_* pattern constants it references.
+  const contentSanitize = compileSanitizer(
+    sliceBetween(contentSource, "function _rcSanitizeText", "function _rcSanitizeUrl", "content.js _rcSanitizeText"),
+    "_rcSanitizeText"
+  );
+  const chatSanitize = compileSanitizer(
+    sliceBetween(chatSource, "const CHAT_PRIVATE_KEY_PATTERN", "function safeContextUrl", "chat-turn-controller.js safeContextText"),
+    "safeContextText"
+  );
+
+  // The corpus must actually drive the content sanitizer, or the superset check
+  // below passes vacuously. Require the overwhelming majority to be redacted.
+  const caughtByContent = GOLDEN_VECTORS.filter((v) => !contentSanitize(v.input, 100000).includes(v.secret));
+  assert.ok(
+    caughtByContent.length >= GOLDEN_VECTORS.length - 1,
+    `golden corpus must exercise the content sanitizer: only ${caughtByContent.length}/${GOLDEN_VECTORS.length} secrets were redacted by content.js`
+  );
+
+  // The contract: chat strips at least as much as content. For every secret the
+  // content script removes, the chat sanitizer must remove it too.
+  const leaks = [];
+  for (const vector of GOLDEN_VECTORS) {
+    const contentOut = contentSanitize(vector.input, 100000);
+    const chatOut = chatSanitize(vector.input, 100000);
+    const contentRedacted = !contentOut.includes(vector.secret);
+    const chatRedacted = !chatOut.includes(vector.secret);
+    if (contentRedacted && !chatRedacted) leaks.push(vector.name);
+  }
+  assert.deepEqual(
+    leaks,
+    [],
+    `chat-turn-controller.js safeContextText leaks secret shapes that content.js _rcSanitizeText redacts — ` +
+      `referenced-tab text would leak secrets a live snapshot strips:\n  ${leaks.join("\n  ")}`
+  );
+});
+
+test("chat-turn sanitizer's redaction patterns are a superset of the content-script's (#410 parity, structural backstop)", async () => {
   const [contentSource, chatSource] = await Promise.all([
     readFile(contentScriptPath, "utf8"),
     readFile(chatTurnControllerPath, "utf8")

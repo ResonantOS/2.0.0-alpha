@@ -132,10 +132,13 @@ test("typeahead closes when the query stops matching any permitted tab", async (
   assert.equal(doc.querySelector(".tab-mention-typeahead"), null);
 });
 
-test("typeahead exposes an editable combobox with aria-activedescendant (#410 a11y)", async () => {
+test("typeahead keeps the textarea's native role and exposes aria-activedescendant (#410 a11y)", async () => {
   const { doc, dom, input } = setupDom(openTabs);
 
-  assert.equal(input.getAttribute("role"), "combobox");
+  // ARIA-in-HTML forbids any role override on a <textarea> (only its native
+  // textbox is allowed), so the typeahead must NOT set role="combobox"; it
+  // conveys the popup via supported states instead.
+  assert.equal(input.getAttribute("role"), null, "no invalid role override on the textarea");
   assert.equal(input.getAttribute("aria-autocomplete"), "list");
   assert.equal(input.getAttribute("aria-expanded"), "false");
 
@@ -194,4 +197,47 @@ test("input-triggered refresh is debounced so a keystroke burst queries tabs onc
   await new Promise((resolve) => setTimeout(resolve, 40));
   assert.equal(queryCount, 1, "the coalesced refresh queries tabs exactly once");
   assert.equal(typeahead.isOpen(), true);
+});
+
+test("a stale debounced popup never erases text or swallows Enter (#410 regression)", async () => {
+  const { dom, input, typeahead } = setupDom(openTabs, { debounceMs: 15 });
+
+  // Open the popup for "@A".
+  input.value = "@A";
+  input.setSelectionRange(2, 2);
+  input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(typeahead.isOpen(), true, "popup is open for @A");
+
+  // Type past the mention (a space ends the unquoted token) and press Enter
+  // while the debounce timer for this keystroke is still pending.
+  input.value = "@A hello";
+  input.setSelectionRange(8, 8);
+  input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  assert.equal(typeahead.isOpen(), false, "popup closes synchronously once the caret leaves the mention");
+
+  const enter = keydown(dom, "Enter");
+  input.dispatchEvent(enter);
+  assert.equal(input.value, "@A hello", "the user's text is not erased by a stale suggestion");
+  assert.equal(enter.defaultPrevented, false, "Enter is not swallowed — it falls through to the composer's submit");
+});
+
+test("selectCandidate refuses to commit when the caret no longer sits in the ranked mention (#410)", async () => {
+  // Open on a valid mention, then move the caret out of it without firing the
+  // debounced input refresh, and confirm an Enter does not commit or swallow.
+  const { dom, input, typeahead } = setupDom(openTabs, { debounceMs: 15 });
+
+  input.value = "@Al";
+  input.setSelectionRange(3, 3);
+  input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(typeahead.isOpen(), true);
+
+  // Caret jumps to the very start (position 0) — before the mention's "@".
+  input.setSelectionRange(0, 0);
+  const enter = keydown(dom, "Enter");
+  input.dispatchEvent(enter);
+  assert.equal(input.value, "@Al", "no mention is inserted when the caret is outside the ranked mention");
+  assert.equal(enter.defaultPrevented, false, "Enter falls through rather than committing a stale candidate");
+  assert.equal(typeahead.isOpen(), false, "the stale popup is closed");
 });

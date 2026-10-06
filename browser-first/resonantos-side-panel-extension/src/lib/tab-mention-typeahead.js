@@ -105,14 +105,18 @@ export function createTabMentionTypeahead({
   let queryInfo = null;
   let open = false;
   let refreshTimer = null;
+  // #410: monotonic token so a debounced/in-flight fetch that resolves after the
+  // caret has moved on (or after close) can detect it was superseded.
+  let refreshSeq = 0;
 
   const isOpen = () => open;
 
-  // #410 (a11y): mark the composer as an editable combobox that owns the popup.
-  // Active-option state is conveyed via aria-activedescendant (APG virtual
-  // focus) so focus stays in the input and screen readers still announce the
-  // highlighted option.
-  input.setAttribute("role", "combobox");
+  // #410 (a11y): the composer is a <textarea>, and ARIA-in-HTML permits a
+  // textarea no role other than its native textbox (role="combobox" on a
+  // textarea is invalid). So we convey the popup relationship with supported
+  // states only — aria-autocomplete plus aria-expanded/aria-controls — and track
+  // the active option via aria-activedescendant (APG virtual focus) so focus
+  // stays in the textarea while screen readers announce the highlighted option.
   input.setAttribute("aria-autocomplete", "list");
   input.setAttribute("aria-expanded", "false");
 
@@ -136,6 +140,7 @@ export function createTabMentionTypeahead({
       clearTimeout(refreshTimer);
       refreshTimer = null;
     }
+    refreshSeq += 1; // invalidate any in-flight fetch so it can't reopen after close
     container?.remove();
     container = null;
     setExpanded(false);
@@ -196,51 +201,77 @@ export function createTabMentionTypeahead({
     if (active) input.setAttribute("aria-activedescendant", active.id);
   }
 
-  async function refresh() {
-    const info = mentionQueryAtCaret(input.value, input.selectionStart);
-    if (!info) {
+  // Fetch tabs and rank candidates for a mention position already determined by
+  // scheduleRefresh. `seq` guards against a newer keystroke superseding this
+  // fetch; the live re-derivation guards against the caret having left the
+  // mention while the fetch was in flight (#410: a stale popup must never open).
+  async function refresh(info, seq) {
+    const tabs = await listTabs();
+    if (seq !== refreshSeq) return; // a newer input (or close) superseded this fetch
+    const live = mentionQueryAtCaret(input.value, input.selectionStart);
+    if (!live || live.start !== info.start) {
       close();
       return;
     }
-    queryInfo = info;
-    const tabs = await listTabs();
-    if (queryInfo !== info) return; // a newer refresh superseded this one
     candidates = rankMentionCandidates(tabs, info.query, isReadableBrowserTab, { limit: maxCandidates });
     if (!candidates.length) {
       close();
       return;
     }
+    queryInfo = info; // the mention these candidates belong to (re-checked on commit)
     open = true;
     if (activeIndex < 0 || activeIndex >= candidates.length) activeIndex = 0;
     setExpanded(true);
     renderList();
   }
 
+  // #410: decide synchronously, on every input, whether a mention is still under
+  // the caret. If not, close now rather than waiting out the debounce with a
+  // stale popup that Enter could commit (erasing text and swallowing the send).
+  // Only the tab query + ranking is debounced.
   function scheduleRefresh() {
+    refreshSeq += 1;
+    const seq = refreshSeq;
+    const info = mentionQueryAtCaret(input.value, input.selectionStart);
+    if (!info) {
+      close();
+      return;
+    }
     if (debounceMs <= 0) {
-      void refresh();
+      void refresh(info, seq);
       return;
     }
     if (refreshTimer !== null) clearTimeout(refreshTimer);
     refreshTimer = setTimeout(() => {
       refreshTimer = null;
-      void refresh();
+      void refresh(info, seq);
     }, debounceMs);
   }
 
+  // Returns true only if a mention was actually committed. #410: re-derive the
+  // mention at the caret and refuse (returning false, leaving the text and the
+  // keypress untouched) if the caret has left the mention or moved to a
+  // different token than the one these candidates were ranked for — so a stale
+  // debounced popup can never erase the user's text or swallow their Enter.
   function selectCandidate(position) {
     const candidate = candidates[position];
-    if (!candidate || !queryInfo) return;
+    if (!candidate || !queryInfo) return false;
     const caret = input.selectionStart ?? input.value.length;
+    const live = mentionQueryAtCaret(input.value, caret);
+    if (!live || live.start !== queryInfo.start) {
+      close();
+      return false;
+    }
     const insertion = mentionInsertionForTab(candidate);
-    input.value = input.value.slice(0, queryInfo.start) + insertion + input.value.slice(caret);
-    const nextCaret = queryInfo.start + insertion.length;
+    input.value = input.value.slice(0, live.start) + insertion + input.value.slice(caret);
+    const nextCaret = live.start + insertion.length;
     input.setSelectionRange?.(nextCaret, nextCaret);
     close();
     // Notify other composer listeners (undo stack, context meter) of the edit.
     const view = input.ownerDocument?.defaultView;
     input.dispatchEvent(new (view?.Event ?? Event)("input", { bubbles: true }));
     input.focus?.();
+    return true;
   }
 
   // Capture phase on the form: runs before the composer controller's own
@@ -256,9 +287,13 @@ export function createTabMentionTypeahead({
       event.stopPropagation();
       setActiveOption((activeIndex - 1 + candidates.length) % candidates.length);
     } else if (event.key === "Enter") {
-      event.preventDefault();
-      event.stopPropagation();
-      selectCandidate(activeIndex);
+      // Only consume Enter if a mention was actually committed. If the popup is
+      // stale (the caret left the mention during the debounce window), let Enter
+      // fall through to the composer's submit handler instead of swallowing it.
+      if (selectCandidate(activeIndex)) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
     } else if (event.key === "Tab") {
       // #410 (keyboard): don't trap the user — Tab dismisses the dropdown and
       // moves focus to the next control (no preventDefault). Enter or a click
@@ -283,7 +318,6 @@ export function createTabMentionTypeahead({
     input.removeEventListener("input", onInput);
     input.removeEventListener("blur", onBlur);
     keydownHost.removeEventListener("keydown", onKeydown, true);
-    input.removeAttribute("role");
     input.removeAttribute("aria-autocomplete");
     input.removeAttribute("aria-expanded");
   }
