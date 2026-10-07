@@ -64,9 +64,11 @@ that single owning area.
 | `Deferred / Waived` | Delivery is intentionally postponed or the gate is explicitly waived. |
 | `Done` | Acceptance criteria and required checks are complete and the change is merged or otherwise delivered. |
 
-Closing an issue does not make the sync script set `Done`; the triager must keep
-the Project 2 status consistent. Reopening an item returns it to triage unless
-the current Project status is still accurate.
+The sync script never writes `Done`, but the project's built-in GitHub automation
+moves an item to `Done` when its issue or pull request closes (observed on
+#511 the moment #514 merged). Every other transition is the triager's job, and
+`Priority` is never set by automation. Reopening an item returns it to triage
+unless the current Project status is still accurate.
 
 ### Other Planning Fields
 
