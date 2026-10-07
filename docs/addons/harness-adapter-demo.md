@@ -126,9 +126,14 @@ only. A file-by-file comparison of the 0.1.7 and 0.2.0 packages (6 October
 auth route and `x-augmentor-token` header are identical in `dsh-augmentor`
 0.2.11 and 0.2.13; the cookie-exchange packages have no code changes; the
 `/api/remote.mux` wire protocol and client are byte-identical; the session
-contract only gained optional fields. Treat that as a reason to expect
-compatibility, not as certification: pin the version you tested until a live
-pass on 0.2 lands. Also new in 0.2: `dsh-web-app` mounts product-analytics and
+contract only gained optional fields. A live pass on 7 October 2026 settled the
+practical question. DSH 0.2.0-rc.2's own plugin manager refuses
+`dsh-augmentor@0.2.11`, which declares DSH 0.1.5 only ("may cause crashes or
+data loss"), so a plain 0.2 install has no `/api/augmentor/auth` and the
+adapter cannot connect. With the plugin forced in a throwaway profile, the
+adapter's auth exchange, session creation, a full chat turn over
+`/api/remote.mux` and history all worked. Pin DSH 0.1.5-rc.1 or 0.1.7-rc.2
+until a plugin release declares 0.2 support. Also new in 0.2: `dsh-web-app` mounts product-analytics and
 OpenTelemetry packages enabled by default, which a governed host must decide
 on before adopting it.
 
