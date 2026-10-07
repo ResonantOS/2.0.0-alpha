@@ -747,6 +747,182 @@ async function verifyPublicSubmitBoundary(panel, page) {
   return blockedState;
 }
 
+async function verifySitePermissionFailClosed(panel, page) {
+  const tabId = (await evaluate(panel, `(async () => {
+    const tabs = await chrome.tabs.query({});
+    const tab = tabs.find((candidate) => candidate.url === ${JSON.stringify(`http://127.0.0.1:${fixturePort}/`)});
+    if (!tab?.id) throw new Error("Fixture tab not found for site-permission proof.");
+    await chrome.tabs.update(tab.id, { active: true });
+    return tab.id;
+  })()`)).result.value;
+  const setMode = async (mode) => {
+    await evaluate(panel, `(() => {
+      const selector = document.querySelector("#site-permission-mode");
+      selector.value = ${JSON.stringify(mode)};
+      selector.dispatchEvent(new Event("change", { bubbles: true }));
+    })()`);
+    await waitForPageCondition(panel, `(async () => {
+      const stored = await chrome.storage.local.get("augmentorSitePermissions");
+      return stored.augmentorSitePermissions?.["127.0.0.1"] === ${JSON.stringify(mode)}
+        && document.querySelector("#site-permission-mode").value === ${JSON.stringify(mode)}
+        && document.querySelector("#connection-line").title.includes(${JSON.stringify(`Site permission: ${mode}`)});
+    })()`, `fixture site permission ${mode}`);
+  };
+  // executeScript uses this extension's isolated world, the same world as
+  // content.js. Patching the fixture's MAIN world would not exercise its gate.
+  const contentProbe = async (operation) => (await evaluate(panel, `chrome.scripting.executeScript({
+    target: { tabId: ${tabId}, frameIds: [0] },
+    world: "ISOLATED",
+    args: [${JSON.stringify(operation)}],
+    func: (operation) => {
+      const key = "__resonantosLivePermissionProbe";
+      if (operation === "install") {
+        if (globalThis[key]) throw new Error("Permission probe already installed.");
+        const probe = { original: chrome.storage.local.get, reads: 0, settled: 0, failures: 0, fail: false };
+        globalThis[key] = probe;
+        chrome.storage.local.get = function (keys, ...args) {
+          if (keys !== "augmentorSitePermissions") return probe.original.call(this, keys, ...args);
+          probe.reads += 1;
+          if (probe.fail) {
+            probe.failures += 1;
+            probe.settled += 1;
+            throw new Error("Live proof: content site-permission read unavailable.");
+          }
+          return probe.original.call(this, keys, ...args).finally(() => { probe.settled += 1; });
+        };
+      }
+      const probe = globalThis[key];
+      if (operation === "restore") {
+        if (probe) chrome.storage.local.get = probe.original;
+        delete globalThis[key];
+        return true;
+      }
+      if (!probe) throw new Error("Content permission probe missing.");
+      if (operation === "fail") probe.fail = true;
+      return { reads: probe.reads, settled: probe.settled, failures: probe.failures };
+    }
+  })`)).result.value[0].result;
+  const hiddenButton = async (label) => {
+    const hidden = (await evaluate(page, `(() => {
+      const button = document.querySelector("#resonantos-inline-button");
+      return Boolean(button && getComputedStyle(button).display === "none");
+    })()`)).result.value;
+    assert(hidden, `${label}: inline button must exist and remain hidden.`);
+  };
+  const verifyInlineDenied = async (label) => {
+    const before = await contentProbe("state");
+    await evaluate(page, `(() => {
+      document.activeElement?.blur();
+      const paragraph = document.querySelector("p");
+      paragraph.scrollIntoView();
+      const range = document.createRange();
+      range.selectNodeContents(paragraph);
+      const selection = getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      document.dispatchEvent(new Event("selectionchange"));
+      if (selection.toString().length < 2 || range.getBoundingClientRect().width === 0) {
+        throw new Error("Permission proof requires a visible, nonempty text selection.");
+      }
+    })()`);
+    let after = before;
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      after = await contentProbe("state");
+      if (after.reads > before.reads && after.settled === after.reads) break;
+    }
+    assert(after.reads > before.reads && after.settled === after.reads,
+      `${label}: selection must complete a content-script permission read.`);
+    if (label === "unreadable") assert(after.failures > before.failures, "Selection must hit the injected storage failure.");
+    await hiddenButton(`${label} selection`);
+    const response = (await evaluate(panel, `chrome.tabs.sendMessage(${tabId}, {
+      channel: "resonantos.browser_first.content",
+      type: "show_inline_assistant_for_text",
+      text: "This page verifies safe browser control, document-style typing, and approval gates.",
+      rect: { left: 44, right: 520, top: 92, bottom: 116, width: 476, height: 24 }
+    }, { frameId: 0 })`)).result.value;
+    assert(response?.ok === false && /blocked for this site/.test(response.error ?? ""),
+      `${label}: inline message must refuse on the permission gate: ${JSON.stringify(response)}`);
+    const messaged = await contentProbe("state");
+    assert(messaged.reads > after.reads, `${label}: inline message must check content-script permission.`);
+    if (label === "unreadable") assert(messaged.failures > after.failures, "Inline message must hit the injected storage failure.");
+    await hiddenButton(`${label} message`);
+    certificationReport.record(`site-permission-inline-${label}`, "passed", "Selection and tab message refused; inline button hidden.");
+  };
+  const transcript = `document.querySelector("#transcript").innerText`;
+  const attachmentCount = async () => (await evaluate(panel, `(${transcript}.match(/Page context attached:/g) ?? []).length`)).result.value;
+  try {
+    await evaluate(panel, `(() => {
+      if (document.querySelector("#context-toggle").getAttribute("aria-expanded") !== "true") {
+        document.querySelector("#context-toggle").click();
+      }
+      if (document.querySelector("#dock-tab-site").getAttribute("aria-expanded") !== "true") {
+        document.querySelector("#dock-tab-site").click();
+      }
+    })()`);
+    await waitForPageCondition(panel, `!document.querySelector("#site-permission-panel").hidden
+      && document.querySelector("#site-permission-host").textContent === "127.0.0.1"`, "permission proof panel binding");
+    await setMode("blocked");
+    assert((await evaluate(panel, `(() => {
+      const selector = document.querySelector("#site-permission-mode");
+      return selector.value === "blocked" && selector.getClientRects().length > 0;
+    })()`)).result.value,
+      "Fixture site must be visibly blocked in the real permission selector.");
+    await evaluate(panel, `document.querySelector("#dock-popout-close").click()`);
+    const attachedBefore = await attachmentCount();
+    await evaluate(panel, `(() => {
+      globalThis.__resonantosLivePanelGet = chrome.storage.local.get;
+      globalThis.__resonantosLivePanelReadFailures = 0;
+      chrome.storage.local.get = function (keys, ...args) {
+        if (keys === "augmentorSitePermissions") {
+          globalThis.__resonantosLivePanelReadFailures += 1;
+          return Promise.reject(new Error("Live proof: panel site-permission read unavailable."));
+        }
+        return globalThis.__resonantosLivePanelGet.call(this, keys, ...args);
+      };
+      document.querySelector("#read-page").click();
+    })()`);
+    // Use transcript text, not the permission panel's identical error note.
+    await waitForPageCondition(panel, `${transcript}.includes("Site permissions could not be read; capture refused.")`, "fail-closed capture transcript");
+    assert((await evaluate(panel, `globalThis.__resonantosLivePanelReadFailures > 0`)).result.value,
+      "Read page must hit the injected panel storage failure.");
+    assert(await attachmentCount() === attachedBefore, "Unreadable permissions must not attach new page context.");
+    await evaluate(panel, `chrome.storage.local.get = globalThis.__resonantosLivePanelGet; delete globalThis.__resonantosLivePanelGet;`);
+    certificationReport.record("site-permission-capture-unreadable", "passed", "Read page refused with the fail-closed transcript and no new attached context.");
+    await evaluate(panel, `document.querySelector("#read-page").click()`);
+    await waitForPageCondition(panel, `${transcript}.includes("Assistant is blocked on 127.0.0.1.")`, "saved block capture refusal");
+    assert(await attachmentCount() === attachedBefore, "Saved blocked permission must not fall back to ask-before-action or attach context.");
+    certificationReport.record("site-permission-capture-blocked", "passed", "Restored storage still refuses capture for the saved blocked site.");
+    await contentProbe("install");
+    await verifyInlineDenied("blocked");
+    await setMode("ask-before-action");
+    await contentProbe("fail");
+    await verifyInlineDenied("unreadable");
+    await contentProbe("restore");
+    await evaluate(panel, `document.querySelector("#read-page").click()`);
+    await waitForPageCondition(panel, `(${transcript}.match(/Page context attached:/g) ?? []).length > ${attachedBefore}`, "site-permission capture recovery");
+    assert(await attachmentCount() === attachedBefore + 1, "Recovery must attach exactly one new page context.");
+    certificationReport.record("site-permission-recovery", "passed", "Readable storage and an unblocked site allow Read page again.");
+  } finally {
+    await evaluate(panel, `(() => {
+      if (globalThis.__resonantosLivePanelGet) chrome.storage.local.get = globalThis.__resonantosLivePanelGet;
+      delete globalThis.__resonantosLivePanelGet;
+      delete globalThis.__resonantosLivePanelReadFailures;
+    })()`);
+    await contentProbe("restore");
+    await setMode("ask-before-action");
+    await evaluate(page, `getSelection().removeAllRanges(); document.dispatchEvent(new Event("selectionchange"));`);
+    await evaluate(panel, `(() => {
+      document.querySelector("#dock-popout-close").click();
+      if (document.querySelector("#context-toggle").getAttribute("aria-expanded") === "true") {
+        document.querySelector("#context-toggle").click();
+      }
+    })()`);
+    await waitForPageCondition(panel, `document.querySelector("#site-permission-panel").hidden
+      && document.querySelector("#job-monitor").hidden`, "permission proof dock cleanup");
+  }
+}
+
 const server = http.createServer((request, response) => {
   response.writeHead(200, { "content-type": "text/html" });
   response.end(request.url === "/calendar" ? calendarHtml : fixtureHtml);
@@ -976,6 +1152,9 @@ try {
       "Excluded from the Agent Control CI profile because it requires provider behavior owned by a separate certification lane.",
     );
   }
+  // The fail-closed proof needs only the fixture page, the panel and the
+  // content script, so it runs in every profile, including the CI lane.
+  await verifySitePermissionFailClosed(panel, page);
   const dockCollapsedState = (await evaluate(panel, `({
     dockHidden: document.querySelector("#context-dock").hidden,
     siteHidden: document.querySelector("#site-permission-panel").hidden,
