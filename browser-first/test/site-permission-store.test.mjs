@@ -94,9 +94,37 @@ test("site permission store rejects invalid write targets", async () => {
   await assert.rejects(() => harness.store.setSitePermission("bad-url", "blocked"), /No site is active/);
 });
 
-test("site permission store falls back safely when reads fail", async () => {
+test("sitePermissions stays lenient for display callers", async () => {
   const harness = createHarness({}, { getError: "storage offline" });
 
   assert.deepEqual(await harness.store.sitePermissions(), {});
-  assert.equal(await harness.store.permissionForUrl("https://example.com/"), "ask-before-action");
+  assert.deepEqual(await createSitePermissionStore({}).sitePermissions(), {});
+});
+
+
+test("permissionForUrl refuses when the store cannot be read", async () => {
+  const stores = [
+    createHarness({}, { getError: "storage offline" }).store,
+    createSitePermissionStore({ storage: undefined }),
+    createSitePermissionStore({ storage: {} })
+  ];
+  for (const store of stores) {
+    await assert.rejects(() => store.permissionForUrl("https://example.com/"), {
+      code: "site-permissions-unavailable",
+      message: "Site permissions could not be read."
+    });
+    await assert.rejects(() => store.readSitePermissions(), { code: "site-permissions-unavailable" });
+  }
+});
+
+test("a permission change never writes a map it could not read", async () => {
+  const harness = createHarness({ augmentorSitePermissions: { "other.example": "blocked" } }, { getError: "storage offline" });
+  for (const mutate of [
+    () => harness.store.setSitePermission("https://example.com/", "read-only"),
+    () => harness.store.resetSitePermission("other.example")
+  ]) {
+    await assert.rejects(mutate, { code: "site-permissions-unavailable" });
+    assert.deepEqual(harness.writes, []);
+    assert.deepEqual(harness.initial.augmentorSitePermissions, { "other.example": "blocked" });
+  }
 });

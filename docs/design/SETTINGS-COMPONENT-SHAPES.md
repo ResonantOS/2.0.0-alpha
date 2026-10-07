@@ -30,13 +30,24 @@ The later `responsive.css` compact-skin rules must not override these Settings
 shapes. Existing color, border and density rules remain in effect. Keep visible
 keyboard focus distinct from hover using the existing accent token.
 
-Run `npm run test:browser-first:settings-shapes` with stable Chrome installed
-(or set `RESONANTOS_LIVE_CHROME_PATH`). The live-browser CI lane runs this check
-and retains screenshots with its evidence. CI uses headless Chrome; local runs
-use a visible window unless `CI=true` is set. It renders actual extension modules
-and styles with synthetic, network-isolated data at 390/768/1280px; it does not
-replace extension/bridge certification. It also injects the old important
-override and a pill-button override to verify that the regression detector rejects both.
+`npm run test:browser-first:settings-shapes` checks computed radii and keyboard
+focus in the rendered Overview, Appearance, and Provider modal at 390, 768, and
+1280px for Comfortable, Compact, and Touch density. It uses synthetic,
+network-isolated data and waits for the asynchronous Appearance preference load
+before each measurement. At those same states it checks applicable 40px and
+42px control minimums, preserves the compact Overview action's smaller height,
+and confirms the textarea remains multiline. It also injects the original
+important card override and a pill-button override to confirm both are caught.
+The check saves Overview and Provider modal screenshots for each width in its
+Comfortable state; the live-browser CI lane retains those artifacts. CI uses
+headless Chrome; local runs use a visible window unless `CI=true` is set. Use
+stable Chrome or set `RESONANTOS_LIVE_CHROME_PATH` to its executable.
+
+The automated check covers only those rendered sections and assertions. A human
+still needs to inspect Start Here, Profile, Providers, Routing, Appearance, and
+Bridge Target in live Chrome for text wrapping, clipping, action states, nested
+rows, badges, keyboard focus, and narrow-layout fit. It does not replace
+extension or bridge certification.
 
 When changing these rules, check actual computed styles in Chrome: Start Here,
 Profile, Providers (including its modal), Routing, Appearance and Bridge Target.

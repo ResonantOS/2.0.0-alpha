@@ -102,6 +102,10 @@ test("agent-control job pins the settings-shapes check without skipping certific
 
   const certification = job.steps.find((step) => step.name === "Run live Agent Control certification");
   assert.ok(certification, "agent-control job must keep its certification run");
+  assert.ok(
+    job.steps.indexOf(shapes) < job.steps.indexOf(certification),
+    "the Settings shapes check must run before live Agent Control certification",
+  );
   assert.equal(certification["continue-on-error"], true, "certification outcome must be surfaced, not skipped");
   assert.equal(certification.if, undefined, "certification must not be conditioned on the shapes outcome");
 

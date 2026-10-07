@@ -152,10 +152,18 @@ export function createSidePanelLifecycleController({
     void syncWorkspaceToggleState();
     sitePermissionMode?.addEventListener?.("change", async () => {
       const tab = await activeTab();
-      const result = await setSitePermission(tab?.url, sitePermissionMode.value, {
-        reason: "Changed from current-site permission selector",
-        source: "site-permission-panel"
-      });
+      let result;
+      try {
+        result = await setSitePermission(tab?.url, sitePermissionMode.value, {
+          reason: "Changed from current-site permission selector",
+          source: "site-permission-panel"
+        });
+      } catch {
+        await addMessage("system", "Site permissions could not be read; the change was not saved.");
+        setStatus("Site permissions could not be read");
+        await renderSitePermissionPanel(tab);
+        return;
+      }
       await renderSitePermissionPanel(tab);
       setStatus(`Site permission: ${result.mode}`);
       setActivity("completed", "Site permission updated", `${result.key} · ${result.mode}`);

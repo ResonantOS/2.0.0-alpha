@@ -62,10 +62,19 @@ const { inlineActionAllowedForLocationGate } = globalThis.ResonantOSInlineAction
     var _rcLastSnapshotAt = 0;
     function _rcSanitizeText(value, max) {
       return String(value || '')
+        .replace(/(\b(?:proxy-)?authorization\s*[:=]\s*['"]?(?:bearer|basic)\s+)\S{4,}/gi, '$1[redacted]')
+        // Bare schemes require a digit, base64 padding, or at least 20 token characters.
+        .replace(/(\b(?:bearer|basic)\s+)([A-Za-z0-9._~+/=-]{8,})/gi, (match, scheme, token) => {
+          return /\d|=$/.test(token) || token.length >= 20 ? scheme + '[redacted]' : match;
+        })
         .replace(/-----BEGIN [^-]+ PRIVATE KEY-----[\s\S]*?-----END [^-]+ PRIVATE KEY-----/g, '[redacted]')
         .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, '[redacted]')
         .replace(/\b(?:sk-[A-Za-z0-9_-]{12,}|sk-ant-[A-Za-z0-9_-]{12,}|sk-or-v1-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9_]{12,}|github_pat_[A-Za-z0-9_]{12,}|hf_[A-Za-z0-9_-]{12,}|xox[baprs]-[A-Za-z0-9-]{12,}|xai-[A-Za-z0-9_-]{12,}|gsk_[A-Za-z0-9_-]{12,}|AIza[A-Za-z0-9_-]{12,}|AKIA[A-Z0-9]{12,}|pk_live_[A-Za-z0-9]{12,}|rk_live_[A-Za-z0-9]{12,})\b/gi, '[redacted]')
-        .replace(/\b(?:api[_-]?key|token|password|secret|authorization|bearer|session|cookie)\s*[:=]\s*['"]?[^'"\s]+/gi, '[redacted]')
+        .replace(/\b(?:api[_-]?key|token|password|secret|authorization|bearer|session|cookie)\s*[:=]\s*['"]?[^'"\s]+/gi, function (match, offset, text) {
+          // Keep an authorization label and scheme whose credential is already redacted.
+          return /^authorization\s*[:=]\s*['"]?(?:bearer|basic)$/i.test(match)
+            && /^\s+\[redacted\]/.test(text.slice(offset + match.length)) ? match : '[redacted]';
+        })
         .replace(/\b(?:\d[ -]?){13,19}\b/g, function (candidate) {
           var digits = candidate.replace(/\D/g, '');
           return digits.length >= 13 && digits.length <= 19 ? '[redacted]' : candidate;
@@ -1060,10 +1069,11 @@ const currentSitePermission = async () => {
   const key = location.hostname.replace(/^www\./, "");
   if (!key) return "ask-before-action";
   try {
-    const stored = await chrome.storage?.local?.get?.("augmentorSitePermissions");
+    if (typeof chrome.storage?.local?.get !== "function") return "blocked";
+    const stored = await chrome.storage.local.get("augmentorSitePermissions");
     return stored?.augmentorSitePermissions?.[key] ?? "ask-before-action";
   } catch {
-    return "ask-before-action";
+    return "blocked";
   }
 };
 
@@ -1226,10 +1236,8 @@ const runInlineAction = async (action) => {
     result.textContent = locationGate.message;
     return;
   }
-  const sitePermissionMode = await chrome.storage?.local?.get?.("augmentorSitePermissions")
-    .then((value) => value?.augmentorSitePermissions?.mode)
-    .catch(() => null);
-  if (sitePermissionMode === "blocked") {
+  const mode = await currentSitePermission();
+  if (mode === "blocked") {
     result.textContent = "Augmentor inline actions are blocked for this site by your saved site permission. Toggle the site permission in the side panel to re-enable inline actions.";
     return;
   }
@@ -1465,8 +1473,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     lastInlineSelectionDetails = { activeRef: "", editable: false, rect, text };
     button.style.left = `${Math.min(window.innerWidth - 112, Math.max(8, rect.left))}px`;
     button.style.top = `${Math.min(window.innerHeight - 42, Math.max(8, rect.bottom + 8))}px`;
-    button.style.display = "block";
-    sendResponse({ ok: true, textLength: text.length });
+    // Same per-site gate as positionInlineButton: a blocked (or unreadable)
+    // site never surfaces the button, whoever asked for it.
+    void currentSitePermission().then((mode) => {
+      if (mode === "blocked") {
+        button.style.display = "none";
+        sendResponse({ ok: false, error: "Augmentor inline actions are blocked for this site by your saved site permission." });
+        return;
+      }
+      button.style.display = "block";
+      sendResponse({ ok: true, textLength: text.length });
+    });
     return true;
   }
 

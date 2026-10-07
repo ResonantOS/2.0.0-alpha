@@ -712,7 +712,9 @@ export async function runBrowserFirstSelfTest(context) {
           contextMarkdown: "This is deterministic test context only.",
         },
       });
-      const started = await request("/hermes/delegation/start", { body: { path: created.path } });
+      const started = await request("/hermes/delegation/start", {
+        body: { path: created.path, provider: "openai-api", model: "gpt-5.4-mini" },
+      });
       const artifact = await request("/hermes/delegation/artifact", { body: { path: created.path } });
       const statusAfter = await request("/hermes/delegation/status", { body: { path: created.path } });
       const hermesStatus = await request("/hermes/status", { body: {} });
@@ -769,10 +771,12 @@ export async function runBrowserFirstSelfTest(context) {
     const previousHermesCommand = process.env.HERMES_COMMAND;
     const previousOpenAiKey = process.env.OPENAI_API_KEY;
     const previousProviderSecretsJson = process.env.RESONANTOS_PROVIDER_SECRETS_JSON;
+    const oldMiniKey = process.env.MINIMAX_API_KEY;
     process.env.RESONANTOS_BROWSER_FIRST_USER_ROOT = path.join(tempRoot, "ResonantOS_User");
     let exitCode = 1;
     try {
       setAddonRuntimeSelfTestHomeDir(tempRoot);
+      delete process.env.MINIMAX_API_KEY;
       const fakeOutput = [
         "## Final Summary",
         "Hermes CLI adapter completed the requested production execution test.",
@@ -843,7 +847,9 @@ export async function runBrowserFirstSelfTest(context) {
           contextMarkdown: "This is deterministic test context only.",
         },
       });
-      const started = await request("/hermes/delegation/start", { body: { path: created.path } });
+      const started = await request("/hermes/delegation/start", {
+        body: { path: created.path, provider: "openai-api", model: "gpt-5.4-mini" },
+      });
       const artifact = await request("/hermes/delegation/artifact", { body: { path: created.path } });
       const statusAfter = await request("/hermes/delegation/status", { body: { path: created.path } });
       const hermesStatus = await request("/hermes/status", { body: {} });
@@ -886,6 +892,11 @@ export async function runBrowserFirstSelfTest(context) {
         delete process.env.RESONANTOS_PROVIDER_SECRETS_JSON;
       } else {
         process.env.RESONANTOS_PROVIDER_SECRETS_JSON = previousProviderSecretsJson;
+      }
+      if (oldMiniKey === undefined) {
+        delete process.env.MINIMAX_API_KEY;
+      } else {
+        process.env.MINIMAX_API_KEY = oldMiniKey;
       }
       await rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
     }
@@ -1074,11 +1085,13 @@ export async function runBrowserFirstSelfTest(context) {
     const previousOpenAiKey = process.env.OPENAI_API_KEY;
     const previousProviderSecretsJson = process.env.RESONANTOS_PROVIDER_SECRETS_JSON;
     const previousOpenCodeProviderEnv = process.env.RESONANTOS_OPENCODE_PROVIDER_ENV;
+    const oldMiniKey = process.env.MINIMAX_API_KEY;
     process.env.RESONANTOS_BROWSER_FIRST_USER_ROOT = path.join(tempRoot, "ResonantOS_User");
     let server = null;
     let exitCode = 1;
     try {
       setAddonRuntimeSelfTestHomeDir(tempRoot);
+      delete process.env.MINIMAX_API_KEY;
       const fakeOpenCode = path.join(tempRoot, ".opencode", "bin", process.platform === "win32" ? "opencode.exe" : "opencode");
       const fakeOutput = [
         "## Final Summary",
@@ -1147,7 +1160,9 @@ export async function runBrowserFirstSelfTest(context) {
           contextMarkdown: "This is deterministic test context only.",
         },
       });
-      const started = await request("/opencode/delegation/start", { body: { path: created.path } });
+      const started = await request("/opencode/delegation/start", {
+        body: { path: created.path, model: "openai/gpt-5.4-mini" },
+      });
       const artifact = await request("/opencode/delegation/artifact", { body: { path: created.path } });
       const statusAfter = await request("/opencode/delegation/status", { body: { path: created.path } });
       const opencodeStatus = await request("/opencode/status", { method: "GET" });
@@ -1202,6 +1217,11 @@ export async function runBrowserFirstSelfTest(context) {
       } else {
         process.env.RESONANTOS_OPENCODE_PROVIDER_ENV = previousOpenCodeProviderEnv;
       }
+      if (oldMiniKey === undefined) {
+        delete process.env.MINIMAX_API_KEY;
+      } else {
+        process.env.MINIMAX_API_KEY = oldMiniKey;
+      }
       await rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
     }
     process.exit(exitCode);
@@ -1214,10 +1234,12 @@ export async function runBrowserFirstSelfTest(context) {
     const previousOpenAiKey = process.env.OPENAI_API_KEY;
     const previousProviderSecretsJson = process.env.RESONANTOS_PROVIDER_SECRETS_JSON;
     const previousOpenCodeProviderEnv = process.env.RESONANTOS_OPENCODE_PROVIDER_ENV;
+    const oldMiniKey = process.env.MINIMAX_API_KEY;
     process.env.RESONANTOS_BROWSER_FIRST_USER_ROOT = path.join(tempRoot, "ResonantOS_User");
     let exitCode = 1;
     try {
       setAddonRuntimeSelfTestHomeDir(tempRoot);
+      delete process.env.MINIMAX_API_KEY;
       const fakeOpenCode = path.join(tempRoot, ".opencode", "bin", process.platform === "win32" ? "opencode.exe" : "opencode");
       const fakeOutput = [
         "## Final Summary",
@@ -1272,7 +1294,9 @@ export async function runBrowserFirstSelfTest(context) {
           contextMarkdown: "This is deterministic test context only.",
         },
       });
-      const started = await request("/opencode/delegation/start", { body: { path: created.path } });
+      const started = await request("/opencode/delegation/start", {
+        body: { path: created.path, model: "openai/gpt-5.4-mini" },
+      });
       const artifact = await request("/opencode/delegation/artifact", { body: { path: created.path } });
       const statusAfter = await request("/opencode/delegation/status", { body: { path: created.path } });
       const opencodeStatus = await request("/opencode/status", { method: "GET" });
@@ -1324,6 +1348,11 @@ export async function runBrowserFirstSelfTest(context) {
         delete process.env.RESONANTOS_OPENCODE_PROVIDER_ENV;
       } else {
         process.env.RESONANTOS_OPENCODE_PROVIDER_ENV = previousOpenCodeProviderEnv;
+      }
+      if (oldMiniKey === undefined) {
+        delete process.env.MINIMAX_API_KEY;
+      } else {
+        process.env.MINIMAX_API_KEY = oldMiniKey;
       }
       await rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
     }

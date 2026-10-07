@@ -29,6 +29,12 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 
+// chat's safeContextText is a real module export (since #522), so the
+// behavioural test runs the production function directly. content's
+// _rcSanitizeText is a classic content script that cannot be imported, so it is
+// still compiled from source below.
+import { safeContextText } from "../resonantos-side-panel-extension/src/lib/chat-turn-controller.js";
+
 const extensionSrc = path.resolve(
   import.meta.dirname,
   "..",
@@ -114,7 +120,12 @@ const SECRET = {
   labelledAuthorization: "BasicZm9vOmJhcnNlY3JldA",
   labelledSecret: "topsecretvaluehere12",
   labelledCookie: "sessioncookievalue1234",
-  creditCard: "4111 1111 1111 1111"
+  creditCard: "4111 1111 1111 1111",
+  // #510/#522 (merged from dev): the credential after an Authorization:
+  // Bearer/Basic scheme, and after a bare bearer/basic scheme. Both carry a digit
+  // so the bare-scheme length/padding floor is met.
+  bearerAuthToken: "s3cr3tbearertokenvalue",
+  bareBearerToken: "x7tokenwithdigits99value"
 };
 
 const GOLDEN_VECTORS = [
@@ -139,25 +150,21 @@ const GOLDEN_VECTORS = [
   { name: "labelled authorization:", input: `authorization: ${SECRET.labelledAuthorization}`, secret: SECRET.labelledAuthorization },
   { name: "labelled secret=", input: `secret=${SECRET.labelledSecret}`, secret: SECRET.labelledSecret },
   { name: "labelled cookie=", input: `cookie=${SECRET.labelledCookie}`, secret: SECRET.labelledCookie },
-  { name: "credit-card number", input: `card ${SECRET.creditCard} exp`, secret: SECRET.creditCard }
+  { name: "credit-card number", input: `card ${SECRET.creditCard} exp`, secret: SECRET.creditCard },
+  { name: "Authorization: Bearer <token> (#510/#522)", input: `Authorization: Bearer ${SECRET.bearerAuthToken}`, secret: SECRET.bearerAuthToken },
+  { name: "bare Bearer <token> (#510/#522)", input: `auth header Bearer ${SECRET.bareBearerToken} end`, secret: SECRET.bareBearerToken }
 ];
 
 test("chat-turn sanitizer redacts every secret shape the content-script sanitizer redacts (#410 parity, behavioural)", async () => {
-  const [contentSource, chatSource] = await Promise.all([
-    readFile(contentScriptPath, "utf8"),
-    readFile(chatTurnControllerPath, "utf8")
-  ]);
+  const contentSource = await readFile(contentScriptPath, "utf8");
 
-  // content's _rcSanitizeText is self-contained; chat's safeContextText is
-  // sliced together with the CHAT_* pattern constants it references.
+  // content's _rcSanitizeText is self-contained and compiled from source; chat's
+  // safeContextText is the imported production export, run directly.
   const contentSanitize = compileSanitizer(
     sliceBetween(contentSource, "function _rcSanitizeText", "function _rcSanitizeUrl", "content.js _rcSanitizeText"),
     "_rcSanitizeText"
   );
-  const chatSanitize = compileSanitizer(
-    sliceBetween(chatSource, "const CHAT_PRIVATE_KEY_PATTERN", "function safeContextUrl", "chat-turn-controller.js safeContextText"),
-    "safeContextText"
-  );
+  const chatSanitize = safeContextText;
 
   // The corpus must actually drive the content sanitizer, or the superset check
   // below passes vacuously for any vector content doesn't touch. Today content
@@ -227,7 +234,21 @@ test("chat-turn sanitizer's redaction patterns are a superset of the content-scr
     "extraction sanity: the PEM private-key pattern must be among the extracted content-script patterns"
   );
 
-  const missing = [...contentPatterns].filter((pattern) => !chatPatterns.has(pattern));
+  // #522 added a label-preserving refinement to content's labelled-secret pass:
+  // two control-flow guard regexes that decide whether to keep an already-redacted
+  // "authorization: bearer" label. They are NOT secret-matching redaction patterns.
+  // chat's safeContextText strips the same secrets with its simpler always-redact
+  // labelled pattern (the behavioural test above proves the output parity), so
+  // these guards have no chat-side counterpart and must not count as a missing
+  // redaction pattern. Named explicitly (not a blanket rule) so a future change to
+  // either guard re-surfaces here for a human to re-confirm parity.
+  const CONTENT_NON_REDACTION_PATTERNS = new Set([
+    "^authorization\\s*[:=]\\s*['\"]?(?:bearer|basic)$",
+    "^\\s+\\[redacted\\]"
+  ]);
+  const missing = [...contentPatterns].filter(
+    (pattern) => !chatPatterns.has(pattern) && !CONTENT_NON_REDACTION_PATTERNS.has(pattern)
+  );
   assert.deepEqual(
     missing,
     [],

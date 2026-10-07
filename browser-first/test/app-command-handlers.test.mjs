@@ -99,7 +99,7 @@ function createHarness(overrides = {}) {
     finishControlRun: (status) => calls.push(["finish", status]),
     focusBrowserJob: overrides.focusBrowserJob ?? null,
     getCurrentControlRun: () => overrides.currentControlRun ?? { status: "running" },
-    permissionForUrl: async () => "ask-before-action",
+    permissionForUrl: overrides.permissionForUrl ?? (async () => "ask-before-action"),
     renderJobMonitor: () => calls.push(["renderJobs"]),
     renderSitePermissionPanel: async () => calls.push(["renderSite"]),
     restartBrowserJob: async (job) => calls.push(["restart", job.id, job.goal, job.steps?.length ?? 0]),
@@ -108,7 +108,7 @@ function createHarness(overrides = {}) {
       return { path: "INTAKE/browser/job-report.md" };
     },
     setActivity: (...args) => calls.push(["activity", ...args]),
-    setSitePermission: async (_url, mode, audit) => ({ audit, key: "example.com", mode }),
+    setSitePermission: overrides.setSitePermission ?? (async (_url, mode, audit) => ({ audit, key: "example.com", mode })),
     setStatus: (status) => calls.push(["status", status]),
     siteKeyForUrl: () => "example.com",
     tickBrowserJobScheduler: overrides.tickBrowserJobScheduler,
@@ -505,4 +505,26 @@ test("app command handlers continue a previous browser job through restart bound
 
   assert.ok(harness.calls.some((call) => call[0] === "message" && /Continuing browser job job-b/.test(call[2])));
   assert.ok(harness.calls.some((call) => call[0] === "restart" && call[1] === "job-b" && call[2] === "Find product" && call[3] === 1));
+});
+
+
+test("site permission status displays unavailable permissions without throwing", async () => {
+  const harness = createHarness({ permissionForUrl: async () => { throw new Error("storage offline"); } });
+  await harness.handlers.runSitePermissionCommand("status");
+  assert.ok(harness.calls.some(([type, role, message]) => type === "message" && /Current site permission:.*unavailable/.test(message)));
+  assert.equal(harness.calls.some((call) => String(call[2]).includes("ask-before-action")), false);
+});
+
+test("capabilities displays unavailable permissions without throwing", async () => {
+  const harness = createHarness({ permissionForUrl: async () => { throw new Error("storage offline"); } });
+  await harness.handlers.runCapabilitiesCommand();
+  assert.ok(harness.calls.some(([type, role, message]) => type === "message" && /Current site:.*unavailable/.test(message)));
+  assert.equal(harness.calls.some((call) => String(call[2]).includes("ask-before-action")), false);
+});
+
+test("site permission command refuses with a message when the store cannot be read", async () => {
+  const harness = createHarness({ setSitePermission: async () => { throw new Error("storage offline"); } });
+  await harness.handlers.runSitePermissionCommand("blocked");
+  assert.ok(harness.calls.some(([type, , message]) => type === "message" && message === "Site permissions could not be read; the change was not saved."));
+  assert.equal(harness.calls.some((call) => /^Set .* permission to/.test(String(call[2]))), false);
 });

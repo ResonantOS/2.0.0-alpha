@@ -15,3 +15,12 @@ This contract changes height only. Palette, corner shapes, field behavior and
 preference persistence are separate concerns. Check Overview actions,
 Appearance selects and provider form fields at narrow/wide widths and all
 three densities before changing the rule.
+
+The live Settings shape check also measures the rendered Appearance select and
+save action, Provider modal input, textarea and actions, and Overview setup
+action at 390/768/1280px in every density. It waits for the stored Appearance
+preference to finish applying, checks 40px in Comfortable and 42px in Touch, and
+confirms Compact keeps the smaller Overview action and 9px Settings workspace
+gap. Human review still covers the other Settings sections and visual fit,
+including wrapping, clipping, and action states; the automated dimensions do not
+certify those details.

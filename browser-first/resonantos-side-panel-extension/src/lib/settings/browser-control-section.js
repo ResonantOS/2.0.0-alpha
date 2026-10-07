@@ -235,9 +235,21 @@ export function renderBrowserControlSection(container, { bridgeRequest, getBridg
     const siteKey = readableTab(tab) && sitePermissionStore
       ? sitePermissionStore.siteKeyForUrl(tab.url)
       : "";
-    const mode = readableTab(tab) && sitePermissionStore
-      ? await sitePermissionStore.permissionForUrl(tab.url)
-      : "unavailable";
+    let mode;
+    try {
+      mode = readableTab(tab) && sitePermissionStore
+        ? await sitePermissionStore.permissionForUrl(tab.url)
+        : "unavailable";
+    } catch {
+      const error = "Site permissions could not be read; capture refused.";
+      currentCard.querySelector("p").textContent = `${siteKey} · ${error}`;
+      modeStatusHost.replaceChildren();
+      permissionsList.replaceChildren();
+      downloadsList.replaceChildren();
+      jobsList.replaceChildren();
+      setStatus(statusNode, error, "error");
+      return;
+    }
     const [sitePermissions, taskConsents, jobs, activeJobId, downloads] = await Promise.all([
       sitePermissionStore?.sitePermissions?.() ?? {},
       taskConsentStore?.taskConsents?.() ?? {},

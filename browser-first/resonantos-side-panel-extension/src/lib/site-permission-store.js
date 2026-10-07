@@ -17,6 +17,18 @@ export function createSitePermissionStore({
     return result?.[sitePermissionStorageKey] ?? {};
   };
 
+  const readSitePermissions = async () => {
+    try {
+      if (typeof storage?.get !== "function") throw new Error();
+      const result = await storage.get(sitePermissionStorageKey);
+      return result?.[sitePermissionStorageKey] ?? {};
+    } catch {
+      const error = new Error("Site permissions could not be read.");
+      error.code = "site-permissions-unavailable";
+      throw error;
+    }
+  };
+
   const sitePermissionAudit = async () => {
     const result = await storage?.get?.(sitePermissionAuditStorageKey).catch(() => ({}));
     return result?.[sitePermissionAuditStorageKey] ?? {};
@@ -41,14 +53,15 @@ export function createSitePermissionStore({
 
   const permissionForUrl = async (url) => {
     const key = siteKeyForUrl(url);
+    const permissions = await readSitePermissions();
     if (!key) return "ask-before-action";
-    return (await sitePermissions())[key] ?? "ask-before-action";
+    return permissions[key] ?? "ask-before-action";
   };
 
   const setSitePermission = async (url, mode, { reason = "Site permission changed", source = "human" } = {}) => {
     const key = siteKeyForUrl(url);
     if (!key) throw new Error("No site is active.");
-    const permissions = await sitePermissions();
+    const permissions = await readSitePermissions();
     const previousMode = permissions[key] ?? "ask-before-action";
     permissions[key] = mode;
     await storage?.set?.({ [sitePermissionStorageKey]: permissions });
@@ -59,7 +72,7 @@ export function createSitePermissionStore({
   const resetSitePermission = async (siteKeyOrUrl, { reason = "Site permission reset", source = "human" } = {}) => {
     const key = String(siteKeyOrUrl ?? "").includes("://") ? siteKeyForUrl(siteKeyOrUrl) : String(siteKeyOrUrl ?? "");
     if (!key) return false;
-    const permissions = await sitePermissions();
+    const permissions = await readSitePermissions();
     const existed = Object.hasOwn(permissions, key);
     const previousMode = permissions[key] ?? "ask-before-action";
     delete permissions[key];
@@ -72,6 +85,7 @@ export function createSitePermissionStore({
 
   return {
     permissionForUrl,
+    readSitePermissions,
     resetSitePermission,
     setSitePermission,
     sitePermissionAudit,

@@ -13,8 +13,8 @@
 //                              MAX_CALL_SPAN_CHARS (a huge inline options object
 //                              must not silently hide a shell: true)
 // Bare and member calls both match (cp.spawnSync, child_process.execSync);
-// only `.exec(` is excluded — member exec is RegExp.prototype.exec or a
-// domain method, not the child_process string API. Argv-form spawns (array
+// Member `.exec(` is scanned for tracked child_process receivers; unrelated
+// receivers retain the RegExp/domain-method carve-out. Argv-form spawns (array
 // args, shell:false or default) are the sanctioned pattern and pass.
 // Allowlist entries below carry the data-flow rationale for each known-safe
 // site. Wraps into the run-check.mjs contract:
@@ -32,9 +32,8 @@
 // template can mask later lines until its closing backtick (no instance in
 // this repo). Spread overrides after a literal `shell: false` (e.g.
 // { shell: false, ...options }) can re-enable the shell invisibly — spread
-// values are not resolved. Provenance tracking is textual: an import-shaped
-// string literal could register a phantom alias (over-matching direction;
-// allowlist relief applies). Confirmed evasions (maintainer review 2026-09-26,
+// values are not resolved. Provenance tracking is a textual binding graph,
+// not a complete data-flow analysis. Confirmed evasions (maintainer review 2026-09-26,
 // each demonstrated on this checker): an options object held in a variable
 // (const opts = { shell: true }; spawn(cmd, args, opts)); indirect invocation
 // (exec.apply(null, [cmd]), Reflect.apply, (0, exec)(cmd), cp["exec"](cmd));
@@ -66,8 +65,8 @@ const SOURCE_EXTENSIONS = new Set([".mjs", ".js", ".ts", ".tsx", ".jsx"]);
 const SKIPPED_DIRECTORIES = new Set(["node_modules", ".git", "dist", "coverage"]);
 const MAX_CALL_SPAN_CHARS = 8000;
 
-// Known-safe call sites. Each entry pins file + rule + exact trimmed source
-// line, so moved or edited code re-flags and forces a fresh look.
+// Known-safe call sites. Each entry pins file + rule + exact trimmed
+// whole-call source span, so edits re-flag and force a fresh look.
 // Why each is safe (data flow):
 //  - engineer-runner.test.mjs: node:test fixtures whose command strings are
 //    compile-time literals ("git init", ...) with no variable content.
@@ -172,14 +171,12 @@ function quotedShellKey(maskedSpan, rawSpan) {
 //             const spawnImpl = spawn           -> bare calls of the alias match
 //   receivers: import cp from / import * as cp / const cp = require(...)
 //             -> member calls receiver.exec(...) flag
-// Known limit: provenance is textual — a string literal containing an
-// import-shaped text could register a phantom alias (over-matching,
-// allowlist relief applies).
+// Known limit: textual bindings do not cover arbitrary computed or indirect
+// invocation and member-copy aliasing (see the documented limits above).
 const CHILD_PROCESS_API_NAMES = [...STRING_API_NAMES, ...SPAWN_FAMILY_NAMES];
-// Import/require patterns reference the module name inside a string, so they
-// run on RAW source; first-wins registration means a later phantom match (a
-// doc-text import inside a string literal) can never overwrite a real import
-// binding (review 2026-09-11: a comment-shaped alias used to overwrite one).
+// Import/require patterns run on masked source; raw bytes verify module
+// specifiers at the same offsets. Comments and import-shaped string content
+// cannot register or overwrite bindings (review 2026-09-11).
 // Provenance patterns run on the FULL MASK (comments, strings, and regex
 // literals blanked — the mask is the one lexer that gets all three right, a
 // lesson this file taught itself twice). Module specifiers are strings, so

@@ -119,6 +119,19 @@ token once at `/api/augmentor/auth` for a DSH session cookie and then speaks to
 DSH's own `/api/remote.mux`, so the Augmentor browser companion keeps its
 actions while this host is connected. Both can run at once.
 
+**DSH 0.2.** `@deepseek-ai/dsh@0.2.0-rc.2` is npm's `latest`, so an unpinned
+install gets it. The adapter is certified on `0.1.5-rc.1` and `0.1.7-rc.2`
+only. A file-by-file comparison of the 0.1.7 and 0.2.0 packages (6 October
+2026) found the surfaces the adapter uses unchanged or additive: the plugin
+auth route and `x-augmentor-token` header are identical in `dsh-augmentor`
+0.2.11 and 0.2.13; the cookie-exchange packages have no code changes; the
+`/api/remote.mux` wire protocol and client are byte-identical; the session
+contract only gained optional fields. Treat that as a reason to expect
+compatibility, not as certification: pin the version you tested until a live
+pass on 0.2 lands. Also new in 0.2: `dsh-web-app` mounts product-analytics and
+OpenTelemetry packages enabled by default, which a governed host must decide
+on before adopting it.
+
 ## OpenAI-compatible endpoint and bearer binding
 
 The SDK-valid [OpenAI-compatible example](../../examples/addons/openai-compatible-harness.json)
