@@ -1145,19 +1145,16 @@ try {
     await evaluate(page, `document.querySelector('#resonantos-inline-assistant [data-action="insert"]').click()`);
     const inlineEditorValue = (await evaluate(page, `document.querySelector("#inline-editor").value`)).result.value;
     assert(inlineEditorValue === "prefix the quick I suffix", `Inline Assistant should replace only selected editable text: ${inlineEditorValue}`);
-    await verifySitePermissionFailClosed(panel, page);
   } else {
     certificationReport.record(
       "provider-inline-assistant-flow",
       "excluded",
       "Excluded from the Agent Control CI profile because it requires provider behavior owned by a separate certification lane.",
     );
-    certificationReport.record(
-      "site-permission-fail-closed",
-      "excluded",
-      "The site-permission capture and inline gate proof runs in the full profile after the inline-assistant flow.",
-    );
   }
+  // The fail-closed proof needs only the fixture page, the panel and the
+  // content script, so it runs in every profile, including the CI lane.
+  await verifySitePermissionFailClosed(panel, page);
   const dockCollapsedState = (await evaluate(panel, `({
     dockHidden: document.querySelector("#context-dock").hidden,
     siteHidden: document.querySelector("#site-permission-panel").hidden,
