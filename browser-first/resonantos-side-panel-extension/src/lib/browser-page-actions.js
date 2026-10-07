@@ -892,6 +892,10 @@ export function createBrowserPageActions(deps) {
       setStatus("Summary unavailable");
       return { ok: false, error: `No readable page content for the ${template.label} template.` };
     }
+    // Every field that reaches the model goes through the chat sanitizer:
+    // the intake markdown and, for the opt-in templates, the page excerpt
+    // that buildSummaryPrompt appends to the user message.
+    const safeSnapshot = { ...snapshot, text: safeContextText(snapshot.text, Infinity) };
     setActivity("thinking", "Summarising page for Living Archive intake", snapshot.title || snapshot.url);
     setStatus("Summarising page");
     let summary = "";
@@ -904,11 +908,11 @@ export function createBrowserPageActions(deps) {
           model: getModel(),
           surface: "archive-intake",
           thinkingDepth: getThinkingDepth(),
-          pageContext: pageIntakeMarkdown(snapshot).slice(0, 12000),
+          pageContext: pageIntakeMarkdown(safeSnapshot).slice(0, 12000),
           runtimeContext: "Create a source-grounded Living Archive intake summary. Do not claim trusted wiki promotion. Preserve uncertainty and cite visible source facts only.",
           messages: [{
             role: "user",
-            content: buildSummaryPrompt(templateId, snapshot)
+            content: buildSummaryPrompt(templateId, safeSnapshot)
           }]
         }
       });

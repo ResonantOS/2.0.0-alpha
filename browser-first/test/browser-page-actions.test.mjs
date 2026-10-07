@@ -940,3 +940,26 @@ for (const field of ["text", "link text"]) {
     assert.match(call[2].body.pageContext, /Authorization: Bearer \[redacted\]/);
   });
 }
+
+test("archive summary #510 delta sanitizes the opt-in template prompt too", async () => {
+  const token = "bearer-token-value-0123456789";
+  const harness = createHarness({
+    lastSnapshot: {
+      title: "Summary Page", url: "https://example.test/summary",
+      text: `Readable page text.\nAuthorization: Bearer ${token}\nMore readable text.`,
+      links: [], controls: [], fields: []
+    },
+    bridgeRequest: async (route) => route === "/augmentor/chat"
+      ? { reply: "A summary.", model: "MiniMax-M3" }
+      : { path: "INTAKE/browser/summary.md", status: "pending" }
+  });
+  const result = await harness.actions.summarizeCurrentPageToArchive("tldr");
+  assert.equal(result.ok, true);
+  const call = harness.events.find((event) => event[0] === "bridge" && event[1] === "/augmentor/chat");
+  assert.ok(call, "model request must be recorded");
+  const prompt = call[2].body.messages[0].content;
+  assert.match(prompt, /## Page text/, "the tldr template appends the page excerpt to the prompt");
+  assert.equal(prompt.includes(token), false, "the excerpt must be sanitized");
+  assert.match(prompt, /Authorization: Bearer \[redacted\]/);
+  assert.equal(call[2].body.pageContext.includes(token), false);
+});
