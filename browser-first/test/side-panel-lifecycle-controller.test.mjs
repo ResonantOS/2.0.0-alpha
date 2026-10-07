@@ -223,3 +223,32 @@ for (const prompt of ["/jobs", "/jobs focus job-1", "/control go to https://exam
     assert.equal(harness.events.filter(([type]) => type === "respond").length, 1);
   });
 }
+
+test("site permission selector refuses with a message when the store cannot be read", async () => {
+  const events = [];
+  const sitePermissionMode = createEventTarget();
+  sitePermissionMode.value = "blocked";
+  const rejections = [];
+  const onRejection = (reason) => rejections.push(reason);
+  process.on("unhandledRejection", onRejection);
+  try {
+    const controller = createSidePanelLifecycleController({
+      activeTab: async () => ({ id: 1, url: "https://example.test/" }),
+      addMessage: async (role, content) => events.push(["message", role, content]),
+      renderSitePermissionPanel: async () => events.push(["render-site"]),
+      setSitePermission: async () => { throw new Error("storage offline"); },
+      setStatus: (label) => events.push(["status", label]),
+      sitePermissionMode
+    });
+    controller.bindListeners();
+    await sitePermissionMode.dispatch("change");
+    await new Promise((resolve) => setImmediate(resolve));
+  } finally {
+    process.off("unhandledRejection", onRejection);
+  }
+  assert.deepEqual(rejections, []);
+  assert.ok(events.some(([type, , message]) => type === "message" && message === "Site permissions could not be read; the change was not saved."));
+  assert.ok(events.some(([type, label]) => type === "status" && label === "Site permissions could not be read"));
+  assert.ok(events.some(([type]) => type === "render-site"));
+  assert.equal(events.some(([type, label]) => type === "status" && /^Site permission: /.test(String(label))), false);
+});

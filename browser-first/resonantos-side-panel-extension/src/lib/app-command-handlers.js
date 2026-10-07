@@ -309,14 +309,20 @@ export function createAppCommandHandlers({
     const normalized = String(body ?? "").trim();
     const tab = await activeTab();
     if (!normalized || /^status$/i.test(normalized)) {
-      const mode = tab?.url ? await permissionForUrl(tab.url) : "unknown";
+      const mode = tab?.url ? await permissionForUrl(tab.url).catch(() => "unavailable") : "unknown";
       await addMessage("system", `Current site permission: ${tab?.url ? siteKeyForUrl(tab.url) : "no site"} · ${mode}`);
       return;
     }
-    const result = await setSitePermission(tab?.url, sitePermissionModeFromText(normalized), {
-      reason: `Slash command: /site ${normalized}`,
-      source: "slash-command"
-    });
+    let result;
+    try {
+      result = await setSitePermission(tab?.url, sitePermissionModeFromText(normalized), {
+        reason: `Slash command: /site ${normalized}`,
+        source: "slash-command"
+      });
+    } catch {
+      await addMessage("system", "Site permissions could not be read; the change was not saved.");
+      return;
+    }
     await renderSitePermissionPanel(tab);
     await addMessage("system", `Set ${result.key} Assistant permission to ${result.mode}.`);
   }
@@ -423,7 +429,7 @@ export function createAppCommandHandlers({
 
   async function runCapabilitiesCommand() {
     const tab = await activeTab();
-    const mode = tab?.url ? await permissionForUrl(tab.url) : "unknown";
+    const mode = tab?.url ? await permissionForUrl(tab.url).catch(() => "unavailable") : "unknown";
     const host = tab?.url ? siteKeyForUrl(tab.url) : "no readable page";
     await addMessage(
       "system",

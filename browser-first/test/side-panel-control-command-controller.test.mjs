@@ -11,6 +11,7 @@ function createHarness({
   currentReadableControlTab = undefined,
   ensureControlTabForUrl = undefined,
   permissionMode = "ask-before-action",
+  permissionForUrl = async () => permissionMode,
   shouldPreflight = false
 } = {}) {
   const events = [];
@@ -51,7 +52,7 @@ function createHarness({
     }),
     getCurrentControlRun: () => currentRun,
     getRawActiveTab: async () => activeTab,
-    permissionForUrl: async () => permissionMode,
+    permissionForUrl,
     persistContextDockExpanded: async () => events.push(["persist-dock"]),
     renderControlMonitor: () => events.push(["render-control"]),
     renderJobMonitor: () => events.push(["render-jobs"]),
@@ -284,4 +285,13 @@ test("control command controller cancels stale approval conflicts before taking 
   assert.equal(harness.getPendingApproval(), null);
   assert.equal(harness.getCurrentRun().status, "cancelled");
   assert.ok(harness.events.some((event) => event[0] === "update-job" && event[1] === "job-approval" && event[2].status === "cancelled"));
+});
+
+
+test("control command refuses unreadable site permissions before preflight or jobs", async () => {
+  const harness = createHarness({ permissionForUrl: async () => { throw new Error("storage offline"); } });
+  assert.equal(await harness.controller.runControlCommand("click the button"), null);
+  assert.ok(harness.events.some(([type, role, message]) => type === "message" && message === "Site permissions could not be read; capture refused."));
+  assert.equal(harness.events.some(([type]) => ["create-job", "preflight", "consume-consent"].includes(type)), false);
+  assert.equal(harness.getSchedulerTicks(), 0);
 });

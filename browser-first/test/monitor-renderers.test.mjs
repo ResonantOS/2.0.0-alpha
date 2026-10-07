@@ -134,7 +134,7 @@ function createHarness(overrides = {}) {
     onSaveBrowserJobReport: (job) => state.reported.push(job.id),
     onResetSitePermission: (siteKey) => state.resetSites.push(siteKey),
     onRevokeTaskConsent: (consent) => state.revoked.push(consent.taskClass),
-    permissionForUrl: async () => overrides.permission ?? "trusted-for-safe-actions",
+    permissionForUrl: overrides.permissionForUrl ?? (async () => overrides.permission ?? "trusted-for-safe-actions"),
     siteKeyForUrl: (url) => new URL(url).hostname.replace(/^www\./, ""),
     updateContextDockVisibility: () => calls.push("dock")
   });
@@ -820,4 +820,36 @@ test("composed history notice preserves unrelated notices and unavailable jobs c
   assert.deepEqual(mutations, []); assert.deepEqual(commands, []); assert.equal(renders, 2);
   state = "ready"; assert.equal(await show(""), "normal jobs");
   assert.deepEqual(mutations, [false]); assert.deepEqual(commands, [""]);
+});
+
+
+test("site permission panel renders unavailable permissions without throwing", async () => {
+  let unavailable = false;
+  const harness = createHarness({ permissionForUrl: async () => {
+    if (unavailable) throw new Error("storage offline");
+    return "trusted-for-safe-actions";
+  } });
+  const document = harness.dom.window.document;
+  await harness.renderers.renderSitePermissionPanel();
+  unavailable = true;
+  await harness.renderers.renderSitePermissionPanel();
+  assert.equal(document.querySelector("#site").hidden, false);
+  assert.equal(document.querySelector("#mode").disabled, true);
+  assert.equal(document.querySelector("#mode").value, "");
+  assert.equal(document.querySelector("#note").textContent, "Site permissions could not be read; capture refused.");
+  unavailable = false;
+  await harness.renderers.renderSitePermissionPanel();
+  assert.equal(document.querySelector("#mode").disabled, false);
+  assert.equal(document.querySelector("#mode").value, "trusted-for-safe-actions");
+});
+
+test("side-panel permission-manager reset refuses with a message when the store cannot be read", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../resonantos-side-panel-extension/src/side-panel.js", import.meta.url), "utf8");
+  const start = source.indexOf("onResetSitePermission: async (siteKey) => {");
+  const handler = source.slice(start, source.indexOf("  permissionForUrl,\n  siteKeyForUrl,", start));
+  assert.ok(start >= 0 && handler.length > 0);
+  assert.match(handler, /try \{[\s\S]*await resetSitePermission\(siteKey/);
+  assert.match(handler, /catch[\s\S]*Site permissions could not be read; the change was not saved\./);
+  assert.ok(handler.indexOf("catch") < handler.indexOf("Reset site permission for"));
 });

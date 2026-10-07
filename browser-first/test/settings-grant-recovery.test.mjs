@@ -133,3 +133,28 @@ for (const label of ["Reset", "Revoke"]) {
     assert.equal(store.granted(), true);
   });
 }
+
+
+test("browser control settings displays unavailable site permissions without stale defaults", async (t) => {
+  let unavailable = false;
+  const ui = setup(t, {
+    bridgeRequest: async () => ({ entries: [], total: 0 }),
+    chromeApi: { tabs: { query: async () => [{ id: 1, url: "https://example.test/" }] } },
+    sitePermissionStore: {
+      siteKeyForUrl: () => "example.test",
+      permissionForUrl: async () => {
+        if (unavailable) throw new Error("storage offline");
+        return "ask-before-action";
+      },
+      sitePermissions: async () => ({})
+    }
+  });
+  await until(() => ui.status.dataset.tone === "success");
+  unavailable = true;
+  ui.button("Clear Download History").click();
+  await until(() => ui.status.dataset.tone === "error");
+  assert.match(ui.container.textContent, /Site permissions could not be read; capture refused\./);
+  assert.equal(ui.container.querySelector(".settings-mode-status-host").textContent, "");
+  assert.doesNotMatch(ui.container.textContent, /Agent Control is using ask-before-action defaults/);
+  assert.doesNotMatch(ui.container.textContent, /No browser jobs/);
+});
