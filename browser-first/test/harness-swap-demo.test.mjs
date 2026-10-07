@@ -7,6 +7,50 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { FIXTURE_SIGNER, createBridgeClient, observeEventStream, runFixtureCertification, verifyEvidence } from '../../scripts/harness-swap-demo.mjs';
+import * as demo from '../../scripts/harness-swap-demo.mjs';
+
+test('stall diagnostics preserve each wait label prefix exactly', () => {
+  assert.equal(typeof demo.describeStall, 'function');
+  for (const label of ['visible answer', 'host final reply']) {
+    const message = demo.describeStall({ label, before: 1, after: 2, lastText: 'A reply', receipts: [] });
+    assert.equal(message.split('\n')[0], `Demo did not observe ${label}. No live certification was produced.`);
+    assert.equal(message.split('\n').length, 2);
+  }
+});
+
+test('stall diagnostics report bubble counts and collapse whitespace before truncating text to 200 characters', () => {
+  assert.equal(typeof demo.describeStall, 'function');
+  const message = demo.describeStall({ label: 'host final reply', before: 3, after: 4,
+    lastText: `  Partial\n\t reply  ${'x'.repeat(200)} NOT-IN-LOG`, receipts: [] });
+  assert.ok(message.includes('assistant bubbles before=3 after=4'));
+  assert.ok(message.includes(`last assistant text=${JSON.stringify(`Partial reply ${'x'.repeat(186)}`)}`));
+  assert.ok(!message.includes('NOT-IN-LOG'));
+  assert.equal(message.split('\n').length, 2);
+});
+
+test('stall diagnostics render receipt kinds in order and cap them at 20', () => {
+  assert.equal(typeof demo.describeStall, 'function');
+  const receipts = [
+    { kind: 'route', operation: '/agent/turn', ok: true },
+    { kind: 'event', event: { type: 'delta' } },
+    { kind: 'stream-closed' },
+    { kind: 'route', operation: '/agent/events', ok: false },
+    ...Array.from({ length: 18 }, (_, index) => ({ kind: `receipt-${index}` })),
+  ];
+  const original = structuredClone(receipts);
+  const message = demo.describeStall({ label: 'host final reply', before: 0, after: 1, lastText: 'reply', receipts });
+  assert.equal(message.split('receipts=')[1], [
+    'route:/agent/turn ok', 'event:delta', 'stream-closed', 'route:/agent/events failed',
+    ...Array.from({ length: 16 }, (_, index) => `receipt-${index}`),
+  ].join(', '));
+  assert.deepEqual(receipts, original);
+});
+
+test('stall diagnostics explicitly report empty receipts and an absent bubble', () => {
+  assert.equal(typeof demo.describeStall, 'function');
+  const message = demo.describeStall({ label: 'visible answer', before: 0, after: 0, lastText: '', receipts: [] });
+  assert.ok(message.includes('assistant bubbles before=0 after=0; last assistant text=""; receipts=(none)'));
+});
 
 const canonical = value => JSON.stringify(value, (_, v) => v && typeof v === 'object' && !Array.isArray(v)
   ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]])) : v);
