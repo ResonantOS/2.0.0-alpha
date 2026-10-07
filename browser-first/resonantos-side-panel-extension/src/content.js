@@ -1060,10 +1060,11 @@ const currentSitePermission = async () => {
   const key = location.hostname.replace(/^www\./, "");
   if (!key) return "ask-before-action";
   try {
-    const stored = await chrome.storage?.local?.get?.("augmentorSitePermissions");
+    if (typeof chrome.storage?.local?.get !== "function") return "blocked";
+    const stored = await chrome.storage.local.get("augmentorSitePermissions");
     return stored?.augmentorSitePermissions?.[key] ?? "ask-before-action";
   } catch {
-    return "ask-before-action";
+    return "blocked";
   }
 };
 
@@ -1226,10 +1227,8 @@ const runInlineAction = async (action) => {
     result.textContent = locationGate.message;
     return;
   }
-  const sitePermissionMode = await chrome.storage?.local?.get?.("augmentorSitePermissions")
-    .then((value) => value?.augmentorSitePermissions?.mode)
-    .catch(() => null);
-  if (sitePermissionMode === "blocked") {
+  const mode = await currentSitePermission();
+  if (mode === "blocked") {
     result.textContent = "Augmentor inline actions are blocked for this site by your saved site permission. Toggle the site permission in the side panel to re-enable inline actions.";
     return;
   }
@@ -1465,8 +1464,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     lastInlineSelectionDetails = { activeRef: "", editable: false, rect, text };
     button.style.left = `${Math.min(window.innerWidth - 112, Math.max(8, rect.left))}px`;
     button.style.top = `${Math.min(window.innerHeight - 42, Math.max(8, rect.bottom + 8))}px`;
-    button.style.display = "block";
-    sendResponse({ ok: true, textLength: text.length });
+    // Same per-site gate as positionInlineButton: a blocked (or unreadable)
+    // site never surfaces the button, whoever asked for it.
+    void currentSitePermission().then((mode) => {
+      if (mode === "blocked") {
+        button.style.display = "none";
+        sendResponse({ ok: false, error: "Augmentor inline actions are blocked for this site by your saved site permission." });
+        return;
+      }
+      button.style.display = "block";
+      sendResponse({ ok: true, textLength: text.length });
+    });
     return true;
   }
 
