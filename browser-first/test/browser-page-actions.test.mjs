@@ -963,3 +963,28 @@ test("archive summary #510 delta sanitizes the opt-in template prompt too", asyn
   assert.match(prompt, /Authorization: Bearer \[redacted\]/);
   assert.equal(call[2].body.pageContext.includes(token), false);
 });
+
+test("archive summary #510 delta strips credentials from the url, title and link hrefs it sends to the model", async () => {
+  const token = "bearer-token-value-0123456789";
+  const harness = createHarness({
+    lastSnapshot: {
+      title: `Console — Authorization: Bearer ${token}`,
+      url: `https://example.test/console?access_token=${token}`,
+      text: "Readable page text.",
+      links: [{ text: "Memory", href: `https://user:pass${token}@example.test/memory?auth=${token}#frag` }],
+      controls: [], fields: []
+    },
+    bridgeRequest: async (route) => route === "/augmentor/chat"
+      ? { reply: "A summary.", model: "MiniMax-M3" }
+      : { path: "INTAKE/browser/summary.md", status: "pending" }
+  });
+  const result = await harness.actions.summarizeCurrentPageToArchive("tldr");
+  assert.equal(result.ok, true);
+  const call = harness.events.find((event) => event[0] === "bridge" && event[1] === "/augmentor/chat");
+  assert.ok(call, "model request must be recorded");
+  const sent = `${call[2].body.pageContext}\n${call[2].body.messages[0].content}`;
+  assert.equal(sent.includes(token), false, "no token in anything sent to the model");
+  assert.equal(sent.includes("user:pass"), false, "no userinfo in link hrefs");
+  assert.match(sent, /https:\/\/example\.test\/console/, "the page url survives without its query");
+  assert.match(sent, /https:\/\/example\.test\/memory/, "the link survives without userinfo, query or hash");
+});

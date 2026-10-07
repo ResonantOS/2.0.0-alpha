@@ -1,4 +1,4 @@
-import { safeContextText } from "./chat-turn-controller.js";
+import { safeContextText, safeContextUrl } from "./chat-turn-controller.js";
 import { isReadableSubframeTab, rankedReadableBrowserTabs } from "./readable-tab-ranking.js";
 import { parseQuotedText } from "./browser-command-parser.js";
 import {
@@ -895,7 +895,13 @@ export function createBrowserPageActions(deps) {
     // Every field that reaches the model goes through the chat sanitizer:
     // the intake markdown and, for the opt-in templates, the page excerpt
     // that buildSummaryPrompt appends to the user message.
-    const safeSnapshot = { ...snapshot, text: safeContextText(snapshot.text, Infinity) };
+    const safeSnapshot = {
+      ...snapshot,
+      title: safeContextText(snapshot.title, Infinity),
+      url: safeContextUrl(snapshot.url),
+      text: safeContextText(snapshot.text, Infinity),
+      links: (snapshot.links ?? []).map((link) => ({ ...link, text: safeContextText(link.text, Infinity), href: safeContextUrl(link.href) }))
+    };
     setActivity("thinking", "Summarising page for Living Archive intake", snapshot.title || snapshot.url);
     setStatus("Summarising page");
     let summary = "";

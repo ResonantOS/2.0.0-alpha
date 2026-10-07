@@ -21,7 +21,7 @@ export function safeContextText(value, max = 1000) {
     .slice(0, max);
 }
 
-function safeContextUrl(value) {
+export function safeContextUrl(value) {
   try {
     const url = new URL(String(value || ""));
     if (!["http:", "https:"].includes(url.protocol)) return "";
