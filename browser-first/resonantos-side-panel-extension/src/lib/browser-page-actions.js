@@ -948,28 +948,48 @@ export function createBrowserPageActions(deps) {
       }
     }
     if (!captures.length) {
-      await addMessage("system", "I could not read any open web tabs for the research trail. Check site permissions or open readable pages.");
+      const blocked = skipped.filter((item) => item.kind === "blocked").length;
+      const failed = skipped.length - blocked;
+      await addMessage("system", `No readable browser tabs are available for a research trail. Open one or more normal web pages first.\n\nBlocked: ${blocked}; failed: ${failed}; over the 8-tab limit: ${notCaptured.overLimit.length}; non-web: ${notCaptured.nonWeb}.`);
       setStatus("Trail unavailable");
       setActivity("failed", "No readable tab content", "Research trail");
       return { ok: false, error: "No readable tab content available.", skipped };
     }
     const trail = buildResearchTrail({ question, captures, skipped, notCaptured });
-    const result = await bridge()("/archive/intake", {
-      method: "POST",
-      body: {
-        title: trail.title,
-        url: safeContextText(safeContextUrl(captures[0].snapshot.url), Infinity) || null,
-        origin: "browser-research-trail",
-        content: trail.content
-      }
-    });
-    const review = await bridge()("/archive/review/request", {
-      method: "POST",
-      body: {
-        path: result.path,
-        reason: "Evaluate this multi-page browser research trail for Living Archive ingestion, source provenance, entity extraction, contradictions, and durable wiki synthesis."
-      }
-    });
+    let result;
+    try {
+      result = await bridge()("/archive/intake", {
+        method: "POST",
+        body: {
+          title: trail.title,
+          url: safeContextText(safeContextUrl(captures[0].snapshot.url), Infinity) || null,
+          origin: "browser-research-trail",
+          content: trail.content
+        }
+      });
+    } catch (error) {
+      const reason = safeContextText(error instanceof Error ? error.message : String(error));
+      const message = `Could not save the research trail: ${reason}. Nothing was saved.`;
+      await addMessage("system", message);
+      setStatus("Trail unavailable");
+      setActivity("failed", "Could not save the research trail", reason);
+      return { ok: false, error: message };
+    }
+    let review;
+    try {
+      review = await bridge()("/archive/review/request", {
+        method: "POST",
+        body: {
+          path: result.path,
+          reason: "Evaluate this multi-page browser research trail for Living Archive ingestion, source provenance, entity extraction, contradictions, and durable wiki synthesis."
+        }
+      });
+    } catch {
+      await addMessage("system", `Saved to ${result.path}, but it could not be queued for review; ask again with \`/trail\` or queue it from the archive.`);
+      setStatus("Research trail saved");
+      setActivity("completed", "Saved research trail intake", result.path);
+      return { ...result, ok: true, reviewQueued: false, pages: trail.counts.captured, skipped: trail.counts.skipped, notCaptured: trail.counts.notCaptured };
+    }
     await addMessage("system", `Saved a ${trail.counts.captured}-page trail; ${trail.counts.skipped} tabs skipped\n\n${result.path}\n\nRaw source material, queued for review. Nothing was written to trusted memory.\n\n${reviewQueueGuidance}`);
     setStatus("Research trail saved");
     setActivity("completed", "Saved research trail intake", result.path);
