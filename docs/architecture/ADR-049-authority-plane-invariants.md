@@ -1,4 +1,4 @@
-# ADR-040: Authority Plane Invariants
+# ADR-049: Authority Plane Invariants
 
 ## Decision Metadata
 
@@ -13,17 +13,17 @@
 
 ## Context
 
-[ADR-038](ADR-038-guardian-engineer-core-only-invariants.md) defines the
-authority-bearing components — identity, caller attribution, capabilities,
-policy, the commit broker, audit, credentials, and provenance — and fixes two
-parts of them. The **Guardian** protects the baseline with restart/rollback
-authority. And **privilege follows authority**: first-party does not imply
-privileged; only the actuation executor with field classifier, the commit
+[ADR-038](ADR-038-guardian-engineer-core-only-invariants.md) fixed two parts of
+the authority model: the **Guardian** protects the baseline with restart/rollback
+authority, and **privilege follows authority** — first-party does not imply
+privileged, so only the actuation executor with field classifier, the commit
 broker, credential custody, and the update channel hold authority. That split is
 recorded in ADR-038 as Tom's position and is **proposed, pending Manolo's
-agreement**. This ADR names that set of authority-holding components the
-**Authority Plane** and states the invariant that holds those pieces together
-and defines what the Authority Plane may and may not do.
+agreement**. This ADR proposes the authority-bearing component inventory —
+identity, caller attribution, capabilities, policy, the commit broker, audit,
+credentials, and provenance — names that set the **Authority Plane**, and states
+the invariant that holds those pieces together and defines what the Authority
+Plane may and may not do.
 
 ## Decision
 
@@ -95,7 +95,7 @@ cannot act with authority the caller did not hold.
 
 ## Why
 
-- The pieces already exist (Guardian, Core-only invariants, caller attribution,
+- The pieces are specified (Guardian, Core-only invariants, caller attribution,
   capability classes), but they are not tied together by a single checkable
   invariant.
 - Without the invariant, "first-party" drifts into "privileged," and governance
@@ -119,9 +119,10 @@ These are proposals and are not in force until this ADR is ratified:
 
 ## Migration
 
-Today, slot and authority state live in the React client
-(`activeSystemSlotProviderIds`, `capabilityForSlot`, `surface-routing.ts`),
-which contradicts "authority never lives in a client". Before the Authority
+Today, slot and authority state live in the client-side shell
+(`src/modules/shell/`; `activeSystemSlotProviderIds`, `capabilityForSlot`,
+`surface-routing.ts`), which contradicts "authority never lives in a client".
+Before the Authority
 Plane is treated as real, that state must move to a host-owned location: the
 client may render authority state and route requests, but it must not be the
 source of truth for grants, slots, or capabilities. This ADR records that move
@@ -145,7 +146,7 @@ attribution) to be added there before implementation (per ADR-038 "Invariant
 Changes: Working Assumption"):
 
 ```text
-/docs/architecture/ADR-040-authority-plane-invariants.md
+/docs/architecture/ADR-049-authority-plane-invariants.md
 ```
 
 ## Consequences

@@ -1,4 +1,4 @@
-# ADR-039: Ground-0 Recovery Contract
+# ADR-048: Ground-0 Recovery Contract
 
 ## Decision Metadata
 
@@ -60,9 +60,9 @@ Ground-0 must remain recoverable without:
   Harness);
 - any model, provider route, or network;
 - any optional add-on (chat, memory, browser, terminal, notes);
-- any marketplace, registry, certification service, DAO, or chain. None of
-  these is currently in scope; Ground-0 does not depend on them whether or not
-  that scope is later adopted.
+- any external marketplace or distribution registry, certification service, DAO,
+  or chain. None of these is currently in scope; Ground-0 does not depend on
+  them whether or not that scope is later adopted.
 
 The Augmentor may fail, restart, update, or be replaced without destroying
 Ground-0. The Guardian's recovery authority is restart and rollback only, and is
@@ -188,7 +188,7 @@ Guardian baseline and recovery-policy paths to be added there before
 implementation (per ADR-038 "Invariant Changes: Working Assumption"):
 
 ```text
-/docs/architecture/ADR-039-ground0-recovery-contract.md
+/docs/architecture/ADR-048-ground0-recovery-contract.md
 ```
 
 ## Consequences
