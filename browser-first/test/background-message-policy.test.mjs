@@ -116,3 +116,12 @@ test("background policy preserves rich context while redacting nested secrets", 
   assert.equal(snapshot.forms[0].fields[1].value, "resonantos");
   assert.equal(snapshot.domain_data.token, "[redacted]");
 });
+
+test("inline assistant #510 delta removes header and bare credentials while preserving prose", () => {
+  const tokens = ["bearer-token-value-0123456789", "abc!def%ghi12345", "abé文xyz", "tok3nwithdigit9abc", "YWJjZGVmZw==", "abcdefghijklmnopqrst"];
+  const prose = "basic arithmetic for children; the bearer of bad news arrived; Bearer abcdefghij";
+  const pageContext = `${prose}\nAuthorization: Bearer ${tokens[0]}\nAuthorization: Bearer ${tokens[1]}\nProxy-Authorization: Basic ${tokens[2]}\nBearer ${tokens[3]}\nBasic ${tokens[4]}\nBearer ${tokens[5]}`;
+  const result = sanitizeInlineAssistantBody({ pageContext }).pageContext;
+  for (const token of tokens) assert.equal(result.includes(token), false, `must remove ${token}`);
+  assert.ok(result.startsWith(prose));
+});

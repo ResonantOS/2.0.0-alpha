@@ -1,3 +1,4 @@
+import { safeContextText, safeContextUrl } from "./chat-turn-controller.js";
 import { isReadableSubframeTab, rankedReadableBrowserTabs } from "./readable-tab-ranking.js";
 import { parseQuotedText } from "./browser-command-parser.js";
 import {
@@ -777,10 +778,10 @@ export function createBrowserPageActions(deps) {
   }
 
   function pageIntakeMarkdown(snapshot) {
-    const text = String(snapshot.text ?? "").trim();
+    const text = safeContextText(snapshot.text, Infinity);
     const links = (snapshot.links ?? [])
       .slice(0, 24)
-      .map((link) => `- [${link.text || link.href}](${link.href})`)
+      .map((link) => `- [${safeContextText(link.text, Infinity) || link.href}](${link.href})`)
       .join("\n");
     return [
       `Captured from: ${snapshot.url}`,
@@ -891,6 +892,16 @@ export function createBrowserPageActions(deps) {
       setStatus("Summary unavailable");
       return { ok: false, error: `No readable page content for the ${template.label} template.` };
     }
+    // Every field that reaches the model goes through the chat sanitizer:
+    // the intake markdown and, for the opt-in templates, the page excerpt
+    // that buildSummaryPrompt appends to the user message.
+    const safeSnapshot = {
+      ...snapshot,
+      title: safeContextText(snapshot.title, Infinity),
+      url: safeContextUrl(snapshot.url),
+      text: safeContextText(snapshot.text, Infinity),
+      links: (snapshot.links ?? []).map((link) => ({ ...link, text: safeContextText(link.text, Infinity), href: safeContextUrl(link.href) }))
+    };
     setActivity("thinking", "Summarising page for Living Archive intake", snapshot.title || snapshot.url);
     setStatus("Summarising page");
     let summary = "";
@@ -903,11 +914,11 @@ export function createBrowserPageActions(deps) {
           model: getModel(),
           surface: "archive-intake",
           thinkingDepth: getThinkingDepth(),
-          pageContext: pageIntakeMarkdown(snapshot).slice(0, 12000),
+          pageContext: pageIntakeMarkdown(safeSnapshot).slice(0, 12000),
           runtimeContext: "Create a source-grounded Living Archive intake summary. Do not claim trusted wiki promotion. Preserve uncertainty and cite visible source facts only.",
           messages: [{
             role: "user",
-            content: buildSummaryPrompt(templateId, snapshot)
+            content: buildSummaryPrompt(templateId, safeSnapshot)
           }]
         }
       });

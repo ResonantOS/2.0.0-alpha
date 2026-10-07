@@ -3,8 +3,13 @@ import { modelConnectionMessage } from "./runtime-error-messages.js";
 export const DEFAULT_MAX_HISTORY_MESSAGES = 16;
 const CHAT_TOKEN_PATTERN = /\b(?:sk-[a-z0-9_-]{12,}|sk-ant-[a-z0-9_-]{12,}|gh[pousr]_[a-z0-9_]{12,}|github_pat_[a-z0-9_]{12,}|hf_[a-z0-9_-]{12,}|xox[baprs]-[a-z0-9-]{12,}|AIza[a-z0-9_-]{12,}|AKIA[A-Z0-9]{12,})\b/gi;
 
-function safeContextText(value, max = 1000) {
+export function safeContextText(value, max = 1000) {
   return String(value ?? "")
+    .replace(/(\b(?:proxy-)?authorization\s*[:=]\s*['"]?(?:bearer|basic)\s+)\S{4,}/gi, "$1[redacted]")
+    // Bare schemes require a digit, base64 padding, or at least 20 token characters.
+    .replace(/(\b(?:bearer|basic)\s+)([A-Za-z0-9._~+/=-]{8,})/gi, (match, scheme, token) => {
+      return /\d|=$/.test(token) || token.length >= 20 ? scheme + "[redacted]" : match;
+    })
     .replace(CHAT_TOKEN_PATTERN, "[redacted]")
     .replace(/\b(?:\d[ -]?){13,19}\b/g, (candidate) => {
       const digits = candidate.replace(/\D/g, "");
@@ -16,7 +21,7 @@ function safeContextText(value, max = 1000) {
     .slice(0, max);
 }
 
-function safeContextUrl(value) {
+export function safeContextUrl(value) {
   try {
     const url = new URL(String(value || ""));
     if (!["http:", "https:"].includes(url.protocol)) return "";
