@@ -62,6 +62,7 @@ function createHarness(overrides = {}) {
     getLastSnapshot: () => lastSnapshot,
     isReadableBrowserTab: (tab) => typeof tab?.url === "string" && /^https?:\/\//i.test(tab.url),
     normalizeBrowserUrl,
+    now: overrides.now,
     permissionForUrl: overrides.permissionForUrl ?? (async () => overrides.permission ?? "ask-before-action"),
     renderSitePermissionPanel: async (tab) => events.push(["site-panel", tab?.id ?? null]),
     setActivity: (phase, label, detail) => events.push(["activity", phase, label, detail]),
@@ -730,25 +731,27 @@ test("browser page actions surface unsupported content for a media-only page wit
 });
 
 test("browser page actions save multi-tab research trail to reviewed intake", async () => {
+  const times = ["2026-10-07T14:00:00.000Z", "2026-10-07T14:00:01.000Z"];
+  let clockCalls = 0;
   const harness = createHarness({
     controlledTabId: 1,
+    now: () => new Date(times[clockCalls++]),
+    lastSnapshot: { title: "Stale", url: "https://stale.test/", text: "cached stale content" },
     tabs: [
-      { id: 1, active: true, title: "Alpha", url: "https://alpha.test/" },
+      { id: 1, active: true, title: "Alpha", url: "https://alpha.test/?token=query-value#part" },
       { id: 2, active: false, title: "Beta", url: "https://beta.test/" },
-      { id: 3, active: false, title: "Side Panel", url: "chrome-extension://abc/panel.html" }
+      { id: 3, active: false, title: "Private extension title", url: "chrome-extension://abc/private-panel.html" }
     ],
     sendMessage: (_call, message, _options, tabId) => {
-      if (message.type !== "read_page") return { ok: false, error: "unexpected" };
+      assert.equal(message.type, "read_page");
       return {
         ok: true,
         snapshot: {
           title: tabId === 1 ? "Alpha" : "Beta",
-          url: tabId === 1 ? "https://alpha.test/" : "https://beta.test/",
+          url: tabId === 1 ? "https://alpha.test/?token=query-value#part" : "https://beta.test/",
           text: tabId === 1 ? "Alpha research source text." : "Beta research source text.",
           links: [{ text: "Source", href: `https://${tabId === 1 ? "alpha" : "beta"}.test/source` }],
-          controls: [],
-          fields: [],
-          frame: { isTop: true }
+          controls: [], fields: [], frame: { isTop: true }
         }
       };
     },
@@ -756,40 +759,53 @@ test("browser page actions save multi-tab research trail to reviewed intake", as
       ? { path: "INTAKE/browser/research-trail.md", bytes: 300 }
       : { path: "REVIEW/requests/research-trail.md", status: "pending" }
   });
-
   const result = await harness.actions.saveResearchTrailToArchive("trail ResonantOS market research");
-
   assert.equal(result.ok, true);
   assert.equal(result.pages, 2);
   assert.equal(result.skipped, 0);
+  assert.equal(result.notCaptured, 1);
+  assert.equal(result.reviewQueued, true);
   assert.equal(result.path, "INTAKE/browser/research-trail.md");
   assert.equal(result.reviewRequestPath, "REVIEW/requests/research-trail.md");
-  const bridgeCall = harness.events.find((event) => event[0] === "bridge" && event[1] === "/archive/intake");
-  assert.equal(bridgeCall[2].body.origin, "browser-research-trail");
-  assert.equal(bridgeCall[2].body.title, "Research Trail: ResonantOS market research");
-  assert.match(bridgeCall[2].body.content, /Page 1: Alpha/);
-  assert.match(bridgeCall[2].body.content, /Page 2: Beta/);
-  assert.match(bridgeCall[2].body.content, /source material until the Living Archive review/);
-  const reviewCall = harness.events.find((event) => event[0] === "bridge" && event[1] === "/archive/review/request");
-  assert.equal(reviewCall[2].body.path, "INTAKE/browser/research-trail.md");
-  assert.match(reviewCall[2].body.reason, /multi-page browser research trail/);
-  assert.ok(harness.events.some((event) =>
-    event[0] === "message" &&
-    /2-page browser research trail/.test(event[2]) &&
-    /Next: open Living Archive > Review Queue/.test(event[2])
-  ));
+  assert.equal(clockCalls, 2);
+  assert.equal(harness.events.filter((event) => event[0] === "sendMessage" && event[1] === "read_page").length, 2);
+  const calls = harness.events.filter((event) => event[0] === "bridge");
+  assert.deepEqual(calls.map((event) => event[1]), ["/archive/intake", "/archive/review/request"]);
+  const intake = calls[0][2];
+  assert.equal(intake.method, "POST");
+  assert.equal(intake.body.origin, "browser-research-trail");
+  assert.equal(intake.body.title, "Research Trail: ResonantOS market research");
+  assert.equal(intake.body.url, "https://alpha.test/");
+  assert.match(intake.body.content, /- research question: ResonantOS market research/);
+  assert.match(intake.body.content, /### 1\. Alpha/);
+  assert.match(intake.body.content, /### 2\. Beta/);
+  for (const time of times) assert.ok(intake.body.content.includes(`- captured at: ${time}`));
+  assert.match(intake.body.content, /- Non-web tabs not captured: 1/);
+  assert.doesNotMatch(intake.body.content, /Stale|cached stale content|query-value|Private extension title|private-panel/);
+  assert.ok(intake.body.content.endsWith("Raw source material, queued for review. Nothing was written to trusted memory."));
+  assert.equal(calls[1][2].method, "POST");
+  assert.equal(calls[1][2].body.path, result.path);
+  assert.match(calls[1][2].body.reason, /multi-page browser research trail/);
+  assert.ok(harness.events.some((event) => event[0] === "message" &&
+    event[2].includes("Saved a 2-page trail; 0 tabs skipped") &&
+    event[2].includes(result.path) && event[2].includes("queued for review") &&
+    event[2].includes("Next: open Living Archive > Review Queue")));
 });
 
 test("browser page actions report when research trail has no readable tabs", async () => {
+  let clockCalls = 0;
   const harness = createHarness({
+    now: () => { clockCalls += 1; return new Date("2026-10-07T14:00:00.000Z"); },
     tabs: [{ id: 1, active: true, title: "Extension", url: "chrome-extension://abc/panel.html" }]
   });
-
   const result = await harness.actions.saveResearchTrailToArchive("trail");
-
   assert.equal(result.ok, false);
-  assert.match(result.error, /No readable browser tabs/);
-  assert.ok(harness.events.some((event) => event[0] === "message" && /No readable browser tabs/.test(event[2])));
+  assert.equal(result.error, "No readable browser tabs available.");
+  assert.equal(clockCalls, 0);
+  assert.equal(harness.events.some((event) => event[0] === "sendMessage"), false);
+  assert.deepEqual(harness.events.filter((event) => event[0] === "bridge").map((event) => event[1]), []);
+  assert.ok(harness.events.some((event) => event[0] === "message" && event[2] ===
+    "No readable browser tabs are available for a research trail. Open one or more normal web pages first."));
 });
 
 test("page understanding fixtures: the REAL content.js read_page extracts the expected context", async () => {
