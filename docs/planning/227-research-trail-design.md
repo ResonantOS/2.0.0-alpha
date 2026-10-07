@@ -109,7 +109,7 @@ trail".
 | Site permissions unreadable | Treated as blocked | Domain and reason only |
 | More than 8 readable tabs | Count over the limit | First 8; rest listed |
 | `/archive/intake` fails | "Could not save the research trail: <reason>. Nothing was saved." | Nothing |
-| `/archive/review/request` fails | "Saved to <path>, but it could not be queued for review…" | Trail, `reviewQueued: false` |
+| `/archive/review/request` fails | "Saved to <path>, but it could not be queued for review; ask again with `/trail` or queue it from the archive." | Trail, `reviewQueued: false` |
 | `/trail` with no text | Title "Browser research trail"; question "none given" | As normal |
 
 ## Tests
