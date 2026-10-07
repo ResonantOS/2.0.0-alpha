@@ -1197,6 +1197,19 @@ try {
     mode: document.querySelector("#site-permission-mode").value
   })`)).result.value;
   assert(sitePanelMode.mode, `Site permission panel mode missing: ${JSON.stringify(sitePanelMode)}`);
+  await submitControlCommand(panel, "/trail Live fixture research");
+  const trailPanelText = await waitForPanelText(
+    panel,
+    /Saved a \d+-page trail; \d+ tabs skipped[\s\S]*INTAKE\/browser\/[^\s]+\.md[\s\S]*Raw source material, queued for review\. Nothing was written to trusted memory\./,
+    "research trail save and review handoff"
+  );
+  const trailSavedPath = trailPanelText.match(/INTAKE\/browser\/[^\s]*research-trail-live-fixture-research\.md/);
+  assert(trailSavedPath, "Research trail confirmation did not include its saved intake path.");
+  certificationReport.record(
+    "research-trail-save",
+    "passed",
+    "Fixture /trail command displayed the saved intake path and review-queued confirmation."
+  );
   await submitControlCommand(panel, `/capabilities`);
   await waitForPanelText(panel, /What Augmentor can do now:/, "capabilities command");
   await submitControlCommand(panel, `/wallet status`);
