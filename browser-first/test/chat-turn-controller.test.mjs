@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFile } from "node:fs/promises";
+import { runInNewContext } from "node:vm";
 
 import {
   createChatTurnController,
@@ -223,3 +225,31 @@ test("chat turn controller sends no tab contexts for unscoped requests", async (
   const assistant = harness.events.find((event) => event[0] === "message" && event[1] === "assistant");
   assert.deepEqual(assistant[3]?.chips, []);
 });
+
+// Exercise the actual closure-local sanitizer without adding a production export.
+const bearerBasicContentSource = await readFile(new URL(
+  "../resonantos-side-panel-extension/src/content.js", import.meta.url
+), "utf8");
+const bearerBasicContentFunction = bearerBasicContentSource.match(
+  /function _rcSanitizeText\(value, max\) \{[\s\S]*?\n    \}/
+)?.[0];
+assert.ok(bearerBasicContentFunction, "content sanitizer must be present");
+const sanitizeBearerBasicContent = runInNewContext(`(${bearerBasicContentFunction})`);
+
+for (const [label, scheme, token] of [
+  ["Authorization: ", "Bearer", "bearer-token-value-0123456789"],
+  ["authorization: ", "basic", "dGVzdC11c2VyOnRlc3QtcGFzcw=="],
+  ["Proxy-Authorization: ", "bEaReR", "proxy-token-value-0123456789"],
+  ["", "BeArEr", "bare-token-value-0123456789"],
+]) {
+  test(`chat-turn-controller redacts #510 ${label || "bare "}${scheme} credentials with parity`, () => {
+    const input = `Before request. ${label}${scheme} ${token} After request.`;
+    const expected = `Before request. ${label}${scheme} [redacted] After request.`;
+    const content = sanitizeBearerBasicContent(input, 1000);
+    const chat = tabContextsForScopedTabs([{ text: input }])[0].text;
+    const actual = chat;
+    assert.equal(actual.includes(token), false, "credential must be removed");
+    assert.equal(actual, expected, "label, scheme case and surrounding prose must survive");
+    assert.equal(content, chat, "both sanitizers must produce byte-identical text");
+  });
+}

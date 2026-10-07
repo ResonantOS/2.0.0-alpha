@@ -5,6 +5,7 @@ const CHAT_TOKEN_PATTERN = /\b(?:sk-[a-z0-9_-]{12,}|sk-ant-[a-z0-9_-]{12,}|gh[po
 
 function safeContextText(value, max = 1000) {
   return String(value ?? "")
+    .replace(/((?:bearer|basic)\s+)[A-Za-z0-9._~+/=-]{8,}/gi, "$1[redacted]")
     .replace(CHAT_TOKEN_PATTERN, "[redacted]")
     .replace(/\b(?:\d[ -]?){13,19}\b/g, (candidate) => {
       const digits = candidate.replace(/\D/g, "");
