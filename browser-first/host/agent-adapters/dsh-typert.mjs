@@ -261,10 +261,10 @@ export function createDshTypertAdapter({ transport, followTimeoutMs = 15000, tur
       let total = 0;
       const groups = catalog.groups.map(group => {
         if (!Array.isArray(group?.models) || group.models.length > 200) throw fail('invalid-event');
-        const provider = identifier(group.provider);
+        const provider = identifier(group.id);
         const models = group.models.map(model => {
           if (!record(model)) throw fail('invalid-event');
-          const value = { model: identifier(model.model), ...(model.name === undefined ? {} : { name: text(model.name) }) };
+          const value = { model: identifier(model.id), ...(model.name === undefined ? {} : { name: text(model.name) }) };
           total += Buffer.byteLength(JSON.stringify(value));
           if (total > 65536) throw fail('invalid-event');
           return value;
