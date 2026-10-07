@@ -28,7 +28,11 @@ function blockedDomain(url) {
 function uncapturedMarkdown(skipped, notCaptured) {
   const lines = skipped.map(({ tab, kind, error }) => {
     if (kind === "blocked") {
-      return `- Blocked by your site permission: ${safeContextText(blockedDomain(tab.url), Infinity)}`;
+      // Domain and reason only: a site the user may have blocked never shows its title or path.
+      const reason = /^Site permissions could not be read/i.test(String(error ?? ""))
+        ? "Site permissions could not be read"
+        : "Blocked by your site permission";
+      return `- ${reason}: ${safeContextText(blockedDomain(tab.url), Infinity)}`;
     }
     return `- Could not read: ${safeContextText(tab.title || "Untitled", Infinity)} — ${safeContextText(safeContextUrl(tab.url), Infinity)} — ${safeContextText(error, Infinity)}`;
   });

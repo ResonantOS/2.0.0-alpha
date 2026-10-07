@@ -20,7 +20,8 @@ export function createSidePanelBrowserActionController({
 } = {}) {
   const saveIntake = async (target = "page") => {
     if (/trail|research/i.test(String(target))) {
-      return saveResearchTrailToArchive(target);
+      // The side panel prefixes the command word; the research question is what follows it.
+      return saveResearchTrailToArchive(String(target).replace(/^\s*(?:research\s*trail|researchtrail|trail|research)\b\s*/i, ""));
     }
     if (/summary|summari[sz]e|synthesis/i.test(String(target))) {
       return summarizeCurrentPageToArchive();

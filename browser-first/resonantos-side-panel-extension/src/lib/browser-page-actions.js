@@ -919,7 +919,7 @@ export function createBrowserPageActions(deps) {
   }
 
   async function saveResearchTrailToArchive(rawText = "") {
-    const question = String(rawText ?? "").replace(/^(?:research trail|trail|research)\b\s*/i, "").trim();
+    const question = String(rawText ?? "").trim();
     const label = safeContextText(question, 80) || "Browser research trail";
     setActivity("retrieving", "Collecting browser research trail", label);
     setStatus("Collecting trail");
@@ -953,7 +953,7 @@ export function createBrowserPageActions(deps) {
       await addMessage("system", `No readable browser tabs are available for a research trail. Open one or more normal web pages first.\n\nBlocked: ${blocked}; failed: ${failed}; over the 8-tab limit: ${notCaptured.overLimit.length}; non-web: ${notCaptured.nonWeb}.`);
       setStatus("Trail unavailable");
       setActivity("failed", "No readable tab content", "Research trail");
-      return { ok: false, error: "No readable tab content available.", skipped };
+      return { ok: false, error: "No readable tab content available.", skipped: skipped.length, blocked, failed, notCaptured: notCaptured.overLimit.length + notCaptured.nonWeb };
     }
     const trail = buildResearchTrail({ question, captures, skipped, notCaptured });
     let result;

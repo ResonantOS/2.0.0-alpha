@@ -766,7 +766,7 @@ test("browser page actions save multi-tab research trail to reviewed intake", as
       ? { path: "INTAKE/browser/research-trail.md", bytes: 300 }
       : { path: "REVIEW/requests/research-trail.md", status: "pending" }
   });
-  const result = await harness.actions.saveResearchTrailToArchive("trail ResonantOS market research");
+  const result = await harness.actions.saveResearchTrailToArchive("ResonantOS market research");
   assert.equal(result.ok, true);
   assert.equal(result.pages, 2);
   assert.equal(result.skipped, 0);
@@ -805,7 +805,7 @@ test("browser page actions report when research trail has no readable tabs", asy
     now: () => { clockCalls += 1; return new Date("2026-10-07T14:00:00.000Z"); },
     tabs: [{ id: 1, active: true, title: "Extension", url: "chrome-extension://abc/panel.html" }]
   });
-  const result = await harness.actions.saveResearchTrailToArchive("trail");
+  const result = await harness.actions.saveResearchTrailToArchive("");
   assert.equal(result.ok, false);
   assert.equal(result.error, "No readable browser tabs available.");
   assert.equal(clockCalls, 0);
@@ -1028,9 +1028,11 @@ test("research trail every read fails with counts by reason and no archive calls
     },
     sendMessage: () => ({ ok: false, error: "frame unavailable" })
   });
-  const result = await harness.actions.saveResearchTrailToArchive("trail evidence");
+  const result = await harness.actions.saveResearchTrailToArchive("evidence");
   assert.equal(result.ok, false);
-  assert.deepEqual(result.skipped.map((item) => item.kind), ["blocked", "blocked", "failed"]);
+  assert.equal(result.skipped, 3);
+  assert.deepEqual({ blocked: result.blocked, failed: result.failed }, { blocked: 2, failed: 1 });
+  assert.doesNotMatch(JSON.stringify(result), /private|https?:/i, "the failure result carries counts, never tab titles or addresses");
   assert.deepEqual(harness.events.filter((event) => event[0] === "bridge").map((event) => event[1]), []);
   assert.ok(harness.events.some((event) => event[0] === "message" && event[2] ===
     "No readable browser tabs are available for a research trail. Open one or more normal web pages first.\n\nBlocked: 2; failed: 1; over the 8-tab limit: 0; non-web: 1."));
@@ -1048,7 +1050,7 @@ test("research trail some reads fail but a graded trail is saved and queued", as
       : { ok: false, error: "frame unavailable" },
     bridgeRequest: trailArchiveResponse
   });
-  const result = await harness.actions.saveResearchTrailToArchive("trail Which evidence?");
+  const result = await harness.actions.saveResearchTrailToArchive("Which evidence?");
   assert.equal(result.ok, true);
   assert.equal(result.reviewQueued, true);
   assert.equal(result.pages, 1);
@@ -1079,14 +1081,14 @@ test("research trail treats unreadable site permission as blocked and never read
     },
     bridgeRequest: trailArchiveResponse
   });
-  const result = await harness.actions.saveResearchTrailToArchive("trail permissions");
+  const result = await harness.actions.saveResearchTrailToArchive("permissions");
   assert.equal(result.ok, true);
   assert.equal(result.skipped, 2);
   assert.deepEqual(attemptedTabs, [1]);
   const calls = harness.events.filter((event) => event[0] === "bridge");
   assert.deepEqual(calls.map((event) => event[1]), ["/archive/intake", "/archive/review/request"]);
   const content = calls[0][2].body.content;
-  assert.ok(content.includes("- Blocked by your site permission: unknown.test"));
+  assert.ok(content.includes("- Site permissions could not be read: unknown.test"));
   assert.ok(content.includes("- Blocked by your site permission: blocked.test"));
   assert.doesNotMatch(content, /Unknown secret title|Blocked secret title|private-unknown|private-blocked|query-value|capture refused/);
 });
@@ -1106,7 +1108,7 @@ test("research trail captures only eight readable tabs and lists every over-limi
     },
     bridgeRequest: trailArchiveResponse
   });
-  const result = await harness.actions.saveResearchTrailToArchive("trail coverage");
+  const result = await harness.actions.saveResearchTrailToArchive("coverage");
   assert.equal(result.ok, true);
   assert.equal(result.pages, 8);
   assert.equal(result.skipped, 0);
@@ -1128,7 +1130,7 @@ test("research trail intake failure reports nothing saved and never requests rev
     now: () => new Date(trailTime),
     bridgeRequest: async () => { throw new Error("disk unavailable"); }
   });
-  const result = await harness.actions.saveResearchTrailToArchive("trail evidence");
+  const result = await harness.actions.saveResearchTrailToArchive("evidence");
   assert.equal(result.ok, false);
   assert.equal(result.error, "Could not save the research trail: disk unavailable. Nothing was saved.");
   assert.equal(result.path, undefined);
@@ -1144,7 +1146,7 @@ test("research trail review failure preserves saved path and returns reviewQueue
       throw new Error("review unavailable");
     }
   });
-  const result = await harness.actions.saveResearchTrailToArchive("trail evidence");
+  const result = await harness.actions.saveResearchTrailToArchive("evidence");
   assert.equal(result.ok, true);
   assert.equal(result.path, trailSavedPath);
   assert.equal(result.reviewQueued, false);
@@ -1161,11 +1163,26 @@ test("research trail review failure preserves saved path and returns reviewQueue
 test("research trail without question saves Browser research trail with none given", async () => {
   const harness = createHarness({ now: () => new Date(trailTime), bridgeRequest: trailArchiveResponse });
   // The router turns '/trail' into saveIntake('trail'), which calls this action.
-  const result = await harness.actions.saveResearchTrailToArchive("trail");
+  const result = await harness.actions.saveResearchTrailToArchive("");
   assert.equal(result.ok, true);
   assert.equal(result.reviewQueued, true);
   const calls = harness.events.filter((event) => event[0] === "bridge");
   assert.deepEqual(calls.map((event) => event[1]), ["/archive/intake", "/archive/review/request"]);
   assert.equal(calls[0][2].body.title, "Browser research trail");
   assert.ok(calls[0][2].body.content.startsWith("# Browser research trail\n- research question: none given\n"));
+});
+
+
+test("research trail records a bare question exactly as typed, including a leading 'research'", async () => {
+  const harness = createHarness({
+    tabs: [{ id: 1, title: "Alpha", url: "https://alpha.test/" }],
+    bridgeRequest: async (route) => route === "/archive/intake"
+      ? { path: "INTAKE/browser/research-trail.md", status: "pending" }
+      : { path: "REVIEW/requests/research-trail.md", status: "pending" }
+  });
+  await harness.actions.saveResearchTrailToArchive("research methods for coral reefs");
+  const intake = harness.events.find((event) => event[0] === "bridge" && event[1] === "/archive/intake");
+  assert.ok(intake, "intake must be called");
+  assert.match(intake[2].body.content, /- research question: research methods for coral reefs\n/);
+  assert.equal(intake[2].body.title, "Research Trail: research methods for coral reefs");
 });

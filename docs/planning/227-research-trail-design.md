@@ -60,7 +60,7 @@ output; the module never reads the clock.
 
 ### `saveResearchTrailToArchive(rawText)` (existing, orchestrator)
 
-1. Query the current window's tabs. Count non-web tabs; keep readable ones.
+1. Receive the research question as typed (the side panel strips its own `trail` command word before calling; the main workspace passes the bare text). Query the current window's tabs. Count non-web tabs; keep readable ones.
 2. Read the first 8 readable tabs; record `capturedAt` from an injected clock
    (`deps.now`, defaulting to `() => new Date()`) at each read. List the rest as
    over the limit.
@@ -89,6 +89,7 @@ output; the module never reads the clock.
 ## Skipped and not captured
 - Could not read: <title> — <address> — <reason>
 - Blocked by your site permission: <domain>
+- Site permissions could not be read: <domain>
 - Over the 8-tab limit: <title> — <address>
 - Non-web tabs not captured: <count>
 

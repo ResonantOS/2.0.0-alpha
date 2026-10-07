@@ -46,7 +46,7 @@ test("side panel browser action controller routes archive intake targets", async
     ["save-page"],
     ["save-selection"],
     ["save-summary"],
-    ["save-trail", "trail dao research"]
+    ["save-trail", "dao research"]
   ]);
 });
 

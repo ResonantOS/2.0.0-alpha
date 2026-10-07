@@ -101,7 +101,8 @@ test("trail grades failed, blocked, permission-unknown and over-limit tabs witho
   assert.deepEqual(result.counts, { captured: 2, skipped: 3, notCaptured: 3 });
   assert.ok(result.content.includes("## Skipped and not captured"));
   assert.ok(result.content.includes("- Could not read: Failed Authorization: Bearer [redacted] — https://failed.test/path — Read failed Authorization: Bearer [redacted]"));
-  assert.ok(result.content.includes("- Blocked by your site permission: blocked.test\n- Blocked by your site permission: unknown.test"));
+  assert.ok(result.content.includes("- Blocked by your site permission: blocked.test\n- Site permissions could not be read: unknown.test"));
+  assert.doesNotMatch(result.content, /Blocked by your site permission: unknown\.test/);
   assert.ok(result.content.includes("- Over the 8-tab limit: Ninth Authorization: Bearer [redacted] — https://ninth.test/path"));
   assert.ok(result.content.includes("- Non-web tabs not captured: 2"));
   assert.doesNotMatch(result.content, /Blocked private title|Unknown private title|private-path|private-unknown|8443|query-value|bearer-token-value-0123456789|capture refused/);
@@ -125,7 +126,8 @@ test("a blocked tab with a malformed or missing address never aborts the trail a
       { tab: { title: "Missing private title" }, kind: "blocked", error: "Site permissions could not be read; capture refused." }
     ]
   }));
-  assert.equal((trail.content.match(/- Blocked by your site permission: unknown site/g) ?? []).length, 2);
+  assert.equal((trail.content.match(/- Blocked by your site permission: unknown site/g) ?? []).length, 1);
+  assert.equal((trail.content.match(/- Site permissions could not be read: unknown site/g) ?? []).length, 1);
   assert.doesNotMatch(trail.content, /Malformed private title|Missing private title|not a url/);
   assert.equal(trail.counts.skipped, 2);
 });
