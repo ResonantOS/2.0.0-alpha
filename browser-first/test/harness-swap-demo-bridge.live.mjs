@@ -24,5 +24,9 @@ test('fixture demo through the real bridge completes and verifies', { timeout: 1
     const bundle = JSON.parse(readFileSync(path.join(evidenceDir, 'evidence.json'), 'utf8'));
     assert.equal(verifyEvidence(bundle, { requireLive: false }), true);
     assert.equal(bundle.governance.degrade.upstreamAccepted, true);
-  } finally { rmSync(parent, { recursive: true, force: true }); }
+  } catch (error) {
+    error.message += `\nevidence kept at ${parent}`;
+    throw error;
+  }
+  rmSync(parent, { recursive: true, force: true });
 });
