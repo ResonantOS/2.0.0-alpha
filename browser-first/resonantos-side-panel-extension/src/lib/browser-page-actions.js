@@ -1,3 +1,4 @@
+import { safeContextText } from "./chat-turn-controller.js";
 import { isReadableSubframeTab, rankedReadableBrowserTabs } from "./readable-tab-ranking.js";
 import { parseQuotedText } from "./browser-command-parser.js";
 import {
@@ -777,10 +778,10 @@ export function createBrowserPageActions(deps) {
   }
 
   function pageIntakeMarkdown(snapshot) {
-    const text = String(snapshot.text ?? "").trim();
+    const text = safeContextText(snapshot.text, Infinity);
     const links = (snapshot.links ?? [])
       .slice(0, 24)
-      .map((link) => `- [${link.text || link.href}](${link.href})`)
+      .map((link) => `- [${safeContextText(link.text, Infinity) || link.href}](${link.href})`)
       .join("\n");
     return [
       `Captured from: ${snapshot.url}`,

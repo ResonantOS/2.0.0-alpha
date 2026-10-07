@@ -916,3 +916,27 @@ test("wallet detection refuses unreadable site permissions", async () => {
   assert.ok(harness.events.some(([type, role, message]) => type === "message" && message === "Site permissions could not be read; capture refused."));
   assert.equal(harness.events.some(([type]) => ["sendMessage", "inject"].includes(type)), false);
 });
+
+for (const field of ["text", "link text"]) {
+  test(`archive summary #510 delta sanitizes ${field} before the model request`, async () => {
+    const token = "bearer-token-value-0123456789";
+    const header = `Authorization: Bearer ${token}`;
+    const harness = createHarness({
+      lastSnapshot: {
+        title: "Summary Page", url: "https://example.test/summary",
+        text: field === "text" ? header : "Readable page text.",
+        links: [{ text: field === "link text" ? header : "Memory", href: "https://example.test/memory" }],
+        controls: [], fields: []
+      },
+      bridgeRequest: async (route) => route === "/augmentor/chat"
+        ? { reply: "A summary.", model: "MiniMax-M3" }
+        : { path: "INTAKE/browser/summary.md", status: "pending" }
+    });
+    const result = await harness.actions.summarizeCurrentPageToArchive();
+    assert.equal(result.ok, true);
+    const call = harness.events.find((event) => event[0] === "bridge" && event[1] === "/augmentor/chat");
+    assert.ok(call, "model request must be recorded");
+    assert.equal(call[2].body.pageContext.includes(token), false);
+    assert.match(call[2].body.pageContext, /Authorization: Bearer \[redacted\]/);
+  });
+}

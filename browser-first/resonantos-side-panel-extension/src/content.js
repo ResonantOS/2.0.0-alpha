@@ -62,7 +62,11 @@ const { inlineActionAllowedForLocationGate } = globalThis.ResonantOSInlineAction
     var _rcLastSnapshotAt = 0;
     function _rcSanitizeText(value, max) {
       return String(value || '')
-        .replace(/((?:bearer|basic)\s+)[A-Za-z0-9._~+/=-]{8,}/gi, '$1[redacted]')
+        .replace(/(\b(?:proxy-)?authorization\s*[:=]\s*['"]?(?:bearer|basic)\s+)\S{4,}/gi, '$1[redacted]')
+        // Bare schemes require a digit, base64 padding, or at least 20 token characters.
+        .replace(/(\b(?:bearer|basic)\s+)([A-Za-z0-9._~+/=-]{8,})/gi, (match, scheme, token) => {
+          return /\d|=$/.test(token) || token.length >= 20 ? scheme + '[redacted]' : match;
+        })
         .replace(/-----BEGIN [^-]+ PRIVATE KEY-----[\s\S]*?-----END [^-]+ PRIVATE KEY-----/g, '[redacted]')
         .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, '[redacted]')
         .replace(/\b(?:sk-[A-Za-z0-9_-]{12,}|sk-ant-[A-Za-z0-9_-]{12,}|sk-or-v1-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9_]{12,}|github_pat_[A-Za-z0-9_]{12,}|hf_[A-Za-z0-9_-]{12,}|xox[baprs]-[A-Za-z0-9-]{12,}|xai-[A-Za-z0-9_-]{12,}|gsk_[A-Za-z0-9_-]{12,}|AIza[A-Za-z0-9_-]{12,}|AKIA[A-Z0-9]{12,}|pk_live_[A-Za-z0-9]{12,}|rk_live_[A-Za-z0-9]{12,})\b/gi, '[redacted]')

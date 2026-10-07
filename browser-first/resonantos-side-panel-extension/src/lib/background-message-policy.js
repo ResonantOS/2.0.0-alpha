@@ -8,6 +8,11 @@ const FORMATTED_CARD_PATTERN = /\b(?:\d[ -]?){13,19}\b/g;
 
 function redactSecrets(value) {
   return String(value ?? "")
+    .replace(/(\b(?:proxy-)?authorization\s*[:=]\s*['"]?(?:bearer|basic)\s+)\S{4,}/gi, "$1[redacted]")
+    // Bare schemes require a digit, base64 padding, or at least 20 token characters.
+    .replace(/(\b(?:bearer|basic)\s+)([A-Za-z0-9._~+/=-]{8,})/gi, (match, scheme, token) => {
+      return /\d|=$/.test(token) || token.length >= 20 ? scheme + "[redacted]" : match;
+    })
     .replace(PEM_PATTERN, "[redacted]")
     .replace(JWT_PATTERN, "[redacted]")
     .replace(TOKEN_PATTERN, "[redacted]")

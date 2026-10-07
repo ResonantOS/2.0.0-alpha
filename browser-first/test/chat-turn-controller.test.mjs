@@ -253,3 +253,13 @@ for (const [label, scheme, token] of [
     assert.equal(content, chat, "both sanitizers must produce byte-identical text");
   });
 }
+
+for (const [name, input, expected] of [
+  ["prose and credential signals", "basic arithmetic for children; the bearer of bad news arrived; Bearer abcdefghij; Bearer tok3nwithdigit9abc; Basic YWJjZGVmZw==; Bearer abcdefghijklmnopqrst", "basic arithmetic for children; the bearer of bad news arrived; Bearer abcdefghij; Bearer [redacted]; Basic [redacted]; Bearer [redacted]"],
+  ["labelled non-RFC credentials", "Authorization: Bearer abc!def%ghi12345", "Authorization: Bearer [redacted]"],
+  ["labelled Unicode credentials", "Proxy-Authorization: Basic abé文xyz", "Proxy-Authorization: Basic [redacted]"],
+]) {
+  test(`chat-turn-controller #510 delta ${name}`, () => {
+    assert.equal(tabContextsForScopedTabs([{ text: input }])[0].text, expected);
+  });
+}
