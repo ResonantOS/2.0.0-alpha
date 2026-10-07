@@ -111,18 +111,21 @@ export function createTabMentionTypeahead({
 
   const isOpen = () => open;
 
-  // #410 (a11y): the composer is a <textarea>, and ARIA-in-HTML permits a
-  // textarea no role other than its native textbox (role="combobox" on a
-  // textarea is invalid). So we convey the popup relationship with supported
-  // states only — aria-autocomplete plus aria-expanded/aria-controls — and track
-  // the active option via aria-activedescendant (APG virtual focus) so focus
-  // stays in the textarea while screen readers announce the highlighted option.
+  // #410 (a11y): the composer is a <textarea>, whose only ARIA-in-HTML–permitted
+  // role is its native textbox. role="combobox" is invalid on it — and so is
+  // aria-expanded, which is not a supported state of the textbox role. So we
+  // convey the autocomplete relationship with supported attributes only:
+  // aria-autocomplete, plus aria-controls (a global property) pointing at the
+  // listbox while it is open, and aria-activedescendant (APG virtual focus) for
+  // the active option — focus stays in the textarea while screen readers announce
+  // the highlighted option. The listbox's presence in the DOM (created on open,
+  // removed on close) conveys the expanded/collapsed state.
   input.setAttribute("aria-autocomplete", "list");
-  input.setAttribute("aria-expanded", "false");
 
-  function setExpanded(expanded) {
-    input.setAttribute("aria-expanded", expanded ? "true" : "false");
-    if (expanded) {
+  // Link/unlink the textarea to the listbox. aria-controls points at the listbox
+  // only while it exists in the DOM, so it never dangles to a removed id.
+  function setListboxLinked(linked) {
+    if (linked) {
       input.setAttribute("aria-controls", listboxId);
     } else {
       input.removeAttribute("aria-controls");
@@ -143,7 +146,7 @@ export function createTabMentionTypeahead({
     refreshSeq += 1; // invalidate any in-flight fetch so it can't reopen after close
     container?.remove();
     container = null;
-    setExpanded(false);
+    setListboxLinked(false);
   }
 
   function paintActive(position, isActive) {
@@ -221,7 +224,7 @@ export function createTabMentionTypeahead({
     queryInfo = info; // the mention these candidates belong to (re-checked on commit)
     open = true;
     if (activeIndex < 0 || activeIndex >= candidates.length) activeIndex = 0;
-    setExpanded(true);
+    setListboxLinked(true);
     renderList();
   }
 
@@ -259,6 +262,15 @@ export function createTabMentionTypeahead({
     const caret = input.selectionStart ?? input.value.length;
     const live = mentionQueryAtCaret(input.value, caret);
     if (!live || live.start !== queryInfo.start) {
+      close();
+      return false;
+    }
+    // #410: re-check readability at commit time. A permission change can block a
+    // candidate's site after it was ranked but before the open popup is closed,
+    // and close() only runs once the async blocked-set refresh resolves. Refuse
+    // to insert a now-blocked reference (candidate carries .url, which is what
+    // the predicate keys on); let Enter fall through instead.
+    if (!isReadableBrowserTab(candidate)) {
       close();
       return false;
     }
@@ -319,7 +331,7 @@ export function createTabMentionTypeahead({
     input.removeEventListener("blur", onBlur);
     keydownHost.removeEventListener("keydown", onKeydown, true);
     input.removeAttribute("aria-autocomplete");
-    input.removeAttribute("aria-expanded");
+    // close() already cleared aria-controls / aria-activedescendant via setListboxLinked.
   }
 
   return { close, destroy, isOpen };

@@ -10,6 +10,10 @@ import {
   mentionQueryAtCaret,
   rankMentionCandidates
 } from "../resonantos-side-panel-extension/src/lib/tab-mention-typeahead.js";
+import {
+  createReadableUnblockedTab,
+  wireBlockedSiteTypeahead
+} from "../resonantos-side-panel-extension/src/lib/readable-unblocked-tab.js";
 
 const isReadable = (tab) => /^https?:\/\//i.test(String(tab?.url ?? ""));
 
@@ -53,14 +57,14 @@ test("mentionInsertionForTab inserts the deliberate quoted form and sanitizes ti
   assert.equal(mentionInsertionForTab({ title: "", index: 3 }), "@tab 3 ", "untitled tab falls back to the ranked form");
 });
 
-function setupDom(tabs, { debounceMs = 0, queryTabs } = {}) {
+function setupDom(tabs, { debounceMs = 0, queryTabs, isReadableBrowserTab = isReadable } = {}) {
   const dom = new JSDOM('<form id="f"><textarea id="c"></textarea></form>', { url: "https://side-panel.test/" });
   const doc = dom.window.document;
   const input = doc.getElementById("c");
   const typeahead = createTabMentionTypeahead({
     doc,
     input,
-    isReadableBrowserTab: isReadable,
+    isReadableBrowserTab,
     // debounceMs 0 keeps refresh synchronous so tests stay deterministic.
     debounceMs,
     queryTabs: queryTabs ?? (async () => tabs)
@@ -136,18 +140,24 @@ test("typeahead keeps the textarea's native role and exposes aria-activedescenda
   const { doc, dom, input } = setupDom(openTabs);
 
   // ARIA-in-HTML forbids any role override on a <textarea> (only its native
-  // textbox is allowed), so the typeahead must NOT set role="combobox"; it
-  // conveys the popup via supported states instead.
+  // textbox is allowed), so the typeahead must NOT set role="combobox". It must
+  // also NOT set aria-expanded, which is not a supported state of the textbox
+  // role; the open/collapsed state is conveyed by the listbox's presence in the
+  // DOM instead. Only supported attributes are used: aria-autocomplete, plus
+  // aria-controls/aria-activedescendant once the listbox exists.
   assert.equal(input.getAttribute("role"), null, "no invalid role override on the textarea");
   assert.equal(input.getAttribute("aria-autocomplete"), "list");
-  assert.equal(input.getAttribute("aria-expanded"), "false");
+  assert.equal(input.getAttribute("aria-expanded"), null, "aria-expanded is invalid on role=textbox and must never be set");
+  assert.equal(input.getAttribute("aria-controls"), null, "no listbox linked while collapsed");
 
   await typeAndRefresh(dom, input, "@");
   const list = doc.querySelector(".tab-mention-typeahead");
-  assert.equal(input.getAttribute("aria-expanded"), "true");
-  assert.equal(input.getAttribute("aria-controls"), list.id);
+  assert.equal(input.getAttribute("aria-expanded"), null, "aria-expanded stays unset even while open");
+  assert.equal(list.getAttribute("role"), "listbox", "the popup is a listbox");
   assert.ok(list.id, "listbox has an id for aria-controls");
+  assert.equal(input.getAttribute("aria-controls"), list.id, "the open listbox is linked via aria-controls");
   const first = doc.querySelector(".tab-mention-option");
+  assert.equal(first.getAttribute("role"), "option", "listbox children are options");
   assert.equal(input.getAttribute("aria-activedescendant"), first.id, "active option tracked via virtual focus");
   assert.equal(first.getAttribute("aria-selected"), "true");
 
@@ -158,7 +168,8 @@ test("typeahead keeps the textarea's native role and exposes aria-activedescenda
   assert.equal(options[0].getAttribute("aria-selected"), "false");
 
   input.dispatchEvent(keydown(dom, "Escape"));
-  assert.equal(input.getAttribute("aria-expanded"), "false");
+  assert.equal(doc.querySelector(".tab-mention-typeahead"), null, "the listbox is removed on close, conveying collapsed");
+  assert.equal(input.getAttribute("aria-expanded"), null, "still no aria-expanded after close");
   assert.equal(input.getAttribute("aria-activedescendant"), null, "virtual focus cleared on close");
   assert.equal(input.getAttribute("aria-controls"), null);
 });
@@ -240,4 +251,125 @@ test("selectCandidate refuses to commit when the caret no longer sits in the ran
   assert.equal(input.value, "@Al", "no mention is inserted when the caret is outside the ranked mention");
   assert.equal(enter.defaultPrevented, false, "Enter falls through rather than committing a stale candidate");
   assert.equal(typeahead.isOpen(), false, "the stale popup is closed");
+});
+
+test("selectCandidate refuses to commit into a different @ token than it ranked (#509 round 2)", async () => {
+  // The caret can leave the ranked mention yet still land inside ANOTHER
+  // mention: mentionQueryAtCaret is then non-null but at a different start.
+  // This pins the `live.start !== queryInfo.start` half of the guard — the
+  // `!live` half alone would let the @Al candidate overwrite the @Be token.
+  const { dom, input, typeahead } = setupDom(openTabs, { debounceMs: 15 });
+
+  // Open with candidates ranked for the first mention, @Al.
+  input.value = "@Al";
+  input.setSelectionRange(3, 3);
+  input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(typeahead.isOpen(), true, "popup open, candidates ranked for @Al");
+
+  // Append a second mention and move the caret inside it, then press Enter
+  // before the debounced re-rank fires — the popup still shows @Al's candidates.
+  input.value = "@Al @Be";
+  input.setSelectionRange(7, 7);
+  input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+
+  const enter = keydown(dom, "Enter");
+  input.dispatchEvent(enter);
+  assert.equal(input.value, "@Al @Be", "the @Al candidate is not written into the @Be token");
+  assert.equal(enter.defaultPrevented, false, "Enter falls through rather than committing into the wrong mention");
+  assert.equal(typeahead.isOpen(), false, "the stale popup is closed");
+});
+
+test("a site blocked by a permission change closes the open popup and is never committed (#410 wiring)", async () => {
+  // The seam side-panel.js wires: a chrome.storage.onChanged change refreshes the
+  // blocked snapshot, then closes any open typeahead so it cannot keep showing a
+  // now-blocked site. Driven here through the REAL typeahead, the REAL
+  // unblocked-tab predicate and the REAL wireBlockedSiteTypeahead glue — only
+  // chrome.storage.onChanged is faked — so this exercises the composition the
+  // previous suite only matched as source text.
+  const storedBlocked = new Set(); // the permission-store state
+  const liveBlocked = new Set(); // the snapshot the predicate reads
+  const refreshBlockedSiteKeys = async () => {
+    liveBlocked.clear();
+    for (const key of storedBlocked) liveBlocked.add(key);
+  };
+  const isReadableUnblockedTab = createReadableUnblockedTab({
+    isReadableBrowserTab: isReadable,
+    siteKeyForUrl: (url) => {
+      try { return new URL(url).hostname; } catch { return ""; }
+    },
+    getBlockedSiteKeys: () => liveBlocked,
+    isPermissionsLoaded: () => true
+  });
+
+  const listeners = [];
+  const onChanged = { addListener: (fn) => listeners.push(fn) };
+  const fireChange = (changes, area) => listeners.forEach((fn) => fn(changes, area));
+
+  const { doc, dom, input, typeahead } = setupDom(openTabs, { isReadableBrowserTab: isReadableUnblockedTab });
+  wireBlockedSiteTypeahead({
+    onChanged,
+    storageKey: "augmentorSitePermissions",
+    refreshBlockedSiteKeys,
+    typeahead
+  });
+
+  // Open the popup; alpha.test is listed while it is still allowed.
+  await typeAndRefresh(dom, input, "@Alpha");
+  assert.equal(typeahead.isOpen(), true, "popup open for @Alpha");
+  const titlesBefore = [...doc.querySelectorAll(".tab-mention-option strong")].map((s) => s.textContent);
+  assert.ok(titlesBefore.includes("Alpha News"), "alpha.test is listed before it is blocked");
+
+  // An unrelated storage change must not touch the popup (guards the area/key check).
+  fireChange({ someOtherKey: { newValue: 1 } }, "local");
+  fireChange({ augmentorSitePermissions: { newValue: {} } }, "sync");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(typeahead.isOpen(), true, "an unrelated change leaves the popup open");
+
+  // Block alpha.test and fire the subscribed permission change.
+  storedBlocked.add("alpha.test");
+  fireChange({ augmentorSitePermissions: { newValue: {} } }, "local");
+  await new Promise((resolve) => setTimeout(resolve, 0)); // flush refresh().finally(close)
+
+  assert.equal(typeahead.isOpen(), false, "the open popup closes when a site-permission change arrives");
+  assert.equal(doc.querySelector(".tab-mention-typeahead"), null, "the now-blocked option disappears");
+
+  // Enter now falls through — nothing to commit — and the blocked site is not inserted.
+  const enter = keydown(dom, "Enter");
+  input.dispatchEvent(enter);
+  assert.equal(enter.defaultPrevented, false, "Enter is not swallowed by the closed popup");
+  assert.ok(!input.value.includes('@"Alpha News"'), "the blocked site is not committed");
+
+  // The next keystroke reopens the list filtered against the refreshed set.
+  await typeAndRefresh(dom, input, "@Alpha");
+  const titlesAfter = [...doc.querySelectorAll(".tab-mention-option strong")].map((s) => s.textContent);
+  assert.ok(!titlesAfter.includes("Alpha News"), "the blocked alpha.test tab no longer appears after reopen");
+  assert.ok(titlesAfter.includes("Alpha Docs"), "a still-allowed sibling (docs.alpha.test) remains");
+});
+
+test("selectCandidate refuses to commit a candidate whose site was blocked after it was ranked (#410)", async () => {
+  // The narrow window the storage-change close path cannot cover: a candidate is
+  // ranked, its site becomes blocked, and Enter arrives BEFORE the async refresh
+  // closes the popup. selectCandidate must re-check readability at commit time.
+  const liveBlocked = new Set();
+  const isReadableUnblockedTab = createReadableUnblockedTab({
+    isReadableBrowserTab: isReadable,
+    siteKeyForUrl: (url) => {
+      try { return new URL(url).hostname; } catch { return ""; }
+    },
+    getBlockedSiteKeys: () => liveBlocked,
+    isPermissionsLoaded: () => true
+  });
+  const { input, dom, typeahead } = setupDom(openTabs, { isReadableBrowserTab: isReadableUnblockedTab });
+
+  await typeAndRefresh(dom, input, "@Alpha");
+  assert.equal(typeahead.isOpen(), true, "popup open with Alpha News ranked first");
+
+  // Block alpha.test after ranking, without firing the storage-change close path.
+  liveBlocked.add("alpha.test");
+  const enter = keydown(dom, "Enter");
+  input.dispatchEvent(enter);
+  assert.ok(!input.value.includes('@"Alpha News"'), "a now-blocked candidate is not inserted");
+  assert.equal(enter.defaultPrevented, false, "Enter falls through instead of committing a blocked candidate");
+  assert.equal(typeahead.isOpen(), false, "the popup closes rather than committing a blocked candidate");
 });

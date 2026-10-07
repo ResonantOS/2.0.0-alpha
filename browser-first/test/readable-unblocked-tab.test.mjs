@@ -7,7 +7,8 @@ import test from "node:test";
 
 import {
   blockedSiteKeysFromPermissions,
-  createReadableUnblockedTab
+  createReadableUnblockedTab,
+  wireBlockedSiteTypeahead
 } from "../resonantos-side-panel-extension/src/lib/readable-unblocked-tab.js";
 import { createSitePermissionStore } from "../resonantos-side-panel-extension/src/lib/site-permission-store.js";
 import { rankMentionCandidates } from "../resonantos-side-panel-extension/src/lib/tab-mention-typeahead.js";
@@ -141,4 +142,30 @@ test("a stored 'blocked' permission removes the site from typeahead AND resolver
   // the exact regression the reviewer named — the blocked site WOULD appear.
   const unfiltered = rankMentionCandidates(tabs, "", isHttp).map((candidate) => candidate.title);
   assert.deepEqual(unfiltered, ["Allowed Site", "Blocked Site"], "control: the raw predicate leaks the blocked site");
+});
+
+test("wireBlockedSiteTypeahead ignores unrelated changes and still closes when the refresh rejects (#410)", async () => {
+  const calls = [];
+  const typeahead = { close: () => calls.push("close") };
+  const listeners = [];
+  const onChanged = { addListener: (fn) => listeners.push(fn) };
+  const fire = (changes, area) => listeners.forEach((fn) => fn(changes, area));
+
+  // A refresh that REJECTS must not strand a stale popup: finally() still closes.
+  const refreshBlockedSiteKeys = async () => {
+    calls.push("refresh");
+    throw new Error("storage read failed");
+  };
+  wireBlockedSiteTypeahead({ onChanged, storageKey: "sitePerms", refreshBlockedSiteKeys, typeahead });
+
+  // Wrong key and wrong area are both ignored — no refresh, no close.
+  fire({ otherKey: { newValue: 1 } }, "local");
+  fire({ sitePerms: { newValue: {} } }, "sync");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(calls, [], "an unrelated change neither refreshes nor closes");
+
+  // The subscribed change refreshes, then closes even though the refresh threw.
+  fire({ sitePerms: { newValue: {} } }, "local");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(calls, ["refresh", "close"], "the popup is closed after the (rejected) refresh");
 });

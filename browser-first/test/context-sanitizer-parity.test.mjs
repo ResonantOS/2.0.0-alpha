@@ -82,20 +82,30 @@ function patternSet(slice) {
 // is the exact substring that must NOT survive sanitization. A large `max` is
 // passed so trailing truncation never masquerades as redaction. Every token
 // value is 12+ chars to clear the {12,} length floors in the patterns.
+//
+// Each value is a synthetic, non-functional credential SHAPE, needed so the
+// corpus exercises the real redaction patterns on realistic inputs (the
+// sk-or-v1- OpenRouter prefix, for one, cannot be reduced to an "obvious
+// placeholder" the way AKIA can). Provider-key shapes are assembled with
+// token() so the contiguous literal never appears in the scanned source and
+// repo:hygiene does not read the fixture as a committed credential; the full
+// value is still reconstructed at runtime and must be redacted. Same approach
+// as the token() helper in scripts/check-repo-hygiene.test.mjs.
+const token = (prefix, body) => `${prefix}${body}`;
 const SECRET = {
   privateKey: "-----BEGIN RSA PRIVATE KEY-----\nMIIBOAIBAAJAabc123def456ghi789\n-----END RSA PRIVATE KEY-----",
   jwt: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N",
-  openai: "sk-abcdefghijklmnop1234",
-  anthropic: "sk-ant-abcdefghijklmnop1234",
-  openrouter: "sk-or-v1-abcdefghijklmnop1234",
-  github: "ghp_abcdefghijklmnop1234",
-  githubPat: "github_pat_abcdefghijklmnop1234",
+  openai: token("sk-", "abcdefghijklmnop1234"),
+  anthropic: token("sk-ant-", "abcdefghijklmnop1234"),
+  openrouter: token("sk-or-v1-", "abcdefghijklmnop1234"),
+  github: token("ghp_", "abcdefghijklmnop1234"),
+  githubPat: token("github_pat_", "abcdefghijklmnop1234"),
   huggingface: "hf_abcdefghijklmnop1234",
   slack: "xoxb-abcdefghijklmnop1234",
-  xai: "xai-abcdefghijklmnop1234",
-  groq: "gsk_abcdefghijklmnop1234",
-  google: "AIzaAbCdEfGhIjKlMnOp1234",
-  aws: "AKIAABCDEFGHIJKLMNOP",
+  xai: token("xai-", "abcdefghijklmnop1234"),
+  groq: token("gsk_", "abcdefghijklmnop1234"),
+  google: token("AIza", "AbCdEfGhIjKlMnOp1234"),
+  aws: token("AKIA", "ABCDEFGHIJKLMNOP"),
   stripePk: "pk_live_abcdefghijkl1234",
   stripeRk: "rk_live_abcdefghijkl1234",
   labelledApiKey: "sixteencharsecretvalue",
@@ -150,11 +160,20 @@ test("chat-turn sanitizer redacts every secret shape the content-script sanitize
   );
 
   // The corpus must actually drive the content sanitizer, or the superset check
-  // below passes vacuously. Require the overwhelming majority to be redacted.
-  const caughtByContent = GOLDEN_VECTORS.filter((v) => !contentSanitize(v.input, 100000).includes(v.secret));
-  assert.ok(
-    caughtByContent.length >= GOLDEN_VECTORS.length - 1,
-    `golden corpus must exercise the content sanitizer: only ${caughtByContent.length}/${GOLDEN_VECTORS.length} secrets were redacted by content.js`
+  // below passes vacuously for any vector content doesn't touch. Today content
+  // redacts every vector, so the baseline is "all of them". If a shape is ever
+  // added that content legitimately does NOT strip (e.g. the `Authorization:
+  // Bearer` scheme word, left in place per #510), name it here with a reason so
+  // the slack is explicit and can never silently mask a real redaction gap.
+  const CONTENT_MAY_NOT_REDACT = new Set([]);
+  const unexpectedlyUnredacted = GOLDEN_VECTORS
+    .filter((v) => contentSanitize(v.input, 100000).includes(v.secret) && !CONTENT_MAY_NOT_REDACT.has(v.name))
+    .map((v) => v.name);
+  assert.deepEqual(
+    unexpectedlyUnredacted,
+    [],
+    `golden corpus must exercise the content sanitizer, but content.js did not redact: ${unexpectedlyUnredacted.join(", ")} ` +
+      `(add to CONTENT_MAY_NOT_REDACT with a reason only if leaving it unredacted is intended)`
   );
 
   // The contract: chat strips at least as much as content. For every secret the

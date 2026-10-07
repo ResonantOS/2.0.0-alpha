@@ -53,7 +53,7 @@ import { createSidePanelScheduledBrowserJobRunner } from "./lib/side-panel-sched
 import { createSidePanelUiController } from "./lib/side-panel-ui-controller.js";
 import { readPersonalizationSettings } from "./lib/personalization-settings.js";
 import { createSitePermissionStore } from "./lib/site-permission-store.js";
-import { blockedSiteKeysFromPermissions, createReadableUnblockedTab } from "./lib/readable-unblocked-tab.js";
+import { blockedSiteKeysFromPermissions, createReadableUnblockedTab, wireBlockedSiteTypeahead } from "./lib/readable-unblocked-tab.js";
 import { createTabContextController } from "./lib/tab-context-controller.js";
 import { createTabMentionTypeahead } from "./lib/tab-mention-typeahead.js";
 import { createSessionSummaryController } from "./lib/session-summary-controller.js";
@@ -383,7 +383,9 @@ const isReadableUnblockedTab = createReadableUnblockedTab({
   getBlockedSiteKeys: () => blockedSiteKeys,
   isPermissionsLoaded: () => sitePermissionsLoaded
 });
-void refreshBlockedSiteKeys();
+// A rejected first load leaves sitePermissionsLoaded false, so the predicate
+// keeps failing closed (lists nothing) rather than surface an unhandled rejection.
+void refreshBlockedSiteKeys().catch(() => undefined);
 
 // @tab mention typeahead (#252): typing `@` lists open, readable tabs; selecting
 // one inserts the deliberate @"…" mention form that the command router treats as
@@ -398,11 +400,13 @@ const mentionTypeahead = createTabMentionTypeahead({
 });
 // #410: when site permissions change, refresh the blocked set and close any open
 // typeahead popup so it cannot keep showing a now-blocked site; the next
-// keystroke reopens it filtered against the fresh set.
-chrome.storage?.onChanged?.addListener((changes, area) => {
-  if (area === "local" && changes[STORAGE_KEYS.sitePermissions]) {
-    void refreshBlockedSiteKeys().finally(() => mentionTypeahead.close());
-  }
+// keystroke reopens it filtered against the fresh set. (See wireBlockedSiteTypeahead
+// in readable-unblocked-tab.js for the tested seam.)
+wireBlockedSiteTypeahead({
+  onChanged: chrome.storage?.onChanged,
+  storageKey: STORAGE_KEYS.sitePermissions,
+  refreshBlockedSiteKeys,
+  typeahead: mentionTypeahead
 });
 const taskConsentStore = createTaskConsentStore({
   storage: chrome.storage?.local,

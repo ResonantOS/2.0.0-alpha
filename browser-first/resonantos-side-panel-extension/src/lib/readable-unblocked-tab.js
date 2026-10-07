@@ -41,3 +41,30 @@ export function blockedSiteKeysFromPermissions(permissions) {
       .map(([key]) => key)
   );
 }
+
+// #410: keep an open @tab typeahead honest across site-permission changes. On
+// each change to the permission store, refresh the blocked-site snapshot and
+// then close any open popup, so it cannot keep showing a site that was just
+// blocked; the next keystroke reopens the list filtered against the fresh set.
+// `onChanged` is chrome.storage.onChanged in production (a fake exposing
+// addListener in tests). Extracted from side-panel.js so this seam is testable
+// against a real typeahead rather than only asserted as source text.
+export function wireBlockedSiteTypeahead({
+  onChanged,
+  storageArea = "local",
+  storageKey,
+  refreshBlockedSiteKeys,
+  typeahead
+} = {}) {
+  onChanged?.addListener?.((changes, area) => {
+    if (area !== storageArea || !changes?.[storageKey]) return;
+    // Refresh first, then close: the close is what the user sees immediately,
+    // and the refreshed set governs the reopen. A failed read fails closed —
+    // the predicate keeps treating keyable sites as blocked — so we swallow the
+    // rejection (no unhandled rejection) but still close, so a failed read can't
+    // strand a stale popup open.
+    void Promise.resolve(refreshBlockedSiteKeys?.())
+      .catch(() => undefined)
+      .finally(() => typeahead?.close?.());
+  });
+}
