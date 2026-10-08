@@ -106,7 +106,7 @@ test('tickets are single use and expire at 60 seconds; host page has restricted 
   const ticket = await f.ticket();
   const page = await f.request(ticket);
   assert.equal(page.response.status, 200);
-  assert.match(page.response.headers.get('set-cookie'), /^ros_embed=[\w-]{43}; HttpOnly; SameSite=Strict; Path=\/$/);
+  assert.match(page.response.headers.get("set-cookie"), /^ros_embed=[\w-]{43}; HttpOnly; Secure; SameSite=None; Path=\/embed\/$/);
   const csp = page.response.headers.get('content-security-policy');
   assert.match(csp, new RegExp(`frame-ancestors chrome-extension://${extensionId}`));
   assert.match(csp, /default-src 'none'; script-src 'nonce-[\w-]+'; style-src 'unsafe-inline'; frame-src 'self'/);

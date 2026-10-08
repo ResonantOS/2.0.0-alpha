@@ -32,6 +32,12 @@ try {
       if (!frame || event.source !== frame.contentWindow || event.origin !== new URL(frame.src).origin) return;
       const allowed = ['augmentor-ready', 'augmentor-result', 'augmentor-status', 'augmentor-event', 'augmentor-settings', 'augmentor-hide', 'augmentor-link'];
       if (allowed.includes(event.data?.type)) window.__embedProofTypes.add(event.data.type);
+      // Diagnostic trail: protocol fields only (no text, URLs or identifiers).
+      window.__embedProofTrail ??= [];
+      const d = event.data ?? {};
+      if (d.type === 'augmentor-event') window.__embedProofTrail.push(`event:${d.event}${d.data?.reason ? `:${d.data.reason}` : ''}`);
+      if (d.type === 'augmentor-result') window.__embedProofTrail.push(`result:ok=${d.ok}${d.code ? `:code=${d.code}` : ''}${d.result ? `:sent=${d.result.sent}` : ''}`);
+      if (d.type === 'augmentor-status') window.__embedProofTrail.push(`status:online=${d.online}:busy=${d.busy}`);
       if (window.__embedProofPromptSent && event.data?.type === 'augmentor-event' && event.data.event === 'turn.finished') window.__embedProofFinished = true;
     });
   });
@@ -70,9 +76,16 @@ try {
   // Playwright errors may contain URLs/tickets; report only the fixed stage.
   summary.error = `Embed live proof failed at ${summary.stage}`;
   process.exitCode = 1;
+  if (page && !page.isClosed()) {
+    await page.screenshot({ path: path.join(out, 'embed-panel-fail.png') }).catch(() => {});
+    const inner = page.frames().find(frame => frame.parentFrame()?.parentFrame() === page.mainFrame());
+    // The panel's visible text is model and UI output, not a credential.
+    summary.panelTextTail = inner ? (await inner.locator('body').innerText().catch(() => '')).slice(-1200) : 'inner frame not found';
+  }
 } finally {
   if (page && !page.isClosed()) {
     summary.messageTypes = await page.evaluate(() => [...(window.__embedProofTypes ?? [])]).catch(() => []);
+    summary.trail = await page.evaluate(() => (window.__embedProofTrail ?? []).slice(-40)).catch(() => []);
   }
   summary.timingsMs.total = Date.now() - started;
   try { await context?.close(); }

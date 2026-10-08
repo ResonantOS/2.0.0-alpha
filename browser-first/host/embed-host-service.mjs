@@ -105,7 +105,9 @@ export function createEmbedHostService({ env = process.env, now = Date.now } = {
     const nonce = opaqueId();
     response.writeHead(200, {
       'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer',
-      'Set-Cookie': `ros_embed=${id}; HttpOnly; SameSite=Strict; Path=/`,
+      // WebSocket handshakes from a frame under a chrome-extension:// top level
+      // omit SameSite=Strict cookies (observed live); Origin checks still apply.
+      'Set-Cookie': `ros_embed=${id}; HttpOnly; Secure; SameSite=None; Path=/embed/`,
       'Content-Security-Policy': `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; frame-src 'self'; frame-ancestors ${extensionOrigin}`,
     });
     response.end(`<!doctype html><html><head><meta charset="utf-8"><title>Augmentor</title><style>html,body,iframe{width:100%;height:100%;margin:0;border:0;display:block;overflow:hidden}</style></head><body><iframe title="Augmentor" allow="clipboard-write"></iframe><script nonce="${nonce}">
@@ -156,6 +158,12 @@ iframe.src = ${JSON.stringify(prefix)};
     outgoing.end(request.method === 'POST' ? Buffer.concat(chunks) : undefined);
   }
   function handleUpgrade(request, socket, head) {
+    if (env.RESONANTOS_EMBED_DEBUG === '1') {
+      // Spike diagnostics: booleans and fetch metadata only, never cookie or token values.
+      const cookieNames = String(request.headers.cookie ?? '').split(';').map(p => p.trim().split('=')[0]).filter(Boolean);
+      const sid = String(request.headers.cookie ?? '').split(';').map(p => p.trim()).find(p => p.startsWith('ros_embed='));
+      process.stderr.write(`[embed-debug] upgrade path=${String(request.url).split('?')[0]} hostOk=${request.headers.host === new URL(publicOrigin ?? 'http://x').host} origin=${request.headers.origin} sfs=${request.headers['sec-fetch-site']} cookieNames=${cookieNames.join(',')} sessionKnown=${Boolean(sid && sessions.has(sid.slice(10)))}\n`);
+    }
     if (!String(request.url).startsWith(prefix) || !authorized(request, true) || request.method !== 'GET' || request.headers.upgrade?.toLowerCase() !== 'websocket') {
       socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
       return;
@@ -167,7 +175,7 @@ iframe.src = ${JSON.stringify(prefix)};
     socket.on('error', close);
     socket.once('close', close);
     outgoing.on('error', close);
-    outgoing.on('response', response => { response.resume(); close(); });
+    outgoing.on('response', response => { if (env.RESONANTOS_EMBED_DEBUG === '1') process.stderr.write(`[embed-debug] upstream refused upgrade status=${response.statusCode}\n`); response.resume(); close(); });
     outgoing.on('upgrade', (response, upstreamSocket, upstreamHead) => {
       peer = track(upstreamSocket);
       if (closed || socket.destroyed) { close(); return; }
