@@ -1,7 +1,8 @@
 import { resolveBridgeConfig, initCapabilityTokens, createBridgeClient } from './lib/bridge-client.js';
 
 export async function selectAgentViewMode(search = '', storage = globalThis.chrome?.storage?.local) {
-  if (new URLSearchParams(search).get('agentView') === 'embed') return 'embed';
+  const queryMode = new URLSearchParams(search).get('agentView');
+  if (queryMode === 'embed' || queryMode === 'normal') return queryMode;
   try {
     const values = await storage?.get('resonantos.agentView');
     if (values?.['resonantos.agentView'] === 'embed') return 'embed';

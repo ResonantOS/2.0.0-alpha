@@ -2,12 +2,18 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { selectAgentViewMode, bootSidePanel } from '../resonantos-side-panel-extension/src/side-panel-entry.js';
 
-test('embed mode is selected by query OR local storage; default remains normal', async () => {
+test('explicit query overrides local storage; otherwise storage decides and default remains normal', async () => {
   const storage = value => ({ get: async () => ({ 'resonantos.agentView': value }) });
   assert.equal(await selectAgentViewMode('?agentView=embed', storage('normal')), 'embed');
   assert.equal(await selectAgentViewMode('', storage('embed')), 'embed');
-  assert.equal(await selectAgentViewMode('?agentView=normal', storage('embed')), 'embed');
+  assert.equal(await selectAgentViewMode('?agentView=normal', storage('embed')), 'normal');
   assert.equal(await selectAgentViewMode('', storage('normal')), 'normal');
+  assert.equal(await selectAgentViewMode('?agentView=unknown', storage('embed')), 'embed');
+  let storageReads = 0;
+  const unavailable = { get() { storageReads++; throw Error('unavailable'); } };
+  assert.equal(await selectAgentViewMode('?agentView=normal', unavailable), 'normal');
+  assert.equal(await selectAgentViewMode('?agentView=embed', unavailable), 'embed');
+  assert.equal(storageReads, 0);
   assert.equal(await selectAgentViewMode('', { get: async () => { throw Error('unavailable'); } }), 'normal');
 });
 
@@ -16,7 +22,8 @@ test('bootstrap only loads the selected implementation', async () => {
   const options = { storage: null, loadNormal: async () => calls.push('normal'), mountEmbed: async () => calls.push('embed') };
   await bootSidePanel({ ...options, search: '' });
   await bootSidePanel({ ...options, search: '?agentView=embed' });
-  assert.deepEqual(calls, ['normal', 'embed']);
+  await bootSidePanel({ ...options, search: '?agentView=normal', storage: { get: async () => ({ 'resonantos.agentView': 'embed' }) } });
+  assert.deepEqual(calls, ['normal', 'embed', 'normal']);
 });
 
 test('mounted embed validates relay source/origin, bounds history and sends to bridge origin', async t => {

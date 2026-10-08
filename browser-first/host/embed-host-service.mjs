@@ -1,9 +1,11 @@
 import http from 'node:http';
-import { readFileSync } from 'node:fs';
+import { lstatSync, readFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 
 const DEFAULT_EXTENSION_ID = 'cdpdmmalhmokbfcfgogoepnjplaakgnl';
 const BODY_LIMIT = 1024 * 1024;
+const SESSION_TTL = 12 * 60 * 60 * 1000;
+const SESSION_LIMIT = 64;
 const opaqueId = () => randomBytes(32).toString('base64url');
 
 // Configuration contains only the credential file location, never its contents.
@@ -28,9 +30,21 @@ function cleanHeaders(headers) {
   return Object.fromEntries(Object.entries(headers).filter(([key]) => !blocked.has(key.toLowerCase())));
 }
 
+const disabledService = () => ({ enabled: false, embedRoutes: [], matches: () => false, setPublicOrigin() {}, close() {} });
+
 export function createEmbedHostService({ env = process.env, now = Date.now } = {}) {
   const config = readEmbedHostConfig(env);
-  if (!config.enabled) return { enabled: false, embedRoutes: [], matches: () => false, setPublicOrigin() {}, close() {} };
+  if (!config.enabled) return disabledService();
+  try {
+    const stat = lstatSync(config.tokenFile);
+    if (!stat.isFile() || typeof process.getuid !== 'function' ||
+        stat.uid !== process.getuid() || (stat.mode & 0o077) !== 0) {
+      throw new Error('Unsafe embed credential file');
+    }
+  } catch {
+    process.stderr.write('Embed service disabled: credential file must be a private regular file owned by the current user.\n');
+    return disabledService();
+  }
   let token;
   try { token = readFileSync(config.tokenFile, 'utf8').trim(); }
   catch { throw new Error('Invalid embed credential'); }
@@ -39,7 +53,7 @@ export function createEmbedHostService({ env = process.env, now = Date.now } = {
   const extensionOrigin = `chrome-extension://${config.extensionId}`;
   const prefix = `/embed/${config.profile}/`;
   const tickets = new Map();
-  const sessions = new Set();
+  const sessions = new Map();
   const active = new Set();
   let publicOrigin;
   let closed = false;
@@ -48,16 +62,44 @@ export function createEmbedHostService({ env = process.env, now = Date.now } = {
     resource.once('close', () => active.delete(resource));
     return resource;
   };
-  const matches = url => !closed && (String(url).split('?')[0] === '/embed-host/' || String(url).startsWith(prefix));
-  function reject(response, status = 403) {
-    response.writeHead(status, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' });
+  function parseTarget(url) {
+    const rawPath = String(url).split('?')[0];
+    try {
+      const parsed = new URL(url, 'http://embed.invalid');
+      const pathname = decodeURIComponent(parsed.pathname);
+      const safe = rawPath.startsWith('/') && !rawPath.startsWith('//') &&
+        !rawPath.includes('\\') && !/(?:^|\/)\.{1,2}(?:\/|$)|%2e|%2f|%5c/i.test(rawPath) &&
+        !String(url).includes('#');
+      return { rawPath, pathname, parsed, safe };
+    } catch { return { rawPath, safe: false }; }
+  }
+  const matches = url => {
+    const target = parseTarget(url);
+    // The bootstrap route remains capability-gated by the bridge. Everything
+    // else in the embed namespace must reach our validation, including paths
+    // whose raw spelling or decoded profile prefix is invalid.
+    if (target.rawPath === '/embed/session') return false;
+    const inNamespace = pathname => /^\/embed(?:[\/\\]|$)/.test(pathname ?? '');
+    return !closed && (target.rawPath === '/embed-host/' ||
+      inNamespace(target.rawPath) || inNamespace(target.pathname));
+  };
+  function reject(request, response, status = 403) {
+    response.writeHead(status, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store', 'Connection': 'close' });
+    // Drain unread bytes while Node flushes the refusal and closes the connection.
+    request.resume();
     response.end(status === 413 ? 'Embed request too large' : 'Embed request unavailable');
   }
+  function pruneSessions() {
+    const time = now();
+    for (const [id, expiry] of sessions) if (expiry <= time) sessions.delete(id);
+  }
   function authorized(request, upgrade = false) {
+    pruneSessions();
     if (!publicOrigin || request.headers.host !== new URL(publicOrigin).host) return false;
     const origin = request.headers.origin;
     if ((upgrade || origin !== undefined) && origin !== publicOrigin) return false;
-    if (['cross-site', 'same-site'].includes(request.headers['sec-fetch-site'])) return false;
+    const fetchSite = request.headers['sec-fetch-site'];
+    if ((!upgrade || fetchSite !== undefined) && fetchSite !== 'same-origin') return false;
     const cookies = String(request.headers.cookie ?? '').split(';').map(part => part.trim()).filter(part => part.startsWith('ros_embed='));
     return cookies.length === 1 && sessions.has(cookies[0].slice('ros_embed='.length));
   }
@@ -93,15 +135,18 @@ export function createEmbedHostService({ env = process.env, now = Date.now } = {
       result['content-security-policy'] = Array.isArray(result['content-security-policy'])
         ? result['content-security-policy'].map(rewrite) : rewrite(result['content-security-policy']);
     }
+    if (!result['content-security-policy']) result['content-security-policy'] = `frame-ancestors ${publicOrigin} ${extensionOrigin}`;
     if (upgrade) { result.connection = 'Upgrade'; result.upgrade = 'websocket'; }
     return result;
   }
-  function hostPage(response, ticket) {
+  function hostPage(request, response, ticket) {
     const expiry = tickets.get(ticket);
     tickets.delete(ticket);
-    if (expiry === undefined || expiry <= now() || !publicOrigin) { reject(response); return; }
+    if (expiry === undefined || expiry <= now() || !publicOrigin) { reject(request, response); return; }
     const id = opaqueId();
-    sessions.add(id);
+    pruneSessions();
+    sessions.set(id, now() + SESSION_TTL);
+    if (sessions.size > SESSION_LIMIT) sessions.delete(sessions.keys().next().value);
     const nonce = opaqueId();
     response.writeHead(200, {
       'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer',
@@ -125,27 +170,30 @@ iframe.src = ${JSON.stringify(prefix)};
 </script></body></html>`);
   }
   async function handleHttp(request, response) {
-    if (String(request.url).split('?')[0] === '/embed-host/') {
-      if (request.method !== 'GET' || request.headers.host !== new URL(publicOrigin).host) { reject(response); return; }
-      hostPage(response, new URL(request.url, publicOrigin).searchParams.get('ticket'));
+    if (!publicOrigin) { reject(request, response); return; }
+    const target = parseTarget(request.url);
+    if (target.rawPath === '/embed-host/') {
+      if (request.method !== 'GET' || request.headers.host !== new URL(publicOrigin).host) { reject(request, response); return; }
+      hostPage(request, response, new URL(request.url, publicOrigin).searchParams.get('ticket'));
       return;
     }
-    if (!authorized(request)) { request.resume(); reject(response); return; }
-    if (!['GET', 'HEAD', 'POST'].includes(request.method)) { request.resume(); reject(response, 405); return; }
+    if (!target.safe || !target.pathname.startsWith(prefix)) { reject(request, response); return; }
+    if (!authorized(request)) { reject(request, response); return; }
+    if (!['GET', 'HEAD', 'POST'].includes(request.method)) { reject(request, response, 405); return; }
     const chunks = [];
     let size = 0;
     if (request.method === 'POST') {
       // Buffer at most 1 MiB before opening any upstream connection.
-      if (Number(request.headers['content-length']) > BODY_LIMIT) { request.resume(); reject(response, 413); return; }
+      if (Number(request.headers['content-length']) > BODY_LIMIT) { reject(request, response, 413); return; }
       try {
-        for await (const chunk of request) {
+        for await (const chunk of request.iterator({ destroyOnReturn: false })) {
           size += chunk.length;
-          if (size > BODY_LIMIT) { reject(response, 413); return; }
+          if (size > BODY_LIMIT) { reject(request, response, 413); return; }
           chunks.push(chunk);
         }
-      } catch { if (!response.destroyed) reject(response, 400); return; }
+      } catch { if (!response.destroyed) reject(request, response, 400); return; }
     }
-    if (closed) { reject(response, 503); return; }
+    if (closed) { reject(request, response, 503); return; }
     const headers = requestHeaders(request);
     if (request.method === 'POST') headers['content-length'] = size;
     const outgoing = track(http.request({ hostname: '127.0.0.1', port: upstream.port, path: request.url, method: request.method, headers }, incoming => {
@@ -153,18 +201,20 @@ iframe.src = ${JSON.stringify(prefix)};
       incoming.on('error', () => response.destroy());
       incoming.pipe(response);
     }));
-    outgoing.on('error', () => { if (!response.headersSent && !response.destroyed) reject(response, 502); else response.destroy(); });
+    outgoing.on('error', () => { if (!response.headersSent && !response.destroyed) reject(request, response, 502); else response.destroy(); });
     response.once('close', () => outgoing.destroy());
     outgoing.end(request.method === 'POST' ? Buffer.concat(chunks) : undefined);
   }
   function handleUpgrade(request, socket, head) {
+    pruneSessions();
     if (env.RESONANTOS_EMBED_DEBUG === '1') {
       // Spike diagnostics: booleans and fetch metadata only, never cookie or token values.
       const cookieNames = String(request.headers.cookie ?? '').split(';').map(p => p.trim().split('=')[0]).filter(Boolean);
       const sid = String(request.headers.cookie ?? '').split(';').map(p => p.trim()).find(p => p.startsWith('ros_embed='));
       process.stderr.write(`[embed-debug] upgrade path=${String(request.url).split('?')[0]} hostOk=${request.headers.host === new URL(publicOrigin ?? 'http://x').host} origin=${request.headers.origin} sfs=${request.headers['sec-fetch-site']} cookieNames=${cookieNames.join(',')} sessionKnown=${Boolean(sid && sessions.has(sid.slice(10)))}\n`);
     }
-    if (!String(request.url).startsWith(prefix) || !authorized(request, true) || request.method !== 'GET' || request.headers.upgrade?.toLowerCase() !== 'websocket') {
+    const target = parseTarget(request.url);
+    if (!target.safe || !target.pathname.startsWith(prefix) || !authorized(request, true) || request.method !== 'GET' || request.headers.upgrade?.toLowerCase() !== 'websocket') {
       socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
       return;
     }

@@ -155,7 +155,7 @@ async function withBridgeRoutes(callback) {
     const { createHarnessHostService } = await import('../host/harness-host-service.mjs');
     const harness = await createHarnessHostService({ userRoot: root, stateRoot: path.join(root, 'state'), providerHost: provider, env: {} });
     const embedTokenFile = path.join(root, 'embed-token');
-    await writeFile(embedTokenFile, 'audit-fixture-token');
+    await writeFile(embedTokenFile, 'audit-fixture-token', { mode: 0o600 });
     const embed = createEmbedHostService({ env: {
       RESONANTOS_EMBED_POC: '1', RESONANTOS_EMBED_UPSTREAM_URL: 'http://127.0.0.1:18872',
       RESONANTOS_EMBED_PROFILE: 'poc', RESONANTOS_EMBED_TOKEN_FILE: embedTokenFile,

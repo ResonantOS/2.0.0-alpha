@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import net from 'node:net';
 import vm from 'node:vm';
 import { once } from 'node:events';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, rm, chmod, symlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createEmbedHostService, readEmbedHostConfig } from '../host/embed-host-service.mjs';
@@ -12,17 +13,17 @@ import { startBridgeServer, startBridgeServerWithFallback } from '../host/bridge
 const extensionId = 'cdpdmmalhmokbfcfgogoepnjplaakgnl';
 const token = 'test-embed-private-bearer';
 const auth = { 'X-ResonantOS-Bridge-Token': 'bridge-test', 'X-ResonantOS-Bridge-Capability-Token': 'cap-test' };
-async function fixture(t, { fallback = false } = {}) {
+async function fixture(t, { fallback = false, csp = "default-src 'self'; frame-ancestors http://old; script-src 'self'; connect-src 'self'" } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ros-embed-test-'));
   const tokenFile = path.join(root, 'token');
-  await writeFile(tokenFile, `  ${token}\n`);
+  await writeFile(tokenFile, `  ${token}\n`, { mode: 0o600 });
   const seen = [];
   const sockets = new Set();
   const upstream = http.createServer(async (req, res) => {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     seen.push({ url: req.url, headers: req.headers, body: Buffer.concat(chunks).toString() });
-    res.writeHead(200, { 'Content-Security-Policy': "default-src 'self'; frame-ancestors http://old; script-src 'self'; connect-src 'self'", 'Set-Cookie': 'upstream=private', 'Content-Type': 'text/plain' });
+    res.writeHead(200, { ...(csp === null ? {} : { 'Content-Security-Policy': csp }), 'Set-Cookie': 'upstream=private', 'Content-Type': 'text/plain' });
     res.end('upstream reply');
   });
   upstream.on('upgrade', (req, socket, head) => {
@@ -145,19 +146,19 @@ test('proxy preserves path/query/body, injects startup bearer, removes client cr
   assert.equal(f.seen[0].headers['x-resonantos-bridge-token'], undefined);
   assert.equal(result.response.headers.get('set-cookie'), null);
   assert.equal(result.response.headers.get('content-security-policy'), `default-src 'self'; frame-ancestors ${f.origin} chrome-extension://${extensionId}; script-src 'self'; connect-src 'self'`);
-  assert.equal((await f.request('/embed/poc/', { method: 'HEAD', headers: { cookie } })).body, '');
+  assert.equal((await f.request('/embed/poc/', { method: 'HEAD', headers: { cookie, 'sec-fetch-site': 'same-origin' } })).body, '');
 });
 
 test('POST body over 1 MiB is rejected before upstream contact', async t => {
   const f = await fixture(t);
   const { cookie } = await f.session();
-  assert.equal((await f.request('/embed/poc/preferences', { method: 'POST', headers: { cookie, origin: f.origin }, body: 'a'.repeat(1024 * 1024 + 1) })).response.status, 413);
+  assert.equal((await f.request('/embed/poc/preferences', { method: 'POST', headers: { cookie, origin: f.origin, 'sec-fetch-site': 'same-origin' }, body: 'a'.repeat(1024 * 1024 + 1) })).response.status, 413);
   assert.equal(f.seen.length, 0);
 });
 
-function upgrade(origin, headers) {
+function upgrade(origin, headers, path = "/embed/poc/native?q=%2F") {
   return new Promise((resolve, reject) => {
-    const req = http.request(`${origin}/embed/poc/native?q=%2F`, { headers: { connection: 'Upgrade', upgrade: 'websocket', ...headers } });
+    const req = http.request(origin, { path, headers: { connection: 'Upgrade', upgrade: 'websocket', ...headers } });
     req.on('upgrade', (res, socket, head) => resolve({ res, socket, head }));
     req.on('response', res => { res.resume(); resolve({ res }); });
     req.on('error', reject);
@@ -200,7 +201,7 @@ test('chunked POST over 1 MiB returns 413 without opening upstream', async t => 
   const f = await fixture(t);
   const { cookie } = await f.session();
   const status = await new Promise((resolve, reject) => {
-    const req = http.request(`${f.origin}/embed/poc/preferences`, { method: 'POST', headers: { cookie, origin: f.origin } }, res => { res.resume(); resolve(res.statusCode); });
+    const req = http.request(`${f.origin}/embed/poc/preferences`, { method: 'POST', headers: { cookie, origin: f.origin, 'sec-fetch-site': 'same-origin' } }, res => { res.resume(); resolve(res.statusCode); });
     req.on('error', reject);
     req.write('a'.repeat(1024 * 1024));
     req.end('b');
@@ -239,4 +240,234 @@ test('host relay allows only the iframe origin/source and four parent command ty
     { source: parent, origin: `chrome-extension://${extensionId}`, data: null },
   ]) listener(event);
   assert.equal(sentToFrame.length, 4);
+});
+
+
+function rawRequest(origin, path, headers = {}, method = 'GET') {
+  return new Promise((resolve, reject) => {
+    const req = http.request(origin, { path, method, headers }, res => {
+      res.resume();
+      res.on('end', () => resolve(res));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+test('unsafe raw proxy paths are rejected for HTTP and upgrades before upstream contact', async t => {
+  const f = await fixture(t);
+  const { cookie } = await f.session();
+  const headers = { cookie, origin: f.origin, 'sec-fetch-site': 'same-origin' };
+  for (const path of [
+    '/embed/poc/../private', '/embed/poc/./native', '/embed/poc/.', '/embed/poc/..',
+    '/embed/poc/a/../../private', '/embed/poc/\\private',
+    '/embed/poc/%2e%2e/private', '/embed/poc/%2E/native', '/embed/poc/a%2fb',
+    '/embed/poc/a%2Fb', '/embed/poc/a%5cb', '/embed/poc/a%5Cb',
+    '/embed/poc/%ZZ', '/embed/poc%2fnative',
+    '/embed/poc\\..\\private', '/embed/other/', '/embed/poc',
+  ]) {
+    assert.equal((await rawRequest(f.origin, path, headers)).statusCode, 403, path);
+    const result = await upgrade(f.origin, headers, path);
+    result.socket?.destroy();
+    assert.equal(result.res.statusCode, 403, path);
+    assert.equal(f.seen.length, 0, path);
+  }
+});
+
+test('HTTP handler rejects paths outside its decoded profile namespace', async t => {
+  const f = await fixture(t);
+  const { cookie } = await f.session();
+  for (const url of ['/private', '/embed/other/', '/embed/poc', '//evil.test/embed/poc/']) {
+    let status;
+    await f.service.handleHttp({ url, method: 'GET', headers: { host: new URL(f.origin).host, cookie, 'sec-fetch-site': 'same-origin' }, resume() {}, destroy() {} }, {
+      writeHead(value) { status = value; }, end() {}, once() {},
+    });
+    assert.equal(status, 403, url);
+    assert.equal(f.seen.length, 0);
+  }
+});
+
+
+test('HTTP fetch metadata is an exact same-origin allowlist', async t => {
+  const f = await fixture(t);
+  const { cookie } = await f.session();
+  for (const value of [undefined, 'none', 'same-site', 'cross-site', 'Same-Origin', '']) {
+    const headers = { cookie, origin: f.origin };
+    if (value !== undefined) headers['sec-fetch-site'] = value;
+    assert.equal((await rawRequest(f.origin, '/embed/poc/', headers)).statusCode, 403, String(value));
+  }
+  assert.equal(f.seen.length, 0);
+  assert.equal((await rawRequest(f.origin, '/embed/poc/', { cookie, 'sec-fetch-site': 'same-origin' })).statusCode, 200);
+});
+
+test('WebSocket fetch metadata may be absent but otherwise must be same-origin', async t => {
+  const f = await fixture(t);
+  const { cookie } = await f.session();
+  for (const value of ['none', 'same-site', 'cross-site', 'Same-Origin', '']) {
+    const result = await upgrade(f.origin, { cookie, origin: f.origin, 'sec-fetch-site': value });
+    result.socket?.destroy();
+    assert.equal(result.res.statusCode, 403, value);
+  }
+  assert.equal(f.seen.length, 0);
+  for (const metadata of [{}, { 'sec-fetch-site': 'same-origin' }]) {
+    const result = await upgrade(f.origin, { cookie, origin: f.origin, ...metadata });
+    result.socket?.destroy();
+    assert.equal(result.res.statusCode, 101);
+  }
+});
+
+test('sessions expire at 12 hours and checks prune expired sessions', async t => {
+  const f = await fixture(t);
+  const first = await f.session();
+  const second = await f.session();
+  const request = cookie => rawRequest(f.origin, '/embed/poc/', { cookie, 'sec-fetch-site': 'same-origin' });
+  f.advance(12 * 60 * 60 * 1000 - 1);
+  assert.equal((await request(first.cookie)).statusCode, 200);
+  f.advance(1);
+  assert.equal((await request(first.cookie)).statusCode, 403);
+  f.advance(-1); // An expired entry must not revive if the clock moves backwards.
+  assert.equal((await request(second.cookie)).statusCode, 403);
+  const result = await upgrade(f.origin, { cookie: first.cookie, origin: f.origin });
+  result.socket?.destroy();
+  assert.equal(result.res.statusCode, 403);
+  assert.equal(f.seen.length, 1);
+});
+
+test('creating a session prunes expired entries and retains at most 64 live sessions', async t => {
+  const f = await fixture(t);
+  const expired = await f.session();
+  f.advance(12 * 60 * 60 * 1000);
+  const first = await f.session();
+  f.advance(-1);
+  assert.equal((await rawRequest(f.origin, '/embed/poc/', { cookie: expired.cookie, 'sec-fetch-site': 'same-origin' })).statusCode, 403);
+  const cookies = [first.cookie];
+  for (let i = 1; i < 64; i++) cookies.push((await f.session()).cookie);
+  assert.equal((await rawRequest(f.origin, '/embed/poc/', { cookie: cookies[0], 'sec-fetch-site': 'same-origin' })).statusCode, 200);
+  cookies.push((await f.session()).cookie);
+  assert.equal((await rawRequest(f.origin, '/embed/poc/', { cookie: cookies.shift(), 'sec-fetch-site': 'same-origin' })).statusCode, 403);
+  for (const cookie of cookies) {
+    assert.equal((await rawRequest(f.origin, '/embed/poc/', { cookie, 'sec-fetch-site': 'same-origin' })).statusCode, 200);
+  }
+});
+
+
+test('proxy supplies frame-ancestors when upstream has no CSP', async t => {
+  const f = await fixture(t, { csp: null });
+  const { cookie } = await f.session();
+  const res = await rawRequest(f.origin, '/embed/poc/', { cookie, 'sec-fetch-site': 'same-origin' });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.headers['content-security-policy'], `frame-ancestors ${f.origin} chrome-extension://${extensionId}`);
+});
+
+test('HTTP and upgrade requests before public origin initialization are refused safely with debug enabled', async t => {
+  const f = await fixture(t);
+  const service = createEmbedHostService({ env: { ...f.env, RESONANTOS_EMBED_DEBUG: '1' } });
+  t.after(() => service.close());
+  const logs = [];
+  t.mock.method(process.stderr, 'write', line => { logs.push(line); return true; });
+  for (const url of ['/embed-host/?ticket=unused', '/embed/poc/']) {
+    let status;
+    const req = { url, method: 'GET', headers: { host: '127.0.0.1', 'sec-fetch-site': 'same-origin', upgrade: 'websocket' }, resume() {}, destroy() {} };
+    await service.handleHttp(req, { writeHead(value) { status = value; }, end() {}, once() {} });
+    assert.equal(status, 403);
+    let handshake;
+    service.handleUpgrade(req, { end(value) { handshake = value; } }, Buffer.alloc(0));
+    assert.match(handshake, /^HTTP\/1.1 403 Forbidden/);
+  }
+  assert.equal(logs.length, 2);
+  assert.ok(logs.every(line => line.startsWith('[embed-debug] upgrade ') && !line.includes(token)));
+  assert.equal(f.seen.length, 0);
+});
+
+
+async function exchangeUntilClosed(origin, payload) {
+  const url = new URL(origin);
+  const socket = net.connect(Number(url.port), url.hostname);
+  let reply = '';
+  const timer = setTimeout(() => socket.destroy(new Error('refused connection stayed open')), 2000);
+  try {
+    socket.on('data', chunk => { reply += chunk.toString(); });
+    const closed = once(socket, 'close');
+    // Keep the write side open to test server-initiated closure.
+    socket.write(payload);
+    await closed;
+    return reply;
+  } finally { clearTimeout(timer); socket.destroy(); }
+}
+
+test('refused and oversized requests close keep-alive connections with unread bodies', async t => {
+  const f = await fixture(t);
+  const { cookie } = await f.session();
+  const host = new URL(f.origin).host;
+  const valid = `Cookie: ${cookie}\r\nSec-Fetch-Site: same-origin\r\n`;
+  const cases = [
+    { path: '/embed/poc/', headers: '', body: 'Content-Length: 100\r\n\r\nx', status: 403 },
+    { path: '/embed-host/?ticket=bad', headers: valid, body: 'Content-Length: 100\r\n\r\nx', status: 403 },
+    { path: '/embed/poc/../private', headers: valid, body: 'Content-Length: 100\r\n\r\nx', status: 403 },
+    { path: '/embed/poc/', method: 'PUT', headers: valid, body: 'Content-Length: 100\r\n\r\nx', status: 405 },
+    { path: '/embed/poc/', headers: valid, body: `Content-Length: ${1024 * 1024 + 1}\r\n\r\nx`, status: 413 },
+    { path: '/embed/poc/', headers: valid, body: `Transfer-Encoding: chunked\r\n\r\n100001\r\n${'x'.repeat(1024 * 1024 + 1)}\r\n`, status: 413 },
+  ];
+  for (const entry of cases) {
+    const reply = await exchangeUntilClosed(f.origin,
+      `${entry.method ?? 'POST'} ${entry.path} HTTP/1.1\r\nHost: ${host}\r\nConnection: keep-alive\r\n${entry.headers}${entry.body}`);
+    assert.match(reply, new RegExp(`^HTTP/1.1 ${entry.status} `));
+    assert.match(reply, /\r\nconnection: close\r\n/i);
+  }
+  assert.equal(f.seen.length, 0);
+});
+
+test('refusal prevents a pipelined request from reaching upstream', async t => {
+  const f = await fixture(t);
+  const { cookie } = await f.session();
+  const host = new URL(f.origin).host;
+  const reply = await exchangeUntilClosed(f.origin,
+    `POST /embed/poc/ HTTP/1.1\r\nHost: ${host}\r\nConnection: keep-alive\r\nContent-Length: 4\r\n\r\nbody` +
+    `GET /embed/poc/ HTTP/1.1\r\nHost: ${host}\r\nCookie: ${cookie}\r\nSec-Fetch-Site: same-origin\r\nConnection: close\r\n\r\n`);
+  assert.match(reply, /^HTTP\/1.1 403 /);
+  assert.match(reply, /\r\nconnection: close\r\n/i);
+  assert.equal((reply.match(/HTTP\/1.1/g) ?? []).length, 1);
+  assert.equal(f.seen.length, 0);
+});
+
+
+test('token file must be regular, private, and owned by the current uid; failures disable with one value-free line', async t => {
+  const f = await fixture(t);
+  const tokenFile = f.env.RESONANTOS_EMBED_TOKEN_FILE;
+  const link = `${tokenFile}-symlink`;
+  await symlink(tokenFile, link);
+  const logs = [];
+  t.mock.method(process.stderr, 'write', line => { logs.push(line); return true; });
+  const checkDisabled = file => {
+    const start = logs.length;
+    let service;
+    assert.doesNotThrow(() => { service = createEmbedHostService({ env: { ...f.env, RESONANTOS_EMBED_TOKEN_FILE: file } }); });
+    t.after(() => service?.close());
+    assert.equal(service.enabled, false);
+    assert.deepEqual(service.embedRoutes, []);
+    assert.equal(service.matches('/embed/poc/'), false);
+    assert.equal(logs.length, start + 1);
+    assert.match(logs[start], /^[^\r\n]+\n$/);
+    assert.ok(!logs[start].includes(file));
+    assert.ok(!logs[start].includes(token));
+  };
+  for (const mode of [0o640, 0o604, 0o620, 0o602, 0o610, 0o601]) {
+    await chmod(tokenFile, mode);
+    checkDisabled(tokenFile);
+  }
+  await chmod(tokenFile, 0o600);
+  checkDisabled(link);
+  checkDisabled(path.dirname(tokenFile));
+  checkDisabled(`${tokenFile}-missing`);
+  const uid = process.getuid();
+  const uidMock = t.mock.method(process, 'getuid', () => uid + 1);
+  checkDisabled(tokenFile);
+  uidMock.mock.restore();
+  for (const mode of [0o600, 0o400, 0o700]) {
+    await chmod(tokenFile, mode);
+    const service = createEmbedHostService({ env: f.env });
+    assert.equal(service.enabled, true);
+    service.close();
+  }
+  assert.equal(logs.length, 10);
 });
