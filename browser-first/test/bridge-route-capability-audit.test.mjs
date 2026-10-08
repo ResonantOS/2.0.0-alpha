@@ -1,3 +1,5 @@
+import { createEmbedHostService } from '../host/embed-host-service.mjs';
+import { writeFile } from 'node:fs/promises';
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
@@ -152,7 +154,14 @@ async function withBridgeRoutes(callback) {
     // merely named in a list.
     const { createHarnessHostService } = await import('../host/harness-host-service.mjs');
     const harness = await createHarnessHostService({ userRoot: root, stateRoot: path.join(root, 'state'), providerHost: provider, env: {} });
+    const embedTokenFile = path.join(root, 'embed-token');
+    await writeFile(embedTokenFile, 'audit-fixture-token');
+    const embed = createEmbedHostService({ env: {
+      RESONANTOS_EMBED_POC: '1', RESONANTOS_EMBED_UPSTREAM_URL: 'http://127.0.0.1:18872',
+      RESONANTOS_EMBED_PROFILE: 'poc', RESONANTOS_EMBED_TOKEN_FILE: embedTokenFile,
+    } });
     const routeArrays = {
+      embedRoutes: embed.embedRoutes,
       harnessRoutes: harness.harnessRoutes,
       browserDiagnosticsRoutes: diagnostics.browserDiagnosticsRoutes,
       providerBridgeRoutes: harness.composeProviderRoutes(provider.providerBridgeRoutes),
@@ -164,7 +173,7 @@ async function withBridgeRoutes(callback) {
     };
     const routes = Object.values(routeArrays).flat();
 
-    try { await callback(routes, routeArrays); } finally { await harness.close(); }
+    try { await callback(routes, routeArrays); } finally { embed.close(); await harness.close(); }
   } finally {
     await rm(root, { recursive: true, force: true });
   }

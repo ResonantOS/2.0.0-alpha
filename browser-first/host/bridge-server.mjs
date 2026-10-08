@@ -1270,6 +1270,7 @@ export function createBridgeRequestHandler({
   capabilityBootstrapToken,
   extensionOrigin,
   routes = [],
+  embedService = null,
   getPublicPort = () => undefined,
   allowedOrigins = getBridgeAllowedOrigins(),
   allowedCidrs = getBridgeAllowedCidrs(),
@@ -1320,6 +1321,10 @@ export function createBridgeRequestHandler({
         writeJson(response, 403, {ok:false,error:"Client IP not allowlisted for browser-first bridge."}, extensionOrigin, request.headers, allowedOrigins);
         return;
       }
+      if (embedService?.matches(request.url)) {
+        await embedService.handleHttp(request, response);
+        return;
+      }
       const proxyPath = (request.url ?? "/").split("?")[0];
       if (!owned && proxyHandler && !reservedInternalPaths.has(proxyPath) && dashboardProxyPathMatches(proxyPath)) {
         proxyHandler(request, response);
@@ -1364,9 +1369,10 @@ export function createBridgeRequestHandler({
   handleBridgeRequest.closeStreams = () => Promise.allSettled([...subscriptions].map(([sub, family]) => sub.close(family === "harness" ? "runtime-unavailable" : "OPENCODE_UNAVAILABLE")));
   return handleBridgeRequest;
 }
-function closeStreamsWithServer(server, handle) {
+function closeStreamsWithServer(server, handle, embedService) {
   const close = server.close.bind(server);
   server.close = function(callback) {
+    embedService?.close();
     void handle.closeStreams();
     return close(callback);
   };
@@ -1379,6 +1385,7 @@ export async function startBridgeServer({
   capabilityBootstrapToken,
   extensionOrigin,
   routes,
+  embedService = null,
   host,
   allowedOrigins = getBridgeAllowedOrigins(),
   allowedCidrs = getBridgeAllowedCidrs(),
@@ -1402,6 +1409,7 @@ export async function startBridgeServer({
     capabilityBootstrapToken,
     extensionOrigin,
     routes,
+    embedService,
     allowedOrigins,
     allowedCidrs,
     dashboardProxyHandler: effectiveProxyHandler,
@@ -1409,7 +1417,7 @@ export async function startBridgeServer({
     getPublicPort,
   });
   const server = http.createServer(handle);
-  closeStreamsWithServer(server, handle);
+  closeStreamsWithServer(server, handle, embedService);
   // WebSocket upgrade support. Node's http server emits "upgrade"
   // (not "request") for WebSocket handshakes, so the request
   // handler above is bypassed for those. Register a parallel
@@ -1425,6 +1433,11 @@ export async function startBridgeServer({
     openPathPrefixes: effectiveOpenPathPrefixes,
   });
   server.on("upgrade", (req, socket, head) => {
+    if (embedService?.matches(req.url)) {
+      if (!clientIpAllowed(req.socket?.remoteAddress, allowedCidrs)) { socket.destroy(); return; }
+      embedService.handleUpgrade(req, socket, head);
+      return;
+    }
     const pathPart = (req.url ?? "/").split("?")[0] ?? "/";
     if (!dashboardProxyPathMatches(pathPart)) {
       // Non-proxy upgrade (none today, but defensively) — drop
@@ -1448,6 +1461,7 @@ export async function startBridgeServer({
     server.once("listening", onListening);
     server.listen(port, bindHost);
   });
+  embedService?.setPublicOrigin(`http://${bindHost === "0.0.0.0" ? "127.0.0.1" : bindHost}:${server.address().port}`);
   return server;
 }
 
@@ -1466,6 +1480,7 @@ export async function startBridgeServersWithTls({
   capabilityBootstrapToken,
   extensionOrigin,
   routes,
+  embedService = null,
   host,
   allowedOrigins,
   allowedCidrs,
@@ -1482,6 +1497,7 @@ export async function startBridgeServersWithTls({
     capabilityBootstrapToken,
     extensionOrigin,
     routes,
+    embedService,
     allowedOrigins,
     allowedCidrs: effectiveAllowedCidrs,
     dashboardProxyHandler,
@@ -1489,7 +1505,7 @@ export async function startBridgeServersWithTls({
     getPublicPort,
   });
   const httpServer = http.createServer(handle);
-  closeStreamsWithServer(httpServer, handle);
+  closeStreamsWithServer(httpServer, handle, embedService);
   await new Promise((resolve, reject) => {
     const onError = (error) => { httpServer.off("listening", onListening); reject(error); };
     const onListening = () => { httpServer.off("error", onError); resolve(); };
@@ -1502,7 +1518,7 @@ export async function startBridgeServersWithTls({
   let httpsActualPort = null;
   if (tls && tls.key && tls.cert) {
     httpsServer = https.createServer({ key: tls.key, cert: tls.cert }, handle);
-    closeStreamsWithServer(httpsServer, handle);
+    closeStreamsWithServer(httpsServer, handle, embedService);
     await new Promise((resolve, reject) => {
       const onError = (error) => { httpsServer.off("listening", onListening); reject(error); };
       const onListening = () => { httpsServer.off("error", onError); resolve(); };
@@ -1527,6 +1543,11 @@ export async function startBridgeServersWithTls({
     openPathPrefixes: effectiveOpenPathPrefixes,
   });
   const onUpgrade = (req, socket, head) => {
+    if (embedService?.matches(req.url)) {
+      if (!clientIpAllowed(req.socket?.remoteAddress, effectiveAllowedCidrs)) { socket.destroy(); return; }
+      embedService.handleUpgrade(req, socket, head);
+      return;
+    }
     const pathPart = (req.url ?? "/").split("?")[0] ?? "/";
     if (!dashboardProxyPathMatches(pathPart)) {
       // Non-proxy upgrade (none today, but defensively) — drop the
@@ -1537,6 +1558,7 @@ export async function startBridgeServersWithTls({
     }
     upgradeHandler(req, socket, head);
   };
+  embedService?.setPublicOrigin(`${httpsServer ? "https" : "http"}://${bindHost === "0.0.0.0" ? "127.0.0.1" : bindHost}:${httpsActualPort ?? httpActualPort}`);
   httpServer.on("upgrade", onUpgrade);
   if (httpsServer) httpsServer.on("upgrade", onUpgrade);
   return {
@@ -1560,6 +1582,7 @@ export async function startBridgeServerWithFallback({
   capabilityBootstrapToken,
   extensionOrigin,
   routes,
+  embedService = null,
   host,
   allowedOrigins = getBridgeAllowedOrigins(),
   allowedCidrs = getBridgeAllowedCidrs(),
@@ -1589,6 +1612,7 @@ export async function startBridgeServerWithFallback({
         capabilityBootstrapToken,
         extensionOrigin,
         routes,
+        embedService,
         host,
         allowedOrigins,
         allowedCidrs,

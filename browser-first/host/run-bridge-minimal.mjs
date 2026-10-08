@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createEmbedHostService } from './embed-host-service.mjs';
 
 import { spawn } from "node:child_process";
 import { existsSync, realpathSync, statSync } from "node:fs";
@@ -410,7 +411,11 @@ const harnessService = await createHarnessHostService({
 const { harnessRoutes } = harnessService;
 const providerBridgeRoutes = harnessService.composeProviderRoutes(legacyProviderBridgeRoutes);
 
+const embedService = createEmbedHostService();
+const { embedRoutes } = embedService;
+
 const bridgeRoutes = [
+  ...embedRoutes,
   ...browserDiagnosticsRoutes,
   ...providerBridgeRoutes,
   ...agentControlRoutes,
@@ -470,6 +475,7 @@ const bridgeInfo = await startBridgeServerWithFallback({
   capabilityBootstrapToken,
   extensionOrigin: resonantExtensionOrigin,
   routes: bridgeRoutes,
+  embedService,
   host: getBridgeHost(),
   getPublicPort,
 });
@@ -477,6 +483,7 @@ const bridgeInfo = await startBridgeServerWithFallback({
 const activeBridgePort = bridgeInfo.actualPort;
 const bridgePublicUrl = getBridgePublicUrl(activeBridgePort);
 bridgePublicUrlHolder.value = bridgePublicUrl;
+embedService.setPublicOrigin(bridgePublicUrl);
 const bridgeConfigPath = await writeBridgeConfig({
   extensionRoot: resonantExtension,
   bridgePort: activeBridgePort,
@@ -498,6 +505,7 @@ console.log(JSON.stringify({
 console.log(`Load ${resonantExtension} in Chrome as an unpacked extension.`);
 
 const shutdown = async () => {
+  embedService.close();
   await flushPendingExtensionPrefs().catch(() => undefined);
   try { unsubscribeOpenCodeExecution(); } catch { /* noop */ }
   await openCodeBoundary.dispose().catch(() => undefined);

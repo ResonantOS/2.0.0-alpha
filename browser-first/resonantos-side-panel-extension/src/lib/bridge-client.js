@@ -24,6 +24,7 @@ const GENERATED_CONFIG_PREFIX = "globalThis.__RESONANTOS_BRIDGE_CONFIG__ = Objec
 const GENERATED_CONFIG_SUFFIX = ");";
 const UNAUTHORIZED_BRIDGE_ERROR = "Unauthorized browser-first bridge request.";
 const BRIDGE_ROUTE_CAPABILITIES = Object.freeze({
+  "POST /embed/session": "addon-runtime-control",
   "GET /status": "bridge-diagnostics-read",
   "GET /workspace/inspect": "bridge-diagnostics-read",
   "GET /browser/downloads": "bridge-diagnostics-read",
