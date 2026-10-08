@@ -43,6 +43,24 @@ channel token is in `$DSH_HOME/augmentor-ws-token` (the usual DSH home is
 `~/.dsh`). The token file must be a regular, owner-only file owned by the current
 user; symlinks are refused. Never copy its contents into the repository.
 
+**Telemetry is off by default in ResonantOS ([#519](https://github.com/ResonantOS/2.0.0-alpha/issues/519)).**
+DSH mounts `@deepseek-ai/dsh-session-telemetry-otel` in its `web` profile, in
+`FEEDBACK_ONLY` mode, in both the 0.1.x versions certified here and 0.2. When a
+user rates or comments on a reply, that session's records are sent to
+`https://dsh-otel-collector.deepseeksvc.com/v1/logs`. The exporter connects
+directly, so a proxy cannot intercept it. Start the DSH service with telemetry
+disabled; the profile reads this variable from DSH's own environment, and in
+this mode DSH constructs no exporter at all:
+
+```bash
+export DSH_TELEMETRY_MODE=DISABLED
+```
+
+DSH's product analytics (`@deepseek-ai/dsh-client-product-analytics`, on by
+default) is mounted only in DSH's desktop profile, not in the `web` profile
+used here. On the DSH desktop app, set the `product-analytics` setting
+`enabled` to `false`.
+
 Approve the example's binding in the private operator terminal:
 
 ```bash
