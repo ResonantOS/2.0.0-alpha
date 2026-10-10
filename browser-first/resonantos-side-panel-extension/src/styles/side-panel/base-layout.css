@@ -287,10 +287,6 @@ html.has-embed-bar:not(.embed-mode) .chat-shell { height: calc(100vh - var(--emb
 .embed-assistant-menu button { display: flex; width: 100%; justify-content: flex-start; padding: 4px 8px; }
 .embed-assistant-menu button[aria-checked="true"] { background: var(--embed-bar-hover); }
 .embed-bar [hidden] { display: none; }
-@media (prefers-color-scheme: light) {
-  .embed-bar { --embed-bar-bg: #f4f6f8; --embed-bar-text: #18212b;
-    --embed-bar-line: #c4ccd5; --embed-bar-hover: #dde6ef; --embed-bar-focus: #0869ae; }
-}
 @media (prefers-reduced-motion: reduce) {
   .embed-bar, .embed-bar * { animation: none !important; transition: none !important; }
 }

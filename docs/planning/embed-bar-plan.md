@@ -8,6 +8,8 @@
 
 **Tech Stack:** Chrome Manifest V3, JavaScript ES modules, Node.js `node:test`, existing JSDOM, CSS tokens, existing Playwright live harness, authenticated Node HTTP bridge.
 
+> **Amendment 2026-10-10:** the live proof showed the light palette rendering above dark panels. The bar is now dark-only; Task 4's light-scheme CSS block and its test assertion were replaced (see the design's decision 6).
+
 ## Global Constraints
 
 The following hard values and language are copied from the approved specification:

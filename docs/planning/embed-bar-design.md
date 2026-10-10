@@ -53,9 +53,9 @@ standalone; ResonantOS adds one slim row above it.
    workspace tab. The item needs the `contextMenus` permission.
 6. **Look and access.** At most 36 px tall; icon buttons with tooltips and
    accessible names; fits a 320 px side panel; visible keyboard focus; Escape
-   closes the Assistant menu. Colors come from tokens with a dark default that
-   matches the harness panel, and a light variant under
-   `prefers-color-scheme: light`.
+   closes the Assistant menu. Colors come from a dark-only token set, because
+   both panels the bar sits on are dark whatever the system theme. (Amended
+   2026-10-10 after the live proof showed a light bar above dark panels.)
 7. **Boundaries.** The bar never receives bridge or harness credentials. It
    talks to the harness only through the existing host-page relay allowlist
    (`augmentor-prompt`, `augmentor-new-chat`, `augmentor-focus`,

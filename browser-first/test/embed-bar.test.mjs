@@ -89,12 +89,14 @@ test('bar failures are inline and do not disable Workspace or Assistant', async 
   assert.equal(bar.root.querySelector('[data-control=assistant]').disabled, false);
 });
 
-test('CSS declares bounded one-row layout, keyboard focus, light colors and reduced motion', async () => {
+test('CSS declares bounded one-row layout, keyboard focus, a dark-only palette and reduced motion', async () => {
   const css = await readFile(new URL('../resonantos-side-panel-extension/src/styles/side-panel/base-layout.css', import.meta.url), 'utf8');
   assert.match(css, /--embed-bar-height:\s*36px/);
   assert.match(css, /\.embed-bar\s*\{[^}]*max-height:\s*36px/s);
   assert.match(css, /\.embed-bar button:focus-visible/);
-  assert.match(css, /prefers-color-scheme:\s*light/);
+  // The bar sits on dark harness and ResonantOS panels, so it never switches to a light palette.
+  assert.match(css, /--embed-bar-bg:\s*#111315/);
+  assert.doesNotMatch(css, /prefers-color-scheme:\s*light[^{]*\{[^}]*\.embed-bar/s);
   assert.match(css, /prefers-reduced-motion:\s*reduce/);
   const html = await readFile(new URL('../resonantos-side-panel-extension/src/side-panel.html', import.meta.url), 'utf8');
   assert.match(html, /id="normal-chat-root" class="chat-shell"/);
