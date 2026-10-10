@@ -120,3 +120,21 @@ test('both context add-on declarations load redaction before the SDK', async () 
     assert.deepEqual(addon.contentScripts, ['trace-redaction-core.js', 'resonant-context.js', 'context-plugins.js']);
   }
 });
+
+test('extension deliberately pins permissions and both human workspace launchers', async () => {
+  const manifest = await readJson('browser-first/resonantos-side-panel-extension/manifest.json');
+  assert.deepEqual(manifest.permissions, [
+    'activeTab', 'clipboardRead', 'clipboardWrite', 'contextMenus', 'history',
+    'scripting', 'sidePanel', 'storage', 'tabs', 'webNavigation'
+  ]);
+  assert.deepEqual(manifest.commands, {
+    'open-augmentor-side-panel': {
+      suggested_key: { default: 'Alt+Shift+A', mac: 'Alt+Shift+A' },
+      description: 'Open the Augmentor side panel'
+    },
+    'open-resonantos-workspace': {
+      suggested_key: { default: 'Alt+Shift+W', mac: 'Alt+Shift+W' },
+      description: 'Open ResonantOS workspace'
+    }
+  });
+});

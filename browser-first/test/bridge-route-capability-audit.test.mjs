@@ -271,3 +271,15 @@ test("harness routes retain the exact capability and transport boundary", async 
     assert.equal(arrays.harnessRoutes.find(route => route.path === '/agent/events').terminalEventFamily, 'harness');
   });
 });
+
+test('embed routes have exactly the declared capability boundary', async () => {
+  await withBridgeRoutes(async (_routes, arrays) => {
+    assert.deepEqual(arrays.embedRoutes.map(route =>
+      [bridgeRouteKey(route), route.requiredCapability]), [
+      ['GET /embed/status', 'addon-runtime-control'],
+      ['POST /embed/session', 'addon-runtime-control']
+    ]);
+    assert.equal(capabilityForBridgeRoute('/embed/status?probe=1', 'GET'),
+      'addon-runtime-control');
+  });
+});

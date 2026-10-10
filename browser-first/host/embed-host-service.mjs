@@ -30,7 +30,17 @@ function cleanHeaders(headers) {
   return Object.fromEntries(Object.entries(headers).filter(([key]) => !blocked.has(key.toLowerCase())));
 }
 
-const disabledService = () => ({ enabled: false, embedRoutes: [], matches: () => false, setPublicOrigin() {}, close() {} });
+const embedStatusRoute = (readStatus) => ({
+  method: 'GET', path: '/embed/status', requiredCapability: 'addon-runtime-control',
+  handler: async () => readStatus()
+});
+const disabledService = () => ({
+  enabled: false,
+  embedRoutes: [embedStatusRoute(() => ({ available: false, profile: null }))],
+  matches: () => false,
+  setPublicOrigin() {},
+  close() {}
+});
 
 export function createEmbedHostService({ env = process.env, now = Date.now } = {}) {
   const config = readEmbedHostConfig(env);
@@ -78,7 +88,7 @@ export function createEmbedHostService({ env = process.env, now = Date.now } = {
     // The bootstrap route remains capability-gated by the bridge. Everything
     // else in the embed namespace must reach our validation, including paths
     // whose raw spelling or decoded profile prefix is invalid.
-    if (target.rawPath === '/embed/session') return false;
+    if (target.rawPath === '/embed/session' || target.rawPath === '/embed/status') return false;
     const inNamespace = pathname => /^\/embed(?:[\/\\]|$)/.test(pathname ?? '');
     return !closed && (target.rawPath === '/embed-host/' ||
       inNamespace(target.rawPath) || inNamespace(target.pathname));
@@ -241,13 +251,16 @@ iframe.src = ${JSON.stringify(prefix)};
   }
   return {
     enabled: true,
-    embedRoutes: [{ method: 'POST', path: '/embed/session', requiredCapability: 'addon-runtime-control', handler: async () => {
-      if (closed) throw new Error('Embed service unavailable');
-      for (const [ticket, expiry] of tickets) if (expiry <= now()) tickets.delete(ticket);
-      const ticket = opaqueId();
-      tickets.set(ticket, now() + 60_000);
-      return { hostPath: `/embed-host/?ticket=${ticket}` };
-    } }],
+    embedRoutes: [
+      embedStatusRoute(() => ({ available: !closed, profile: closed ? null : config.profile })),
+      { method: 'POST', path: '/embed/session', requiredCapability: 'addon-runtime-control', handler: async () => {
+        if (closed) throw new Error('Embed service unavailable');
+        for (const [ticket, expiry] of tickets) if (expiry <= now()) tickets.delete(ticket);
+        const ticket = opaqueId();
+        tickets.set(ticket, now() + 60_000);
+        return { hostPath: `/embed-host/?ticket=${ticket}` };
+      } }
+    ],
     matches, handleHttp, handleUpgrade,
     setPublicOrigin(value) { publicOrigin = new URL(value).origin; },
     close() {

@@ -73,7 +73,10 @@ async function fixture(t, { fallback = false, csp = "default-src 'self'; frame-a
 test('embed service is disabled by default without reading credentials', () => {
   const service = createEmbedHostService({ env: {} });
   assert.equal(service.enabled, false);
-  assert.deepEqual(service.embedRoutes, []);
+  assert.deepEqual(service.embedRoutes.map(({ method, path, requiredCapability }) =>
+  ({ method, path, requiredCapability })), [
+  { method: 'GET', path: '/embed/status', requiredCapability: 'addon-runtime-control' }
+]);
   assert.equal(service.matches('/embed/poc/'), false);
   service.close();
 });
@@ -444,7 +447,10 @@ test('token file must be regular, private, and owned by the current uid; failure
     assert.doesNotThrow(() => { service = createEmbedHostService({ env: { ...f.env, RESONANTOS_EMBED_TOKEN_FILE: file } }); });
     t.after(() => service?.close());
     assert.equal(service.enabled, false);
-    assert.deepEqual(service.embedRoutes, []);
+    assert.deepEqual(service.embedRoutes.map(({ method, path, requiredCapability }) =>
+  ({ method, path, requiredCapability })), [
+  { method: 'GET', path: '/embed/status', requiredCapability: 'addon-runtime-control' }
+]);
     assert.equal(service.matches('/embed/poc/'), false);
     assert.equal(logs.length, start + 1);
     assert.match(logs[start], /^[^\r\n]+\n$/);
@@ -470,4 +476,40 @@ test('token file must be regular, private, and owned by the current uid; failure
     service.close();
   }
   assert.equal(logs.length, 10);
+});
+
+test('embed status is gated, credential-free and never proxied', async t => {
+  const f = await fixture(t);
+  assert.equal(f.service.matches('/embed/status'), false);
+  assert.equal(f.service.matches('/embed/status?probe=1'), false);
+  assert.equal((await f.request('/embed/status')).response.status, 401);
+  assert.equal((await f.request('/embed/status', {
+    headers: { 'X-ResonantOS-Bridge-Token': 'bridge-test' }
+  })).response.status, 403);
+  const result = await f.request('/embed/status', { headers: auth });
+  assert.equal(result.response.status, 200);
+  assert.deepEqual(JSON.parse(result.body), { ok: true, available: true, profile: 'poc' });
+  assert.equal(result.response.headers.get('set-cookie'), null);
+  assert.equal(f.seen.length, 0);
+  f.service.close();
+  const route = f.service.embedRoutes.find(route => route.path === '/embed/status');
+  assert.deepEqual(await route.handler(), { available: false, profile: null });
+});
+
+test('disabled embed status is a gated route with no session capability', async t => {
+  const service = createEmbedHostService({ env: {} });
+  const server = await startBridgeServer({
+    host: '127.0.0.1', port: 0, bridgeToken: 'bridge-test',
+    bridgeCapabilityTokens: { 'addon-runtime-control': 'cap-test' },
+    routes: service.embedRoutes, embedService: service
+  });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const url = `http://127.0.0.1:${server.address().port}/embed/status`;
+  assert.equal((await fetch(url)).status, 401);
+  assert.equal((await fetch(url, {
+    headers: { 'X-ResonantOS-Bridge-Token': 'bridge-test' }
+  })).status, 403);
+  assert.deepEqual(await (await fetch(url, { headers: auth })).json(),
+    { ok: true, available: false, profile: null });
+  assert.equal(service.embedRoutes.some(route => route.path === '/embed/session'), false);
 });

@@ -46,6 +46,35 @@ for the URL limitations and bounded sync/diagnostics consumer audit.
 
 OpenCode session HTTP and events use capability-scoped bridge routes. The extension receives session identifiers, never the OpenCode server URL or Basic credential. Turning OpenCode local execution off revokes active requests and event streams. The existing session panel displays only its selected session's events with Governed or External source labels. The full cockpit remains disabled.
 
+## Extension Permissions And Workspace Launchers
+
+The extension declares `activeTab`, `clipboardRead`, `clipboardWrite`,
+`contextMenus`, `history`, `scripting`, `sidePanel`, `storage`, `tabs`, and
+`webNavigation`, with HTTP(S) host permissions. `contextMenus` adds the
+extension toolbar's right-click item, **Open ResonantOS workspace**. It does
+not add a page context-menu action. The command `open-resonantos-workspace`
+suggests **Alt+Shift+W** and opens or focuses the workspace; it never closes it.
+The existing side-panel shortcut remains **Alt+Shift+A**. Chrome or the OS may
+require assigning a shortcut in `chrome://extensions/shortcuts`.
+
+On the opt-in embed testing branch, the ResonantOS bar sits above the unchanged
+harness panel. Workspace retains the existing open/focus/close toggle behavior.
+Assistant stores `resonantos.agentView` as `embed` or `normal` and reloads the
+side-panel document; an explicit `agentView` query takes precedence at boot.
+An explicit Assistant choice also updates that query when it is present.
+
+Page shares only sanitized title and URL metadata after checking the current
+site permission. Blocked or unreadable permission state sends nothing; “Page
+shared” confirms local dispatch. Approvals reads the existing browser-job queue
+and only opens/focuses the workspace for human review. Status comes from the
+harness relay. Session failure leaves Workspace and Assistant usable. In normal
+mode, only Assistant appears, and only after successful embed availability.
+The bar receives no credentials and does not control pages for the harness.
+
+Testing-branch design and execution details are in the
+[approved bar design](../docs/planning/embed-bar-design.md) and
+[bar implementation plan](../docs/planning/embed-bar-plan.md).
+
 ## Context Session Persistence
 
 Resonant Context redacts a detached copy of navigation history, click trails,

@@ -115,3 +115,34 @@ test("isVisible queries the current window and detects the workspace", async () 
 
   assert.equal(await toggle.isVisible(), true);
 });
+
+test('open focuses an active or background workspace and never closes it', async () => {
+  for (const active of [true, false]) {
+    const calls = [];
+    const control = createMainWorkspaceToggle({
+      tabsApi: {
+        query: async query => { calls.push(['query', query]); return [
+          { id: 7, windowId: 3, url: workspaceUrl, active }
+        ]; },
+        update: async (...args) => calls.push(['update', ...args]),
+        remove: async () => { throw Error('must not close'); },
+        create: async () => { throw Error('must not duplicate'); }
+      },
+      windowsApi: { update: async (...args) => calls.push(['window', ...args]) },
+      getWorkspaceUrl: () => workspaceUrl
+    });
+    assert.equal(await control.open({ windowId: 3 }), true);
+    assert.deepEqual(calls, [ ['query', { windowId: 3 }],
+      ['update', 7, { active: true }], ['window', 3, { focused: true }] ]);
+  }
+});
+
+test('open creates only when absent in the target window', async () => {
+  const calls = [];
+  const control = createMainWorkspaceToggle({
+    tabsApi: { query: async () => [], create: async options => calls.push(options) },
+    windowsApi: {}, getWorkspaceUrl: () => workspaceUrl
+  });
+  assert.equal(await control.open({ windowId: 9 }), true);
+  assert.deepEqual(calls, [{ url: workspaceUrl, active: true, windowId: 9 }]);
+});

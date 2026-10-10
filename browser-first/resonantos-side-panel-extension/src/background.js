@@ -29,6 +29,11 @@ async function loadBridgeConfig() {
 import { createBridgeClient, createRawBridgeFetch, detectLoopbackBridge, resolveBridgeConfig, initCapabilityTokens, isUnauthorizedBridgeError } from "./lib/bridge-client.js";
 import { isTopFrameSender, sanitizeInlineAssistantBody, sanitizeResonantContextSnapshot } from "./lib/background-message-policy.js";
 import { createPrefsSync } from "./lib/prefs-sync.js";
+import { createMainWorkspaceToggle } from './lib/main-workspace-toggle.js';
+import { installWorkspaceLaunchers } from './lib/workspace-launchers.js';
+const workspaceLauncher = createMainWorkspaceToggle();
+installWorkspaceLaunchers({ chromeApi: chrome, openWorkspace: workspaceLauncher.open });
+
 
 const APPROVAL_REQUIRED_ACTIONS = new Set([
   "wallet_connect",

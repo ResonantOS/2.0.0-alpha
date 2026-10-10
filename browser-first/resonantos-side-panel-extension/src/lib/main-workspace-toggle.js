@@ -76,5 +76,22 @@ export function createMainWorkspaceToggle({
     return decision.visible;
   }
 
-  return { toggle, isVisible };
+  async function open({ windowId } = {}) {
+    const query = windowId === undefined ? { currentWindow: true } : { windowId };
+    const tabs = await tabsApi.query(query);
+    const target = tabs.find(tab => isMainWorkspaceUrl(tab.url, { workspacePath }));
+    if (target) {
+      await tabsApi.update(target.id, { active: true });
+      if (target.windowId !== undefined && windowsApi?.update) {
+        await windowsApi.update(target.windowId, { focused: true });
+      }
+    } else {
+      const options = { url: getWorkspaceUrl(), active: true };
+      if (windowId !== undefined) options.windowId = windowId;
+      await tabsApi.create(options);
+    }
+    return true;
+  }
+
+  return { toggle, isVisible, open };
 }

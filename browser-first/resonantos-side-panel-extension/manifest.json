@@ -5,7 +5,7 @@
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApuNZYsaSNn4zSCLL5oqE7cdl8DnhoFUbMmZtcG+Sch5yqT8wob/1yjX/f3HFGRyxgLAW2tmpVA8PVruLCMSDed0YIKm99y6F7Zfmt+XU6bY+r/soP7dVZKVV6PEQdvtxFkd69/dVqS1lY9Y0BDwjxonP4D2AZsi1y2NghV2agjHaO3cu7/837GKv/ZOvtGXofm8ilprmZcwYkq3hU1HCTrJ6IM8NNyvzbeIHC0uMrG4m5ROhqqMXR7GauOiWFZiVaXbZ4EbeX0GzrvLjQ170/DmaW4ob7dxveK26mOx27r4L3G0hOn9gncbHr0kbMErC/+nT9gjm284OKnQiaWIhCQIDAQAB",
   "description": "Browser-contained ResonantOS layer for Augmentor, Living Archive context, add-ons, task monitor, and approval gates.",
   "minimum_chrome_version": "116",
-  "permissions": ["activeTab", "clipboardRead", "clipboardWrite", "history", "scripting", "sidePanel", "storage", "tabs", "webNavigation"],
+  "permissions": ["activeTab", "clipboardRead", "clipboardWrite", "contextMenus", "history", "scripting", "sidePanel", "storage", "tabs", "webNavigation"],
   "host_permissions": ["http://*/*", "https://*/*"],
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' http://127.0.0.1:* http://localhost:* https://127.0.0.1:* https://localhost:* http://*:* https://*:*; img-src 'self' data: blob: http://127.0.0.1:* http://localhost:* https://127.0.0.1:* https://localhost:* http://*:* https://*:*; style-src 'self' 'unsafe-inline'; frame-src http://127.0.0.1:* http://localhost:* https://127.0.0.1:* https://localhost:* http://*:* https://*:*;"
@@ -47,6 +47,10 @@
         "mac": "Alt+Shift+A"
       },
       "description": "Open the Augmentor side panel"
+    },
+    "open-resonantos-workspace": {
+      "suggested_key": { "default": "Alt+Shift+W", "mac": "Alt+Shift+W" },
+      "description": "Open ResonantOS workspace"
     }
   }
 }
