@@ -139,6 +139,8 @@ test('notice stays exposed while empty, announced and cleared', async t => {
     assert.equal(notice.textContent, text);
     assert.equal(notice.hasAttribute('hidden'), false);
     assert.equal(notice.getAttribute('aria-live'), 'polite');
+    // A clipped notice keeps its full text on hover.
+    assert.equal(notice.title, text);
     const computed = dom.window.getComputedStyle(notice);
     assert.notEqual(computed.display, 'none');
     assert.notEqual(computed.visibility, 'hidden');
@@ -166,4 +168,12 @@ test('menu arrows move in opposite directions and wrap across all choices; Home 
     assert.equal(key('Home', i), choices[0]);
     assert.equal(key('End', i), choices.at(-1));
   }
+  // With focus outside the choices, ArrowUp lands on the last and ArrowDown on the first.
+  const fromOutside = value => {
+    f.bar.root.querySelector('[data-control=assistant]').focus();
+    f.dom.window.document.dispatchEvent(new f.dom.window.KeyboardEvent('keydown', { key: value, bubbles: true }));
+    return f.dom.window.document.activeElement;
+  };
+  assert.equal(fromOutside('ArrowUp'), choices.at(-1));
+  assert.equal(fromOutside('ArrowDown'), choices[0]);
 });

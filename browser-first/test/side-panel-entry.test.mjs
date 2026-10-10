@@ -146,6 +146,8 @@ test('tab updates refresh only for completed loads or URL changes', async t => {
   for (const change of [{ status: 'loading' }, { title: 'Title' }, { favIconUrl: 'icon' }, {}]) {
     f.chromeApi.tabs.onUpdated.emit(1, change);
   }
+  // Chrome always supplies changeInfo, but a missing one must not throw.
+  assert.doesNotThrow(() => f.chromeApi.tabs.onUpdated.emit(1));
   await settle(); assert.equal(queries, initial);
   for (const change of [{ status: 'complete' }, { url: 'https://example.test/' }]) {
     f.chromeApi.tabs.onUpdated.emit(1, change);

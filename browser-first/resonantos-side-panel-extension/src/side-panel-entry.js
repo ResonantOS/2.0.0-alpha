@@ -47,7 +47,7 @@ function mountSidePanelBar({ mode, sendContext = () => false,
   documentRef.documentElement.classList.add('has-embed-bar');
   const refresh = () => { void bar.refresh(); };
   const tabUpdated = (_tabId, changeInfo) => {
-    if (changeInfo.status === 'complete' || changeInfo.url !== undefined) refresh();
+    if (changeInfo?.status === 'complete' || changeInfo?.url !== undefined) refresh();
   };
   const storageChanged = (changes, area) => {
     if (area === 'local' && (changes.augmentorBrowserJobs || changes.augmentorActiveBrowserJob)) refresh();

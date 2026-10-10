@@ -14,6 +14,7 @@ export function mountEmbedBar({ documentRef, parent, mode, toggleWorkspace,
   const announce = text => {
     if (disposed) return;
     notice.textContent = text;
+    notice.title = text || '';
   };
   function button(name, control, path) {
     const node = documentRef.createElement('button');
@@ -72,6 +73,7 @@ export function mountEmbedBar({ documentRef, parent, mode, toggleWorkspace,
       const current = choices.indexOf(documentRef.activeElement);
       const step = event.key === 'ArrowUp' ? -1 : 1;
       const index = event.key === 'Home' ? 0 : event.key === 'End' ? choices.length - 1
+        : current === -1 ? (step === -1 ? choices.length - 1 : 0)
         : (current + step + choices.length) % choices.length;
       choices[index].focus();
     } else if (event.key === 'Tab') closeMenu();
