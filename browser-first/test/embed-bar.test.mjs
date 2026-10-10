@@ -101,3 +101,69 @@ test('CSS declares bounded one-row layout, keyboard focus, a dark-only palette a
   const html = await readFile(new URL('../resonantos-side-panel-extension/src/side-panel.html', import.meta.url), 'utf8');
   assert.match(html, /id="normal-chat-root" class="chat-shell"/);
 });
+
+test('window blur closes Assistant without reclaiming focus and is removed on destroy', async t => {
+  const f = fixture(); t.after(() => { f.bar.destroy(); f.dom.window.close(); });
+  await f.bar.ready;
+  const { document } = f.dom.window;
+  const assistant = f.bar.root.querySelector('[data-control=assistant]');
+  const menu = f.bar.root.querySelector('[role=menu]');
+  const frame = document.createElement('iframe'); document.body.append(frame);
+  assistant.click(); frame.focus();
+  f.dom.window.dispatchEvent(new f.dom.window.Event('blur'));
+  assert.equal(menu.hidden, true);
+  assert.equal(assistant.getAttribute('aria-expanded'), 'false');
+  assert.equal(document.activeElement, frame);
+  const removed = [];
+  const remove = f.dom.window.removeEventListener.bind(f.dom.window);
+  f.dom.window.removeEventListener = (...args) => { removed.push(args); remove(...args); };
+  f.bar.destroy();
+  assert.equal(removed.filter(([type]) => type === 'blur').length, 1);
+});
+
+test('notice stays exposed while empty, announced and cleared', async t => {
+  const dom = new JSDOM('<body></body>');
+  const css = await readFile(new URL('../resonantos-side-panel-extension/src/styles/side-panel/base-layout.css', import.meta.url), 'utf8');
+  const style = dom.window.document.createElement('style'); style.textContent = css;
+  dom.window.document.head.append(style);
+  let message = 'Page shared';
+  const bar = mountEmbedBar({ documentRef: dom.window.document, parent: dom.window.document.body,
+    mode: 'embed', workspaceVisible: async () => false, readApprovals: async () => null,
+    sharePage: async () => message });
+  t.after(() => { bar.destroy(); dom.window.close(); });
+  await bar.ready;
+  const notice = bar.root.querySelector('[role=status]');
+  for (const text of ['', 'Page shared', '']) {
+    message = text;
+    if (text || notice.textContent) { bar.root.querySelector('[data-control=page]').click(); await settle(); }
+    assert.equal(notice.textContent, text);
+    assert.equal(notice.hasAttribute('hidden'), false);
+    assert.equal(notice.getAttribute('aria-live'), 'polite');
+    const computed = dom.window.getComputedStyle(notice);
+    assert.notEqual(computed.display, 'none');
+    assert.notEqual(computed.visibility, 'hidden');
+    if (!text) assert.equal(computed.opacity, '0');
+  }
+});
+
+test('menu arrows move in opposite directions and wrap across all choices; Home and End reach edges', async t => {
+  const f = fixture(); t.after(() => { f.bar.destroy(); f.dom.window.close(); });
+  await f.bar.ready;
+  const menu = f.bar.root.querySelector('[role=menu]');
+  // A third DOM choice prevents two-item wrapping from hiding a reversed ArrowUp.
+  const extra = f.dom.window.document.createElement('button');
+  extra.setAttribute('role', 'menuitemradio'); extra.textContent = 'Another assistant'; menu.append(extra);
+  const choices = [...menu.querySelectorAll('[role=menuitemradio]')];
+  f.bar.root.querySelector('[data-control=assistant]').click();
+  const key = (value, index) => {
+    choices[index].focus();
+    choices[index].dispatchEvent(new f.dom.window.KeyboardEvent('keydown', { key: value, bubbles: true }));
+    return f.dom.window.document.activeElement;
+  };
+  for (let i = 0; i < choices.length; i++) {
+    assert.equal(key('ArrowUp', i), choices[(i - 1 + choices.length) % choices.length]);
+    assert.equal(key('ArrowDown', i), choices[(i + 1) % choices.length]);
+    assert.equal(key('Home', i), choices[0]);
+    assert.equal(key('End', i), choices.at(-1));
+  }
+});

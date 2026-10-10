@@ -46,17 +46,20 @@ function mountSidePanelBar({ mode, sendContext = () => false,
     openWorkspace: workspace.open, ...actions });
   documentRef.documentElement.classList.add('has-embed-bar');
   const refresh = () => { void bar.refresh(); };
+  const tabUpdated = (_tabId, changeInfo) => {
+    if (changeInfo.status === 'complete' || changeInfo.url !== undefined) refresh();
+  };
   const storageChanged = (changes, area) => {
     if (area === 'local' && (changes.augmentorBrowserJobs || changes.augmentorActiveBrowserJob)) refresh();
   };
-  const events = [chromeApi?.tabs?.onActivated, chromeApi?.tabs?.onUpdated, chromeApi?.tabs?.onRemoved];
-  for (const event of events) event?.addListener(refresh);
-  chromeApi?.storage?.onChanged?.addListener(storageChanged);
+  const events = mode === 'embed' ? [[chromeApi?.tabs?.onActivated, refresh],
+    [chromeApi?.tabs?.onUpdated, tabUpdated], [chromeApi?.tabs?.onRemoved, refresh],
+    [chromeApi?.storage?.onChanged, storageChanged]] : [];
+  for (const [event, listener] of events) event?.addListener(listener);
   const destroy = bar.destroy;
   const onPageHide = () => bar.destroy();
   bar.destroy = () => {
-    for (const event of events) event?.removeListener(refresh);
-    chromeApi?.storage?.onChanged?.removeListener(storageChanged);
+    for (const [event, listener] of events) event?.removeListener(listener);
     windowRef.removeEventListener('pagehide', onPageHide);
     documentRef.documentElement.classList.remove('has-embed-bar');
     destroy();

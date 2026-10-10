@@ -57,11 +57,11 @@ function fixture(t) {
   const chromeApi = {
     runtime: { getURL: file => `chrome-extension://abc/${file}` },
     tabs: { query: async () => [], create: async value => calls.push(value),
-      onActivated: { addListener() {}, removeListener() {} },
-      onUpdated: { addListener() {}, removeListener() {} },
-      onRemoved: { addListener() {}, removeListener() {} } },
+      onActivated: fakeEvent(),
+      onUpdated: fakeEvent(),
+      onRemoved: fakeEvent() },
     windows: {}, storage: { local: { get: async () => ({}), set: async value => writes.push(value) },
-      onChanged: { addListener() {}, removeListener() {} } }
+      onChanged: fakeEvent() }
   };
   t.after(() => dom.window.close());
   return { dom, chromeApi, calls, writes, assigned, options: {
@@ -126,4 +126,98 @@ test('session failure retains working Workspace and Assistant with offline statu
   view.bar.root.querySelector('[data-mode=normal]').click(); await settle();
   assert.deepEqual(f.writes, [{ 'resonantos.agentView': 'normal' }]);
   assert.equal(new URL(f.assigned[0]).searchParams.get('agentView'), 'normal');
+});
+
+function fakeEvent() {
+  const listeners = new Set();
+  return { listeners, addListener: fn => listeners.add(fn), removeListener: fn => listeners.delete(fn),
+    emit: (...args) => { for (const fn of listeners) fn(...args); } };
+}
+async function offlineView(f) {
+  return mountEmbedView({ ...f.options, getConnection: async () => { throw Error('offline'); } });
+}
+
+test('tab updates refresh only for completed loads or URL changes', async t => {
+  const f = fixture(t);
+  let queries = 0;
+  f.chromeApi.tabs.query = async () => { queries++; return []; };
+  const { bar } = await offlineView(f); t.after(() => bar.destroy()); await bar.ready;
+  const initial = queries;
+  for (const change of [{ status: 'loading' }, { title: 'Title' }, { favIconUrl: 'icon' }, {}]) {
+    f.chromeApi.tabs.onUpdated.emit(1, change);
+  }
+  await settle(); assert.equal(queries, initial);
+  for (const change of [{ status: 'complete' }, { url: 'https://example.test/' }]) {
+    f.chromeApi.tabs.onUpdated.emit(1, change);
+    await settle();
+  }
+  assert.equal(queries, initial + 2);
+});
+
+test('refresh bursts keep one read in flight and one pending, dropping stale results', async t => {
+  const f = fixture(t);
+  const reads = [];
+  f.chromeApi.tabs.query = () => new Promise(resolve => reads.push(resolve));
+  const { bar } = await offlineView(f); t.after(() => bar.destroy());
+  assert.equal(reads.length, 1);
+  for (let i = 0; i < 20; i++) {
+    f.chromeApi.tabs.onActivated.emit({ tabId: i });
+    f.chromeApi.tabs.onUpdated.emit(i, { status: 'complete' });
+    f.chromeApi.storage.onChanged.emit({ augmentorBrowserJobs: {} }, 'local');
+  }
+  await settle(); assert.equal(reads.length, 1);
+  reads[0]([{ active: true, url: 'chrome-extension://abc/src/main-workspace.html' }]);
+  await settle();
+  assert.equal(reads.length, 2);
+  assert.equal(bar.root.querySelector('[data-control=workspace]').getAttribute('aria-pressed'), 'false');
+  reads[1]([]); await bar.ready; await settle();
+  assert.equal(reads.length, 2);
+  assert.equal(bar.root.querySelector('[data-control=workspace]').getAttribute('aria-pressed'), 'false');
+  f.chromeApi.tabs.onRemoved.emit(1); await settle();
+  assert.equal(reads.length, 3);
+  reads[2]([{ active: true, url: 'chrome-extension://abc/src/main-workspace.html' }]);
+  await settle();
+  assert.equal(bar.root.querySelector('[data-control=workspace]').getAttribute('aria-pressed'), 'true');
+});
+
+test('destroy removes refresh listeners and cancels pending refresh work', async t => {
+  const f = fixture(t);
+  const reads = [];
+  f.chromeApi.tabs.query = () => new Promise(resolve => reads.push(resolve));
+  const { bar } = await offlineView(f);
+  f.chromeApi.tabs.onActivated.emit({ tabId: 2 });
+  bar.destroy();
+  reads[0]([]); await bar.ready; await settle();
+  assert.equal(reads.length, 1);
+  for (const event of [f.chromeApi.tabs.onActivated, f.chromeApi.tabs.onUpdated,
+    f.chromeApi.tabs.onRemoved, f.chromeApi.storage.onChanged]) assert.equal(event.listeners.size, 0);
+});
+
+test('normal mode registers no tab or storage listeners and performs no refresh reads', async t => {
+  const f = fixture(t);
+  const globals = { document: f.options.documentRef, window: f.options.windowRef,
+    chrome: f.chromeApi, location: f.options.locationRef };
+  for (const [key, value] of Object.entries(globals)) {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, key);
+    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
+    t.after(() => {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else delete globalThis[key];
+    });
+  }
+  let reads = 0, registrations = 0;
+  f.chromeApi.tabs.query = async () => { reads++; return []; };
+  f.chromeApi.storage.local.get = async () => { reads++; return {}; };
+  for (const event of [f.chromeApi.tabs.onActivated, f.chromeApi.tabs.onUpdated,
+    f.chromeApi.tabs.onRemoved, f.chromeApi.storage.onChanged]) {
+    const add = event.addListener;
+    event.addListener = fn => { registrations++; add(fn); };
+  }
+  await bootSidePanel({ search: '?agentView=normal', loadNormal: async () => {},
+    probeAvailability: async () => true });
+  t.after(() => f.dom.window.dispatchEvent(new f.dom.window.Event('pagehide')));
+  assert.equal(registrations, 0);
+  await settle(); assert.equal(reads, 0);
+  assert.deepEqual([...f.dom.window.document.querySelectorAll('[data-control]')]
+    .map(node => node.dataset.control), ['assistant']);
 });

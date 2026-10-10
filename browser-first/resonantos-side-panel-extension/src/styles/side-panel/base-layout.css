@@ -278,6 +278,7 @@ html.has-embed-bar:not(.embed-mode) .chat-shell { height: calc(100vh - var(--emb
 .embed-approval-count { font-size: 10px; max-width: 22px; overflow: hidden; }
 .embed-bar-status { flex: 0 0 auto; font-size: 11px; white-space: nowrap; }
 .embed-bar-notice { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 10px; }
+.embed-bar-notice:empty { opacity: 0; }
 .embed-assistant-menu {
   position: absolute; top: 100%; left: 6px; min-width: 150px; padding: 4px;
   background: var(--embed-bar-bg); color: var(--embed-bar-text);

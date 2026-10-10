@@ -10,13 +10,10 @@ export function mountEmbedBar({ documentRef, parent, mode, toggleWorkspace,
   notice.className = 'embed-bar-notice';
   notice.setAttribute('role', 'status');
   notice.setAttribute('aria-live', 'polite');
-  notice.hidden = true;
   let disposed = false;
   const announce = text => {
     if (disposed) return;
     notice.textContent = text;
-    notice.title = text;
-    notice.hidden = !text;
   };
   function button(name, control, path) {
     const node = documentRef.createElement('button');
@@ -70,14 +67,19 @@ export function mountEmbedBar({ documentRef, parent, mode, toggleWorkspace,
       event.preventDefault(); closeMenu(); assistant.focus();
     } else if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
       event.preventDefault();
+      const choices = [...menu.querySelectorAll('[role=menuitemradio]')];
+      if (!choices.length) return;
       const current = choices.indexOf(documentRef.activeElement);
-      const index = event.key === 'Home' ? 0 : event.key === 'End' ? 1 : (current + 1) % 2;
+      const step = event.key === 'ArrowUp' ? -1 : 1;
+      const index = event.key === 'Home' ? 0 : event.key === 'End' ? choices.length - 1
+        : (current + step + choices.length) % choices.length;
       choices[index].focus();
     } else if (event.key === 'Tab') closeMenu();
   };
   const outside = event => { if (!root.contains(event.target)) closeMenu(); };
   documentRef.addEventListener('keydown', keydown);
   documentRef.addEventListener('pointerdown', outside);
+  documentRef.defaultView?.addEventListener('blur', closeMenu);
   if (mode === 'embed') {
     const page = button('Page', 'page', 'M5 3h10l4 4v14H5z M14 3v5h5 M8 12h8 M8 16h6');
     page.addEventListener('click', () => {
@@ -103,17 +105,31 @@ export function mountEmbedBar({ documentRef, parent, mode, toggleWorkspace,
     status.setAttribute('aria-label', `Status: ${label}`);
     status.dataset.state = value?.online === true ? (value.busy === true ? 'busy' : 'online') : 'offline';
   }
-  async function refresh() {
-    if (mode !== 'embed' || disposed) return;
-    const [visible, count] = await Promise.all([
-      Promise.resolve().then(workspaceVisible).catch(() => false),
-      Promise.resolve().then(readApprovals).catch(() => null)
-    ]);
-    if (disposed) return;
-    workspace.setAttribute('aria-pressed', String(visible));
-    const label = count === null ? 'Approvals unavailable' : `Approvals: ${count} pending`;
-    approvals.title = label; approvals.setAttribute('aria-label', label);
-    approvals.querySelector('span').textContent = count === null ? '—' : String(count);
+  let refreshSequence = 0, refreshInFlight = null;
+  function refresh() {
+    if (mode !== 'embed' || disposed) return Promise.resolve();
+    refreshSequence++;
+    if (refreshInFlight) return refreshInFlight;
+    refreshInFlight = (async () => {
+      try {
+        let sequence;
+        do {
+          sequence = refreshSequence;
+          const [visible, count] = await Promise.all([
+            Promise.resolve().then(workspaceVisible).catch(() => false),
+            Promise.resolve().then(readApprovals).catch(() => null)
+          ]);
+          if (disposed) return;
+          // A newer request invalidates this snapshot and requires only one more read.
+          if (sequence !== refreshSequence) continue;
+          workspace.setAttribute('aria-pressed', String(visible));
+          const label = count === null ? 'Approvals unavailable' : `Approvals: ${count} pending`;
+          approvals.title = label; approvals.setAttribute('aria-label', label);
+          approvals.querySelector('span').textContent = count === null ? '—' : String(count);
+        } while (sequence !== refreshSequence);
+      } finally { refreshInFlight = null; }
+    })();
+    return refreshInFlight;
   }
   setStatus(null);
   const ready = refresh();
@@ -121,6 +137,7 @@ export function mountEmbedBar({ documentRef, parent, mode, toggleWorkspace,
     disposed = true;
     documentRef.removeEventListener('keydown', keydown);
     documentRef.removeEventListener('pointerdown', outside);
+    documentRef.defaultView?.removeEventListener('blur', closeMenu);
     root.remove();
   } };
 }
