@@ -73,7 +73,9 @@ The bar receives no credentials and does not control pages for the harness.
 
 Testing-branch design and execution details are in the
 [approved bar design](../docs/planning/embed-bar-design.md) and
-[bar implementation plan](../docs/planning/embed-bar-plan.md).
+[bar implementation plan](../docs/planning/embed-bar-plan.md). The
+[interface decisions](../docs/planning/embed-interface-decisions.md) approved on
+2026-10-10 govern this branch.
 
 ## Context Session Persistence
 
