@@ -114,7 +114,7 @@ both modes can be installed at once. The example port is not a default.
 | `RESONANTOS_HARNESS_BINDINGS` | Existing default `[]`. At most one native binding per bridge. Existing plugin and bearer bindings may coexist. |
 | Native `endpoint` | Required exact `http://127.0.0.1:<port>`, with port 1024 through 65535. No default, port zero, DNS name, TLS, path, query, fragment, or userinfo. No trailing slash in the binding or manifest. |
 | Native `source` | Exactly `{ "managedDsh": true }`. File, environment-token, and mixed sources are rejected for this scheme. |
-| `RESONANTOS_DSH_PACKAGE_ROOT` | Required for native launch only. Absolute path to an operator-installed `@deepseek-ai/dsh` package directory. No search through PATH, npm execution, download, or desktop bundle discovery. |
+| `RESONANTOS_DSH_PACKAGE_ROOT` | Required for native launch only. Absolute path to the dedicated npm install prefix that contains `node_modules/@deepseek-ai/dsh`. The value is the prefix, not the package directory or `node_modules`. No search through PATH, npm execution, download, or desktop bundle discovery. |
 | `RESONANTOS_DSH_HOME` | Optional absolute path. Default is `<userRoot>/BrowserFirst/Harnesses/dsh-native`, outside the repository. This is the child's actual DSH_HOME. |
 | `DEEPSEEK_API_KEY` | Optional bridge environment value forwarded only to the native child. Missing means no key is injected. Provider setup errors appear on model use. No lookup in another application's credentials. |
 | `RESONANTOS_HARNESS_DEMO` | Existing default remains off. Enabling it offers the separate native example only when a native binding is configured. It grants nothing. |
@@ -129,27 +129,38 @@ Use this exact validation split:
 
 | Phase | Failures | Result |
 | --- | --- | --- |
-| Bridge composition | Malformed binding; duplicate native bindings; wrong adapter, scheme, source, or endpoint; nonempty relative package/home path; native binding on a platform other than macOS or Linux | Refuse bridge startup with the fixed configuration error. Reject a second native binding even if its name or endpoint differs. |
-| First authorized native acquisition | Unset or empty package root; absent path; unreadable metadata; wrong package name; invalid or unsupported version; unsafe package tree; missing or invalid entry | Return `runtime-unavailable` for native use. Keep the bridge and other modes available. |
+| Bridge composition | Malformed binding; duplicate native bindings; wrong adapter, scheme, source, or endpoint; nonempty relative prefix/home path; native binding on a platform other than macOS or Linux | Refuse bridge startup with the fixed configuration error. Reject a second native binding even if its name or endpoint differs. |
+| First authorized native acquisition | Unset or empty install prefix; absent path; unreadable metadata; wrong package name; invalid or unsupported version; unsafe prefix tree; validation ceiling exceeded; missing or invalid entry | Return `runtime-unavailable` for native use. Keep the bridge and other modes available. |
 | First authorized native acquisition | Unsafe home, lock conflict, busy port, spawn, announcement, cookie, or protocol failure | Use the matching runtime error below. Never install or adopt a process. |
 
-Snapshotting a path does not resolve or inspect it. Package and home filesystem
+Snapshotting a path does not resolve or inspect it. Prefix and home filesystem
 checks are lazy and follow authorization. Restart the bridge after changing
-any setting. An unset package root is a missing runtime dependency, not a
+any setting. An unset install prefix is a missing runtime dependency, not a
 malformed binding.
 
-Resolve the package root with `realpath`. Check the canonical root and every
+Keep the setting name `RESONANTOS_DSH_PACKAGE_ROOT`, but define its value as
+the npm install prefix. Require a dedicated prefix used only for this harness
+and its dependencies. Recommend an operator-created prefix at
+`<userRoot>/BrowserFirst/Harnesses/dsh-native-install`, outside the repository
+and separate from DSH_HOME. Do not use a shared project or global npm prefix.
+The bridge does not create, install, or repair this prefix.
+
+The trust boundary is the entire install prefix. Resolve it with `realpath`.
+Check the canonical prefix and every
 ancestor directory through filesystem root `/`, inclusive. Each must be owned
 by root or the current user and satisfy `(mode & 0o022) === 0`. Do not stop at
-the package's parent. A writable ancestor can permit replacement of the tree.
+the prefix's parent. A writable ancestor can permit replacement of the tree.
 There is no sticky-directory exception. Scratch installs for this check must
 use a private location with safe ancestors, not a shared temporary directory.
 
-Walk every nested entry, including imported modules and dependencies. Use
+Walk every entry in the entire prefix tree. Include every hoisted dependency
+under `node_modules`, scoped packages, nested dependencies, and
+`node_modules/.bin`. Dependencies beside `@deepseek-ai/dsh` are inside this
+trust boundary even though they are outside the DSH package directory. Use
 `lstat` to distinguish links. Real directories and regular files must meet the
 same ownership and mode rules. Reject special files. Allow npm's normal
 symlinks, including entries in `node_modules/.bin`, only when every link hop
-and the final resolved target stay inside the canonical package root. Use
+and the final resolved target stay inside the canonical install prefix. Use
 path-component containment, not a string prefix. Reject escaping, dangling,
 or unresolvable cyclic links. Check link ownership, but do not apply file mode
 bits to the link itself. Symlink modes commonly include write bits and do not
@@ -159,11 +170,25 @@ through aliases. Checking only `package.json` and `lib/bin.js` is insufficient.
 Group or other read/execute permissions are allowed. The private credential-file
 rule remains stricter and still rejects symlinks.
 
-Validate package name and semver from `package.json`. Require `lib/bin.js` to
-resolve inside the root. Complete validation before spawn. The operator must
+The full walk costs filesystem I/O and launch time proportional to the entry
+count, plus ancestor and link checks. Bound the file count at 50,000 entries,
+including the prefix itself, directories, regular files, and symlinks. Count
+each directory entry once; a link counts even when its target was already
+visited. Bound depth at 64 path components below the canonical prefix, whose
+depth is zero. Check both encountered paths and resolved targets. These are
+fixed ceilings, not operator overrides. Exceeding either ceiling refuses
+launch with the fixed limit error below. Never skip entries or accept a partial
+walk. The walk also consumes the existing 30-second startup deadline. Expiry
+refuses launch with `deadline-exceeded`; it does not permit partial validation.
+
+Derive `packageRoot` as `<installPrefix>/node_modules/@deepseek-ai/dsh`.
+Validate package name and semver from that package's `package.json`. Resolve
+its `lib/bin.js` as before. Both metadata and entry must resolve inside the
+validated prefix. Do not search another prefix or run a `.bin` wrapper.
+Complete validation before spawn on every launch. The operator must
 keep the validated installation stable during use. This is a trust check, not
 a sandbox against code or replacements by an already trusted owner. Never take
-a package path from a manifest or route payload.
+an install prefix or package path from a manifest or route payload.
 
 Use the bridge's absolute `process.execPath` to launch the validated entry:
 
@@ -575,10 +600,11 @@ detail; the existing client displays the public harness message.
 | Failure | Public result | Fixed operator message and recovery |
 | --- | --- | --- |
 | Composition failures listed in the validation split, including a second native binding or unsupported native platform | Bridge startup refused | `Invalid native DSH configuration. Check the native binding and DSH settings, then restart the bridge.` |
-| Unset/empty package root, missing package, unsafe tree, bad entry, or unsupported version | `runtime-unavailable`: `Runtime unavailable.` | `Native DSH package is unavailable or unsupported. Select a supported local package and restart the bridge.` |
+| Unset/empty install prefix, missing package, unsafe prefix tree, bad entry, or unsupported version | `runtime-unavailable`: `Runtime unavailable.` | `Native DSH install prefix is unavailable or unsupported. Select a dedicated prefix with a supported local package and restart the bridge.` |
+| Prefix validation exceeds the entry-count or depth ceiling | `runtime-unavailable`: `Runtime unavailable.` | `Native DSH install prefix exceeds the validation limit of 50000 entries or depth 64. Use a smaller dedicated prefix and restart the bridge. No child was started.` |
 | Unsafe home or conflicting lock | `runtime-unavailable` | `Native DSH home is unavailable. Use a dedicated home and inspect any existing owner before retrying.` |
 | Port busy or announcement endpoint mismatch | `runtime-unavailable` | `Native DSH could not use its approved port. Choose another port in both binding and manifest, then restart and reinstall the manifest.` |
-| Missing announcement or readiness timeout | `deadline-exceeded`: `Runtime deadline exceeded.` | `Native DSH did not become ready within 30 seconds. Check the package and retry with a new session.` |
+| Prefix validation deadline, missing announcement, or readiness timeout | `deadline-exceeded`: `Runtime deadline exceeded.` | `Native DSH did not become ready within 30 seconds. Check the package and retry with a new session.` |
 | Malformed announcement, child exit, failed cookie exchange, transport failure, or invalid protocol schema | `runtime-unavailable` | `Native DSH startup or authentication failed. Check the installed version and retry with a new session.` |
 | Missing grants, binding mismatch, or forbidden operation | Existing `permission-denied` or `invalid-manifest` | `Native DSH requires its exact approved binding and explicit capability grants.` |
 | Child exits during a session | Active stream terminates with `runtime-unavailable`; later references get `session-not-found`; the next user-submitted browser chat creates a fresh session after cleanup | `Native DSH stopped. Send a new chat request or create a new session. The previous turn was not retried.` |
@@ -611,7 +637,7 @@ the future implementation. It uses the same adapter, a distinct ID and binding,
 the native scheme, and the stronger floor. The demo remains opt-in and private.
 Installation grants nothing, and selecting a primary agent is still separate.
 
-For migration, configure the native binding and package, restart the bridge,
+For migration, configure the native binding and dedicated install prefix, restart the bridge,
 install the native example, explicitly grant its requests, and replace the
 primary-agent slot using the existing generation check. Assign chat-interface
 separately if wanted. Old plugin sessions retire through the current boundary.
@@ -723,13 +749,26 @@ logs or credentials in fixtures.
   the documented default. Reject both `~/.dsh` and the documented desktop DSH
   home, plus an empty descendant of each. Test component containment with a
   sibling whose name merely shares the protected path's prefix.
-- Accept an npm-style internal `.bin` symlink and an internal directory alias.
+- Verify the configured path is the install prefix. Resolve package metadata
+  and the unchanged `lib/bin.js` entry beneath its `node_modules/@deepseek-ai/dsh`.
+  A package directory supplied as the prefix must fail without fallback.
+- Verify a hoisted dependency outside the DSH package but inside the prefix
+  is visited and checked. Accept it with safe ownership and modes. Refuse a
+  group-writable hoisted dependency before spawn.
+- Accept `node_modules/.bin/js-yaml -> ../js-yaml/bin/js-yaml.js` when the link
+  and target are inside the prefix, outside the DSH package. Accept an internal
+  directory alias.
   Reject an escaping link, an escaping intermediate hop, a dangling link, and
   a link-resolution cycle. Reject a group-writable imported module or link
-  target, a writable nested directory, and a foreign owner. Test a safe package
+  target, a writable nested directory, and a foreign owner. Test a safe prefix
   under a writable immediate parent and under a writable higher ancestor.
   Both must fail before spawn. Test group and other write bits separately.
   Verify the walk reaches `/` and terminates for repeated directory aliases.
+- Accept a safe fixture at exactly 50,000 entries and depth 64. Independently
+  exceed each ceiling by one and assert `runtime-unavailable`, the fixed limit
+  message, and zero spawns. Include directories and links in the count.
+  Expire the startup deadline during the walk. Assert `deadline-exceeded` and
+  zero spawns. None of these cases may accept an incompletely checked tree.
 - Verify SIGTERM, escalation, confirmed exit, stuck stop, bridge shutdown, and
   a late old-child exit after replacement. No orphaned startup promise may
   publish a usable lease after cancellation.
@@ -807,8 +846,10 @@ exit, both owned children receive cleanup, and the DSH stop deadline is honored.
 
 ### Live lane
 
-Run the three exact versions above from separate scratch package installs and
-managed homes outside the repository. Install no Manolo/Augmentor plugin.
+Run the three exact versions above from separate dedicated install prefixes and
+managed homes outside the repository. Each prefix must satisfy the full tree
+and ancestor rules. Record the checked entry count, maximum depth, and walk
+duration for each version. Install no Manolo/Augmentor plugin.
 Supply provider credentials privately through the permitted environment.
 Require all of these checks for each version:
 
@@ -852,13 +893,16 @@ For the future implementation, run `npm run test:browser-first`,
 Run `npm run verify:alpha` for final cross-module certification.
 Record exact commands and blockers. None of those future runtime checks is
 claimed by this design document. This spec-only task requires the two docs
-checks and verification that only this spec and its review-2 record changed.
+checks and verification that only this spec and its review-3 record changed.
 
 ## Self-review
 
-- Review coverage: Both round-2 reviews were read in full. The final revision
-  [review-2 adjudication](dsh-native-auth-design-review-2.md) accepts all three
-  new Important findings and both new Minor findings. Rejected: 0. Deferred: 0.
+- Review coverage: Both round-3 reviews were read in full as data. The
+  [review-3 adjudication](dsh-native-auth-design-review-3.md) accepts DeepSeek's
+  one new Important finding. Rejected: 0. Deferred: 0. Grok raised no new
+  findings. Both reviewers found all five round-2 findings resolved.
+  The [review-2 adjudication](dsh-native-auth-design-review-2.md) stays historical.
+  Its package-root containment wording is superseded by this prefix boundary.
   The [review-1 adjudication](dsh-native-auth-design-review-1.md) remains the
   historical record of 19 accepted findings and one rejected startup-race
   claim. Its rejection still matches `harness-host-service.mjs:351` through `:373`.
@@ -868,9 +912,13 @@ checks and verification that only this spec and its review-2 record changed.
   Retirement clears the matching browser cache without changing governance.
   A later user request creates a fresh session. Failed prompts are never replayed.
 - Ambiguity check: OS-home equality and DSH-home subtree bans are separate.
-  Package checks permit contained npm links and validate ancestors through `/`.
-  Tests cover protected homes and descendants, writable ancestors, link escape,
-  child-exit chat recovery, and stale cache notifications. Plugin compatibility
+  The configured path is a dedicated npm prefix. Its entire tree is checked,
+  including hoisted dependencies and `.bin`. Links stay inside that prefix.
+  Ancestor checks reach `/`. Tests cover a safe hoisted dependency, a writable
+  hoisted dependency, contained `.bin` links, escapes, and both ceiling refusals.
+  The walk has explicit cost, entry-count, depth, and startup-time bounds.
+  Tests retain protected homes, writable ancestors, child-exit chat recovery,
+  and stale cache notifications. Plugin compatibility
   includes the stated proxy-bypass hardening. Telemetry proof exercises feedback.
 - Evidence limits: DSH-NATIVE-AUTH-1 and DSH-NATIVE-PROVIDER-1 remain mandatory
   before implementation of their affected policies. Each has outcome rules.
