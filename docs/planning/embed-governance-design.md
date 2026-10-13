@@ -117,6 +117,13 @@ tier. No code may infer the tier from the mode. A runtime may present
 `governed` only when the host has verified that its execution path checks every
 tool call. A reviewed transport adapter alone does not prove that property.
 
+`interfaces[].requiredCapabilities` lists requirements of the ResonantOS add-on
+or reviewed adapter that presents the interface. It never lists authority to
+pass into the external harness. An `agent-runtime` grant lets the host invoke
+the reviewed adapter. A `ui-embedding` grant lets it present the surface.
+Neither grant gives the self-governed harness a capability or token. Additional
+requirements still need host mediation for each ResonantOS operation.
+
 ### Validator rules
 
 Add one interface-validation pass after existing surface, tool and runtime
@@ -129,12 +136,12 @@ resolve endpoints, grant capabilities or mutate the input.
 | `interfaces` | Omitted or JavaScript `undefined` skips the entire new pass. Otherwise require an array of 0 to 16 entries. `null` is invalid. | `interfaces-array` |
 | Entry | Require a plain JSON object. Permit only the base keys and keys for its mode. Reject all unknown keys, including endpoints, credentials, defaults and executable paths. | `interface-object`, `interface-field` |
 | `id` | Match `^[a-z][a-z0-9-]{0,63}$`. IDs must be unique within the list. Do not trim or repair input. | `interface-id`, `duplicate-interface-id` |
-| `label` | String of 1 to 80 Unicode code points, already trimmed, with no U+0000 through U+001F or U+007F. Render as text. | `interface-label` |
+| `label` | String of 1 to 80 Unicode code points, with no U+0000 through U+001F or U+007F. Reject leading or trailing whitespace; do not trim. Render as text. | `interface-label` |
 | `mode` | Exactly `adapter-chat` or `embed`. Reject `web`, `terminal` and all other values. | `interface-mode` |
 | `governance` | Exactly `governed` or `self-governed`. Required for every entry. | `interface-governance` |
 | `requiredCapabilities` | Required array of unique values from `ADDON_CAPABILITIES`. Each must occur in `requestedCapabilities[].capability`. Empty arrays fail the mode-specific rules below. | `interface-capabilities`, `interface-unrequested-capability` |
 | Adapter reference | `agentRuntimeRef` must equal `agentRuntime`. Require a valid `agentRuntime` object with the complete version 1 adapter contract. Legacy invocation-tool-only runtimes remain valid without this interface, but cannot back a new `adapter-chat` entry. Forbid `surfaceId`. | `interface-runtime-reference` |
-| Adapter dependencies | Require `agent-runtime`. Include every capability in `agentRuntime.requiredCapabilities`, its invocation tool, and its model-selection contract and change tool when model selection is supported. | `interface-missing-capability` |
+| Adapter dependencies | Require `agent-runtime`. Include every capability in `agentRuntime.requiredCapabilities` and the referenced invocation tool's `requiredCapabilities`. When model selection is supported, also include `modelSelection.requiredCapabilities` and the referenced change tool's `requiredCapabilities`, if a change tool is declared. Include capability values, not tool names or objects. | `interface-missing-capability` |
 | Embed reference | `surfaceId` must match exactly one declared `surfaces[].id` whose type is `embedded-pane`. Forbid `agentRuntimeRef`. | `interface-surface-reference` |
 | Embed dependencies | Require `ui-embedding`. Include that surface's `shellNavigation.requiredCapabilities`, if present. If `embeddedWorkspace.surfaceId` names that surface, also include its `requiredCapabilities`. | `interface-missing-capability` |
 
@@ -261,7 +268,7 @@ available in the host adapter allowlist. The example claims no governed tier.
       "requiredCapabilities": ["agent-runtime"],
       "inputSchema": { "type": "object" },
       "outputSchema": { "type": "object" },
-      "audit": { "artifactTypes": [] }
+      "audit": { "logRequest": false, "logResult": false, "artifactTypes": [] }
     }
   ],
   "agentRuntime": {
@@ -319,7 +326,8 @@ The profile remains the proxy path segment. It is not a harness identity or
 consent key. The upstream, token file and extension ID have no new manifest
 fields. No actual local profile, path or credential belongs in an example.
 
-The host defines a fixed public PoC descriptor:
+The host defines a public PoC descriptor with fixed product fields and a
+recipient-specific notice key:
 
 ```ts
 type EmbedHarnessDescriptor = {
@@ -327,8 +335,24 @@ type EmbedHarnessDescriptor = {
   interfaceId: "panel";
   label: "Augmentor";
   governance: "self-governed";
+  noticeKey: string;
 };
 ```
+
+`noticeKey` is `augmentor-v1-` followed by the lowercase SHA-256 hex digest of
+the UTF-8 JSON array `["addon.augmentor-embed", new URL(upstreamUrl).origin]`.
+The host computes it from validated startup configuration. A different origin,
+including a different port, requires a new notice. Profile, interface and
+manifest version changes do not. The key is an opaque consent identifier, not
+a credential or a proof of product identity. Keep the upstream URL out of the
+descriptor, dialog, activity records and diagnostics. Only the notice map persists
+the key. Never accept a key supplied by the harness relay.
+
+This PoC supports an operator-configured Augmentor endpoint only. It does not
+discover the product behind an arbitrary endpoint. The named live gate below
+must verify that the configured recipient is Augmentor. Replacing it with a
+different product requires a reviewed descriptor and notice update first.
+Reusing an origin for a different product does not prove identity continuity.
 
 Expose it as `harness` in `/embed/status` when available, and alongside
 `hostPath` in `/embed/session`. Return `harness: null` when disabled.
@@ -379,11 +403,17 @@ suggest that it approves the harness's own tools.
 
 ### Event contract
 
-Use a shared pure module at
-`browser-first/resonantos-side-panel-extension/src/lib/embed-governance-contract.js`.
-It exports the metadata validator, domain projection and fixed constants.
-The Node host imports this module through the existing host-to-extension pure
-helper pattern. It contains no Chrome, filesystem, DOM or network calls.
+Use a shared pure module at `src/core/embed-governance-contract.js`.
+It owns the metadata validator, domain projection, redaction check and fixed
+constants. It contains no Chrome, filesystem, DOM or network calls.
+The Node host imports the canonical module. Package the same source for the
+unpacked extension at `src/lib/generated/embed-governance-contract.js` inside
+the extension root. Do not import a path outside the loaded extension root.
+The packaged file is a deterministic generated copy, never a second authored
+validator. The implementation must add a generation and byte-parity check to
+the extension preparation and test path. Keep the redaction rule source shared
+with the existing trace redactor; do not fork its secret patterns. Any needed
+pure extraction belongs in `src/core/` and preserves existing redactor behavior.
 Keep this log contract separate from SDK manifests and from `HarnessEvent`,
 which carries reply content and host execution provenance.
 
@@ -489,8 +519,16 @@ The checked-in live proof confirms the `turn.finished` event name and the
 status booleans. It does not establish every other upstream field above.
 These rows specify the accepted protocol projection for implementation, not
 a claim that all rows are already emitted by the current upstream version.
-The live acceptance gate must demonstrate each required event using the real
-harness. A missing or differently shaped event fails that gate. Do not silently
+Before implementing the event mapping, run **EMBED-UPSTREAM-1: recipient and
+relay verification** with the real configured Augmentor version. Record the
+version and field-presence results in redacted evidence outside Git. Verify the
+recipient label and every required event, including `conversationId`, without
+saving payloads. If the recipient and fields match, implement the table as
+written. If an event is absent or has a different shape, stop implementation of
+that mapping and require a reviewed narrow spec update. If the recipient is not
+Augmentor, do not use this descriptor or enable page sharing to it. No live run
+has established those facts for this revision. Repeat this gate for a changed
+upstream version or recipient configuration. Do not silently
 claim full coverage, inspect proxy bytes, or start retaining raw payloads to
 work around it. Any upstream protocol reconciliation stays in this narrow
 projection and needs a reviewed spec update before changing the mapping.
@@ -540,10 +578,13 @@ failure never rejects a chat operation or the Page action promise.
 ### First-share notice
 
 Show the notice before the first permitted Page share to an outside harness.
-The key is the host's stable `harnessId`, not profile, interface, origin, port,
-manifest version or conversation ID. One acknowledgement covers all profiles
-and interfaces of that harness under the same local user root. It survives
-browser and bridge restarts. A new harness ID requires its own notice.
+Use the mounted session's host-issued `noticeKey`. One acknowledgement covers
+all profiles and interfaces at that configured recipient under the same local
+user root. It survives browser and bridge restarts at the same upstream origin.
+A changed recipient key requires a new notice. A missing or invalid descriptor
+blocks Page sharing with `Assistant unavailable`; other bar controls still work.
+State responses identify the current key. A mismatch with the mounted descriptor
+invalidates its cached acknowledgement and requires a fresh session before share.
 
 First resolve the tab and check its site permission through the existing
 strict reader. A blocked, unreadable or unsupported page produces the existing
@@ -557,7 +598,7 @@ harness frame. Its exact text is:
 > tools. Sharing sends this page's title and address to Augmentor. It does not
 > give Augmentor permission to use ResonantOS tools or control this page.
 
-Use the host label in both positions. Buttons are `Cancel` and `Share page`.
+Use the host label in every position. Buttons are `Cancel` and `Share page`.
 Initial focus is on Cancel. Escape cancels. Trap focus while open and restore
 focus to Page on close. Associate the heading and description using dialog
 ARIA attributes. Cancel sends nothing and remembers nothing.
@@ -566,13 +607,18 @@ After Share page, re-resolve the tab and permission. If the tab ID or sanitized
 URL differs from the candidate selected when opening the notice, send nothing and
 announce `Page changed. Select Page again.` Do not remember that attempt.
 If the permission is now blocked or unreadable, send nothing and retain the
-existing denial message. Do not use an earlier permission snapshot.
+existing denial message. Remember nothing. Do not use an earlier permission
+snapshot. Also require the same mounted frame and recipient key as when the
+dialog opened. A replacement cancels the attempt without remembering it.
 
-For a valid confirmed attempt, cache notice version 1 for the harness in memory
-and send the context once. Start the durable notice write independently of the
-dispatch result. Remembering means acknowledgement, so it still counts
-if the subsequent dispatch finds the harness offline. It is not a receipt of
-delivery or a grant. `Page shared` continues to mean local dispatch only.
+For a valid confirmed attempt, call `sendContext` once immediately after the
+final checks. Only `sendContext(message) === true` permits caching notice
+version 1 for this key and starting its durable write. A false return or thrown
+error shows `Assistant offline` and creates neither cache nor durable notice.
+Cancellation, URL or tab change, permission failure and frame replacement also
+create neither. A later valid attempt must show the notice again. Successful
+local dispatch does not prove upstream receipt and is not a grant.
+`Page shared` continues to mean local dispatch only.
 
 Notice state is separate from recording consent. The dialog does not turn
 recording on. Turning recording off, pruning records, or deleting event
@@ -580,8 +626,8 @@ history does not clear the notice acknowledgement. A deliberate future change
 to the notice text requires increasing the notice version, not guessing from
 a manifest version.
 
-A notice-state read failure means unknown, so show the dialog. After confirmation
-and the final permission check, bound the independent acknowledgement write to
+A notice-state read failure means unknown, so show the dialog. After confirmation,
+the final checks and successful local dispatch, bound the acknowledgement write to
 2 seconds. If saving fails, keep the acknowledgement only for this mounted
 controller. It does not affect the share already dispatched. Show
 `Notice preference could not be saved. It may
@@ -602,8 +648,19 @@ The sole durable file is
 launcher resolver: `RESONANTOS_BROWSER_FIRST_USER_ROOT`, or
 `~/ResonantOS_User` by default. Never use the extension directory, a browser
 storage API, a repository-relative path or the proxy profile as a file path.
-Production storage must resolve outside the repository. An unsafe root disables
-this service without preventing bridge or embed startup.
+Production storage must resolve outside the repository. The launcher's lexical
+`path.resolve` check is insufficient. Before creating feature data, inspect
+every existing component of the absolute configured root with `lstat`. Reject
+a symlink in the root or any ancestor, even when its target is outside the repo.
+Canonicalize the existing root with `realpath` and compare it with the
+repository's `realpath` using a path-component containment check. Reject equality
+or containment. For a missing root, first validate and canonicalize the nearest
+existing ancestor, check the intended path, then create missing directories
+without following links. Recheck with `lstat` and `realpath` before use.
+Apply the same checks to `BrowserFirst`, `EmbedGovernance`, lock and temporary
+paths. Use canonical paths in test fixtures, such as `/private/tmp` on macOS.
+Recheck before reads and replacements; refuse path substitution. An unsafe root
+disables this service without preventing bridge or embed startup.
 
 ```ts
 type EmbedGovernanceState = {
@@ -616,15 +673,17 @@ type EmbedGovernanceState = {
 ```
 
 `writeEpoch` is a host-generated lowercase UUID v4. It is an append freshness
-value, not a credential or grant. `notices` permits only host-known harness IDs.
-For this PoC its only key is `addon.augmentor-embed`. Missing state initializes
+value, not a credential or grant. `notices` stores host-issued recipient keys.
+Stored keys must match `^augmentor-v1-[0-9a-f]{64}$`, with value exactly 1.
+Retain earlier recipient acknowledgements, but lookup only the current descriptor's
+key. Notice writes must match that current key exactly. Missing state initializes
 to recording off, a new epoch, an empty notice map and no events. Persist on
 the first mutation. No event IDs, timestamps or request bodies enter notices.
 
 Use UTF-8 JSON with a trailing newline. Require a private directory (`0700`)
 and private regular file (`0600`), owned by the bridge user. Reject symlinks
 and unsafe ownership or permissions in the service's directory and file.
-Resolve the configured root once. Route arguments never choose paths. Permit
+Fix the configured root at startup. Route arguments never choose paths. Permit
 only one writer process per user root. Acquire ownership by atomically creating
 a private `writer.lock` directory and writing a private `owner.json` containing
 only the bridge PID and a random ownership UUID. Reclaim a stale lock only when
@@ -634,6 +693,10 @@ mean unavailable. An interrupted lock creation needs operator cleanup, never
 automatic takeover. On close, remove only a lock with this process's ownership
 UUID. The lock directory and its owner file contain no event data. They are
 coordination artifacts in addition to `state.json`.
+PID reuse is a deliberate availability limit: an unrelated live process with
+that PID also blocks takeover. Never kill it or infer that a lock is stale from
+age. Operator cleanup must first establish that no bridge owns this user root.
+Automatic PID-reuse recovery is deferred beyond this PoC.
 
 Serialize all operations inside the owning service. Write a complete validated
 snapshot to a private temporary file in the same directory, flush it, rename
@@ -649,11 +712,13 @@ paused: local log is full` in Settings. It resumes after deletion or pruning
 creates room. This is a capacity failure, not permission to retain less data
 silently. The log is best effort and does not promise complete coverage.
 
-Retention is exactly 30 times 24 hours, using the host clock. Remove every
+The retention cutoff is 30 times 24 hours on the host wall clock. Remove every
 record with `recordedAt <= now - 2_592_000_000` milliseconds. Prune on startup,
 before every read and mutation, and every hour while the bridge runs, including
-when recording or the embed experiment is off. Clock rollback never extends an
-already removed record. No process can prune while the bridge is stopped;
+when recording or the embed experiment is off. Clock rollback can delay removal
+of records that still exist. It never restores a removed record. This is not a
+guarantee of exactly 30 elapsed days under clock changes or bridge downtime.
+No process can prune while the bridge is stopped;
 startup pruning runs before any retained record is returned.
 
 If disk pruning fails, exclude expired records from every read anyway. Stop
@@ -677,20 +742,31 @@ proxy. No special exemption or new relay command is needed.
 Every route requires the bridge token, the capability below and
 `loopbackHostOnly: true`. Add `requiredOrigin: "extension"`,
 `errorFamily: "embed-governance"` and `maxBodyBytes` route options for these
-routes. Require the configured extension origin, rejecting
-missing Origin, the bridge page origin and other CORS-allowed origins. Enforce
-that check in `bridge-server.mjs`, before invoking a service. CORS headers alone
+routes. In `authorizeBridgeRoute`, require exact string equality between the
+single request Origin and the configured `extensionOrigin`. A missing configured
+origin fails closed. Reject missing or duplicate Origin, the bridge page origin
+and every other origin, even when an allowed-origin wildcard matches it.
+Do not use `pickAllowedOrigin` for authorization. The bridge and embed service
+must use the same configured extension origin or governance is unavailable.
+Enforce the check before invoking a service. CORS headers alone
 are not authorization. Use fixed public errors for this route family and
 `Cache-Control: no-store` on every response. Do not return exception strings.
 
 | Method and path | Capability | Exact input | Successful payload, in the existing `ok: true` envelope |
 | --- | --- | --- | --- |
-| `GET /embed-governance/state` | `addon-runtime-read` | No query or body | `{ recordingEnabled, writeEpoch, noticeVersion: 1, noticeAcknowledged, available, problem }` |
-| `POST /embed-governance/recording` | `addon-runtime-control` | `{ enabled: boolean }` | `{ recordingEnabled, writeEpoch }` |
-| `POST /embed-governance/notice` | `addon-runtime-control` | `{ harnessId: "addon.augmentor-embed", version: 1 }` | `{ noticeAcknowledged: true }` |
+| `GET /embed-governance/state` | `addon-runtime-read` | No query or body | `{ recordingEnabled, writeEpoch, noticeKey, noticeVersion: 1, noticeAcknowledged, available, problem }` |
+| `POST /embed-governance/recording` | `embed-governance-consent-write` | `{ enabled: boolean }` | `{ recordingEnabled, writeEpoch }` |
+| `POST /embed-governance/notice` | `embed-governance-consent-write` | `{ noticeKey: string, version: 1 }` | `{ noticeKey, noticeAcknowledged: true }` |
 | `POST /embed-governance/events` | `addon-record-write` | One `EmbedEventSubmission` | `{ recorded: boolean, reason }` |
 | `GET /embed-governance/events` | `addon-record-read` | Optional `before` UUID v4 query only | `{ events, nextBefore }` |
-| `POST /embed-governance/events/delete` | `addon-record-write` | `{}` only | `{ deleted: true, writeEpoch }` |
+| `POST /embed-governance/events/delete` | `addon-record-write` | `{}` only | `{ deleted: true, writeEpoch, recordingEnabled, noticeKey, noticeAcknowledged }` |
+
+`noticeKey` is the current descriptor's key, or null when unavailable.
+`noticeAcknowledged` refers only to that key at version 1. It is false for a
+null key. This is an explicit single-active-recipient API. Generic multi-harness
+selection is deferred. The notice map retains earlier keys without exposing it
+as a new registry or selection API. Reject a mismatched notice write with 400
+`invalid-request`; never apply it to the current recipient instead.
 
 Read returns up to 100 records, newest first, in insertion order reversed.
 `nextBefore` is the last returned event ID if older records remain, otherwise
@@ -714,11 +790,19 @@ return HTTP 503 with a fixed public message.
 Validate unknown keys, JSON types and bounds before any mutation. The append
 body limit is 2,048 UTF-8 bytes; other POST bodies are limited to 512 bytes.
 Apply these limits during body reading, not after arbitrary buffering.
+Pass `route.maxBodyBytes` into `readJsonBody`. Count raw byte lengths before
+decoding or appending chunks. Stop accumulating at the first excess byte, return
+413, and drain or close the request with a bounded timeout. Preserve this error
+through the POST catch path; do not remap it to a generic 400. Other route
+families keep their existing defaults. For these GET routes, reject nonzero
+Content-Length or any Transfer-Encoding with 400 before the handler. The zero
+body limit also rejects any actual body bytes with 400. Never ignore a GET body.
 Unsupported methods, duplicate query keys and malformed URLs are rejected.
 Malformed input returns 400; oversized input returns 413. Set `maxBodyBytes`
-to the stated POST limit and to zero for GET. Authorization keeps the bridge's
-401 and 403 distinction. Error bodies contain only `ok: false`, a fixed code
-and fixed message. Use these exact public errors:
+to the stated POST limit and to zero for GET, with the GET exception above.
+Authorization keeps the bridge's 401 and 403 distinction. Error bodies contain
+exactly `{ ok: false, code, error }`. `error` is the fixed message below, matching
+the bridge client's existing field. Use these exact public errors:
 
 | HTTP status | Code | Message |
 | --- | --- | --- |
@@ -731,8 +815,23 @@ and fixed message. Use these exact public errors:
 | 413 | `request-too-large` | `Activity request too large.` |
 | 503 | `storage-unavailable` | `Activity storage unavailable.` |
 
-Classify these exact registered paths as this error family even when the method
-is unsupported, so a method mismatch cannot bypass the fixed-error policy.
+Add a method-independent path classifier before `compileRoutes` lookup in both
+the HTTP handler and self-test evaluator, and use it in `authorizeBridgeRoute`.
+The exact `/embed-governance` namespace and its slash-prefixed children belong
+to this family. They never fall back to the generic or OpenCode serializers.
+Within it, a known path with an unsupported method returns 405 and an unknown
+path returns 404, after bridge-token, Host and exact-origin checks. Supported
+routes also require their declared capability before body parsing or service
+dispatch. Reject malformed namespace targets with fixed 400 responses.
+
+Add explicit `embed-governance` branches to authorization's `refuse` helper and
+`routeError`. Map auth failures, parser failures, service failures and the outer
+HTTP catch to this table. Unknown exceptions become 503 `storage-unavailable`.
+An IP allowlist refusal in this family uses the fixed 403 response too.
+No exception message, rejected value or OpenCode error may escape these paths.
+Keep the existing global `OPTIONS` 204 preflight. It runs no service, exposes no
+activity data and grants no authorization. Include `Cache-Control: no-store`
+on these preflight responses as well as all data and error responses.
 The service has no network or process-launch
 authority, and may access only its own storage directory.
 
@@ -750,7 +849,19 @@ be recorded if recording remains enabled. Deletion preserves a valid recording
 preference and notice map. Recovery from an invalid file resets both to defaults.
 
 Add all six method/path pairs to the extension bridge capability map and route
-audit fixtures. Reuse existing capability names; mint no new tokens. The bar,
+audit fixtures. Add only `embed-governance-consent-write` to the canonical
+`bridge-capability-tokens.mjs` mint map and the client's derived allowlist.
+Its argument is `embed-governance-consent-token`; its environment name is
+`RESONANTOS_BROWSER_FIRST_EMBED_GOVERNANCE_CONSENT_TOKEN`. Use the existing
+authenticated bootstrap. An `addon-runtime-control` or `addon-record-write`
+token alone cannot acknowledge a notice or enable recording. This is a bridge
+transport capability for the trusted extension, not an SDK manifest capability
+or a grant to the outside harness. It does not prove a human click by itself.
+The trusted controller issues consent writes only from the explicit checkbox
+action or a confirmed, successfully dispatched first share. A relay event,
+mount, poll, grant or slot action must never issue those writes. Do not claim
+protection from a compromised extension or a holder of its bootstrap credential.
+The bar,
 notice dialog and history renderer receive callbacks and safe data, never a
 bridge config, token, ticket or upstream credential. The controller calls the
 existing bridge client. No route accepts a harness-supplied approval as consent.
@@ -771,8 +882,11 @@ Above the list show:
 
 No records displays `No recorded activity`. A failed read displays `Activity
 unavailable`, not an empty-success state. Pagination is explicit and does not
-poll. Refresh reloads the newest page. Clear visible rows immediately after
-a confirmed deletion acknowledgement.
+poll. Refresh reloads the newest page. After a deletion acknowledgement, render
+its `recordingEnabled`, `writeEpoch`, `noticeKey` and `noticeAcknowledged` snapshot
+and clear visible rows before showing success. Recovery must uncheck recording
+and clear the card's notice state. Ignore any older in-flight read that could
+overwrite this snapshot. The card does not rely on the side panel's polling.
 
 Delete activity opens a confirmation: `Delete all recorded harness activity on
 this computer? This keeps your recording choice and first-share notices.`
@@ -816,16 +930,17 @@ spec-only task does not edit that file. Paths under `extension/` below mean
 | Path | Primary responsibility | Allowed state and writes | Excluded responsibility |
 | --- | --- | --- | --- |
 | `src/core/contracts.ts`, `packages/addon-sdk/src/contracts.ts`, `index.ts`, `validation.ts` | Interface types, exports and pure manifest validation | Declarative input and detached diagnostics | Runtime grants, tier verification, launches or slot mutation |
-| `extension/src/lib/embed-governance-contract.js` | Closed metadata schema and pure sanitizing projections | Bounded detached metadata | Raw event persistence, Chrome, filesystem or credentials |
+| `src/core/embed-governance-contract.js` and any extracted pure redaction helper | Closed metadata schema, domain projection and shared redaction check | Bounded detached metadata; generated extension copy with parity checks | Raw event persistence, Chrome, filesystem or credentials |
 | `extension/src/lib/embed-governance-controller.js` | Relay observations, consent reads, first-share flow and bounded event delivery | In-memory baselines, notice acknowledgement cache and safe queue | Authority decisions, filesystem access or raw transcript storage |
 | `extension/src/lib/embed-bar-actions.js` | Existing page resolver and strict permission gate, now with notice and successful-share callbacks | Explicit page-share intent and mode preference | Consent persistence, capability issuance or log storage |
 | `extension/src/lib/embed-bar.js`, `embed-bar-model.js` | Tier badge, accessible descriptions and existing controls | Safe host descriptor, DOM and narrow callbacks | Bridge config, credentials, raw events or harness approval decisions |
 | `extension/src/lib/settings/privacy-section.js` | Recording controls and paged read/delete presentation | Validated host snapshots and explicit user intents | Filesystem policy, authoritative preference cache or payload logging |
 | `extension/src/side-panel-entry.js` | Compose the controller, validated relay, bar and frame lifecycle | Frame identity and projected proof state | Protocol-domain persistence, new relay authority or slot selection |
 | `extension/src/lib/bridge-client.js` | Authenticated method/path capability mapping | Existing scoped transport | Consent decisions or passing tokens into UI callbacks |
-| `browser-first/host/embed-host-service.mjs` | Existing tunnel plus fixed public harness descriptor | Operator config, tickets and sessions | Event parsing, recording storage or manifest-driven launch |
+| `browser-first/host/embed-host-service.mjs` | Existing tunnel plus public harness descriptor and origin-bound notice key | Operator config, tickets and sessions | Event parsing, recording storage or manifest-driven launch |
 | `browser-first/host/embed-governance-host-service.mjs` | Validated routes, recording preference, notices, event storage and pruning | Its private user-root directory only | Proxy parsing, harness execution, grants or trusted audit receipts |
-| `browser-first/host/bridge-server.mjs` | Existing authentication plus exact-origin, body-limit and fixed-error route policy | Transport authorization and bounded request parsing | Consent, log projection, storage or retention policy |
+| `browser-first/host/bridge-server.mjs` | Existing authentication plus exact-origin authorization, method-independent error family and per-route byte limits in the reader | Transport authorization, fixed errors and bounded request parsing; unchanged preflight semantics | Consent, log projection, storage or retention policy |
+| `browser-first/host/bridge-capability-tokens.mjs` | Consent-write transport scope in the canonical mint map | Existing per-capability token minting | Human consent decisions or SDK grants |
 | `browser-first/host/run-bridge-minimal.mjs` | Construct the governance service, compose routes and close resources | Pass the existing user root and descriptor provider | Inline event, consent or retention logic |
 
 No ownership moves to a desktop shell, native browser host or upstream harness.
@@ -843,7 +958,8 @@ section. It must not gain domain logic. No new application-level store is needed
   duplicate capabilities and undeclared requirements. Pin issue codes and paths.
   Prove old manifests receive unchanged diagnostics and are not mutated.
 - Metadata tests use payloads containing canary prompts, responses, arguments,
-  results, tokens, error strings, page titles and URLs. Assert none reaches the
+  results, tokens, error strings, page titles, URLs and `conversationId` values.
+  Assert none reaches the
   projected record, proof history, body, stored JSON or fixed diagnostics.
   Test name rejection, strict booleans, domain normalization, IDNA, IPv4,
   IPv6, localhost, ports, query strings and fragments.
@@ -853,16 +969,24 @@ section. It must not gain domain logic. No new application-level store is needed
   stale epochs, queue bounds, timeout and pagehide cleanup.
 - First-share tests cover a fresh harness, another profile of the same harness,
   repeat mounts, cancellation, permission-read failure, navigation during the
-  dialog, a permission change, remember failure and recording off. Assert one
+  dialog, a permission change, remember failure and recording off. Test a false
+  or throwing dispatch, frame replacement and a changed upstream origin or port.
+  Every failed share leaves both notice stores untouched and the next valid
+  attempt opens the dialog. An unchanged origin survives restart; a new one
+  cannot reuse the old acknowledgement. Assert one
   context dispatch, no implicit recording consent and no grant mutation.
 - Bar tests cover visible tier text, host-owned tier, malformed descriptor,
   offline fallback, keyboard focus, tooltip Escape behavior and Approvals copy.
 - Storage tests use an injected clock and isolated temporary user root. Cover
   exact 30-day cutoff, startup/hourly/read/write pruning while disabled,
-  permission and symlink rejection, unsafe roots, lock contention, atomic-write
+  permission and symlink rejection, unsafe roots, lock contention, PID reuse,
+  wall-clock rollback, atomic-write
   failure, stale temp cleanup, invalid state, size limits, durable restart,
   pagination and cursor expiry. Race deletion and toggles against queued writes.
   Prove deleted records cannot return through a stale epoch.
+  Test a user-root symlink and an ancestor symlink into the repository, links
+  outside the repository, a missing root under a symlink, and path replacement.
+  No feature file may be created at the rejected destination.
 
 ### Composition tests
 
@@ -871,12 +995,22 @@ section. It must not gain domain logic. No new application-level store is needed
   both PoC-enabled and PoC-disabled compositions.
 - Audit method/path capability parity between host and client. Reject a missing
   bridge token, wrong capability, embed cookie alone, forged Host, missing or
-  foreign Origin, bridge-page Origin, malformed query, oversized body and
+  foreign Origin, duplicate Origin, wildcard-allowed foreign Origin, bridge-page
+  Origin, malformed query, oversized body and
   client attempts to provide identity, timestamps or extra content fields.
+  Assert the exact status, code and error text from every public error row.
+  Cover wrong methods, unknown namespace paths, GET bodies, malformed JSON and
+  unknown exceptions. Assert no-store and unchanged empty OPTIONS 204 responses.
+  Send chunked bodies that cross 512 and 2,048 bytes without ending the stream;
+  require rejection before end and prove the service was not invoked.
+  Prove slot/grant control and record-write tokens cannot perform consent writes.
+  Prove polling and relays do not request consent changes. Delete valid and
+  invalid stores with the Privacy card mounted; verify the returned state is
+  rendered before success, including when an older state read completes late.
 - Run real bar actions, permission store, metadata controller and local service
   against fixtures. Confirm domain-only durable records and local-dispatch
   semantics. Inject log failures while chat, Page, Workspace and Assistant work.
-- Reopen state after restart. Verify preference and per-harness notice survive,
+- Reopen state after restart. Verify preference and recipient notice survive,
   expired records do not appear, deletion is durable and off blocks appends.
 - Confirm view selection makes no registry or slot assignment calls. Existing
   compare-and-swap slot tests remain the authority for changing harnesses.
@@ -886,6 +1020,8 @@ section. It must not gain domain logic. No new application-level store is needed
 Extend the manual `browser-first/test/embed-live.mjs` proof using a disposable
 browser profile and external temporary user root. Use the real external
 Augmentor and retain only redacted evidence outside Git.
+Complete **EMBED-UPSTREAM-1** before event-mapping implementation, then repeat
+it here against the finished integration. Fixture tests cannot satisfy it.
 
 1. Start with recording off. Inspect the marker and description at 320 px and
    420 px. Confirm a single row, an unchanged harness panel, keyboard access,
@@ -916,17 +1052,27 @@ These commands are implementation gates, not claims of completed live proof.
 
 ## Self-review
 
-- Placeholder scan: no unfinished sections or deferred implementation choices.
-  Example identities are explicitly illustrative and contain no local secrets.
-  Both JSON examples parse and pass the existing SDK validator. The new
-  interface rules still require the implementation tests specified above.
-- Internal consistency: SDK declarations confer no runtime authority. The host
-  owns identity and storage. The extension captures metadata. Off, deletion,
-  retention and first-share acknowledgement have separate stated effects.
-- Scope check: only the three approved additions are designed. The PoC remains
-  operator-configured, off by default, outside Alpha and without manifest-driven
-  launch, new harness capabilities or slot-selection behavior.
-- Ambiguity check: types, references, capability subsets, labels, event fields,
-  capture rules, routes, consent keys, defaults, retention cutoff and failure
-  behavior are explicit. The current upstream evidence limit is called out and
-  has a required live acceptance gate rather than an invented support claim.
+- Review 1: both independent reviews were read in full and checked against this
+  worktree. The [adjudication table](embed-governance-design-review-1.md) records
+  all 16 findings: 9 Important and 7 Minor. None was Critical. All 16 are
+  accepted; none is rejected. Two minor extensions remain deferred: a generic
+  multi-harness state API and automatic recovery from PID reuse.
+- Examples: both JSON manifests parse and pass the current SDK validator.
+  The adapter example now supplies both required audit booleans. The proposed
+  interface rules still need their own implementation tests. Example identities
+  are illustrative and contain no local secrets.
+- Consent: remember only a successful local share. The host-issued notice key
+  changes with the upstream origin. Consent writes use their own extension
+  transport scope. That scope is neither a harness grant nor proof of a click.
+  Delete and recovery return the state the Privacy card must render.
+- Boundaries: shared validation belongs in core. Storage uses canonical paths
+  and rejects symlinks. Exact-origin checks, method-independent errors, reader
+  byte limits and preflight behavior are explicit implementation requirements.
+  They are not claims about protections already shipped in this checkout.
+- Limits: retention follows the host wall clock and bridge availability.
+  **EMBED-UPSTREAM-1** must resolve recipient and relay facts before implementing
+  the mapping. Its pass and failure paths are stated. No live proof is claimed.
+- Scope: decisions 1 through 5 remain fixed. Only the three approved additions
+  are designed. The PoC stays off by default and outside Alpha. There is no
+  launcher, slot-selection path or new authority for the outside harness.
+  This revision does not change DSH lifecycle, credential or plugin behavior.
