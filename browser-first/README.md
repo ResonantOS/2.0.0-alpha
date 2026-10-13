@@ -75,7 +75,9 @@ Testing-branch design and execution details are in the
 [approved bar design](../docs/planning/embed-bar-design.md) and
 [bar implementation plan](../docs/planning/embed-bar-plan.md). The
 [interface decisions](../docs/planning/embed-interface-decisions.md) approved on
-2026-10-10 govern this branch.
+2026-10-10 govern this branch; the
+[governance design draft](../docs/planning/embed-governance-design.md) covers the
+three approved pieces not built yet.
 
 ## Context Session Persistence
 
