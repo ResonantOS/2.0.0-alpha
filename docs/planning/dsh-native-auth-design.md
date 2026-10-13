@@ -113,23 +113,44 @@ both modes can be installed at once. The example port is not a default.
 | `RESONANTOS_HARNESS_BINDINGS` | Existing default `[]`. At most one native binding per bridge. Existing plugin and bearer bindings may coexist. |
 | Native `endpoint` | Required exact `http://127.0.0.1:<port>`, with port 1024 through 65535. No default, port zero, DNS name, TLS, path, query, fragment, or userinfo. No trailing slash in the binding or manifest. |
 | Native `source` | Exactly `{ "managedDsh": true }`. File, environment-token, and mixed sources are rejected for this scheme. |
-| `RESONANTOS_DSH_PACKAGE_ROOT` | Required absolute path to an operator-installed `@deepseek-ai/dsh` package directory. No search through PATH, npm execution, download, or desktop bundle discovery. |
+| `RESONANTOS_DSH_PACKAGE_ROOT` | Required for native launch only. Absolute path to an operator-installed `@deepseek-ai/dsh` package directory. No search through PATH, npm execution, download, or desktop bundle discovery. |
 | `RESONANTOS_DSH_HOME` | Optional absolute path. Default is `<userRoot>/BrowserFirst/Harnesses/dsh-native`, outside the repository. This is the child's actual DSH_HOME. |
 | `DEEPSEEK_API_KEY` | Optional bridge environment value forwarded only to the native child. Missing means no key is injected. Provider setup errors appear on model use. No lookup in another application's credentials. |
 | `RESONANTOS_HARNESS_DEMO` | Existing default remains off. Enabling it offers the separate native example only when a native binding is configured. It grants nothing. |
 
-These values are read once when composing the bridge. There are no new bridge
-CLI flags, dotenv reads, settings persistence, hot reload, or arbitrary child
-arguments. Invalid native configuration refuses bridge startup with a fixed
-configuration error. An absent or incompatible package is a runtime failure
-on the first authorized session request, not an install attempt.
+Snapshot native settings only when a `dsh-native-cookie` binding is present.
+Without one, ignore `RESONANTOS_DSH_PACKAGE_ROOT` and `RESONANTOS_DSH_HOME`.
+Do not validate them or read their paths. Plugin-only and non-DSH bridges keep
+working without either variable. There are no new CLI flags, dotenv reads,
+settings persistence, hot reload, or arbitrary child arguments.
 
-Resolve the package root to a canonical absolute directory. Validate its
-package name and semver version from `package.json`. Require `lib/bin.js` to
-resolve inside that root and be a regular file. Reject a package tree whose
-root or selected launch files are writable by other users. Permit root or the
-current user as owner. The operator-approved package remains trusted code.
-Never take a package path from a manifest or route payload.
+Use this exact validation split:
+
+| Phase | Failures | Result |
+| --- | --- | --- |
+| Bridge composition | Malformed binding; duplicate native bindings; wrong adapter, scheme, source, or endpoint; nonempty relative package/home path; native binding on a platform other than macOS or Linux | Refuse bridge startup with the fixed configuration error. Reject a second native binding even if its name or endpoint differs. |
+| First authorized native acquisition | Unset or empty package root; absent path; unreadable metadata; wrong package name; invalid or unsupported version; unsafe package tree; missing or invalid entry | Return `runtime-unavailable` for native use. Keep the bridge and other modes available. |
+| First authorized native acquisition | Unsafe home, lock conflict, busy port, spawn, announcement, cookie, or protocol failure | Use the matching runtime error below. Never install or adopt a process. |
+
+Snapshotting a path does not resolve or inspect it. Package and home filesystem
+checks are lazy and follow authorization. Restart the bridge after changing
+any setting. An unset package root is a missing runtime dependency, not a
+malformed binding.
+
+Resolve the package root with `realpath`. Validate the canonical root and every
+nested directory and file, including imported modules and dependencies. Each
+entry must be owned by root or the current user. Require `(mode & 0o022) === 0`
+for every entry. Directories must be directories; all other entries must be
+regular files. Reject symlinks below the canonical root and special files.
+Checking only `package.json` and `lib/bin.js` is insufficient. Group or other
+read/execute permissions are allowed. The private credential-file rule remains
+stricter and is unchanged.
+
+Validate package name and semver from `package.json`. Require `lib/bin.js` to
+resolve inside the root. Complete validation before spawn. The operator must
+keep the validated installation stable during use. This is a trust check, not
+a sandbox against code or replacements by an already trusted owner. Never take
+a package path from a manifest or route payload.
 
 Use the bridge's absolute `process.execPath` to launch the validated entry:
 
@@ -146,7 +167,13 @@ environment, a browser launch, or a health-check command.
 
 Treat the configured DSH_HOME as an exclusive bridge-managed directory.
 Resolve its parent and reject repository paths, symlinks in the managed path,
-the real user home, and any nonempty unmarked directory. On first use, create
+and any nonempty unmarked directory. Reject `os.homedir()` itself, `~/.dsh`,
+and the known desktop home
+`~/Library/Application Support/Augmentor/data/augmentor/managed-dsh/home`,
+including paths inside those DSH homes. Do not read desktop config to discover
+more paths. The home-directory check is equality, not an ancestor ban.
+The default under `~/ResonantOS_User/BrowserFirst/Harnesses/dsh-native` is valid.
+A custom path still must be dedicated to the bridge. On first use, create
 it with mode 0700 and a mode 0600 ownership marker. The marker contains only
 format version, native binding name, and canonical bridge user root.
 An existing marker must match. Never adopt, copy, migrate, clear, or chmod
@@ -184,8 +211,10 @@ environment variable alone is not proof of absent telemetry traffic.
 
 ## Process lifecycle and endpoint ownership
 
-Add one host-only `dsh-runtime.mjs` module. It manages at most one child per
-native binding and bridge. Concurrent acquisitions share one startup promise.
+Add one host-only `dsh-runtime.mjs` module. It manages at most one child for
+the bridge and its single native binding. Concurrent acquisitions share one
+launch promise. It resolves at Announced with a private runtime lease. Host
+composition then gates session creation on its separate shared Ready promise.
 Each child gets a fresh in-memory runtime epoch and lifetime abort signal.
 That epoch is separate from the registry's boot epoch and slot generation.
 
@@ -193,8 +222,8 @@ That epoch is separate from the registry's boot epoch and slot generation.
 | --- | --- |
 | Stopped | An authorized session creation acquires the first runtime lease and starts a child. Registry reads, installation, grants, and slot assignment do not spawn. |
 | Starting | Lock and port checks pass; spawn succeeds; wait for the exact boot announcement. |
-| Announced | Token and endpoint are captured. The transport performs native authentication and the adapter probes modelCatalog. No session reference is returned yet. |
-| Ready | Authenticated probe succeeds. Authorized sessions share this child, each with its own transport lease and DSH session. |
+| Announced | Token and endpoint are captured. Host composition sequences transport authentication and the adapter protocol probe. No session reference is returned yet. |
+| Ready | Authenticated protocol readiness is established. Provider readiness is separate. Sessions share the child and its cookie, with separate transport leases and DSH sessions. |
 | Stopping | Last lease is released, all runtime authority is revoked, initial readiness fails, or the bridge closes. New acquisitions wait for cleanup. |
 | Failed | Initial startup, child exit, or cleanup fails. Associated sessions are retired. No background restart occurs. |
 
@@ -206,19 +235,41 @@ adopting a listener. DSH must announce exactly the approved origin and port.
 No health success without an owned, still-live child and its captured token
 counts as readiness.
 
+`harness-host-service.mjs` owns the acquire, authenticate, probe, and mark-Ready
+sequence in its `resolveAdapter` path. It shares one readiness promise per
+runtime epoch. The runtime owns spawn and token capture. The transport owns
+HTTP authentication. The adapter validates Typert envelopes and catalog values.
+Composition reports readiness or failure to the runtime. The runtime must not
+import RPC or registry logic.
+
 The startup deadline is 30 seconds from acquisition through token exchange
-and modelCatalog validation. Each HTTP or WebSocket opening also retains the
-existing 10-second transport bound, capped by the remaining startup deadline.
-There is no startup retry loop. Follow readiness retains its 15-second bound
-and turns retain their 120-second bound. These are constants, not new env flags.
+and protocol readiness validation. Each HTTP or WebSocket opening retains
+the existing 10-second transport bound, capped by the startup deadline.
+There is no startup retry loop. Follow readiness retains its 15-second bound.
+Direct `/agent/turn` turns retain the adapter's 120-second bound. Governed
+`/augmentor/chat` keeps its existing 30-second reply deadline after session
+creation and turn allocation. Startup is outside that reply race, as it is
+today in `harness-host-service.mjs:351` and `:358`. Do not move session creation
+into that race or cancel before a turn ID exists. Cold chat can take the
+30-second startup budget, a bounded session/create RPC, and then the separate
+30-second reply budget. It does not promise 120 seconds for a browser reply.
+These are constants, not new environment flags.
+
 Concurrent waiters share the first launch's deadline. Later transport leases
-against a ready child authenticate within the existing 10-second request bound.
-Their authentication failure retires only that lease's session. Failure of the
-initial readiness probe fails the shared startup and stops that child.
+use the current shared cookie without another login exchange. Requests keep
+the existing 10-second bound. Initial transport, authentication, or schema
+failure stops the child. A recognized provider rejection follows the separate
+readiness rule below and does not stop it.
 
 Propagate the boundary's pending-session abort signal through adapter
-resolution, runtime acquisition, and transport startup. Recheck registry
-authorization before spawn, after acquisition, and before returning a session.
+resolution, runtime acquisition, and transport startup. Add the signal to the
+host-only `resolveAdapter` contract; the current call does not pass it.
+The boundary owns registry checks before acquisition, after acquisition, and
+before returning a session. Its synchronous registry fence aborts each affected
+pending signal. Immediately before spawn, the runtime checks that at least one
+authorized waiter's signal remains live and that its epoch is current. It
+checks them again after acquisition. These signal checks carry the boundary's
+authorization decision. Do not inject the registry or grants into the runtime.
 A revoked or timed-out pending session releases its lease even if startup
 settles late. One cancelled waiter must not stop a child still needed by
 another authorized waiter. No queued acquisition survives its authorization.
@@ -228,7 +279,7 @@ notifies the boundary to emit one fixed `runtime-unavailable` terminal error
 on each active stream, then abort and retire all associated pending and active
 sessions. It closes streams and suppresses late output. New calls using retired references
 return `session-not-found`. A new explicit session request may start one new
-child after confirmed cleanup, with a new runtime epoch, token, and cookies.
+child after confirmed cleanup, with a new runtime epoch, token, and cookie.
 It cannot replay a prompt or reconnect an old session. The registry does not
 silently change owners or grants to recover a process failure.
 
@@ -238,21 +289,34 @@ revocation that disables session creation. A turn-only cancellation uses
 `session/cancel` and keeps the session's runtime lease. It does not kill other
 sessions. Dependency-only revocation preserves the current policy semantics.
 
-On stop, first fence authority and abort network work. Attempt bounded adapter
-cancellation. Send SIGTERM to the exact live child handle, wait up to one
-second, then SIGKILL if it is still live, and wait one more second. Cleanup is
-idempotent. Track the stop promise separately from the existing one-second
-adapter cleanup race. `harnessService.close()` must drain runtime stop promises
-before the launcher exits. Its total native-runtime drain budget is three
-seconds. A synchronous exit hook may only best-effort signal owned live handles.
+Use one stop clock, starting at the synchronous fence (`t = 0`). Abort ordinary
+network work and start best-effort adapter cancellation under a cleanup-only
+signal. It cannot publish output or accept new work. Allow at most one second
+for that phase. Send SIGTERM to the exact live child by `t = 1s`. Wait at most
+one more second. If still live, send SIGKILL by `t = 2s` and await confirmed
+exit until `t = 3s`. Move to the next phase early when possible. Exit at any
+phase completes cleanup. All waits share the same three-second cap.
+
+Cleanup is idempotent. The existing one-second adapter cleanup race occupies
+the first phase; it is not an extra wait before the stop clock. Track runtime
+stop promises separately so that race cannot discard them. On bridge close,
+start the native fence and stop clock immediately, in parallel with other
+service cleanup. `harnessService.close()` drains those promises before the
+launcher exits. At the cap, retain the lock and emit the unconfirmed-exit
+message only if exit is still unconfirmed. A synchronous exit hook may only
+best-effort signal owned live handles.
 
 The bridge must own the final exit on SIGINT and SIGTERM. Today OpenCode can
 register another signal handler that calls `process.exit()` immediately.
 Add a host-only `installSignalHandlers` option to `ensureOpencodeServer`,
 defaulting to true for existing callers. Bridge composition passes false at
 its `ensureServer` injection into the OpenCode boundary. Retain OpenCode's synchronous
-exit cleanup hook. The bridge's one idempotent shutdown promise drains both
-services before exiting. This is a lifecycle integration change only; OpenCode
+exit cleanup hook. Split registration into two independently guarded paths:
+always install the exit cleanup hook once; install signal handlers only when
+`installSignalHandlers` is true. Do not gate the whole existing
+`installShutdownHooks` function or share its single flag between these paths.
+The bridge's one idempotent shutdown promise drains both services before
+exiting. This is a lifecycle integration change only; OpenCode
 authentication, session behavior, and streams stay unchanged.
 
 Never signal a process found by port, name, desktop configuration, or a saved
@@ -265,7 +329,12 @@ replacement child or its secrets.
 
 ## Token capture and credential lease
 
-Decode stdout incrementally as UTF-8. Accept only a complete line beginning
+Decode stdout incrementally as UTF-8. Before readiness, drain and discard
+complete lines that do not begin `dsh web: `. Banners and warnings are not token
+candidates and do not themselves fail startup. They still count toward the
+line and total byte limits. Never forward or log them. Validate every line
+with the exact prefix; malformed prefixed lines fail startup.
+Accept only a complete announcement line beginning
 `dsh web: ` followed by the login URL. Accept LF or CRLF. The URL must have the
 exact approved origin, path `/`, no userinfo or fragment, and exactly one
 query field named `token`. After decoding, the token must match
@@ -289,11 +358,22 @@ manifest-loadable factory or executable path.
 
 The lease carries `endpoint`, `authScheme`, `loginToken`, and `cookie` through
 its private `use(callback)` interface. Plugin leases retain `actionToken`.
-Only the transport receives these values. Add a private cookie setter that
-validates, remembers, and replaces the cookie. Native runtime leases retain
-the captured login token for reauthentication while the child lives. Each
-transport keeps its cookie in its own credential lease. Cookie refresh is
-single-flight within that transport, not global across unrelated sessions.
+Only the transport receives these values. `harness-credentials.mjs` owns one
+native credential record per binding and live runtime epoch. All native leases
+reference that record. It holds one cookie generation and one shared exchange
+promise. The runtime supplies the boot token and lifetime signal; it does not
+perform HTTP authentication. The transport supplies the guarded exchange
+operation to the record's single-flight coordinator.
+
+Exchange once at initial startup. Acquiring a second session must not exchange
+again. A refresh, when permitted by DSH-NATIVE-AUTH-1 below, is single-flight
+across every session on that child. Atomically replace the shared cookie and
+advance its generation. Requests snapshot the generation they used. A late
+401 from an older generation uses the current cookie for its one retry, when
+the verified policy permits replay, without starting another exchange. Pause new authenticated sends while refresh is
+pending. Cancelled waiters cannot publish a cookie or cancel refresh needed by
+another authorized waiter. Epoch change or loss of the last authorized lease
+aborts the exchange. Never copy usable cookies into per-session caches.
 
 Register the login token, full login URL, cookie pair, cookie value, and their
 supported encoded forms with the existing recursive sanitizer before any
@@ -303,14 +383,26 @@ public errors, event streams, diagnostics, manifests, registry files, generated
 bridge config, nor browser storage may contain them.
 
 Native mode publishes status and final replies, with `supportsStreaming: false`
-as in the current DSH example. Its host wrapper suppresses public delta frames
-and sanitizes the assembled final frame again through the transport's narrow
-sanitizer method. This prevents a credential split across upstream text chunks
-from escaping through deltas or signed receipts. History and model responses
-remain sanitized before returning. Plugin output behavior stays unchanged.
+as in the current DSH example. That metadata does not suppress host events.
+The `resolveAdapter` invoke wrapper must drop every native `delta` before it
+reaches the boundary event bus. Gate this behavior on
+`authScheme === 'dsh-native-cookie'`. Expose a narrow `transport.sanitize(value)`
+method to this wrapper, never the credentials themselves.
 
-Disposal clears usable token and cookie references and releases the runtime
-lease. Retain redaction patterns while late callbacks can still run, as today.
+Sanitize every assembled native frame and public method result after the
+adapter finishes joining text and before any publication or receipt signing.
+This includes final text, history messages, catalog names, status, and selection
+results. Wrap `history`, `modelCatalog`, `status`, and `selectModel` at the same
+composition point. Sanitation of individual upstream JSON strings is still
+required but is insufficient. A token split across two history text parts must
+be redacted in both the returned history and its signed route receipt. Keep
+plugin streaming and output behavior unchanged.
+
+Disposal invalidates the caller's secret access and releases its runtime lease.
+It must not clear the shared cookie while another authorized lease exists.
+Final release or epoch failure clears usable token and cookie references.
+Retain every issued cookie's redaction patterns for all leases while late
+callbacks can still run, including callbacks after rotation or disposal.
 Drop those objects once cleanup completes. JavaScript cannot promise physical
 erasure of immutable strings. No application-level secret persistence, debug
 dump, or heap snapshot is part of this design.
@@ -318,7 +410,15 @@ dump, or heap snapshot is part of this design.
 ## Native transport protocol
 
 Keep authentication in `harness-transport.mjs`. Use the existing endpoint guard
-for every connection. Native authentication runs before the first session RPC:
+for every connection. The production endpoint guard must use an explicitly
+proxy-disabled dispatcher for HTTP and a direct connector for WebSockets.
+Neither may inherit the global dispatcher or consult environment proxy settings.
+This applies to native and plugin DSH exchanges, including token queries and
+cookie requests. Keep numeric-address pinning, Host/port checks, and manual
+redirects. Child environment filtering alone does not protect bridge requests.
+Do not change the parent environment or global networking for other services.
+
+Native authentication runs before the first session RPC:
 
 1. GET `/?token=<encoded login token>` with manual redirects and no cookie.
 2. Require status 303. An optional Location must resolve to `/` on the same
@@ -327,28 +427,58 @@ for every connection. Native authentication runs before the first session RPC:
    name/value grammar and an 8192-byte pair limit. Reject missing, duplicate,
    expired, or conflicting authentication cookies. Ignore unrelated cookies.
    Never create a general cookie jar or persist response headers.
-4. Store only `name=value` in the lease. Cancel the response body without
-   reading the SPA. Make a read-only modelCatalog probe through the adapter
-   and require its response validation to pass. The current `probe()` checks
-   only the RPC envelope. Extend it to reuse the catalog decoder from
-   `modelCatalog()` without needing a created session. An empty valid catalog
-   proves protocol readiness, not provider readiness. This shared validation
-   also applies to plugin probes and confers no new authority.
+4. Store only `name=value` in the shared epoch credential record. Cancel the
+   response body without reading the SPA. Make a read-only modelCatalog probe
+   through the adapter. Reuse the catalog decoder without requiring a session.
+   A valid empty catalog establishes Ready with no available models. It does
+   not prove provider readiness.
+
+The current `rpc()` collapses all `result.ok !== true` responses into one error.
+For native readiness, distinguish transport/authentication failures, malformed
+protocol envelopes or catalog values, and recognized provider/model rejection.
+The first two fail startup. A recognized provider/model rejection establishes
+protocol readiness with provider availability false. Return that classification
+to composition, not a thrown startup error. Continue session creation. If that
+succeeds, return the session normally. Keep the child and use the fixed
+model/provider error on affected operations. Normal final-lease cleanup still
+applies if session creation fails. Do not manufacture an
+empty success catalog from an error. DSH-NATIVE-PROVIDER-1 must establish the
+exact structured rejection shape before implementing this classification.
+Never classify by free-text substring or treat every RPC error as provider
+failure. Keep plugin probe behavior unchanged. The shared decoder may be
+reused, but the native readiness policy is scheme-specific.
 
 Session RPCs send only the cookie and normal JSON content headers. The native
-`/api/remote.mux` handshake sends the cookie and the exact approved Origin.
+`/api/remote.mux` handshake sends the cookie with no explicit Origin header.
 It sends neither a token query nor `x-augmentor-token`. No plugin route appears
 in the native request allowlist. Keep the current plugin branch, including its
 auth exchange and WebSocket action header, intact.
 
-An explicit RPC 401 permits one cookie refresh using the captured token and
-one replay, provided that the same child epoch is still live and authorized.
-Discard the rejected cookie before refresh. A second 401 retires the affected
-session with `runtime-unavailable`. There is no mode switch or new child inside
-that retry. Timeouts, disconnects, redirects, parsing errors, and 5xx responses
-never cause a replay. A failed WebSocket opening fails that attempt; a later
-explicit operation may open a fresh follow stream under existing adapter rules.
-It does not resend an uncertain prompt.
+DSH-NATIVE-AUTH-1 determines whether refresh is permitted. When permitted, an
+explicit RPC 401 allows at most one shared refresh and one replay of that RPC,
+within the original request deadline. Require the same live authorized epoch.
+An explicit WebSocket handshake 401 allows the same shared refresh and at most
+one new socket within the original opening deadline. No prompt is sent until
+the replacement socket supplies the required follow snapshot. A second 401
+from either path fences the epoch and retires its sessions as
+`runtime-unavailable`. There is no mode switch or new child inside a retry.
+
+The current socket wrapper reduces handshake failures to a generic error.
+Do not infer 401 from that error. The host connector must expose an observed
+HTTP rejection status internally, without exposing headers or response text.
+If the production socket API cannot expose it, use one read-only modelCatalog
+request to diagnose a failed opening. This internal diagnostic returns its
+status without automatic retry or refresh. Only an explicit HTTP 401 there
+may trigger refresh and one replacement socket. If that request succeeds or
+fails in another way, fail the opening without refresh. This diagnostic is bounded
+by the original opening deadline and cannot dispatch a prompt.
+
+Timeouts, disconnects, redirects, parsing errors, and 5xx responses never cause
+RPC replay. Never reconnect an active failed follow stream to replay an
+uncertain prompt. A stale-cookie follow test must observe zero prompt calls
+before authentication and the follow snapshot succeed, and zero total prompt
+calls if they fail. If refresh is disabled, any confirmed auth 401 fences the
+epoch. A new explicit session may launch a fresh child after cleanup.
 
 Keep current response, message, queue, and history bounds. Keep the fixed
 session RPC allowlist, loopback destination checks, pinned port, and redirect
@@ -403,15 +533,15 @@ detail; the existing client displays the public harness message.
 
 | Failure | Public result | Fixed operator message and recovery |
 | --- | --- | --- |
-| Invalid host configuration | Bridge startup refused | `Invalid native DSH configuration. Check the native binding and DSH settings, then restart the bridge.` |
-| Missing package, bad entry, unsupported version or platform | `runtime-unavailable`: `Runtime unavailable.` | `Native DSH package is unavailable or unsupported. Select a supported local package and restart the bridge.` |
+| Composition failures listed in the validation split, including a second native binding or unsupported native platform | Bridge startup refused | `Invalid native DSH configuration. Check the native binding and DSH settings, then restart the bridge.` |
+| Unset/empty package root, missing package, unsafe tree, bad entry, or unsupported version | `runtime-unavailable`: `Runtime unavailable.` | `Native DSH package is unavailable or unsupported. Select a supported local package and restart the bridge.` |
 | Unsafe home or conflicting lock | `runtime-unavailable` | `Native DSH home is unavailable. Use a dedicated home and inspect any existing owner before retrying.` |
 | Port busy or announcement endpoint mismatch | `runtime-unavailable` | `Native DSH could not use its approved port. Choose another port in both binding and manifest, then restart and reinstall the manifest.` |
 | Missing announcement or readiness timeout | `deadline-exceeded`: `Runtime deadline exceeded.` | `Native DSH did not become ready within 30 seconds. Check the package and retry with a new session.` |
-| Malformed announcement, child exit, failed cookie exchange or protocol probe | `runtime-unavailable` | `Native DSH startup or authentication failed. Check the installed version and retry with a new session.` |
+| Malformed announcement, child exit, failed cookie exchange, transport failure, or invalid protocol schema | `runtime-unavailable` | `Native DSH startup or authentication failed. Check the installed version and retry with a new session.` |
 | Missing grants, binding mismatch, or forbidden operation | Existing `permission-denied` or `invalid-manifest` | `Native DSH requires its exact approved binding and explicit capability grants.` |
 | Child exits during a session | Active stream terminates with `runtime-unavailable`; later references get `session-not-found` | `Native DSH stopped. Create a new session. The previous turn was not retried.` |
-| Model or provider rejection | Existing sanitized `runtime-unavailable` | `Native DSH could not complete the request. Check its model and provider configuration.` |
+| Recognized model/provider rejection | The probe records provider unavailability without failing protocol readiness. An affected public operation returns sanitized `runtime-unavailable`; no provider-triggered child stop. | `Native DSH could not complete the request. Check its model and provider configuration.` |
 | Stop deadline exceeded | Local authority remains fenced | `Native DSH exit could not be confirmed. Inspect the owned process before reusing its home or port.` |
 
 A route that loses ownership during startup keeps the existing
@@ -461,11 +591,11 @@ implementation PR. This spec-only change does not edit that map.
 | Owner | Reads | May mutate | Must not own |
 | --- | --- | --- | --- |
 | New `browser-first/host/dsh-runtime.mjs` | Validated operator config, package metadata, boundary authorization signal, owned child pipes | Dedicated home and lock, child handle, bounded boot parser, runtime epoch, captured token lifetime | Grants, registry persistence, HTTP auth, RPC semantics, desktop discovery, or foreign process cleanup |
-| `harness-credentials.mjs` | Exact approved binding and injected runtime source | Host-only token/cookie leases, redaction patterns, runtime lease release | Process configuration, slot ownership, public secret projection |
-| `harness-transport.mjs` | Credential lease and pinned endpoint | Native or plugin auth exchange, HTTP/WebSocket requests, cookie refresh, bounded sanitation | Spawning, grants, arbitrary RPCs, or manifest authority |
-| `agent-runtime-endpoint.mjs` | Approved endpoint and connection inputs | Guarded sockets and manual redirect responses | Token extraction, cookie semantics, process ownership |
+| `harness-credentials.mjs` | Exact approved binding and injected runtime source | Shared epoch credential record, cookie generation, single-flight exchange coordination, lease access, retained redaction patterns, runtime lease release | Process configuration, slot ownership, public secret projection |
+| `harness-transport.mjs` | Credential lease and pinned endpoint | Native or plugin exchange I/O, HTTP/WebSocket requests, bounded retry policy, narrow sanitation method | Spawning, grants, arbitrary RPCs, or manifest authority |
+| `agent-runtime-endpoint.mjs` | Approved endpoint and connection inputs | Direct proxy-disabled connections, guarded sockets, internal handshake status, manual redirect responses | Token extraction, cookie semantics, process ownership |
 | `agent-adapters/dsh-typert.mjs` | Authenticated transport and authorized chat input | Existing Typert sessions, follow state, model and history projections | Auth selection, credentials, process lifecycle, tools or approval authority |
-| `harness-host-service.mjs` | Operator config, registry authorization, runtime failure notifications | Runtime composition, adapter resources, native final-output sanitation, bounded shutdown | Parsing child output, implementing login exchange, or granting consent |
+| `harness-host-service.mjs` | Operator config, registry authorization, runtime failure notifications | Shared readiness orchestration, adapter resources, native delta suppression and assembled-result sanitation, bounded shutdown | Parsing child output, implementing login exchange, or granting consent |
 | `harness-boundary.mjs` | Registry authorization and injected lifetime notifications | Pending-session cancellation, epoch-associated retirement, output fences | Concrete DSH process handling or credentials |
 | `harness-policy.mjs` | Reviewed adapter and auth scheme, declarations and grants | Pure scheme-specific floor and revocation decisions | Config, processes, credentials, or persistence |
 | `harness-registry.mjs` and `harness-registry-store.mjs` | Validated manifests, binding metadata, durable governance | Existing consent, slots, revisions, generations, atomic records | Child handles, login tokens, cookies, runtime health or home paths |
@@ -482,6 +612,52 @@ unchanged. No SDK manifest gains an executable or filesystem path field.
 The implementation also updates the harness guide and component instructions
 to distinguish both modes. It does not change the Alpha runtime boundary.
 
+## Required verification before implementation
+
+These gates are pending. Run them before implementing the affected native auth
+or readiness policy. Use isolated scratch packages and in-memory credentials.
+Keep only sanitized results, exact versions, and package integrity hashes in
+external evidence. The historical probe and this checkout do not establish
+the following DSH server behavior. Do not infer it from plugin client code.
+
+### DSH-NATIVE-AUTH-1: shared cookie and token reuse
+
+For each exact target version, exchange the boot token once. Create two
+sessions using that one cookie and overlap real turns. Exchange the same token
+again while a follow stream is active. Check the original and replacement
+cookies with read-only RPC and fresh socket openings. Observe existing streams
+and count upstream prompt dispatches. Separately induce an auth 401 before
+RPC dispatch and during follow opening. Check the replacement-cookie path.
+Record only pass/fail facts, never token URLs, cookies, or prompt content.
+
+| Observed answer | Required design behavior |
+| --- | --- |
+| Token is reusable; old cookies and active streams remain valid; an explicit 401 rejects before RPC dispatch | Permit the bounded shared refresh described above. Both sessions must finish with one prompt dispatch each. |
+| Re-exchange rejects, invalidates an older cookie, or interrupts an active stream | Exchange only once per epoch. Disable in-place refresh for that verified package. On a confirmed 401, fence the epoch and require a new explicit session after cleanup. Never replay a prompt. |
+| An explicit 401 can follow RPC dispatch | Disable refresh and replay even if token reuse works. Fence the epoch on confirmed 401. Require a new explicit session after cleanup. Never resend the uncertain prompt. |
+| The answer is unknown or the required observations cannot be made | Block implementation of refresh and any support claim for that package until the gate resolves. Do not assume the optimistic branch. |
+
+Record the selected behavior in the implementation's reviewed package evidence
+and tests. This is not runtime auth auto-detection, a plugin fallback, or an
+operator flag. Two sessions still share one cookie in every branch.
+
+### DSH-NATIVE-PROVIDER-1: readiness without provider configuration
+
+For each target version, start with no provider key and then with a rejected
+key. Observe authenticated modelCatalog, session creation, and model use.
+Validate response structure in memory. Determine whether provider rejection
+has a stable machine-readable shape distinct from auth and schema failures.
+
+| Observed answer | Required design behavior |
+| --- | --- |
+| Catalog succeeds, including an empty groups array | Mark Ready after catalog validation. Report any later model/provider rejection on that operation. |
+| Catalog returns a distinct valid provider/model rejection | Validate that exact structured shape in the adapter. Mark protocol Ready with provider availability false. Keep the child and report the fixed provider error when the operation requires it. |
+| Rejection is indistinguishable from auth or malformed protocol | Do not guess or mark Ready. Treat readiness as unproven and block native support for that package pending a separate design decision. Do not silently require a key or bypass schema validation. |
+
+Also confirm cookie-only WebSocket opening with no explicit Origin for each
+version. If rejected, block that version's native lane. Do not add an invented
+Origin or change plugin headers without a separate verified protocol decision.
+
 ## Test and acceptance plan
 
 ### Unit tests with a fake DSH child
@@ -497,22 +673,38 @@ logs or credentials in fixtures.
   concurrent authorized sessions share one child and failed callers release it.
 - Exercise split UTF-8, CRLF, repeated announcements, malformed URLs, foreign
   hosts, wrong ports, duplicate queries, missing tokens, overflow, early exit,
-  missing stdout, and each deadline. Capture all logs and search for secrets.
+  missing stdout, and each deadline. Include banners before and between valid
+  announcements. Capture all logs and search for secrets.
 - Deny unsafe homes, symlinks, nonempty unmarked directories, foreign markers,
   concurrent locks, busy ports, invalid packages, and unsupported platforms.
-  A foreign listener must receive zero HTTP requests and zero signals.
+  Include a group-writable nested imported module, writable nested directory,
+  foreign owner, and nested symlink. A foreign listener must receive zero HTTP
+  requests and zero signals. Accept the documented home default; reject the
+  real home itself and known desktop DSH homes even if empty.
 - Verify SIGTERM, escalation, confirmed exit, stuck stop, bridge shutdown, and
   a late old-child exit after replacement. No orphaned startup promise may
   publish a usable lease after cancellation.
-- Verify native 303 exchange, cookie validation, exact Origin, cookie-only RPC
+- Verify native 303 exchange, cookie validation, absent Origin, cookie-only RPC
   and WebSocket headers, and absence of all plugin calls and action headers.
 - Keep plugin token-file ownership, symlink, environment source, exchange,
   action-header, DNS, redirect, and response-bound tests unchanged and passing.
-- Verify only one replay after explicit 401. Test simultaneous refresh callers,
-  second 401, lost prompt response, 5xx, redirect, timeout, and child replacement
-  during refresh. An uncertain accepted prompt must execute at most once.
+- Verify the selected DSH-NATIVE-AUTH-1 branch. Test simultaneous refresh from
+  two sessions, stale-generation 401, handshake 401, generic socket failure,
+  second 401, lost prompt response, 5xx, redirect, timeout, and epoch change
+  during refresh. Assert one exchange per epoch when refresh is disabled.
+  An uncertain accepted prompt must execute at most once.
+- Run both DSH transport modes with bridge `NODE_USE_ENV_PROXY=1`, `HTTP_PROXY`,
+  `HTTPS_PROXY`, and `ALL_PROXY` pointed at a test sink, with `NO_PROXY` unset.
+  Also inject a hostile global dispatcher. The sink must receive zero traffic.
+  The direct loopback server must still receive auth, RPC, and socket requests.
+- Test no native binding with missing or invalid native settings, then one and
+  two native bindings. Test each row of the configuration/runtime failure split.
+- Test an empty valid catalog, a verified provider rejection, an unknown error,
+  a malformed catalog, and an auth failure as separate readiness outcomes.
 - Try token and cookie echoes in errors, headers, nested JSON, model names,
-  history, encoded forms, and split assistant chunks. Scan public replies,
+  history split across two parts, encoded forms, and split assistant chunks.
+  Assert assembled history and its signed receipt redact the split secret.
+  Scan public replies,
   events, receipts, terminal output, and test-owned persisted files. Verify
   disposed leases still sanitize late output and never authenticate again.
 - Run existing DSH adapter and stream cases in both modes. Retain follow
@@ -538,7 +730,11 @@ Revoke each native floor capability during startup and during a turn. Check
 the synchronous fence, rejected late output, closed streams, and termination
 of the owned child after its final lease is released. Replace the primary
 owner, disable it, and close the bridge while startup is pending. Exercise
-two sessions so disposing one cannot kill the other's child.
+two overlapping sessions. Disposing one must not kill the other's child or
+clear its cookie. Apply the selected refresh policy and count prompt dispatches.
+Exercise a slow cold startup followed by a prompt through `/augmentor/chat`.
+Verify the reply timer starts after session creation and turn allocation.
+Startup expiry sends no prompt. Reply expiry cancels only the allocated turn.
 
 Restart against the same registry and managed home after clean shutdown.
 Consent and owners persist. Child epoch, login token, cookies, bridge boot
@@ -557,8 +753,11 @@ managed homes outside the repository. Install no Manolo/Augmentor plugin.
 Supply provider credentials privately through the permitted environment.
 Require all of these checks for each version:
 
-1. The production bridge captures stdout in memory and exchanges the token.
-   No helper file transports the token. Confirm cookie-only RPC and 101 upgrade.
+1. Complete DSH-NATIVE-AUTH-1 and DSH-NATIVE-PROVIDER-1 first. Then verify the
+   production bridge captures stdout in memory and exchanges the token.
+   No helper file transports the token. Confirm cookie-only RPC and 101 upgrade
+   without explicit Origin. Repeat the selected shared-cookie policy with two
+   overlapping sessions through the governed bridge.
 2. Observe a real follow snapshot, prompt acceptance, attributed assistant reply,
    history, model selection, and cancellation. A 101 upgrade alone is insufficient.
 3. Exercise revocation, child termination, fresh session after a crash, and
@@ -587,19 +786,27 @@ For the future implementation, run `npm run test:browser-first`,
 Run `npm run verify:alpha` for final cross-module certification.
 Record exact commands and blockers. None of those future runtime checks is
 claimed by this design document. This spec-only task requires the two docs
-checks and verification that only this file changed.
+checks and verification that only this spec and its review-1 record changed.
 
 ## Self-review
 
-- Placeholder scan: No unresolved design placeholders or missing decisions.
-  Angle-bracket values in protocol and argv examples identify runtime inputs.
-- Internal consistency: Fixed endpoint approval matches manifest validation,
-  port selection, startup capture, and transport pinning. Runtime epochs retire
-  sessions without changing persisted consent. Both secrets stay host-only.
-- Scope check: One native authentication mode, one owned child manager, shared
-  Typert behavior, and retained plugin mode. No installer, generic supervisor,
-  new UI, new route, plugin removal, or implementation is included.
-- Ambiguity check: Configuration, defaults, platform limits, deadlines, retries,
-  last-lease shutdown, crash recovery, grant requirements, and certification
-  claims are explicit. Local probe facts are separate from repository authority
-  and from the live gates still required.
+- Review coverage: Both independent reviews were read in full. The
+  [review-1 adjudication](dsh-native-auth-design-review-1.md) records all 20
+  findings with worktree evidence. Accepted: 19. Rejected: 1. Deferred minors: 0.
+  There were no Critical findings. The rejected startup-race claim conflicts
+  with the actual ordering in `harness-host-service.mjs:351` through `:373`.
+- Internal consistency: One native binding owns one child and one epoch cookie.
+  Composition owns readiness. Credentials own shared secret state. The boundary
+  owns authorization. Startup and browser reply clocks remain separate.
+- Ambiguity check: Package permissions, eager versus lazy errors, ignored boot
+  lines, home paths, stop timing, hook registration, socket 401 handling, proxy
+  bypass, and sanitation after text assembly now have explicit rules and tests.
+- Evidence limits: DSH-NATIVE-AUTH-1 and DSH-NATIVE-PROVIDER-1 remain mandatory
+  before implementation of their affected policies. Each has outcome rules.
+  This revision claims no live token-reuse, provider-error, Origin, or telemetry
+  result. No support claim can substitute a fixture for the live lane.
+- Scope check: Plugin-free native mode, a bridge-owned child, memory-only token
+  and cookie custody, disabled telemetry, and working plugin mode remain fixed.
+  No runtime code, installer, supervisor, UI, route, or embed design is added.
+  The referenced embed decisions file is absent from this worktree. No embed
+  decision is inferred or changed.
