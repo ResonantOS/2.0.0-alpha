@@ -25,18 +25,24 @@ function blockedDomain(url) {
   try { return new URL(url).hostname || "unknown site"; } catch { return "unknown site"; }
 }
 
+function blockedMarkdown(tab, permissionUnknown) {
+  const reason = permissionUnknown ? "Site permissions could not be read" : "Blocked by your site permission";
+  return `- ${reason}: ${safeContextText(blockedDomain(tab.url), Infinity)}`;
+}
+
 function uncapturedMarkdown(skipped, notCaptured) {
   const lines = skipped.map(({ tab, kind, error }) => {
     if (kind === "blocked") {
       // Domain and reason only: a site the user may have blocked never shows its title or path.
-      const reason = /^Site permissions could not be read/i.test(String(error ?? ""))
-        ? "Site permissions could not be read"
-        : "Blocked by your site permission";
-      return `- ${reason}: ${safeContextText(blockedDomain(tab.url), Infinity)}`;
+      return blockedMarkdown(tab, /^Site permissions could not be read/i.test(String(error ?? "")));
     }
     return `- Could not read: ${safeContextText(tab.title || "Untitled", Infinity)} — ${safeContextText(safeContextUrl(tab.url), Infinity)} — ${safeContextText(error, Infinity)}`;
   });
   for (const tab of notCaptured.overLimit) {
+    if (tab.permission === "blocked" || tab.permission === "permission-unknown") {
+      lines.push(blockedMarkdown(tab, tab.permission === "permission-unknown"));
+      continue;
+    }
     lines.push(`- Over the 8-tab limit: ${safeContextText(tab.title || "Untitled", Infinity)} — ${safeContextText(safeContextUrl(tab.url), Infinity)}`);
   }
   if (notCaptured.nonWeb) lines.push(`- Non-web tabs not captured: ${notCaptured.nonWeb}`);
@@ -58,7 +64,7 @@ export function buildResearchTrail({ question = "", captures = [], skipped = [],
     `- ${collected}sources captured: ${counts.captured} · skipped: ${counts.skipped} · not captured: ${counts.notCaptured}`,
     captures.length ? `\n## Sources\n${captures.map(sourceMarkdown).join("\n\n")}` : "",
     uncapturedMarkdown(skipped, notCaptured),
-    "\n## Review\nRaw source material, queued for review. Nothing was written to trusted memory."
+    "\n## Review\nRaw source material for review. Nothing was written to trusted memory."
   ].filter(Boolean).join("\n");
   return { title, content, counts };
 }

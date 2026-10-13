@@ -8,6 +8,8 @@
 
 **Tech Stack:** Plain JavaScript ES modules, Chrome MV3 APIs, Node.js `node:test`/strict assertions, existing CDP/Playwright live harness; no new dependencies.
 
+> **Amendment 2026-10-13:** intake failures now use "Could not confirm the research trail was saved: <reason>. Check the archive before trying again." and over-limit tabs are graded by site permission. See the amendment in the design.
+
 ## Global Constraints
 
 The following decisions and boundary requirements are copied verbatim from the approved spec, `docs/planning/227-research-trail-design.md`:

@@ -30,7 +30,7 @@ test("trail sources record the question, addresses, individual times and determi
   assert.ok(result.content.includes(`### 2. Beta\n- address: https://beta.test/\n- captured at: ${secondTime}\n- 2 words · 1 links`));
   assert.equal(result.content.split("\n").find((line) => line.startsWith("> ")), `> ${passage.split(" ").slice(0, 60).join(" ")}`);
   assert.doesNotMatch(result.content, /query-value|#part|Skipped and not captured/);
-  assert.ok(result.content.endsWith("## Review\nRaw source material, queued for review. Nothing was written to trusted memory."));
+  assert.ok(result.content.endsWith("## Review\nRaw source material for review. Nothing was written to trusted memory."));
   assert.equal(buildResearchTrail(value).content, result.content);
   assert.deepEqual(buildResearchTrail(value), buildResearchTrail(structuredClone(value)));
 });
@@ -107,6 +107,22 @@ test("trail grades failed, blocked, permission-unknown and over-limit tabs witho
   assert.ok(result.content.includes("- Non-web tabs not captured: 2"));
   assert.doesNotMatch(result.content, /Blocked private title|Unknown private title|private-path|private-unknown|8443|query-value|bearer-token-value-0123456789|capture refused/);
 });
+
+for (const permission of ["blocked", "permission-unknown"]) {
+  test(`trail renders a ${permission} ninth tab by domain only`, () => {
+    const result = buildResearchTrail(input({
+      captures: Array.from({ length: 8 }, () => input().captures[0]),
+      notCaptured: {
+        overLimit: [{ title: "Private ninth title", url: "https://ninth.test:8443/private-ninth?secret=value", permission }],
+        nonWeb: 0
+      }
+    }));
+    assert.doesNotMatch(JSON.stringify(result), /Private ninth title|private-ninth|8443|secret=value/);
+    const reason = permission === "blocked" ? "Blocked by your site permission" : "Site permissions could not be read";
+    assert.ok(result.content.includes(`- ${reason}: ninth.test`));
+    assert.deepEqual(result.counts, { captured: 8, skipped: 0, notCaptured: 1 });
+  });
+}
 
 test("trail keeps the scrubbed question as typed and shortens only its title component", () => {
   const question = `Compare  sources: ${"a".repeat(100)}`;

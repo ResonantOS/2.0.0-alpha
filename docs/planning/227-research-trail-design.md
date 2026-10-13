@@ -94,7 +94,7 @@ output; the module never reads the clock.
 - Non-web tabs not captured: <count>
 
 ## Review
-Raw source material, queued for review. Nothing was written to trusted memory.
+Raw source material for review. Nothing was written to trusted memory.
 ```
 
 Empty sections are omitted. With no question, the title is "Browser research
@@ -109,7 +109,7 @@ trail".
 | Some reads fail | "Saved a N-page trail; M tabs skipped" | Trail, skipped tabs graded |
 | Site permissions unreadable | Treated as blocked | Domain and reason only |
 | More than 8 readable tabs | Count over the limit | First 8; rest listed |
-| `/archive/intake` fails | "Could not save the research trail: <reason>. Nothing was saved." | Nothing |
+| `/archive/intake` fails | "Could not confirm the research trail was saved: <reason>. Check the archive before trying again." | Possibly the trail file (see amendment) |
 | `/archive/review/request` fails | "Saved to <path>, but it could not be queued for review; ask again with `/trail` or queue it from the archive." | Trail, `reviewQueued: false` |
 | `/trail` with no text | Title "Browser research trail"; question "none given" | As normal |
 
@@ -148,3 +148,19 @@ live lane in `browser-first/test/agent-control-live.mjs` gains one step: run
 
 Model-written summaries, page headings, a JSON sidecar artifact (needs a host
 change to `/archive/intake`), raising the 8-tab limit, and any change to promotion.
+
+## Amendment 2026-10-13
+
+The batch certification review found two defects, both fixed in #526:
+
+- Tabs beyond the eight-tab limit were listed with title and address without a
+  site-permission check. Each over-limit tab is now graded like a captured tab:
+  only the known allowed modes show title and address; blocked, unreadable or
+  unrecognized permissions show the domain and reason only.
+- "Nothing was saved" was not always true. The archive service writes the trail
+  file before appending its log, and a lost response says nothing about the
+  write, so an intake failure now reports that the save could not be confirmed
+  and asks the user to check the archive.
+- The saved file no longer says it was queued for review, because it is
+  written before the review request; the chat confirms the queue instead.
+

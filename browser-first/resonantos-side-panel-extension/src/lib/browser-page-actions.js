@@ -926,7 +926,20 @@ export function createBrowserPageActions(deps) {
     const allTabs = await chrome.tabs.query({ currentWindow: true }).catch(() => []);
     const readable = allTabs.filter(isReadableBrowserTab);
     const tabs = readable.slice(0, 8);
-    const notCaptured = { overLimit: readable.slice(8), nonWeb: allTabs.length - readable.length };
+    const notCaptured = { overLimit: [], nonWeb: allTabs.length - readable.length };
+    for (const tab of readable.slice(8)) {
+      let permission;
+      try {
+        permission = await permissionForUrl(tab.url);
+      } catch {
+        permission = "permission-unknown";
+      }
+      // Fail closed: only the known allowed modes may show title and address.
+      if (permission !== "blocked" && !["read-only", "ask-before-action", "trusted-for-safe-actions"].includes(permission)) {
+        permission = "permission-unknown";
+      }
+      notCaptured.overLimit.push({ ...tab, permission });
+    }
     if (!tabs.length) {
       await addMessage("system", "No readable browser tabs are available for a research trail. Open one or more normal web pages first.");
       setStatus("Trail unavailable");
@@ -969,11 +982,14 @@ export function createBrowserPageActions(deps) {
       });
     } catch (error) {
       const reason = safeContextText(error instanceof Error ? error.message : String(error));
-      const message = `Could not save the research trail: ${reason}. Nothing was saved.`;
+      // Neither a lost response nor an error response proves nothing was written:
+      // the archive service saves the file before appending its log.
+      const saveUncertain = true;
+      const message = `Could not confirm the research trail was saved: ${reason}. Check the archive before trying again.`;
       await addMessage("system", message);
       setStatus("Trail unavailable");
       setActivity("failed", "Could not save the research trail", reason);
-      return { ok: false, error: message };
+      return { ok: false, error: message, saveUncertain };
     }
     let review;
     try {
