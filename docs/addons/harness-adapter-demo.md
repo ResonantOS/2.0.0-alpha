@@ -43,6 +43,26 @@ channel token is in `$DSH_HOME/augmentor-ws-token` (the usual DSH home is
 `~/.dsh`). The token file must be a regular, owner-only file owned by the current
 user; symlinks are refused. Never copy its contents into the repository.
 
+**Turn DSH telemetry off in the ResonantOS setup ([#519](https://github.com/ResonantOS/2.0.0-alpha/issues/519)).**
+ResonantOS policy is that telemetry stays off, but ResonantOS does not launch
+DSH yet, so this step is yours.
+DSH mounts `@deepseek-ai/dsh-session-telemetry-otel` in its `web` profile, in
+`FEEDBACK_ONLY` mode, in both the 0.1.x versions certified here and 0.2. When a
+user rates or comments on a reply, that session's records are sent to
+`https://dsh-otel-collector.deepseeksvc.com/v1/logs`. The exporter connects
+directly, so a proxy cannot intercept it. Start the DSH service with telemetry
+disabled; the profile reads this variable from DSH's own environment, and in
+this mode DSH constructs no exporter at all:
+
+```bash
+export DSH_TELEMETRY_MODE=DISABLED
+```
+
+DSH's product analytics (`@deepseek-ai/dsh-client-product-analytics`, on by
+default) is mounted only in DSH's desktop profile, not in the `web` profile
+used here. On the DSH desktop app, set the `product-analytics` setting
+`enabled` to `false`.
+
 Approve the example's binding in the private operator terminal:
 
 ```bash
@@ -126,11 +146,17 @@ only. A file-by-file comparison of the 0.1.7 and 0.2.0 packages (6 October
 auth route and `x-augmentor-token` header are identical in `dsh-augmentor`
 0.2.11 and 0.2.13; the cookie-exchange packages have no code changes; the
 `/api/remote.mux` wire protocol and client are byte-identical; the session
-contract only gained optional fields. Treat that as a reason to expect
-compatibility, not as certification: pin the version you tested until a live
-pass on 0.2 lands. Also new in 0.2: `dsh-web-app` mounts product-analytics and
-OpenTelemetry packages enabled by default, which a governed host must decide
-on before adopting it.
+contract only gained optional fields. A live pass on 7 October 2026 settled the
+practical question. DSH 0.2.0-rc.2's own plugin manager refuses
+`dsh-augmentor@0.2.11`, which declares DSH 0.1.5 only ("may cause crashes or
+data loss"), so a plain 0.2 install has no `/api/augmentor/auth` and the
+adapter cannot connect. With the plugin forced in a throwaway profile, the
+adapter's auth exchange, session creation, a full chat turn over
+`/api/remote.mux` and history all worked. Pin DSH 0.1.5-rc.1 or 0.1.7-rc.2
+until a plugin release declares 0.2 support. Also new in 0.2: `dsh-web-app` bundles product analytics and product
+telemetry but enables them only in DSH's desktop profile, so the `web` profile
+used here excludes them. DSH's session telemetry is a separate setting that a
+governed host must decide on before adopting 0.2.
 
 ## OpenAI-compatible endpoint and bearer binding
 

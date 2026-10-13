@@ -38,6 +38,12 @@ redefine the Alpha runtime boundary.
    the Grok-Build test (prototype 9/9) + production-SDK validation (41/41) +
    the self-contained offline loopback demo (PASS).
 
+## Feature designs
+
+- [Research trail save and archive review handoff (#227)](227-research-trail-design.md) —
+  approved design; implementation plan in
+  [227-research-trail-plan.md](227-research-trail-plan.md).
+
 ## Source conversions
 
 Verbatim Markdown conversions of the original source documents live in
