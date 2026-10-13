@@ -83,7 +83,7 @@ These resolve details the spec does not fully spell out without adding behavior:
 - Preserve the complete existing no-readable-tabs message: `No readable browser tabs are available for a research trail. Open one or more normal web pages first.` The spec abbreviates it as `No readable browser tabs…` and says unchanged.
 - On all failed reads, use that same complete message followed by reason counts: `Blocked: N; failed: M; over the 8-tab limit: K; non-web: L.` This suffix implements the requested counts; its exact punctuation is not specified by the design.
 - Successful feedback uses the spec's exact `Saved a N-page trail; M tabs skipped`, then the saved path, exact Review sentence, and existing `reviewQueueGuidance`. Noncaptured counts remain in the saved content and numeric result.
-- Intake failure uses exactly `Could not save the research trail: <reason>. Nothing was saved.` with a scrubbed reason. Review failure uses exactly `Saved to <path>, but it could not be queued for review; ask again with `/trail` or queue it from the archive.`. Do not invent recovery copy.
+- Intake failure uses exactly `Could not confirm the research trail was saved: <reason>. Check the archive before trying again.` with a scrubbed reason, and returns `saveUncertain: true` (amended 2026-10-13). Review failure uses exactly `Saved to <path>, but it could not be queued for review; ask again with `/trail` or queue it from the archive.`. Do not invent recovery copy.
 
 ### Task 1: Pure research trail builder and contracts
 
@@ -916,7 +916,7 @@ test("research trail intake failure reports nothing saved and never requests rev
   });
   const result = await harness.actions.saveResearchTrailToArchive("trail evidence");
   assert.equal(result.ok, false);
-  assert.equal(result.error, "Could not save the research trail: disk unavailable. Nothing was saved.");
+  assert.equal(result.error, "Could not confirm the research trail was saved: disk unavailable. Check the archive before trying again.");
   assert.equal(result.path, undefined);
   assert.deepEqual(harness.events.filter((event) => event[0] === "bridge").map((event) => event[1]), ["/archive/intake"]);
   assert.ok(harness.events.some((event) => event[0] === "message" && event[2] === result.error));
@@ -944,11 +944,11 @@ try {
   });
 } catch (error) {
   const reason = safeContextText(error instanceof Error ? error.message : String(error));
-  const message = `Could not save the research trail: ${reason}. Nothing was saved.`;
+  const message = `Could not confirm the research trail was saved: ${reason}. Check the archive before trying again.`;
   await addMessage("system", message);
-  setStatus("Trail unavailable");
-  setActivity("failed", "Could not save the research trail", reason);
-  return { ok: false, error: message };
+  setStatus("Trail save unconfirmed");
+  setActivity("failed", "Could not confirm the research trail was saved", reason);
+  return { ok: false, error: message, saveUncertain: true };
 }
 ```
 
