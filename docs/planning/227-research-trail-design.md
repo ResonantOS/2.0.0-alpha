@@ -151,7 +151,7 @@ change to `/archive/intake`), raising the 8-tab limit, and any change to promoti
 
 ## Amendment 2026-10-13
 
-The batch certification review found two defects, both fixed in #526:
+The batch certification review found three defects, all fixed in #526:
 
 - Tabs beyond the eight-tab limit were listed with title and address without a
   site-permission check. Each over-limit tab is now graded like a captured tab:

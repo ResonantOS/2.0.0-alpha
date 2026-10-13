@@ -1181,6 +1181,9 @@ test("research trail intake response error cannot confirm the save and never req
   assert.equal(result.error, "Could not confirm the research trail was saved: disk unavailable. Check the archive before trying again.");
   assert.equal(result.path, undefined);
   assert.equal(result.saveUncertain, true);
+  // The activity panel must not contradict the hedged message.
+  assert.ok(harness.events.some((event) => event[0] === "activity" && event[1] === "failed" && event[2] === "Could not confirm the research trail was saved"));
+  assert.equal(harness.events.some((event) => event[0] === "activity" && event[2] === "Could not save the research trail"), false);
   assert.deepEqual(harness.events.filter((event) => event[0] === "bridge").map((event) => event[1]), ["/archive/intake"]);
   assert.ok(harness.events.some((event) => event[0] === "message" && event[2] === result.error));
 });

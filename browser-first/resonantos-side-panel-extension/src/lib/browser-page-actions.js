@@ -987,8 +987,8 @@ export function createBrowserPageActions(deps) {
       const saveUncertain = true;
       const message = `Could not confirm the research trail was saved: ${reason}. Check the archive before trying again.`;
       await addMessage("system", message);
-      setStatus("Trail unavailable");
-      setActivity("failed", "Could not save the research trail", reason);
+      setStatus("Trail save unconfirmed");
+      setActivity("failed", "Could not confirm the research trail was saved", reason);
       return { ok: false, error: message, saveUncertain };
     }
     let review;
