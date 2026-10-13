@@ -43,6 +43,8 @@ redefine the Alpha runtime boundary.
 - [Research trail save and archive review handoff (#227)](227-research-trail-design.md) —
   approved design; implementation plan in
   [227-research-trail-plan.md](227-research-trail-plan.md).
+- [DSH native authentication (draft, under review)](dsh-native-auth-design.md) —
+  a plugin-free way for the bridge to run and sign in to DeepSeek Harness.
 
 ## Source conversions
 
