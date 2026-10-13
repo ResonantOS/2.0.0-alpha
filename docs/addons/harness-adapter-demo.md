@@ -43,7 +43,9 @@ channel token is in `$DSH_HOME/augmentor-ws-token` (the usual DSH home is
 `~/.dsh`). The token file must be a regular, owner-only file owned by the current
 user; symlinks are refused. Never copy its contents into the repository.
 
-**Telemetry is off by default in ResonantOS ([#519](https://github.com/ResonantOS/2.0.0-alpha/issues/519)).**
+**Turn DSH telemetry off in the ResonantOS setup ([#519](https://github.com/ResonantOS/2.0.0-alpha/issues/519)).**
+ResonantOS policy is that telemetry stays off, but ResonantOS does not launch
+DSH yet, so this step is yours.
 DSH mounts `@deepseek-ai/dsh-session-telemetry-otel` in its `web` profile, in
 `FEEDBACK_ONLY` mode, in both the 0.1.x versions certified here and 0.2. When a
 user rates or comments on a reply, that session's records are sent to
