@@ -171,6 +171,17 @@ export async function externalEvidenceDirectory(input) {
   await mkdir(target, { mode: 0o700 });
   return realpath(target);
 }
+export function describeStall({ label, before, after, lastText, receipts }) {
+  const text = lastText.replace(/\s+/g, ' ').trim().slice(0, 200);
+  const kinds = receipts.slice(0, 20).map(receipt => {
+    if (receipt.kind === 'route') return `route:${receipt.operation} ${receipt.ok ? 'ok' : 'failed'}`;
+    if (receipt.kind === 'event') return `event:${receipt.event.type}`;
+    return receipt.kind;
+  });
+  return `Demo did not observe ${label}. No live certification was produced.\n`
+    + `assistant bubbles before=${before} after=${after}; last assistant text=${JSON.stringify(text)}; receipts=${kinds.join(', ') || '(none)'}`;
+}
+
 async function until(predicate, label, timeout = 30000) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) { const value = await predicate(); if (value) return value; await new Promise(resolve => setTimeout(resolve, 5)); }
@@ -231,7 +242,7 @@ async function certification({ fixture, manifests, createHost, connect = async (
     const prompt = `Reply with one short sentence about ${['seven', 'oceans', 'mountains', 'stars', 'forests', 'rivers'][index]}. Include the word ${['seven', 'ocean', 'mountain', 'star', 'forest', 'river'][index]}.`;
     const prior = receipts.length;
     let observation;
-    if (io.answer) observation = await io.answer(manifest, prompt, () => receipts.slice(prior).find(r => r.kind === 'event' && r.event.type === 'final')?.event);
+    if (io.answer) observation = await io.answer(manifest, prompt, () => receipts.slice(prior).find(r => r.kind === 'event' && r.event.type === 'final')?.event, () => receipts.slice(prior));
     else {
       const session = (await call('/agent/session', { addonId: manifest.id })).result.session;
       await call('/agent/turn', { session, input: { messages: [{ role: 'user', content: prompt }], ...(models[manifest.id] ? { model: models[manifest.id] } : {}) } });
@@ -469,7 +480,7 @@ export async function runDemo({ evidenceDir, fixture = false, headed = false } =
         const headers = capability => ({ 'content-type': 'application/json', 'X-ResonantOS-Bridge-Token': bridgeToken, 'X-ResonantOS-Bridge-Capability-Token': capabilities[capability] });
         return {
           ...createBridgeClient({ bridgeUrl: bridgeConfig.bridgeUrl, routes: host.harnessRoutes, headers }),
-          async answer(manifest, prompt, completed) {
+          async answer(manifest, prompt, completed, turnReceipts) {
             await page.getByRole('button', { name: /Add-ons/ }).first().click();
             await page.getByRole('button', { name: 'Refresh harnesses' }).click();
             await page.getByText(`Current owner: ${manifest.id === DSH ? manifest.name : manifest.id} · Available`, { exact: true }).waitFor();
@@ -479,8 +490,25 @@ export async function runDemo({ evidenceDir, fixture = false, headed = false } =
             if (!(await composer.isVisible())) await page.getByRole('button', { name: 'Chat', exact: true }).click();
             const prior = await page.locator('article.message-bubble.assistant').count();
             await composer.fill(prompt); await page.getByRole('button', { name: 'Send message', exact: true }).click();
-            await until(async () => await page.locator('article.message-bubble.assistant').count() > prior, 'visible answer', 150000);
-            const final = await until(completed, 'host final reply', 150000);
+            let final;
+            try {
+              await until(async () => await page.locator('article.message-bubble.assistant').count() > prior, 'visible answer', 150000);
+              final = await until(completed, 'host final reply', 150000);
+            } catch (error) {
+              const label = /^Demo did not observe (visible answer|host final reply)\./.exec(error.message)?.[1];
+              if (!label) throw error;
+              const receipts = turnReceipts();
+              let after = 'unavailable', lastText = '(unavailable)';
+              try {
+                const texts = await page.locator('article.message-bubble.assistant').allTextContents();
+                after = texts.length; lastText = texts.at(-1) ?? '';
+              } catch { /* Preserve the timeout if the page can no longer be inspected. */ }
+              error.message = describeStall({ label, before: prior, after, lastText, receipts });
+              try {
+                await page.screenshot({ path: path.join(output, `stall-${bootNumber}-${manifest.id}.png`), fullPage: true });
+              } catch { /* A failed screenshot must never mask the timeout. */ }
+              throw error;
+            }
             const message = page.locator('article.message-bubble.assistant').filter({ hasText: final.data.text }).last();
             await message.waitFor();
             assert((await message.innerText()).includes(manifest.id), 'UI answer must name the host owner');
