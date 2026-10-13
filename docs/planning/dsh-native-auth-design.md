@@ -29,7 +29,7 @@ Three approaches were considered:
 | Patch, install, or bypass the plugin's DSH version checks | Rejected. Retains the dependency that this work removes. |
 
 There is no DSH installer, package updater, general process supervisor, remote
-DSH support, embedded DSH UI, automatic session recovery, or provider-settings
+DSH support, embedded DSH UI, automatic resumption of failed sessions, or provider-settings
 integration in this change. No browser tools, approval waterfall, plugin
 save/unsave/state actions, or new bridge routes are added.
 
@@ -88,7 +88,8 @@ is the reason to remove it from the native path, not to bypass its guard.
 
 Use the existing `RESONANTOS_HARNESS_BINDINGS` JSON array. The new scheme and
 source select native mode. There is no additional mode flag. With no native
-binding, no DSH child starts and current behavior is unchanged.
+binding, no DSH child starts. Existing modes keep working. The shared DSH
+connector hardening described below also applies to plugin mode.
 
 The proposed native binding has this exact shape:
 
@@ -137,14 +138,26 @@ checks are lazy and follow authorization. Restart the bridge after changing
 any setting. An unset package root is a missing runtime dependency, not a
 malformed binding.
 
-Resolve the package root with `realpath`. Validate the canonical root and every
-nested directory and file, including imported modules and dependencies. Each
-entry must be owned by root or the current user. Require `(mode & 0o022) === 0`
-for every entry. Directories must be directories; all other entries must be
-regular files. Reject symlinks below the canonical root and special files.
-Checking only `package.json` and `lib/bin.js` is insufficient. Group or other
-read/execute permissions are allowed. The private credential-file rule remains
-stricter and is unchanged.
+Resolve the package root with `realpath`. Check the canonical root and every
+ancestor directory through filesystem root `/`, inclusive. Each must be owned
+by root or the current user and satisfy `(mode & 0o022) === 0`. Do not stop at
+the package's parent. A writable ancestor can permit replacement of the tree.
+There is no sticky-directory exception. Scratch installs for this check must
+use a private location with safe ancestors, not a shared temporary directory.
+
+Walk every nested entry, including imported modules and dependencies. Use
+`lstat` to distinguish links. Real directories and regular files must meet the
+same ownership and mode rules. Reject special files. Allow npm's normal
+symlinks, including entries in `node_modules/.bin`, only when every link hop
+and the final resolved target stay inside the canonical package root. Use
+path-component containment, not a string prefix. Reject escaping, dangling,
+or unresolvable cyclic links. Check link ownership, but do not apply file mode
+bits to the link itself. Symlink modes commonly include write bits and do not
+control target access. Validate the target and its parent directories under
+the same rules. Track visited canonical directories to avoid repeated walks
+through aliases. Checking only `package.json` and `lib/bin.js` is insufficient.
+Group or other read/execute permissions are allowed. The private credential-file
+rule remains stricter and still rejects symlinks.
 
 Validate package name and semver from `package.json`. Require `lib/bin.js` to
 resolve inside the root. Complete validation before spawn. The operator must
@@ -167,12 +180,18 @@ environment, a browser launch, or a health-check command.
 
 Treat the configured DSH_HOME as an exclusive bridge-managed directory.
 Resolve its parent and reject repository paths, symlinks in the managed path,
-and any nonempty unmarked directory. Reject `os.homedir()` itself, `~/.dsh`,
-and the known desktop home
-`~/Library/Application Support/Augmentor/data/augmentor/managed-dsh/home`,
-including paths inside those DSH homes. Do not read desktop config to discover
-more paths. The home-directory check is equality, not an ancestor ban.
-The default under `~/ResonantOS_User/BrowserFirst/Harnesses/dsh-native` is valid.
+and any nonempty unmarked directory. Apply these distinct path rules after
+normalization. Resolve existing ancestors for paths that do not yet exist.
+
+| Protected path | Rejection rule |
+| --- | --- |
+| `os.homedir()` | Reject equality only. A dedicated descendant may be used. |
+| `~/.dsh` | Reject equality and every descendant, even an empty directory. |
+| `~/Library/Application Support/Augmentor/data/augmentor/managed-dsh/home` | Reject equality and every descendant, even an empty directory. |
+
+Compare canonical path components, not string prefixes. Do not read desktop
+config to discover more paths. The default under
+`~/ResonantOS_User/BrowserFirst/Harnesses/dsh-native` passes these path rules.
 A custom path still must be dedicated to the bridge. On first use, create
 it with mode 0700 and a mode 0600 ownership marker. The marker contains only
 format version, native binding name, and canonical bridge user root.
@@ -282,6 +301,26 @@ return `session-not-found`. A new explicit session request may start one new
 child after confirmed cleanup, with a new runtime epoch, token, and cookie.
 It cannot replay a prompt or reconnect an old session. The registry does not
 silently change owners or grants to recover a process failure.
+
+Session retirement must also invalidate the browser chat cache. Add a host-only
+synchronous retirement notification from `harness-boundary.mjs` to composition.
+Emit it when a registered session is removed, before awaiting cleanup.
+`harness-host-service.mjs` clears `compatibilitySession` only when all four
+reference fields match the retired session. A late notification for an old
+session must not clear a replacement. Do not change slot generation or grants.
+
+Each governed chat call holds its session reference in a local variable for
+events, invocation, receipts, reply provenance, and timeout cancellation.
+Clearing the shared cache must not erase that in-flight identity. Before caching
+a newly awaited session, use a host-only boundary liveness check against its
+registered reference and current authorization. If retirement already occurred,
+fail that call without caching or retrying it.
+
+The next user-submitted `/augmentor/chat` call rechecks authorization and creates
+a fresh session when the cache is empty. This is an explicit new request and
+may launch a new child after confirmed cleanup. The failed chat call is never
+retried. Never copy or resend its prompt as part of recovery. If authority was
+revoked or cleanup remains unconfirmed, the next call fails without spawning.
 
 Releasing one session disposes its adapter and transport. The final lease
 release stops the child, including after slot replacement, disablement, or
@@ -417,6 +456,8 @@ This applies to native and plugin DSH exchanges, including token queries and
 cookie requests. Keep numeric-address pinning, Host/port checks, and manual
 redirects. Child environment filtering alone does not protect bridge requests.
 Do not change the parent environment or global networking for other services.
+This is shared transport hardening. Plugin authentication, headers, grants,
+and session protocol remain compatible. Plugin requests also bypass proxies.
 
 Native authentication runs before the first session RPC:
 
@@ -540,7 +581,7 @@ detail; the existing client displays the public harness message.
 | Missing announcement or readiness timeout | `deadline-exceeded`: `Runtime deadline exceeded.` | `Native DSH did not become ready within 30 seconds. Check the package and retry with a new session.` |
 | Malformed announcement, child exit, failed cookie exchange, transport failure, or invalid protocol schema | `runtime-unavailable` | `Native DSH startup or authentication failed. Check the installed version and retry with a new session.` |
 | Missing grants, binding mismatch, or forbidden operation | Existing `permission-denied` or `invalid-manifest` | `Native DSH requires its exact approved binding and explicit capability grants.` |
-| Child exits during a session | Active stream terminates with `runtime-unavailable`; later references get `session-not-found` | `Native DSH stopped. Create a new session. The previous turn was not retried.` |
+| Child exits during a session | Active stream terminates with `runtime-unavailable`; later references get `session-not-found`; the next user-submitted browser chat creates a fresh session after cleanup | `Native DSH stopped. Send a new chat request or create a new session. The previous turn was not retried.` |
 | Recognized model/provider rejection | The probe records provider unavailability without failing protocol readiness. An affected public operation returns sanitized `runtime-unavailable`; no provider-triggered child stop. | `Native DSH could not complete the request. Check its model and provider configuration.` |
 | Stop deadline exceeded | Local authority remains fenced | `Native DSH exit could not be confirmed. Inspect the owned process before reusing its home or port.` |
 
@@ -595,8 +636,8 @@ implementation PR. This spec-only change does not edit that map.
 | `harness-transport.mjs` | Credential lease and pinned endpoint | Native or plugin exchange I/O, HTTP/WebSocket requests, bounded retry policy, narrow sanitation method | Spawning, grants, arbitrary RPCs, or manifest authority |
 | `agent-runtime-endpoint.mjs` | Approved endpoint and connection inputs | Direct proxy-disabled connections, guarded sockets, internal handshake status, manual redirect responses | Token extraction, cookie semantics, process ownership |
 | `agent-adapters/dsh-typert.mjs` | Authenticated transport and authorized chat input | Existing Typert sessions, follow state, model and history projections | Auth selection, credentials, process lifecycle, tools or approval authority |
-| `harness-host-service.mjs` | Operator config, registry authorization, runtime failure notifications | Shared readiness orchestration, adapter resources, native delta suppression and assembled-result sanitation, bounded shutdown | Parsing child output, implementing login exchange, or granting consent |
-| `harness-boundary.mjs` | Registry authorization and injected lifetime notifications | Pending-session cancellation, epoch-associated retirement, output fences | Concrete DSH process handling or credentials |
+| `harness-host-service.mjs` | Operator config, registry authorization, runtime failure and session retirement notifications | Shared readiness orchestration, compatibility-session cache invalidation, per-call chat identity, adapter resources, native delta suppression and assembled-result sanitation, bounded shutdown | Parsing child output, implementing login exchange, or granting consent |
+| `harness-boundary.mjs` | Registry authorization and injected lifetime notifications | Pending-session cancellation, epoch-associated retirement, synchronous retirement notifications, host-only session liveness check, output fences | Concrete DSH process handling or credentials |
 | `harness-policy.mjs` | Reviewed adapter and auth scheme, declarations and grants | Pure scheme-specific floor and revocation decisions | Config, processes, credentials, or persistence |
 | `harness-registry.mjs` and `harness-registry-store.mjs` | Validated manifests, binding metadata, durable governance | Existing consent, slots, revisions, generations, atomic records | Child handles, login tokens, cookies, runtime health or home paths |
 | `src/core/contracts.ts` and canonical SDK validation | Declarative runtime fields | Auth scheme vocabulary and validation | Runtime authority or executable configuration |
@@ -675,12 +716,20 @@ logs or credentials in fixtures.
   hosts, wrong ports, duplicate queries, missing tokens, overflow, early exit,
   missing stdout, and each deadline. Include banners before and between valid
   announcements. Capture all logs and search for secrets.
-- Deny unsafe homes, symlinks, nonempty unmarked directories, foreign markers,
+- Deny unsafe homes, managed-path symlinks, nonempty unmarked directories, foreign markers,
   concurrent locks, busy ports, invalid packages, and unsupported platforms.
-  Include a group-writable nested imported module, writable nested directory,
-  foreign owner, and nested symlink. A foreign listener must receive zero HTTP
-  requests and zero signals. Accept the documented home default; reject the
-  real home itself and known desktop DSH homes even if empty.
+  A foreign listener must receive zero HTTP requests and zero signals.
+- Reject the OS home itself. Accept an empty dedicated descendant, including
+  the documented default. Reject both `~/.dsh` and the documented desktop DSH
+  home, plus an empty descendant of each. Test component containment with a
+  sibling whose name merely shares the protected path's prefix.
+- Accept an npm-style internal `.bin` symlink and an internal directory alias.
+  Reject an escaping link, an escaping intermediate hop, a dangling link, and
+  a link-resolution cycle. Reject a group-writable imported module or link
+  target, a writable nested directory, and a foreign owner. Test a safe package
+  under a writable immediate parent and under a writable higher ancestor.
+  Both must fail before spawn. Test group and other write bits separately.
+  Verify the walk reaches `/` and terminates for repeated directory aliases.
 - Verify SIGTERM, escalation, confirmed exit, stuck stop, bridge shutdown, and
   a late old-child exit after replacement. No orphaned startup promise may
   publish a usable lease after cancellation.
@@ -736,6 +785,16 @@ Exercise a slow cold startup followed by a prompt through `/augmentor/chat`.
 Verify the reply timer starts after session creation and turn allocation.
 Startup expiry sends no prompt. Reply expiry cancels only the allocated turn.
 
+After a successful `/augmentor/chat`, exit the native child while keeping the
+add-on ID, slot generation, and grants unchanged. The next user-submitted chat
+must create a new session and child after cleanup and return a fresh reply.
+Repeat with exit during an active chat. That call must fail once; its prompt
+must never reach the replacement child. Old references still fail. Verify
+late retirement cannot clear the new cache, and retirement between session
+creation and cache assignment cannot leave a stale reference. Check timeout
+cancellation uses the call's local reference after cache invalidation. Repeat
+with revoked grants and unconfirmed cleanup; both must prevent a new child.
+
 Restart against the same registry and managed home after clean shutdown.
 Consent and owners persist. Child epoch, login token, cookies, bridge boot
 epoch, and session references do not. Old requests fail. A new session gets a
@@ -764,10 +823,17 @@ Require all of these checks for each version:
    clean bridge restart. Verify old references and output cannot be reused.
 4. Observe a reply in the existing browser surface. Preserve sanitized evidence
    and exact versions outside the repository. Fixture receipts cannot pass live.
-5. Confirm telemetry is disabled in the effective child configuration and by
-   observing outbound traffic during startup and a real turn. Provider traffic
-   is expected; product analytics and OTel export traffic is not. Inability to
-   observe the setting or traffic leaves the telemetry gate unproven.
+5. Confirm telemetry is disabled in the effective child configuration. Inspect
+   the exact installed web profile to verify DISABLED constructs no OTel
+   exporter and excludes desktop product analytics. Startup and a real turn
+   alone do not exercise the documented FEEDBACK_ONLY export path. Exercise
+   rating/comment feedback with synthetic session data in the isolated live
+   harness. Observe exporter construction and export attempts as well as direct
+   outbound traffic. Verify the observation mechanism with a separate enabled
+   control whose exports terminate at a local test sink. Never send the control
+   data to the public collector. The managed child always uses DISABLED and
+   must make zero telemetry export attempts. Provider traffic is expected.
+   Missing source or feedback-path observations leave the gate unproven.
 6. Check the dedicated state for accidental login-token or cookie persistence
    using in-memory comparisons. Emit only pass/fail, never matches or secrets.
 7. Keep the user's desktop DSH running on its own port and home. Confirm its
@@ -786,21 +852,26 @@ For the future implementation, run `npm run test:browser-first`,
 Run `npm run verify:alpha` for final cross-module certification.
 Record exact commands and blockers. None of those future runtime checks is
 claimed by this design document. This spec-only task requires the two docs
-checks and verification that only this spec and its review-1 record changed.
+checks and verification that only this spec and its review-2 record changed.
 
 ## Self-review
 
-- Review coverage: Both independent reviews were read in full. The
-  [review-1 adjudication](dsh-native-auth-design-review-1.md) records all 20
-  findings with worktree evidence. Accepted: 19. Rejected: 1. Deferred minors: 0.
-  There were no Critical findings. The rejected startup-race claim conflicts
-  with the actual ordering in `harness-host-service.mjs:351` through `:373`.
+- Review coverage: Both round-2 reviews were read in full. The final revision
+  [review-2 adjudication](dsh-native-auth-design-review-2.md) accepts all three
+  new Important findings and both new Minor findings. Rejected: 0. Deferred: 0.
+  The [review-1 adjudication](dsh-native-auth-design-review-1.md) remains the
+  historical record of 19 accepted findings and one rejected startup-race
+  claim. Its rejection still matches `harness-host-service.mjs:351` through `:373`.
 - Internal consistency: One native binding owns one child and one epoch cookie.
   Composition owns readiness. Credentials own shared secret state. The boundary
   owns authorization. Startup and browser reply clocks remain separate.
-- Ambiguity check: Package permissions, eager versus lazy errors, ignored boot
-  lines, home paths, stop timing, hook registration, socket 401 handling, proxy
-  bypass, and sanitation after text assembly now have explicit rules and tests.
+  Retirement clears the matching browser cache without changing governance.
+  A later user request creates a fresh session. Failed prompts are never replayed.
+- Ambiguity check: OS-home equality and DSH-home subtree bans are separate.
+  Package checks permit contained npm links and validate ancestors through `/`.
+  Tests cover protected homes and descendants, writable ancestors, link escape,
+  child-exit chat recovery, and stale cache notifications. Plugin compatibility
+  includes the stated proxy-bypass hardening. Telemetry proof exercises feedback.
 - Evidence limits: DSH-NATIVE-AUTH-1 and DSH-NATIVE-PROVIDER-1 remain mandatory
   before implementation of their affected policies. Each has outcome rules.
   This revision claims no live token-reuse, provider-error, Origin, or telemetry
