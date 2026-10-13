@@ -133,9 +133,10 @@ data loss"), so a plain 0.2 install has no `/api/augmentor/auth` and the
 adapter cannot connect. With the plugin forced in a throwaway profile, the
 adapter's auth exchange, session creation, a full chat turn over
 `/api/remote.mux` and history all worked. Pin DSH 0.1.5-rc.1 or 0.1.7-rc.2
-until a plugin release declares 0.2 support. Also new in 0.2: `dsh-web-app` mounts product-analytics and
-OpenTelemetry packages enabled by default, which a governed host must decide
-on before adopting it.
+until a plugin release declares 0.2 support. Also new in 0.2: `dsh-web-app` bundles product analytics and product
+telemetry but enables them only in DSH's desktop profile, so the `web` profile
+used here excludes them. DSH's session telemetry is a separate setting that a
+governed host must decide on before adopting 0.2.
 
 ## OpenAI-compatible endpoint and bearer binding
 
