@@ -1092,10 +1092,10 @@ test('closed metadata excludes content and uses strict tool names and booleans',
   assert.deepEqual(publicActivityError(Error('CANARY')), {status:503,payload:{ok:false,code:'storage-unavailable',error:'Activity storage unavailable.'}});
 });
 test('domain normalization is host-only and canonical', () => {
-  for (const [url,domain] of [['https://Sub.Example.COM./p?q=1#x','sub.example.com'],['http://bücher.example/x','xn--bcher-kva.example'],['http://127.0.0.1:80/x','127.0.0.1'],['http://[::1]:88/x','[::1]'],['http://localhost:9/x','localhost']]) {
+  for (const [url,domain] of [['https://Sub.Example.COM./p?q=1#x','sub.example.com'],['http://bücher.example/x','xn--bcher-kva.example'],['http://127.0.0.1:80/x','127.0.0.1'],['http://[::1]:88/x','[::1]'],['http://[2001:0DB8::1]:8080/x','[2001:db8::1]'],['http://localhost:9/x','localhost']]) {
     assert.equal(domainFromUrl(url),domain); assert.equal(validDomain(domain),true);
   }
-  for (const domain of ['x:80','user@x','x/p','x?q','x#f',' x','EXAMPLE.com','x.','','a'.repeat(254)]) assert.equal(validDomain(domain),false);
+  for (const domain of ['::1','[::1]:88','[2001:0db8::1]','x:80','user@x','x/p','x?q','x#f',' x','EXAMPLE.com','x.','','a'.repeat(254)]) assert.equal(validDomain(domain),false);
   assert.equal(domainFromUrl('file:///private/x'),null);
 });
 test('descriptor is a closed fixed host contract', () => {
@@ -1157,13 +1157,16 @@ export function exact(value, keys) {
 export function validDescriptor(d) {
   return exact(d,['harnessId','interfaceId','label','governance','noticeKey']) && d.harnessId==='addon.augmentor-embed' && d.interfaceId==='panel' && d.label==='Augmentor' && d.governance==='self-governed' && typeof d.noticeKey==='string' && NOTICE_KEY.test(d.noticeKey);
 }
+function bracketHostname(hostname) {
+  return hostname.includes(':')&&!hostname.startsWith('[')?`[${hostname}]`:hostname;
+}
 export function validDomain(value) {
   if (typeof value!=='string' || !/^[\x21-\x7e]{1,253}$/.test(value) || /[@/?#\\]/.test(value) || value.endsWith('.') || value!==value.toLowerCase()) return false;
-  try { const u=new URL(`http://${value}/`); return !u.username && !u.password && !u.port && u.hostname===value && u.pathname==='/'; } catch { return false; }
+  try { const u=new URL(`http://${value}/`); return !u.username && !u.password && !u.port && bracketHostname(u.hostname)===value && u.pathname==='/'; } catch { return false; }
 }
 export function domainFromUrl(value) {
   try { const u=new URL(value); if (!['http:','https:'].includes(u.protocol)) return null;
-    const d=u.hostname.toLowerCase().replace(/\.$/,''); return validDomain(d)?d:null;
+    const d=bracketHostname(u.hostname).toLowerCase().replace(/\.$/,''); return validDomain(d)?d:null;
   } catch { return null; }
 }
 export function metadata(value) {
@@ -1401,6 +1404,16 @@ test('private durable snapshot, lock contention, restart and stale temporary cle
   const next=await openEmbedGovernanceStorage(f); t.after(()=>next.close());
   assert.equal(await next.read(),'{"version":1}\n'); await assert.rejects(fs.stat(temp),{code:'ENOENT'});
 });
+test('restrictive umask does not remove owner access from new private paths or files',async t=>{
+  const f=await fixture(t),previous=process.umask(0o277);let store;
+  try {
+    store=await openEmbedGovernanceStorage(f);await store.write('{}\n');
+    for(const path of [f.userRoot,join(f.userRoot,'BrowserFirst'),f.dir,join(f.dir,'writer.lock')])assert.equal((await fs.stat(path)).mode&0o777,0o700);
+    for(const path of [join(f.dir,'state.json'),join(f.dir,'writer.lock','owner.json')])assert.equal((await fs.stat(path)).mode&0o777,0o600);
+    assert.equal(await store.read(),'{}\n');await store.close();
+    store=await openEmbedGovernanceStorage(f);assert.equal(await store.read(),'{}\n');
+  } finally {process.umask(previous);await store?.close();}
+});
 test('root and ancestor links, repository destinations and missing roots beneath links create no feature data',async t=>{
   for(const destination of ['outside','repo']) {
     const f=await fixture(t),target=destination==='repo'?f.repoRoot:join(f.base,'target');
@@ -1503,7 +1516,7 @@ export async function openEmbedGovernanceStorage({userRoot,repoRoot,fs=nativeFs,
       if(e.code!=='ENOENT'||!create) throw fail();
       const ancestor=await fs.realpath(parent);
       if(ancestor!==parent||inside(repository,path)) throw fail();
-      try { await fs.mkdir(path,{mode:0o700}); } catch(e2) { if(e2.code!=='EEXIST') throw fail(); }
+      try { await fs.mkdir(path,{mode:0o700}); await fs.chmod(path,0o700); } catch(e2) { if(e2.code!=='EEXIST') throw fail(); }
       stat=await fs.lstat(path);
     }
     if(!stat.isDirectory()||stat.isSymbolicLink()||await fs.realpath(path)!==path) throw fail();
@@ -1560,9 +1573,10 @@ export async function openEmbedGovernanceStorage({userRoot,repoRoot,fs=nativeFs,
       if(!absent) throw fail(); await release(old.ownership);
       await fs.mkdir(lock,{mode:0o700});
     }
+    await fs.chmod(lock,0o700);
     await directory(lock,{privateMode:true});
     const handle=await fs.open(owner,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);
-    try { await handle.writeFile(JSON.stringify({pid:process.pid,ownership})+'\n'); await handle.sync(); } finally { await handle.close(); }
+    try { await handle.chmod(0o600); await handle.writeFile(JSON.stringify({pid:process.pid,ownership})+'\n'); await handle.sync(); } finally { await handle.close(); }
     owned=true;
     for(const name of await fs.readdir(dir)) if(/^\.state-[0-9a-f-]{36}\.tmp$/.test(name)) {const p=join(dir,name);await file(p);await fs.unlink(p);}
   } catch { if(owned) await release(ownership).catch(()=>{}); throw fail(); }
@@ -1575,7 +1589,7 @@ export async function openEmbedGovernanceStorage({userRoot,repoRoot,fs=nativeFs,
         await check(); if((await lockOwner()).ownership!==ownership) throw fail();
         await file(state,true); temp=join(dir,`.state-${randomUUID()}.tmp`);
         const handle=await fs.open(temp,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);
-        try {await handle.writeFile(text,'utf8');await handle.sync();}finally{await handle.close();}
+        try {await handle.chmod(0o600);await handle.writeFile(text,'utf8');await handle.sync();}finally{await handle.close();}
         await check(); await file(temp); await file(state,true);
         await fs.rename(temp,state); temp=null;
         const parent=await fs.open(dir,constants.O_RDONLY|constants.O_NOFOLLOW);
@@ -1768,8 +1782,20 @@ test('10 MiB cap includes notice bytes and preserves prior state when an append 
   saved.notices=Object.fromEntries(Array.from({length:count},(_,i)=>['augmentor-v1-'+i.toString(16).padStart(64,'0'),1]));
   raw=JSON.stringify(saved)+'\n';assert.ok(Buffer.byteLength(raw)<=10*1024*1024);
   const next=await f.make();t.after(()=>next.close());const before=raw;
+  assert.equal((await f.call('state',{},'GET',next)).problem,'log-full');
   assert.deepEqual(await f.call('events',{writeEpoch:on.writeEpoch,eventId:randomUUID(),event:{kind:'reply-started'}},'POST',next),{recorded:false,reason:'full'});
   assert.equal(raw,before);
+  await next.close();const restarted=await f.make();t.after(()=>restarted.close());
+  assert.equal((await f.call('state',{},'GET',restarted)).problem,'log-full');
+});
+test('startup pruning frees a full record log before exposing state',async t=>{
+  let raw=null;const f=await fixture(t,{storageFactory:async()=>({read:async()=>raw,write:async v=>{raw=v;},close:async()=>{}})});
+  await f.call('recording',{enabled:true});await f.s.close();
+  const saved=JSON.parse(raw),record={version:1,recordedAt:new Date(Date.UTC(2026,9,13)).toISOString(),harnessId:'addon.augmentor-embed',interfaceId:'panel',governance:'self-governed',source:'harness-report',event:{kind:'reply-started'}};
+  raw=JSON.stringify({...saved,events:Array.from({length:10000},()=>({...record,eventId:randomUUID()}))})+'\n';
+  f.advance(2592000000);const next=await f.make();t.after(()=>next.close());
+  assert.equal((await f.call('state',{},'GET',next)).problem,null);
+  assert.deepEqual(JSON.parse(raw).events,[]);
 });
 ```
 
@@ -1824,8 +1850,17 @@ export async function createEmbedGovernanceHostService({userRoot,repoRoot=resolv
   }
   try {storage=await storageFactory({userRoot,repoRoot});await prune();}
   catch {problem='storage-unavailable';state=null;}
+  function fullFromState() {
+    if(!state)return false;
+    if(state.events.length>=LIMITS.records)return true;
+    // Test the smallest legal records, including JSON array separator and final newline.
+    const base={version:1,eventId:'00000000-0000-4000-8000-000000000000',recordedAt:'2000-01-01T00:00:00.000Z',harnessId:'addon.augmentor-embed',interfaceId:'panel',governance:'self-governed'};
+    const candidates=[{...base,source:'harness-report',event:{kind:'reply-started'}},{...base,source:'local-share',event:{kind:'page-shared',domain:'a'}}];
+    return candidates.every(record=>bytes({...state,events:[...state.events,record]})>LIMITS.state);
+  }
   function snapshot() {
-    const d=descriptor();return {recordingEnabled:state?.recordingEnabled??false,writeEpoch:state?.writeEpoch??null,noticeKey:d?.noticeKey??null,noticeVersion:1,noticeAcknowledged:!!(d&&state?.notices[d.noticeKey]===1),available:!!d,problem};
+    const currentProblem=problem??(fullFromState()?'log-full':null);
+    const d=descriptor();return {recordingEnabled:state?.recordingEnabled??false,writeEpoch:state?.writeEpoch??null,noticeKey:d?.noticeKey??null,noticeVersion:1,noticeAcknowledged:!!(d&&state?.notices[d.noticeKey]===1),available:!!d,problem:currentProblem};
   }
   function requireState(){if(!state||!storage||retentionPending)throw activityError('storage-unavailable');}
   function query(request,paged=false) {
@@ -1902,11 +1937,15 @@ test('capacity preserves history and queued pre-delete appends cannot resurrect 
   await f.s.close();raw=JSON.stringify({...initial,events:Array.from({length:10000},()=>({...record,eventId:randomUUID()}))});
   const next=await f.make();t.after(()=>next.close());
   const before=raw;
+  assert.equal((await f.call('state',{},'GET',next)).problem,'log-full');
   assert.deepEqual(await f.call('events',{writeEpoch:s.writeEpoch,eventId:randomUUID(),event:{kind:'reply-started'}},'POST',next),{recorded:false,reason:'full'});
   assert.equal(raw,before);assert.equal((await f.call('state',{},'GET',next)).problem,'log-full');
   const deletion=f.call('events/delete',{},'POST',next);
   const stale=f.call('events',{writeEpoch:s.writeEpoch,eventId:randomUUID(),event:{kind:'reply-started'}},'POST',next);
   await deletion;assert.equal((await stale).reason,'stale-epoch');assert.deepEqual((await f.call('events',{},'GET',next)).events,[]);
+  assert.equal((await f.call('state',{},'GET',next)).problem,null);
+  await next.close();const afterDelete=await f.make();t.after(()=>afterDelete.close());
+  assert.equal((await f.call('state',{},'GET',afterDelete)).problem,null);
 });
 ```
 
@@ -1979,7 +2018,15 @@ async function fixture(t) {
     assert.equal(response.headers.get('cache-control'),'no-store');
     return {status:response.status,payload:response.status===204?await response.text():await response.json()};
   };
-  return {request,port,options,routes,calls:()=>calls};
+  const rawRequest=(path,extra={})=>new Promise((resolve,reject)=>{
+    const req=http.request({host:'127.0.0.1',port,path,method:'GET',headers:{Host:`127.0.0.1:${port}`,Origin:origin,'X-ResonantOS-Bridge-Token':'bridge','X-ResonantOS-Bridge-Capability-Token':'read',...extra}},res=>{
+      let body='';res.on('data',chunk=>body+=chunk);res.on('error',reject);res.on('end',()=>{
+        try{assert.equal(res.headers['cache-control'],'no-store');resolve({status:res.statusCode,payload:JSON.parse(body)});}catch(error){reject(error);}
+      });
+    });
+    req.on('error',reject);req.setTimeout(1500,()=>req.destroy(Error('Raw request timed out')));req.end();
+  });
+  return {request,rawRequest,port,options,routes,calls:()=>calls};
 }
 function error(result,code){assert.deepEqual(result,{status:ERRORS[code][0],payload:{ok:false,code,error:ERRORS[code][1]}});}
 test('family authentication precedes method lookup and wildcards never authorize',async t=>{
@@ -1988,12 +2035,16 @@ test('family authentication precedes method lookup and wildcards never authorize
   error(await f.request('/embed-governance/state','GET','read',{Origin:''}), 'forbidden');
   error(await f.request('/embed-governance/state','GET','read',{Origin:'chrome-extension://foreign'}), 'forbidden');
   error(await f.request('/embed-governance/state','GET','read',{Origin:`http://127.0.0.1:${f.port}`}), 'forbidden');
-  error(await f.request('/embed-governance/state','GET','read',{Host:'evil.test'}), 'forbidden');
+  const beforeForged=f.calls();
+  error(await f.rawRequest('/embed-governance/state',{Host:'evil.test'}), 'forbidden');
+  assert.equal(f.calls(),beforeForged);
   error(await f.request('/embed-governance/state','PUT','read'), 'method-not-allowed');
   error(await f.request('/embed-governance/unknown'), 'unknown-route');
   for(const token of ['control','write']) for(const path of ['recording','notice']) error(await f.request('/embed-governance/'+path,'POST',token),'forbidden');
   error(await f.request('/embed-governance/state?x=1'), 'invalid-request');
-  error(await f.request('/embed-governance/state?x=%ZZ'), 'invalid-request');
+  const beforeMalformed=f.calls();
+  for(const path of ['/embed-governance/state?x=%ZZ','/embed-governance/%ZZ'])error(await f.rawRequest(path), 'invalid-request');
+  assert.equal(f.calls(),beforeMalformed);
   assert.deepEqual(await f.request('/embed-governance/state','OPTIONS'),{status:204,payload:''});
   assert.equal((await f.request()).status,200);
 });
@@ -2070,7 +2121,8 @@ export function authorizeBridgeRoute(request, {
   };
   if(!isAuthorizedBridgeRequest(request,bridgeToken))return refuse(401,'OPENCODE_BRIDGE_UNAUTHORIZED','Unauthorized browser-first bridge request.');
   if(family) {
-    if(!validateLoopbackHost({...request,url:'/embed-governance/state'},{listenerPort,getPublicPort})||!exactExtensionOrigin(request,extensionOrigin))return refuse(403,'OPENCODE_HOST_REJECTED','Host rejected.');
+    // IncomingMessage headers are prototype accessors; spreading request loses them.
+    if(!validateLoopbackHost({url:'/embed-governance/state',headers:request.headers,rawHeaders:request.rawHeaders,socket:request.socket},{listenerPort,getPublicPort})||!exactExtensionOrigin(request,extensionOrigin))return refuse(403,'OPENCODE_HOST_REJECTED','Host rejected.');
     if(family.malformed)return refuse(400,'OPENCODE_INVALID_REQUEST','Invalid request.');
     if(!route)return refuse(routes.some(r=>r.path===family.pathname)?405:404,'OPENCODE_ROUTE_UNKNOWN','Unknown route.');
   }
@@ -2318,865 +2370,6 @@ git diff --check
 git add browser-first/host/bridge-server.mjs browser-first/host/bridge-capability-tokens.mjs browser-first/resonantos-side-panel-extension/src/lib/bridge-client.js browser-first/host/run-bridge-minimal.mjs browser-first/test/bridge-route-capability-audit.test.mjs browser-first/test/embed-governance-transport.test.mjs docs/architecture/MODULE-OWNERSHIP.md
 git commit -m "feat(bridge): enforce embed governance transport boundaries"
 ```
-### Task 7: Safe relay controller and bounded observation delivery
-
-**Prerequisite:** The conductor must first complete **EMBED-UPSTREAM-1** using Task 11's written proof. Workers may prepare the proof and syntax-check it ahead of this task. Do not implement relay mapping until its recipient/version/field checks pass. Missing fields block this task and require a reviewed narrow mapping correction; they do not justify synthetic events. All independent preceding tasks can proceed.
-
-**Files:**
-- Create: `browser-first/resonantos-side-panel-extension/src/lib/embed-governance-controller.js`
-- Create/Test: `browser-first/test/embed-governance-controller.test.mjs`
-- Modify: `docs/architecture/MODULE-OWNERSHIP.md`
-
-**Interfaces:**
-- Consumes: `request(route:string, options?:{method?:string,body?:object,signal?:AbortSignal}):Promise<object>`; `confirmShare(label:string):Promise<boolean>`; `announce(text:string):void`.
-- Produces: `createEmbedGovernanceController({request,windowRef,confirmShare,announce,uuid?,setTimeoutImpl?,clearTimeoutImpl?,setIntervalImpl?,clearIntervalImpl?})` returning `mount({frame,origin,descriptor}):void`, `relay(event):void`, `refresh():Promise<void>`, `beginShare():Promise<ShareTicket|string>`, `currentShare(ticket):boolean`, `didShare(ticket,url):void`, `stopRecording():void`, `destroy():void`, `history:Array<object>`. `ShareTicket` is `{frame:Window, noticeKey:string, remember:boolean}`. No raw messages escape or survive method return.
-
-- [ ] Write the failing test:
-
-```js
-import test from 'node:test';
-import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
-import { createEmbedGovernanceController } from '../resonantos-side-panel-extension/src/lib/embed-governance-controller.js';
-const d={harnessId:'addon.augmentor-embed',interfaceId:'panel',label:'Augmentor',governance:'self-governed',noticeKey:'augmentor-v1-'+ 'a'.repeat(64)};
-const settle=()=>new Promise(r=>setImmediate(r));
-function fixture({enabled=false,post,confirm=true}={}) {
-  const frame={},calls=[],notices=[],listeners=new Map();let polls=0,poll,timeout=()=>{},epoch=randomUUID(),asks=0,noticeKey=d.noticeKey;
-  const state=()=>({recordingEnabled:enabled,writeEpoch:epoch,noticeKey,noticeVersion:1,noticeAcknowledged:false,available:true,problem:null});
-  const request=async(path,options={})=>{calls.push({path,options});if(path.endsWith('/state')){polls++;return state();}return post?post(path,options):{recorded:true,reason:null};};
-  const c=createEmbedGovernanceController({request,uuid:randomUUID,windowRef:{addEventListener:(k,v)=>listeners.set(k,v),removeEventListener:k=>listeners.delete(k)},confirmShare:async()=>{asks++;return confirm;},announce:s=>notices.push(s),setIntervalImpl:(fn,ms)=>{assert.equal(ms,5000);poll=fn;return 1;},clearIntervalImpl(){},setTimeoutImpl:(fn,ms)=>{assert.equal(ms,2000);timeout=fn;return 2;},clearTimeoutImpl(){}});
-  c.mount({frame,origin:'http://127.0.0.1:9',descriptor:d});
-  const relay=data=>c.relay({source:frame,origin:'http://127.0.0.1:9',data});
-  return {c,frame,calls,notices,listeners,relay,enable:v=>enabled=v,epoch:()=>epoch=randomUUID(),poll:()=>poll(),timeout:()=>timeout(),asks:()=>asks,polls:()=>polls,changeRecipient:key=>noticeKey=key};
-}
-test('unknown/off records nothing; enabling has no backfill; exact transitions never persist IDs/content',async()=>{
-  const f=fixture();await f.c.refresh();
-  f.relay({type:'augmentor-event',event:'turn.started',prompt:'CANARY'});assert.equal(f.c.history.length,0);
-  f.enable(true);await f.c.refresh();
-  f.relay({type:'augmentor-status',online:true,busy:false,conversationId:'CANARY-ID-1'});
-  f.relay({type:'augmentor-event',event:'conversation.changed',conversationId:'CANARY-ID-2',text:'CANARY'});
-  f.relay({type:'augmentor-status',online:true,busy:false,conversationId:'CANARY-ID-2'});
-  f.relay({type:'augmentor-event',event:'turn.started'});f.relay({type:'augmentor-event',event:'turn.started'});
-  f.relay({type:'augmentor-event',event:'turn.finished'});f.relay({type:'augmentor-event',event:'turn.finished'});
-  f.relay({type:'augmentor-event',event:'tool.finished',toolName:'read.page',error:false,result:'CANARY'});
-  f.relay({type:'augmentor-event',event:'tool.finished',toolName:'read.page',error:false});
-  for(let i=0;i<10;i++)await settle();
-  const posts=f.calls.filter(c=>c.path.endsWith('/events'));
-  assert.deepEqual(posts.map(p=>p.options.body.event.kind),['conversation-changed','reply-started','reply-finished','tool-finished','tool-finished']);
-  assert.equal(JSON.stringify(posts).includes('CANARY'),false);assert.equal(JSON.stringify(f.c.history).includes('CANARY'),false);
-  const before=posts.length;
-  f.c.relay({source:{},origin:'http://127.0.0.1:9',data:{type:'augmentor-event',event:'turn.started'}});
-  f.c.relay({source:f.frame,origin:'http://evil',data:{type:'augmentor-event',event:'turn.started'}});
-  f.relay({type:'augmentor-result',text:'CANARY'});f.relay({type:'augmentor-status',online:false,busy:false});
-  await settle();assert.equal(f.calls.filter(c=>c.path.endsWith('/events')).length,before);
-  f.c.destroy();assert.equal(f.listeners.size,0);
-});
-test('queue bounds, timeout drops, stale epoch refresh and pagehide cleanup',async()=>{
-  const f=fixture({enabled:true,post:()=>new Promise(()=>{})});await f.c.refresh();
-  for(let i=0;i<60;i++)f.relay({type:'augmentor-event',event:'tool.finished',toolName:'read',error:false});
-  assert.ok(f.c.history.length<=50);await settle();assert.equal(f.calls.filter(c=>c.path.endsWith('/events')).length,1);
-  f.timeout();await settle();assert.equal(f.calls.filter(c=>c.path.endsWith('/events')).length,2);
-  f.listeners.get('pagehide')();await settle();assert.equal(f.c.history.length,0);
-  const stale=fixture({enabled:true,post:async()=>({recorded:false,reason:'stale-epoch'})});await stale.c.refresh();
-  const polls=stale.polls();stale.relay({type:'augmentor-event',event:'turn.started'});await settle();await settle();
-  assert.ok(stale.polls()>polls);assert.equal(stale.calls.filter(c=>c.path.endsWith('/events')).length,1);stale.c.destroy();
-});
-test('notice consent only follows successful-share callback and survives remember failure in this mount',async()=>{
-  const f=fixture({post:async()=>{throw Error('CANARY');}});await f.c.refresh();
-  const ticket=await f.c.beginShare();assert.equal(typeof ticket,'object');
-  assert.equal(f.calls.some(c=>c.path.endsWith('/notice')),false);
-  f.c.didShare(ticket,'https://example.test/path?q=CANARY');await settle();
-  assert.equal(f.calls.filter(c=>c.path.endsWith('/notice')).length,1);
-  assert.equal(f.calls.some(c=>c.path.endsWith('/recording')),false);
-  await f.c.beginShare();assert.equal(f.asks(),1);
-  assert.ok(f.notices.includes('Notice preference could not be saved. It may appear again.'));
-  f.c.mount({frame:{},origin:'http://127.0.0.1:9',descriptor:d});
-  assert.equal(f.c.currentShare(ticket),false);await f.c.beginShare();assert.equal(f.asks(),2);f.c.destroy();
-});
-```
-
-Append a drain test that measures the full bounded queue, including drop-newest order:
-
-```js
-test('one in flight and at most 32 waiting; full queue drops newest without retry',async()=>{
-  const releases=[];
-  const f=fixture({enabled:true,post:()=>new Promise(resolve=>releases.push(resolve))});await f.c.refresh();
-  for(let i=0;i<60;i++)f.relay({type:'augmentor-event',event:'tool.finished',toolName:'tool'+i,error:false});
-  await settle();assert.equal(releases.length,1);
-  for(let i=0;i<33;i++){assert.equal(releases.length,1);releases.shift()({recorded:true,reason:null});await settle();}
-  assert.equal(releases.length,0);
-  assert.deepEqual(f.calls.filter(c=>c.path.endsWith('/events')).map(c=>c.options.body.event.toolName),Array.from({length:33},(_,i)=>'tool'+i));
-  assert.deepEqual(f.notices,['Activity was not recorded']);f.c.destroy();
-});
-```
-
-Append the disablement-history guard case:
-
-```js
-test('disablement clears pending metadata and keeps only bounded ready/status proof',async()=>{
-  const f=fixture({enabled:true});await f.c.refresh();
-  f.relay({type:'augmentor-ready'});f.relay({type:'augmentor-event',event:'turn.started'});await settle();
-  assert.ok(f.c.history.some(row=>row.kind==='reply-started'));
-  f.enable(false);await f.c.refresh();
-  assert.ok(f.c.history.every(row=>row.type==='augmentor-ready'||row.type==='augmentor-status'));
-  const count=f.calls.filter(c=>c.path.endsWith('/events')).length;
-  f.relay({type:'augmentor-event',event:'turn.finished'});await settle();
-  assert.equal(f.calls.filter(c=>c.path.endsWith('/events')).length,count);f.c.destroy();
-});
-```
-
-Append baseline and recipient-change regressions:
-
-```js
-test('offline resets baselines without synthesizing finishes; busy transitions are not turns',async()=>{
-  const f=fixture({enabled:true});await f.c.refresh();
-  f.relay({type:'augmentor-status',online:true,busy:false,conversationId:'first'});
-  f.relay({type:'augmentor-event',event:'turn.started'});
-  f.relay({type:'augmentor-status',online:false,busy:false});
-  f.relay({type:'augmentor-status',online:true,busy:true,conversationId:'second'});
-  f.relay({type:'augmentor-status',online:true,busy:false,conversationId:'second'});
-  await settle();assert.deepEqual(f.calls.filter(c=>c.path.endsWith('/events')).map(c=>c.options.body.event.kind),['reply-started']);
-  f.relay({type:'augmentor-event',event:'turn.started'});await settle();
-  assert.equal(f.calls.filter(c=>c.path.endsWith('/events')).length,2);f.c.destroy();
-});
-test('changed host recipient key invalidates this mounted frame and never remembers a share',async()=>{
-  const f=fixture();await f.c.refresh();const ticket=await f.c.beginShare();
-  f.changeRecipient('augmentor-v1-'+ 'b'.repeat(64));await f.c.refresh();
-  assert.equal(f.c.currentShare(ticket),false);assert.equal(await f.c.beginShare(),'Assistant unavailable');
-  f.c.didShare(ticket,'https://example.test/');await settle();
-  assert.equal(f.calls.some(c=>c.path.endsWith('/notice')),false);f.c.destroy();
-});
-```
-
-- [ ] Run `node --test browser-first/test/embed-governance-controller.test.mjs`; expect missing module. Only proceed with implementation after the conductor's live prerequisite passes.
-- [ ] Create the complete controller:
-
-```js
-import { LIMITS, UUID, metadata, domainFromUrl, validDescriptor } from './generated/embed-governance-contract.js';
-export function createEmbedGovernanceController({request,windowRef=globalThis.window,confirmShare,announce=()=>{},uuid=()=>crypto.randomUUID(),setTimeoutImpl=setTimeout,clearTimeoutImpl=clearTimeout,setIntervalImpl=setInterval,clearIntervalImpl=clearInterval}={}) {
-  let frame=null,origin='',descriptor=null,enabled=false,epoch=null,keyKnown=null,ack=false,stale=false,conversation=null,reply=null,closed=false,generation=0,readSequence=0,failure=false;
-  const history=[],queue=[],pending=new Set();let pumping=false;
-  function tell(text){try{announce(text);}catch{}}
-  function failed(){if(!failure){failure=true;tell('Activity was not recorded');}}
-  function ring(value){history.push(value);if(history.length>LIMITS.history)history.splice(0,history.length-LIMITS.history);}
-  function clear(){generation++;queue.length=0;for(const ac of pending)ac.abort();pending.clear();history.splice(0,history.length,...history.filter(v=>v.type==='augmentor-ready'||v.type==='augmentor-status'));}
-  async function bounded(path,options={}) {
-    const ac=new AbortController();pending.add(ac);let timer;
-    const timeout=new Promise((_,reject)=>{
-      ac.signal.addEventListener('abort',()=>reject(Error('Activity unavailable')),{once:true});
-      timer=setTimeoutImpl(()=>ac.abort(),LIMITS.timeout);
-    });
-    try{return await Promise.race([Promise.resolve().then(()=>request(path,{...options,signal:ac.signal})),timeout]);}
-    finally{clearTimeoutImpl(timer);pending.delete(ac);}
-  }
-  async function refresh() {
-    if(closed)return;
-    const seq=++readSequence,gen=generation;
-    try {
-      const s=await bounded('/embed-governance/state');
-      if(closed||seq!==readSequence||gen!==generation)return;
-      if(typeof s?.recordingEnabled!=='boolean'||!(s.writeEpoch===null||typeof s.writeEpoch==='string'&&UUID.test(s.writeEpoch))||typeof s.noticeAcknowledged!=='boolean'||s.noticeVersion!==1)throw Error();
-      keyKnown=s.noticeKey;
-      if(descriptor&&s.noticeKey!==descriptor.noticeKey){stale=true;ack=false;enabled=false;epoch=null;clear();return;}
-      if(!s.recordingEnabled||!s.available||s.problem){enabled=false;epoch=null;clear();}
-      else {if(!enabled||epoch!==s.writeEpoch)clear();enabled=true;epoch=s.writeEpoch;}
-      if(s.noticeAcknowledged)ack=true;
-      failure=false;
-    }catch{if(!closed&&seq===readSequence){enabled=false;epoch=null;keyKnown=null;clear();failed();}}
-  }
-  async function pump() {
-    if(pumping||closed)return;pumping=true;
-    try {
-      while(queue.length&&enabled&&!closed) {
-        const item=queue.shift(),gen=generation;
-        try {
-          const result=await bounded('/embed-governance/events',{method:'POST',body:item});
-          if(gen!==generation||closed)continue;
-          if(result.recorded===true){failure=false;continue;}
-          failed();
-          if(['stale-epoch','disabled','unavailable'].includes(result.reason)){enabled=false;clear();await refresh();}
-        }catch{if(gen===generation&&!closed)failed();}
-      }
-    }finally{pumping=false;if(queue.length&&enabled&&!closed)void pump();}
-  }
-  function observe(value) {
-    try {
-      if(!enabled||!epoch||closed)return;
-      const event=metadata(value);if(!event)return;
-      ring(event);
-      if(queue.length>=LIMITS.queue){failed();return;}
-      queue.push({writeEpoch:epoch,eventId:uuid(),event});void pump();
-    }catch{failed();}
-  }
-  function change(id,explicit) {
-    if(typeof id!=='string'||[...id].length<1||[...id].length>128||/[\x00-\x1f\x7f]/.test(id))return;
-    if(id!==conversation){if(conversation!==null||explicit){observe({kind:'conversation-changed'});reply=null;}conversation=id;}
-  }
-  function relay(event) {
-    try {
-      if(closed||!frame||event.source!==frame||event.origin!==origin)return;
-      const data=event.data;if(!data||typeof data!=='object')return;
-      if(data.type==='augmentor-ready'){ring({type:'augmentor-ready'});return;}
-      if(data.type==='augmentor-status') {
-        if(typeof data.online!=='boolean'||typeof data.busy!=='boolean')return;
-        ring({type:'augmentor-status',online:data.online,busy:data.busy});
-        if(!data.online){conversation=null;reply=null;return;}
-        change(data.conversationId,false);return;
-      }
-      if(data.type!=='augmentor-event')return;
-      if(data.event==='conversation.changed')change(data.conversationId,true);
-      else if(data.event==='turn.started'&&reply!=='started'){reply='started';observe({kind:'reply-started'});}
-      else if(data.event==='turn.finished'&&reply!=='finished'){reply='finished';observe({kind:'reply-finished'});}
-      else if(data.event==='tool.finished')observe({kind:'tool-finished',toolName:data.toolName,error:data.error});
-    }catch{failed();}
-  }
-  function mount(value) {
-    if(closed)return;clear();readSequence++;conversation=null;reply=null;ack=false;keyKnown=null;stale=false;enabled=false;epoch=null;history.length=0;
-    frame=value?.frame??null;origin=value?.origin??'';descriptor=validDescriptor(value?.descriptor)?{...value.descriptor}:null;
-    void refresh();
-  }
-  function currentShare(ticket){return !closed&&!stale&&!!descriptor&&ticket?.frame===frame&&ticket?.noticeKey===descriptor.noticeKey;}
-  async function beginShare() {
-    try {
-      if(closed||!frame||!descriptor||stale)return 'Assistant unavailable';
-      const mounted=frame,key=descriptor.noticeKey;
-      await refresh();
-      if(closed||frame!==mounted||descriptor?.noticeKey!==key||stale)return 'Assistant unavailable';
-      const remember=!ack;
-      if(remember&&await confirmShare(descriptor.label)!==true)return '';
-      const ticket={frame:mounted,noticeKey:key,remember};
-      return currentShare(ticket)?ticket:'Assistant unavailable';
-    }catch{return 'Assistant unavailable';}
-  }
-  function didShare(ticket,url) {
-    try {
-      if(!currentShare(ticket))return;
-      if(ticket.remember){ack=true;const gen=generation;
-        void bounded('/embed-governance/notice',{method:'POST',body:{noticeKey:ticket.noticeKey,version:1}}).catch(()=>{
-          if(!closed&&gen===generation)tell('Notice preference could not be saved. It may appear again.');
-        });
-      }
-      const domain=domainFromUrl(url);if(domain)observe({kind:'page-shared',domain});
-    }catch{failed();}
-  }
-  function stopRecording(){enabled=false;epoch=null;readSequence++;clear();}
-  function destroy(){if(closed)return;closed=true;stopRecording();history.length=0;clearIntervalImpl(timer);windowRef?.removeEventListener('focus',focus);windowRef?.removeEventListener('pagehide',destroy);windowRef?.removeEventListener('resonantos-embed-recording-off',stopRecording);}
-  const focus=()=>{void refresh();};
-  const timer=setIntervalImpl(focus,LIMITS.poll);
-  windowRef?.addEventListener('focus',focus);windowRef?.addEventListener('pagehide',destroy);windowRef?.addEventListener('resonantos-embed-recording-off',stopRecording);
-  return {mount,relay,refresh,beginShare,currentShare,didShare,stopRecording,destroy,history};
-}
-```
-
-Append ownership:
-
-```markdown
-| `browser-first/resonantos-side-panel-extension/src/lib/embed-governance-controller.js` | Safe relay observations, notice cache and bounded metadata delivery | Validated session descriptor, exact-source relay and authenticated host snapshots | In-memory baselines, projected queue and notice acknowledgement after dispatch | Authority, filesystem, raw transcript retention or credentials in UI |
-```
-
-- [ ] Run `node --test browser-first/test/embed-governance-controller.test.mjs`; expect pass. Test off-to-on explicitly with a new turn after a finish: baselines may track while off but must not emit old observations. Verify polling/focus requests contain no `/recording` or `/notice` call without `didShare`.
-- [ ] Red evidence: individually remove exact source, exact origin, `if(!enabled||!epoch||closed)return`, queue bound, and `currentShare` frame comparison. Require the corresponding controller test failures. Remove metadata-history filtering in `clear`; the disablement-history test must fail. Restore and rerun. Retain only fixed assertion outcomes in mutation evidence; payload tests use synthetic canaries.
-- [ ] Run this exact guard-mutation matrix after green. Each `rig-mutate` invocation must return zero (behavioral failure under mutation and byte-identical restoration). Inspect any failure; import or syntax errors are not guard evidence. The strings below are exact edits, not patterns.
-
-```bash
-python3 - <<'PYMUTATE'
-from pathlib import Path
-import shlex, subprocess
-rig=str(Path.home()/'.claude/skills/resonant-rig/scripts/rig-mutate')
-mutations=[('browser-first/resonantos-side-panel-extension/src/lib/embed-governance-controller.js', [('if(!enabled||!epoch||closed)return;', 'if(closed)return;')]), ('browser-first/resonantos-side-panel-extension/src/lib/embed-governance-controller.js', [('event.source!==frame||event.origin!==origin', 'false')]), ('browser-first/resonantos-side-panel-extension/src/lib/embed-governance-controller.js', [('if(queue.length>=LIMITS.queue)', 'if(false)')]), ('browser-first/resonantos-side-panel-extension/src/lib/embed-governance-controller.js', [("ring({type:'augmentor-status',online:data.online,busy:data.busy})", 'ring(data)')]), ('browser-first/resonantos-side-panel-extension/src/lib/embed-governance-controller.js', [("data.event==='turn.started'&&reply!=='started'", "data.event==='turn.started'")]), ('browser-first/resonantos-side-panel-extension/src/lib/embed-governance-controller.js', [('timer=setTimeoutImpl(()=>ac.abort(),LIMITS.timeout);', 'timer=0;')]), ('browser-first/resonantos-side-panel-extension/src/lib/embed-governance-controller.js', [('ticket?.frame===frame&&', '')]), ('browser-first/resonantos-side-panel-extension/src/lib/embed-governance-controller.js', [("history.filter(v=>v.type==='augmentor-ready'||v.type==='augmentor-status')", 'history')])]
-test_command='node --test browser-first/test/embed-governance-controller.test.mjs'
-for filename,changes in mutations:
-    edit='from pathlib import Path\np=Path('+repr(filename)+')\ns=p.read_text()\n'
-    for before,after in changes:
-        edit+='assert '+repr(before)+' in s\ns=s.replace('+repr(before)+','+repr(after)+',1)\n'
-    edit+='p.write_text(s)\n'
-    try:
-        subprocess.run([rig,filename,'python3 -c '+shlex.quote(edit),test_command],check=True)
-    finally:
-        subprocess.run(['node','scripts/prepare-embed-governance.mjs'],check=True)
-subprocess.run(shlex.split('node --test browser-first/test/embed-governance-controller.test.mjs'),check=True)
-PYMUTATE
-```
-
-- [ ] Commit:
-
-```bash
-git diff --check
-git add browser-first/resonantos-side-panel-extension/src/lib/embed-governance-controller.js browser-first/test/embed-governance-controller.test.mjs docs/architecture/MODULE-OWNERSHIP.md
-git commit -m "feat(embed): capture bounded consented relay metadata"
-```
-
-### Task 8: Accessible first-share dialog and final permission revalidation
-
-**Files:**
-- Create: `browser-first/resonantos-side-panel-extension/src/lib/embed-governance-dialog.js`
-- Modify: `browser-first/resonantos-side-panel-extension/src/lib/embed-bar-actions.js`, `browser-first/test/embed-bar-actions.test.mjs`, `docs/architecture/MODULE-OWNERSHIP.md`
-- Create/Test: `browser-first/test/embed-first-share.test.mjs`
-
-**Interfaces:**
-- Consumes: controller `beginShare():Promise<ShareTicket|string>`, `currentShare(ticket:ShareTicket):boolean`, `didShare(ticket:ShareTicket,url:string):void`; existing `activeTab():Promise<{id:number,url:string,title?:string}|null>`, `permissionForUrl(url:string):Promise<string>`, `pageContextMessage(tab:{url:string,title?:string}):{type:"augmentor-context",context:{source:"resonantos",page:{title:string,url:string}}}|null`.
-- Produces: `confirmEmbedAction({documentRef,heading,description,confirmLabel,returnFocus}):Promise<boolean>`; `confirmEmbedShare({documentRef,label,returnFocus}):Promise<boolean>`; extended `createEmbedBarActions({chromeApi,locationRef,sendContext,beforeShare,isShareCurrent,onShared})`.
-
-- [ ] Write the failing test:
-
-```js
-import test from 'node:test';
-import assert from 'node:assert/strict';
-import { JSDOM } from 'jsdom';
-import { createEmbedBarActions } from '../resonantos-side-panel-extension/src/lib/embed-bar-actions.js';
-import { confirmEmbedShare } from '../resonantos-side-panel-extension/src/lib/embed-governance-dialog.js';
-function fixture({confirm=true,change,dispatch=true}={}) {
-  const tab={id:2,url:'https://example.test/path?q=CANARY',title:'Fixture'},sent=[],remembered=[];let mode='read-only',reads=0,notices=0,current=true;
-  const chromeApi={tabs:{query:async()=>[tab],get:async()=>tab},webNavigation:{getAllFrames:async()=>[]},storage:{local:{get:async key=>{if(key==='augmentorSitePermissions'){reads++;return {[key]:{'example.test':mode}};}return {};},set:async()=>{}}}};
-  const ticket={frame:{},noticeKey:'key',remember:true};
-  const actions=createEmbedBarActions({chromeApi,locationRef:{},sendContext:m=>{if(dispatch==='throw')throw Error('CANARY');sent.push(m);return dispatch;},beforeShare:async()=>{notices++;if(change==='url')tab.url='https://example.test/other';if(change==='permission')mode='blocked';if(change==='frame')current=false;if(change==='read')chromeApi.storage.local.get=async()=>{throw Error('CANARY');};return confirm?ticket:'';},isShareCurrent:()=>current,onShared:(value,url)=>remembered.push({value,url})});
-  return {actions,sent,remembered,reads:()=>reads,notices:()=>notices};
-}
-test('cancel, navigation, permission failure, frame replacement and failed dispatch remember nothing',async()=>{
-  for(const opts of [{confirm:false},{change:'url'},{change:'permission'},{change:'frame'},{change:'read'},{dispatch:false},{dispatch:'throw'}]) {
-    const f=fixture(opts);assert.notEqual(await f.actions.sharePage(),'Page shared');assert.deepEqual(f.remembered,[]);
-    if(!Object.hasOwn(opts,'dispatch'))assert.deepEqual(f.sent,[]);
-  }
-  const f=fixture();assert.equal(await f.actions.sharePage(),'Page shared');assert.equal(f.sent.length,1);assert.equal(f.remembered.length,1);assert.equal(f.reads(),2);
-  assert.equal(f.remembered[0].url,'https://example.test/path');
-});
-test('dialog focuses Cancel, traps Tab, escapes, names recipient and restores Page focus',async t=>{
-  const dom=new JSDOM('<button id="page">Page</button>');t.after(()=>dom.window.close());const documentRef=dom.window.document,page=documentRef.querySelector('#page');page.focus();
-  const answer=confirmEmbedShare({documentRef,label:'Augmentor',returnFocus:page});
-  const dialog=documentRef.querySelector('[role=dialog]'),buttons=[...dialog.querySelectorAll('button')];
-  assert.equal(documentRef.activeElement,buttons[0]);assert.equal(dialog.getAttribute('aria-modal'),'true');
-  assert.match(dialog.textContent,/does not give Augmentor permission/);
-  buttons[0].dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Tab',shiftKey:true,bubbles:true,cancelable:true}));assert.equal(documentRef.activeElement,buttons[1]);
-  dialog.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));assert.equal(await answer,false);assert.equal(documentRef.activeElement,page);
-  const yes=confirmEmbedShare({documentRef,label:'Augmentor',returnFocus:page});documentRef.querySelector('[data-confirm]').click();assert.equal(await yes,true);
-});
-```
-
-- [ ] Run `node --test browser-first/test/embed-first-share.test.mjs`; expect missing dialog. For fail-before-fix action evidence temporarily omit only the dialog import/test and run the first test against existing actions; it must fail because current actions ignore cancellation and navigation. Restore the full test.
-- [ ] Create the complete dialog module:
-
-```js
-let sequence=0;
-export function confirmEmbedAction({documentRef=globalThis.document,heading,description,confirmLabel,returnFocus=documentRef.activeElement}) {
-  return new Promise(resolve=>{
-    const overlay=documentRef.createElement('div');overlay.className='embed-dialog-overlay';
-    const dialog=documentRef.createElement('section');dialog.className='embed-dialog';dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');
-    const title=documentRef.createElement('h2'),body=documentRef.createElement('p');
-    const id='embed-dialog-'+(++sequence);title.id=id+'-title';body.id=id+'-body';title.textContent=heading;body.textContent=description;
-    dialog.setAttribute('aria-labelledby',title.id);dialog.setAttribute('aria-describedby',body.id);
-    const cancel=documentRef.createElement('button'),confirm=documentRef.createElement('button');
-    cancel.type=confirm.type='button';cancel.textContent='Cancel';confirm.textContent=confirmLabel;confirm.dataset.confirm='true';
-    dialog.append(title,body,cancel,confirm);overlay.append(dialog);documentRef.body.append(overlay);
-    let done=false;
-    const finish=value=>{if(done)return;done=true;documentRef.removeEventListener('keydown',key,true);documentRef.removeEventListener('focusin',focus,true);documentRef.defaultView?.removeEventListener('pagehide',hide);overlay.remove();returnFocus?.focus?.();resolve(value);};
-    const key=event=>{
-      if(event.key==='Escape'){event.preventDefault();event.stopPropagation();finish(false);}
-      if(event.key==='Tab'){event.preventDefault();(documentRef.activeElement===cancel?confirm:cancel).focus();}
-    };
-    const focus=event=>{if(!dialog.contains(event.target))cancel.focus();};
-    const hide=()=>finish(false);
-    cancel.addEventListener('click',()=>finish(false));confirm.addEventListener('click',()=>finish(true));
-    documentRef.addEventListener('keydown',key,true);documentRef.addEventListener('focusin',focus,true);documentRef.defaultView?.addEventListener('pagehide',hide,{once:true});cancel.focus();
-  });
-}
-export function confirmEmbedShare({documentRef,label,returnFocus}) {
-  return confirmEmbedAction({documentRef,returnFocus,heading:`Share this page with ${label}?`,description:`${label} runs outside ResonantOS approvals. Its own approvals cover its tools. Sharing sends this page's title and address to ${label}. It does not give ${label} permission to use ResonantOS tools or control this page.`,confirmLabel:'Share page'});
-}
-```
-
-Replace its constructor declaration with `export function createEmbedBarActions({ chromeApi, locationRef, sendContext, beforeShare = async () => 'Assistant unavailable', isShareCurrent = () => false, onShared = () => {} }) {`. Replace only its `sharePage` function with:
-
-```js
-  async function candidate() {
-    let tab;try{tab=await activeTab();}catch{return 'No readable page';}
-    if(!isControllableTabUrl(tab?.url))return 'No readable page';
-    let mode;try{mode=await permissionForUrl(tab.url);}catch{return 'Site permissions unavailable';}
-    if(mode==='blocked')return 'Page sharing blocked';
-    if(!['read-only','ask-before-action','trusted-for-safe-actions'].includes(mode))return 'Site permissions unavailable';
-    const message=pageContextMessage(tab);if(!message)return 'Page context unavailable';
-    return {tabId:tab.id,url:message.context.page.url,message};
-  }
-  async function sharePage() {
-    const first=await candidate();if(typeof first==='string')return first;
-    let ticket;try{ticket=await beforeShare();}catch{return 'Assistant unavailable';}
-    if(typeof ticket==='string')return ticket;
-    if(!ticket)return 'Assistant unavailable';
-    const final=await candidate();if(typeof final==='string')return final;
-    if(first.tabId!==final.tabId||first.url!==final.url)return 'Page changed. Select Page again.';
-    if(!isShareCurrent(ticket))return 'Assistant unavailable';
-    // No await between the final checks and this one local dispatch.
-    try{if(sendContext(final.message)!==true)return 'Assistant offline';}catch{return 'Assistant offline';}
-    try{onShared(ticket,final.url);}catch{ /* A successful share is independent of recording. */ }
-    return 'Page shared';
-  }
-```
-
-Existing action tests need explicit host-session callbacks instead of an implicit permission bypass. At each `createEmbedBarActions({` in `browser-first/test/embed-bar-actions.test.mjs`, insert these exact properties:
-
-```js
-beforeShare: async () => ({ frame: {}, noticeKey: 'fixture', remember: false }),
-isShareCurrent: () => true,
-```
-
-Replace the actions ownership row's write column with `Explicit mode preference and permitted context callback after final tab/permission/frame checks; successful-share callback only`. Append:
-
-```markdown
-| `browser-first/resonantos-side-panel-extension/src/lib/embed-governance-dialog.js` | Accessible extension-owned confirmations | Safe text and return-focus element | Modal DOM, focus and boolean user result | Credentials, persistence, grants or harness DOM |
-```
-
-- [ ] Run `node --test browser-first/test/embed-first-share.test.mjs browser-first/test/embed-bar-actions.test.mjs`; expect pass. Red evidence: remove the final candidate read, the tab/URL equality check, the frame check and the `sendContext(final.message)!==true` condition individually; each named failed-share case must turn red. Restore each. Original strict permission tests remain red-sensitive without weakening them.
-- [ ] Run this exact guard-mutation matrix after green. Each `rig-mutate` invocation must return zero (behavioral failure under mutation and byte-identical restoration). Inspect any failure; import or syntax errors are not guard evidence. The strings below are exact edits, not patterns.
-
-```bash
-python3 - <<'PYMUTATE'
-from pathlib import Path
-import shlex, subprocess
-rig=str(Path.home()/'.claude/skills/resonant-rig/scripts/rig-mutate')
-mutations=[('browser-first/resonantos-side-panel-extension/src/lib/embed-bar-actions.js', [('const final=await candidate();', 'const final=first;')]), ('browser-first/resonantos-side-panel-extension/src/lib/embed-bar-actions.js', [('if(first.tabId!==final.tabId||first.url!==final.url)', 'if(false)')]), ('browser-first/resonantos-side-panel-extension/src/lib/embed-bar-actions.js', [('if(!isShareCurrent(ticket))', 'if(false)')]), ('browser-first/resonantos-side-panel-extension/src/lib/embed-bar-actions.js', [('if(sendContext(final.message)!==true)', 'if((sendContext(final.message),false))')])]
-test_command='node --test browser-first/test/embed-first-share.test.mjs'
-for filename,changes in mutations:
-    edit='from pathlib import Path\np=Path('+repr(filename)+')\ns=p.read_text()\n'
-    for before,after in changes:
-        edit+='assert '+repr(before)+' in s\ns=s.replace('+repr(before)+','+repr(after)+',1)\n'
-    edit+='p.write_text(s)\n'
-    try:
-        subprocess.run([rig,filename,'python3 -c '+shlex.quote(edit),test_command],check=True)
-    finally:
-        subprocess.run(['node','scripts/prepare-embed-governance.mjs'],check=True)
-subprocess.run(shlex.split('node --test browser-first/test/embed-first-share.test.mjs'),check=True)
-PYMUTATE
-```
-
-- [ ] Commit:
-
-```bash
-git diff --check
-git add browser-first/resonantos-side-panel-extension/src/lib/embed-governance-dialog.js browser-first/resonantos-side-panel-extension/src/lib/embed-bar-actions.js browser-first/test/embed-bar-actions.test.mjs browser-first/test/embed-first-share.test.mjs docs/architecture/MODULE-OWNERSHIP.md
-git commit -m "feat(embed): confirm first shares after fresh permission checks"
-```
-### Task 9: Visible tier badge and safe frame composition
-
-**Files:**
-- Modify: `browser-first/resonantos-side-panel-extension/src/lib/embed-bar-model.js`, `browser-first/resonantos-side-panel-extension/src/lib/embed-bar.js`, `browser-first/resonantos-side-panel-extension/src/styles/side-panel/base-layout.css`, `browser-first/resonantos-side-panel-extension/src/side-panel-entry.js`, `browser-first/test/embed-bar.test.mjs`, `browser-first/test/side-panel-entry.test.mjs`, `docs/architecture/MODULE-OWNERSHIP.md`
-- Create/Test: `browser-first/test/embed-governance-composition.test.mjs`
-
-**Interfaces:**
-- Consumes: `createEmbedGovernanceController({request,windowRef,confirmShare,announce,uuid?,setTimeoutImpl?,clearTimeoutImpl?,setIntervalImpl?,clearIntervalImpl?})` with the returned `mount`, `relay`, `beginShare`, `currentShare`, `didShare`, `destroy` methods; `confirmEmbedShare({documentRef,label,returnFocus}):Promise<boolean>`; `validDescriptor(value:unknown):boolean`; session `{hostPath:string,harness:EmbedHarnessDescriptor}`.
-- Produces: `embedGovernanceDescription(descriptor:unknown):string`; bar adds `setDescriptor(value:unknown):void`, `announce(text:string):void`; `window.__resonantosEmbed.last` aliases controller's safe history only.
-
-- [ ] Append the failing badge test to `browser-first/test/embed-bar.test.mjs`:
-
-```js
-test('self-governed badge is visible, focusable, dismissible and never inferred from status',async t=>{
-  const f=fixture();t.after(()=>{f.bar.destroy();f.dom.window.close();});await f.bar.ready;
-  const badge=f.bar.root.querySelector('[data-tier]');assert.ok(badge);assert.equal(badge.textContent,'Self-governed');assert.equal(badge.tabIndex,0);
-  assert.equal(badge.previousElementSibling.dataset.control,'approvals');assert.equal(badge.nextElementSibling.dataset.control,'status');
-  const description=f.dom.window.document.getElementById(badge.getAttribute('aria-describedby'));assert.match(description.textContent,/outside ResonantOS approvals/);
-  badge.focus();assert.equal(description.hidden,false);
-  badge.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));assert.equal(description.hidden,true);
-  f.bar.setDescriptor({governance:'governed',label:'CANARY'});f.bar.setStatus({online:true,busy:false,governance:'governed'});
-  assert.equal(badge.textContent,'Self-governed');assert.equal(description.textContent.includes('CANARY'),false);
-  assert.equal(f.bar.root.querySelector('[data-control=approvals]').title,'ResonantOS approvals: 2 pending');
-});
-```
-
-Create the failing composition test:
-
-```js
-import test from 'node:test';
-import assert from 'node:assert/strict';
-import { JSDOM } from 'jsdom';
-import { randomUUID } from 'node:crypto';
-import { mountEmbedView } from '../resonantos-side-panel-extension/src/side-panel-entry.js';
-const d={harnessId:'addon.augmentor-embed',interfaceId:'panel',label:'Augmentor',governance:'self-governed',noticeKey:'augmentor-v1-'+ 'a'.repeat(64)};
-const settle=()=>new Promise(r=>setImmediate(r));
-async function fixture(t,harness=d) {
-  const dom=new JSDOM('<body></body>',{url:'https://extension.test/'});const calls=[];
-  const event={addListener(){},removeListener(){}};
-  const chromeApi={runtime:{getURL:p=>'chrome-extension://cdpdmmalhmokbfcfgogoepnjplaakgnl/'+p},tabs:{query:async()=>[],onUpdated:event,onActivated:event,onRemoved:event},storage:{onChanged:event,local:{get:async()=>({}),set:async()=>{}}}};
-  const view=await mountEmbedView({documentRef:dom.window.document,windowRef:dom.window,chromeApi,locationRef:dom.window.location,getConnection:async()=>({bridgeUrl:'http://127.0.0.1:9',request:async(path)=>{calls.push(path);if(path==='/embed/session')return {hostPath:'/embed-host/?ticket='+ 'a'.repeat(43),harness};return {recordingEnabled:false,writeEpoch:randomUUID(),noticeKey:d.noticeKey,noticeVersion:1,noticeAcknowledged:false,available:true,problem:null};}})});
-  t.after(()=>{view.bar.destroy();dom.window.close();});return {dom,view,calls};
-}
-test('real composition refuses foreign relays and retains safe proof state only',async t=>{
-  const f=await fixture(t),frame=f.view.root.querySelector('iframe');
-  const relay=(data,source=frame.contentWindow,origin='http://127.0.0.1:9')=>f.dom.window.dispatchEvent(new f.dom.window.MessageEvent('message',{source,origin,data}));
-  relay({type:'augmentor-ready'});relay({type:'augmentor-status',online:true,busy:false,conversationId:'CANARY'});
-  relay({type:'augmentor-result',text:'CANARY'});relay({type:'augmentor-event',event:'turn.finished',text:'CANARY'});
-  relay({type:'augmentor-status',online:false,busy:false},{},'http://evil');
-  await settle();assert.equal(f.view.state.ready,true);assert.equal(JSON.stringify(f.view.state.last).includes('CANARY'),false);
-  assert.deepEqual(f.view.state.last,[{type:'augmentor-ready'},{type:'augmentor-status',online:true,busy:false}]);
-  assert.equal(f.calls.some(p=>p.includes('/slots/')||p.includes('/grants')||p.endsWith('/recording')),false);
-});
-test('malformed descriptor never mounts an alternative harness and keeps escape controls',async t=>{
-  const f=await fixture(t,{...d,label:'Other'});assert.equal(f.view.root.querySelector('iframe'),null);
-  assert.ok(f.view.bar.root.querySelector('[data-control=workspace]'));assert.ok(f.view.bar.root.querySelector('[data-control=assistant]'));
-  assert.equal(f.view.bar.root.querySelector('[data-tier]').textContent,'Self-governed');
-});
-```
-
-- [ ] Run `node --test browser-first/test/embed-bar.test.mjs browser-first/test/embed-governance-composition.test.mjs`; expect missing badge and raw-history canary failures.
-- [ ] Append to `embed-bar-model.js`:
-
-```js
-export function embedGovernanceDescription(_descriptor) {
-  return 'Augmentor runs outside ResonantOS approvals. Its own approvals cover its tools. ResonantOS access still requires separate permission.';
-}
-```
-
-Import this function with `embedStatusLabel` in `embed-bar.js`. Before `if (mode === 'embed')` that creates Page, declare `let tierDescription;`. Immediately after the Approvals click listener insert:
-
-```js
-    const badge=documentRef.createElement('span');badge.dataset.tier='self-governed';badge.className='embed-tier';badge.tabIndex=0;badge.textContent='Self-governed';
-    tierDescription=documentRef.createElement('span');tierDescription.id='embed-tier-description';tierDescription.className='embed-tier-description';tierDescription.setAttribute('role','tooltip');tierDescription.textContent=embedGovernanceDescription(null);tierDescription.hidden=true;
-    badge.setAttribute('aria-describedby',tierDescription.id);
-    const showTier=()=>{tierDescription.hidden=false;},hideTier=()=>{tierDescription.hidden=true;};
-    badge.addEventListener('focus',showTier);badge.addEventListener('mouseenter',showTier);badge.addEventListener('blur',hideTier);badge.addEventListener('mouseleave',hideTier);
-    badge.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();hideTier();}});
-    root.append(badge);
-```
-
-Append `tierDescription` after appending Status, keeping it outside the badge/status sibling pair:
-
-```js
-    root.append(tierDescription);
-```
-
-In `setStatus`, replace `status.textContent = label; status.title = label;` with:
-
-```js
-    let text=status.querySelector('.embed-status-text');
-    if(!text){text=documentRef.createElement('span');text.className='embed-status-text';status.append(text);}
-    text.textContent=label;status.title=label;
-```
-
-Replace the Page handler's `.finally(() => { page.disabled = false; });` with `.finally(() => { page.disabled = false; page.focus(); });` so dialog focus restoration completes after the action is reenabled. Change only the non-null Approvals label template to `` `ResonantOS approvals: ${count} pending` ``. Add `announce` and `setDescriptor(value) { if(tierDescription) tierDescription.textContent=embedGovernanceDescription(value); }` to the returned bar object. Append CSS:
-
-```css
-.embed-tier { flex: 0 0 auto; white-space: nowrap; font-size: 11px; line-height: 20px; padding: 0 5px; border: 1px solid var(--embed-bar-line); border-radius: 4px; }
-.embed-tier:focus-visible { outline: 2px solid var(--embed-bar-focus); outline-offset: 1px; }
-.embed-tier-description { position: absolute; top: 36px; right: 6px; max-width: 290px; padding: 8px; background: var(--embed-bar-bg); color: var(--embed-bar-text); border: 1px solid var(--embed-bar-line); border-radius: 4px; white-space: normal; font-size: 12px; }
-@media (max-width: 360px) {
-  .embed-status-text { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-  .embed-bar-status::before { content: ''; display: block; width: 7px; height: 7px; border-radius: 50%; background: #b2bac4; }
-  .embed-bar-status[data-state="online"]::before { background: #8bd3a6; }
-  .embed-bar-status[data-state="busy"]::before { background: #e7c778; }
-}
-.embed-dialog-overlay { position: fixed; inset: 0; z-index: 10000; display: grid; place-items: center; background: #0009; padding: 12px; }
-.embed-dialog { width: min(100%, 420px); box-sizing: border-box; padding: 16px; border: 1px solid #3b4149; border-radius: 8px; background: #111315; color: #eef1f4; font: 14px system-ui; }
-.embed-dialog h2 { margin: 0 0 12px; font-size: 16px; }
-.embed-dialog button { padding: 8px 12px; margin-right: 8px; background: #282e35; color: #eef1f4; border: 1px solid #68717d; border-radius: 4px; }
-.embed-dialog button:focus-visible { outline: 2px solid #7fc4ff; outline-offset: 2px; }
-```
-
-In `side-panel-entry.js` add these imports, replace its opening declaration with `function mountSidePanelBar({ mode, sendContext = () => false, beforeShare, isShareCurrent, onShared, documentRef = globalThis.document, windowRef = globalThis.window, chromeApi = globalThis.chrome, locationRef = globalThis.location } = {}) {`, and replace its actions initializer with `const actions = createEmbedBarActions({ chromeApi, locationRef, sendContext, beforeShare, isShareCurrent, onShared });`:
-
-```js
-import { createEmbedGovernanceController } from './lib/embed-governance-controller.js';
-import { confirmEmbedShare } from './lib/embed-governance-dialog.js';
-import { validDescriptor } from './lib/generated/embed-governance-contract.js';
-```
-
-Replace `mountEmbedView` in full:
-
-```js
-export async function mountEmbedView({documentRef=globalThis.document,windowRef=globalThis.window,chromeApi=globalThis.chrome,locationRef=globalThis.location,getConnection=createEmbedConnection}={}) {
-  documentRef.documentElement.classList.add('embed-mode');
-  const root=documentRef.createElement('section');root.id='embed-root';documentRef.body.prepend(root);
-  let frame=null,origin='',online=false,connection=null,descriptor=null,disposed=false;
-  const state={ready:false,last:[],send(message){
-    if(disposed||!state.ready||!online||!frame?.contentWindow||!RELAY_COMMANDS.has(message?.type))return false;
-    try{if(message.type==='augmentor-context'&&new TextEncoder().encode(JSON.stringify(message)).byteLength>16000)return false;frame.contentWindow.postMessage(message,origin);return true;}catch{return false;}
-  }};
-  const controller=createEmbedGovernanceController({windowRef,
-    request:(path,options)=>connection?connection.request(path,options):Promise.reject(Error('Activity unavailable')),
-    announce:text=>bar.announce(text),
-    confirmShare:label=>confirmEmbedShare({documentRef,label,returnFocus:bar.root.querySelector('[data-control=page]')})
-  });
-  state.last=controller.history;windowRef.__resonantosEmbed=state;
-  const bar=mountSidePanelBar({mode:'embed',documentRef,windowRef,chromeApi,locationRef,
-    sendContext:message=>state.send(message),beforeShare:controller.beginShare,isShareCurrent:controller.currentShare,onShared:controller.didShare});
-  const offline=()=>{state.ready=false;online=false;bar.setStatus(null);controller.relay({source:frame?.contentWindow,origin,data:{type:'augmentor-status',online:false,busy:false}});};
-  const relay=event=>{
-    if(disposed||!frame||event.source!==frame.contentWindow||event.origin!==origin||!event.data||typeof event.data!=='object')return;
-    if(event.data.type==='augmentor-ready')state.ready=true;
-    if(event.data.type==='augmentor-status'&&typeof event.data.online==='boolean'&&typeof event.data.busy==='boolean'){
-      online=event.data.online;bar.setStatus({online,busy:event.data.busy});
-    }
-    if(['augmentor-ready','augmentor-status','augmentor-event'].includes(event.data.type))controller.relay(event);
-  };
-  const bridgeChanged=(changes,area)=>{if(area==='local'&&changes.bridgeTargetOverride){offline();controller.destroy();descriptor=null;}};
-  windowRef.addEventListener('message',relay);chromeApi?.storage?.onChanged?.addListener(bridgeChanged);
-  const destroy=bar.destroy;
-  bar.destroy=()=>{if(disposed)return;disposed=true;windowRef.removeEventListener('message',relay);chromeApi?.storage?.onChanged?.removeListener(bridgeChanged);controller.destroy();offline();destroy();};
-  try {
-    connection=await bounded(getConnection);
-    const session=await bounded(()=>connection.request('/embed/session',{method:'POST',body:{}}));
-    if(disposed)return {bar,root,state};
-    if(typeof session.hostPath!=='string'||!/^\/embed-host\/\?ticket=[A-Za-z0-9_-]{43}$/.test(session.hostPath)||!validDescriptor(session.harness))throw Error('Invalid embed session');
-    descriptor=session.harness;origin=new URL(connection.bridgeUrl).origin;bar.setDescriptor(descriptor);
-    frame=documentRef.createElement('iframe');frame.title=descriptor.label;frame.allow='clipboard-write';frame.addEventListener('error',offline);
-    frame.src=connection.bridgeUrl.replace(/\/$/,'')+session.hostPath;root.append(frame);
-    controller.mount({frame:frame.contentWindow,origin,descriptor});
-  }catch{offline();root.textContent='Unable to open the embedded chat. Check that the PoC bridge is running and try again.';}
-  return {bar,root,state};
-}
-```
-
-Update the existing composition fixture and raw-history assertion in `browser-first/test/side-panel-entry.test.mjs`, preserving all tab-refresh, permissions, relay-origin and teardown tests:
-
-```bash
-python3 - <<'PYTEST'
-from pathlib import Path
-p=Path('browser-first/test/side-panel-entry.test.mjs');s=p.read_text()
-a="""      assert.equal(route, '/embed/session'); assert.equal(options.method, 'POST');
-      return { hostPath: `/embed-host/?ticket=${'a'.repeat(43)}` };"""
-b="""      const harness = { harnessId: 'addon.augmentor-embed', interfaceId: 'panel', label: 'Augmentor', governance: 'self-governed', noticeKey: 'augmentor-v1-' + 'a'.repeat(64) };
-      if (route === '/embed-governance/state') return { recordingEnabled: false, writeEpoch: '12345678-1234-4234-8234-123456789abc', noticeKey: harness.noticeKey, noticeVersion: 1, noticeAcknowledged: false, available: true, problem: null };
-      assert.equal(route, '/embed/session'); assert.equal(options.method, 'POST');
-      return { hostPath: `/embed-host/?ticket=${'a'.repeat(43)}`, harness };"""
-assert a in s;s=s.replace(a,b,1)
-a="  assert.equal(view.state.last.length, 50); assert.equal(view.state.last[0].i, 10);"
-b="""  assert.deepEqual(view.state.last, [{ type: 'augmentor-ready' }, { type: 'augmentor-status', online: true, busy: false }]);
-  for (let i = 0; i < 60; i++) relay(frame.contentWindow, 'http://127.0.0.1:18873', { type: 'augmentor-status', online: true, busy: false, conversationId: 'CANARY-' + i });
-  assert.equal(view.state.last.length, 50);
-  assert.ok(view.state.last.every(row => JSON.stringify(row) === JSON.stringify({ type: 'augmentor-status', online: true, busy: false })));"""
-assert a in s;s=s.replace(a,b,1)
-p.write_text(s)
-PYTEST
-```
-
-Update ownership: the side-panel-entry row may retain only `Frame identity, lifecycle and projected proof state`; its exclusion column must say `Protocol-domain persistence, raw relay history, new relay authority or slot selection`. The bar-model/bar rows receive safe descriptor data, never credentials. Add badge presentation to their existing responsibility text.
-
-- [ ] Run `node --test browser-first/test/embed-bar.test.mjs browser-first/test/embed-governance-composition.test.mjs browser-first/test/embed-bar-model.test.mjs browser-first/test/side-panel-entry.test.mjs`; expect pass. Red evidence: the pre-fix composition test must expose the raw-history canary; temporarily remove `validDescriptor(session.harness)` and require malformed-descriptor mounting test to fail. Restore. Existing five control order and normal Assistant-only tests remain unchanged.
-- [ ] Run this exact guard-mutation matrix after green. Each `rig-mutate` invocation must return zero (behavioral failure under mutation and byte-identical restoration). Inspect any failure; import or syntax errors are not guard evidence. The strings below are exact edits, not patterns.
-
-```bash
-python3 - <<'PYMUTATE'
-from pathlib import Path
-import shlex, subprocess
-rig=str(Path.home()/'.claude/skills/resonant-rig/scripts/rig-mutate')
-mutations=[('browser-first/resonantos-side-panel-extension/src/side-panel-entry.js', [('||!validDescriptor(session.harness)', '')])]
-test_command='node --test browser-first/test/embed-governance-composition.test.mjs'
-for filename,changes in mutations:
-    edit='from pathlib import Path\np=Path('+repr(filename)+')\ns=p.read_text()\n'
-    for before,after in changes:
-        edit+='assert '+repr(before)+' in s\ns=s.replace('+repr(before)+','+repr(after)+',1)\n'
-    edit+='p.write_text(s)\n'
-    try:
-        subprocess.run([rig,filename,'python3 -c '+shlex.quote(edit),test_command],check=True)
-    finally:
-        subprocess.run(['node','scripts/prepare-embed-governance.mjs'],check=True)
-subprocess.run(shlex.split('node --test browser-first/test/embed-governance-composition.test.mjs'),check=True)
-PYMUTATE
-```
-
-- [ ] Commit:
-
-```bash
-git diff --check
-git add browser-first/resonantos-side-panel-extension/src/lib/embed-bar-model.js browser-first/resonantos-side-panel-extension/src/lib/embed-bar.js browser-first/resonantos-side-panel-extension/src/styles/side-panel/base-layout.css browser-first/resonantos-side-panel-extension/src/side-panel-entry.js browser-first/test/embed-bar.test.mjs browser-first/test/side-panel-entry.test.mjs browser-first/test/embed-governance-composition.test.mjs docs/architecture/MODULE-OWNERSHIP.md
-git commit -m "feat(embed): show self-governed tier and project relay proof safely"
-```
-### Task 10: Privacy recording choice, paged history and durable deletion
-
-**Files:**
-- Modify: `browser-first/resonantos-side-panel-extension/src/lib/settings/privacy-section.js`, `browser-first/resonantos-side-panel-extension/src/styles/main-workspace/settings.css`, `docs/architecture/MODULE-OWNERSHIP.md`
-- Create/Test: `browser-first/test/embed-governance-privacy.test.mjs`
-
-**Interfaces:**
-- Consumes: existing Settings context `getBridgeRequest(): (path:string,options?:{method?:string,body?:object,signal?:AbortSignal})=>Promise<object>`, six route payloads, `confirmEmbedAction(options):Promise<boolean>`.
-- Produces: `mountEmbedActivityCard({container,documentRef,request,confirm?}): {ready:Promise<void>,refresh():Promise<void>,destroy():void}`; `renderPrivacySection(container, context={})` keeps existing trust-boundary cards and mounts this additional card.
-
-- [ ] Write the failing test:
-
-```js
-import test from 'node:test';
-import assert from 'node:assert/strict';
-import { JSDOM } from 'jsdom';
-import { randomUUID } from 'node:crypto';
-import { mountEmbedActivityCard } from '../resonantos-side-panel-extension/src/lib/settings/privacy-section.js';
-const settle=()=>new Promise(r=>setImmediate(r));
-const initial=()=>({recordingEnabled:true,writeEpoch:randomUUID(),noticeKey:'augmentor-v1-'+ 'a'.repeat(64),noticeVersion:1,noticeAcknowledged:true,available:true,problem:null});
-async function fixture(t,request,confirm=async()=>true) {
-  const dom=new JSDOM('<main></main>');t.after(()=>dom.window.close());const container=dom.window.document.querySelector('main');
-  const card=mountEmbedActivityCard({container,documentRef:dom.window.document,request,confirm});t.after(()=>card.destroy());await card.ready;
-  return {dom,container,card,checkbox:container.querySelector('input')};
-}
-test('load fails closed; toggles wait for durable acknowledgement and never display exception text',async t=>{
-  const failed=await fixture(t,async()=>{throw Error('CANARY');});assert.equal(failed.checkbox.checked,false);assert.equal(failed.checkbox.disabled,true);assert.match(failed.container.textContent,/Recording unavailable/);assert.equal(failed.container.textContent.includes('CANARY'),false);
-  let resolveSave;const state=initial();const f=await fixture(t,async(path)=>path.endsWith('/state')?state:new Promise(r=>resolveSave=r));
-  f.checkbox.checked=false;f.checkbox.dispatchEvent(new f.dom.window.Event('change'));await settle();
-  assert.equal(f.container.textContent.includes('Recording is off'),false);
-  resolveSave({recordingEnabled:false,writeEpoch:randomUUID()});await settle();assert.match(f.container.textContent,/Recording is off/);
-});
-test('delete recovery snapshot wins over older reads and clears rows before success',async t=>{
-  let reads=0,oldRead;const state={...initial(),problem:'storage-unavailable',writeEpoch:null,recordingEnabled:false,noticeAcknowledged:false};
-  const f=await fixture(t,async(path)=>{
-    if(path.endsWith('/state')){reads++;if(reads===1)return state;return new Promise(r=>oldRead=r);}
-    if(path.endsWith('/events/delete'))return {deleted:true,recordingEnabled:false,writeEpoch:randomUUID(),noticeKey:state.noticeKey,noticeAcknowledged:false};
-    return {events:[],nextBefore:null};
-  });
-  const stale=f.card.refresh();await settle();f.container.querySelector('[data-action=delete]').click();await settle();
-  oldRead(initial());await stale;assert.equal(f.checkbox.checked,false);assert.equal(f.container.dataset.noticeAcknowledged,'false');assert.match(f.container.textContent,/Activity deleted/);
-});
-test('history is text only, pagination expires explicitly and deletion failure retains rows',async t=>{
-  let failDelete=false,expired=false;const state=initial();
-  const f=await fixture(t,async(path)=>{
-    if(path.endsWith('/state'))return state;
-    if(path.endsWith('/events/delete')){if(failDelete)throw Error('CANARY');return {deleted:true,...state};}
-    if(path.includes('?before=')){expired=true;throw Object.assign(Error(),{code:'cursor-expired'});}
-    return {events:[{version:1,eventId:randomUUID(),recordedAt:new Date().toISOString(),harnessId:'addon.augmentor-embed',interfaceId:'panel',governance:'self-governed',source:'local-share',event:{kind:'page-shared',domain:'example.test'}}],nextBefore:randomUUID()};
-  });
-  f.container.querySelector('[data-action=view]').click();await settle();assert.match(f.container.textContent,/example.test/);assert.equal(f.container.querySelectorAll('a').length,0);
-  f.container.querySelector('[data-action=older]').click();await settle();await settle();assert.equal(expired,true);
-  failDelete=true;f.container.querySelector('[data-action=delete]').click();await settle();assert.match(f.container.textContent,/Activity could not be deleted/);assert.match(f.container.textContent,/example.test/);
-});
-```
-
-Append the rejected-content test to that file:
-
-```js
-test('history rejects content-bearing metadata without rendering it',async t=>{
-  const f=await fixture(t,async path=>path.endsWith('/state')?initial():{events:[{version:1,eventId:randomUUID(),recordedAt:new Date().toISOString(),harnessId:'addon.augmentor-embed',interfaceId:'panel',governance:'self-governed',event:{kind:'page-shared',domain:'example.test',url:'CANARY'}}],nextBefore:null});
-  f.container.querySelector('[data-action=view]').click();await settle();
-  assert.match(f.container.textContent,/Activity unavailable/);assert.equal(f.container.textContent.includes('CANARY'),false);
-});
-```
-
-Add a cancellation case for deletion:
-
-```js
-test('cancelled deletion does not mutate host state',async t=>{
-  const calls=[];const f=await fixture(t,async path=>{calls.push(path);return initial();},async()=>false);
-  f.container.querySelector('[data-action=delete]').click();await settle();
-  assert.deepEqual(calls,['/embed-governance/state']);assert.equal(f.container.textContent.includes('Activity deleted'),false);
-});
-```
-
-- [ ] Run `node --test browser-first/test/embed-governance-privacy.test.mjs`; expect missing export.
-- [ ] Add these imports to the existing Privacy module and append the complete card implementation:
-
-```js
-import { confirmEmbedAction } from '../embed-governance-dialog.js';
-import { metadata, UUID, NOTICE_KEY } from '../generated/embed-governance-contract.js';
-export function mountEmbedActivityCard({container,documentRef=globalThis.document,request,confirm=options=>confirmEmbedAction(options)}) {
-  const card=documentRef.createElement('section');card.className='settings-control-list embed-activity-card';card.dataset.embedActivity='true';
-  const heading=documentRef.createElement('h3');heading.textContent='Embedded harness activity';
-  const label=documentRef.createElement('label'),checkbox=documentRef.createElement('input');checkbox.type='checkbox';checkbox.disabled=true;checkbox.checked=false;
-  label.append(checkbox,documentRef.createTextNode('Record harness activity'));
-  const description=documentRef.createElement('p');description.textContent='Save conversation changes, reply starts and finishes, tool names and error flags, and shared page domains on this computer for 30 days. No prompts, replies, tool arguments or results are saved.';
-  const status=documentRef.createElement('p');status.setAttribute('role','status');status.setAttribute('aria-live','polite');status.textContent='Recording unavailable';
-  const note=documentRef.createElement('p');note.textContent='Local metadata only. Harness events are reports from the outside harness, not ResonantOS approval receipts. Recording can miss events while the side panel is closed or disconnected.';
-  const controls=documentRef.createElement('div'),list=documentRef.createElement('ol');list.hidden=true;
-  const buttons={};for(const [key,text] of [['view','View activity'],['refresh','Refresh'],['older','Load older'],['delete','Delete activity']]){const b=documentRef.createElement('button');b.type='button';b.textContent=text;b.dataset.action=key;buttons[key]=b;controls.append(b);}
-  buttons.older.disabled=true;card.append(heading,label,description,status,note,controls,list);container.append(card);
-  let dead=false,sequence=0,pageSequence=0,snapshot=null,nextBefore=null,rows=[];
-  const say=text=>{if(!dead)status.textContent=text;};
-  function validSnapshot(s) {
-    return s&&typeof s.recordingEnabled==='boolean'&&(s.writeEpoch===null||typeof s.writeEpoch==='string'&&UUID.test(s.writeEpoch))&&(s.noticeKey===null||typeof s.noticeKey==='string'&&NOTICE_KEY.test(s.noticeKey))&&typeof s.noticeAcknowledged==='boolean'&&typeof s.available==='boolean'&&[null,'storage-unavailable','retention-failed','log-full'].includes(s.problem);
-  }
-  function renderState(s) {
-    if(!validSnapshot(s))throw Error('Invalid activity state');snapshot=s;
-    checkbox.checked=s.recordingEnabled;checkbox.disabled=s.problem==='storage-unavailable'||(!s.available&&!s.recordingEnabled);
-    container.dataset.noticeAcknowledged=String(s.noticeAcknowledged);
-    container.dataset.writeEpoch=s.writeEpoch??'';
-    const problems={'storage-unavailable':'Recording unavailable','retention-failed':'Retention cleanup failed','log-full':'Activity recording paused: local log is full'};
-    say(problems[s.problem]??(s.recordingEnabled?'Recording is on':'Recording is off'));
-  }
-  function descriptionFor(event) {
-    if(event.kind==='tool-finished')return `Tool: ${event.toolName} — ${event.error?'Error':'No error reported'}`;
-    if(event.kind==='page-shared')return `Page shared: ${event.domain}`;
-    return {'conversation-changed':'Conversation changed','reply-started':'Reply started','reply-finished':'Reply finished'}[event.kind];
-  }
-  function renderRows(){list.replaceChildren();list.hidden=false;for(const record of rows){const li=documentRef.createElement('li');li.textContent=`${record.recordedAt} · Augmentor · Self-governed · ${descriptionFor(record.event)}`;list.append(li);}if(!rows.length){const li=documentRef.createElement('li');li.textContent='No recorded activity';list.append(li);}buttons.older.disabled=!nextBefore;}
-  async function refresh(){const seq=++sequence;try{const s=await request('/embed-governance/state');if(!dead&&seq===sequence)renderState(s);}catch{if(!dead&&seq===sequence){snapshot=null;checkbox.checked=false;checkbox.disabled=true;say('Recording unavailable');}}}
-  async function load(older=false){const seq=++pageSequence;const anchor=older?nextBefore:null;try{
-    const page=await request('/embed-governance/events'+(anchor?'?before='+encodeURIComponent(anchor):''));
-    if(dead||seq!==pageSequence)return;
-    if(!Array.isArray(page.events)||page.events.length>100||!(page.nextBefore===null||typeof page.nextBefore==='string'&&UUID.test(page.nextBefore)))throw Error();
-    const clean=page.events.map(r=>{const event=metadata(r.event);if(!event||typeof r.recordedAt!=='string'||!Number.isFinite(Date.parse(r.recordedAt))||new Date(r.recordedAt).toISOString()!==r.recordedAt||r.harnessId!=='addon.augmentor-embed'||r.interfaceId!=='panel'||r.governance!=='self-governed')throw Error();return {recordedAt:r.recordedAt,event};});
-    rows=older?[...rows,...clean]:clean;nextBefore=page.nextBefore;renderRows();
-  }catch(e){if(dead||seq!==pageSequence)return;if(e?.code==='cursor-expired'){rows=[];nextBefore=null;list.replaceChildren();await load(false);}else say('Activity unavailable');}}
-  checkbox.addEventListener('change',()=>{const enabled=checkbox.checked,seq=++sequence;checkbox.disabled=true;
-    if(!enabled)documentRef.defaultView?.dispatchEvent(new documentRef.defaultView.Event('resonantos-embed-recording-off'));
-    checkbox.checked=snapshot?.recordingEnabled??false;say('Saving recording preference');
-    void (async()=>{try{const s=await request('/embed-governance/recording',{method:'POST',body:{enabled}});if(!dead&&seq===sequence)renderState({...snapshot,...s});}
-    catch{if(!dead&&seq===sequence){await refresh();say('Recording preference could not be saved');}}})();
-  });
-  buttons.view.addEventListener('click',()=>{void load();});buttons.refresh.addEventListener('click',()=>{void refresh();void load();});buttons.older.addEventListener('click',()=>{if(nextBefore)void load(true);});
-  buttons.delete.addEventListener('click',()=>{void(async()=>{
-    const recovery=snapshot?.problem==='storage-unavailable';
-    let accepted;try{accepted=await confirm({documentRef,returnFocus:buttons.delete,heading:recovery?'Reset unreadable harness activity?':'Delete all recorded harness activity on this computer?',description:recovery?'This turns recording off and clears remembered first-share notices.':'This keeps your recording choice and first-share notices.',confirmLabel:'Delete activity'});}catch{say('Activity could not be deleted');return;}
-    if(!accepted||dead)return;
-    const seq=++sequence;++pageSequence;buttons.delete.disabled=true;
-    try{const s=await request('/embed-governance/events/delete',{method:'POST',body:{}});if(dead||seq!==sequence)return;if(s.deleted!==true)throw Error();
-      renderState({...snapshot,...s,problem:null});rows=[];nextBefore=null;renderRows();say('Activity deleted');
-    }catch{if(!dead&&seq===sequence)say('Activity could not be deleted');}
-    finally{if(!dead)buttons.delete.disabled=false;}
-  })();});
-  const ready=refresh();return {ready,refresh,destroy(){dead=true;sequence++;pageSequence++;card.remove();}};
-}
-```
-
-Change the existing signature to `renderPrivacySection(container, context = {})`. After the existing `container.replaceChildren` statement, before the closing brace of `renderPrivacySection`, add:
-
-```js
-  mountEmbedActivityCard({container,documentRef:container.ownerDocument,
-    request:(path,options)=>{
-      const bridge=typeof context.getBridgeRequest==='function'?context.getBridgeRequest():context.bridgeRequest;
-      return typeof bridge==='function'?bridge(path,options):Promise.reject(Error('Activity unavailable'));
-    }
-  });
-```
-
-Append these complete dialog rules to `browser-first/resonantos-side-panel-extension/src/styles/main-workspace/settings.css` (these are the exact rules needed by the workspace, which does not load side-panel CSS):
-
-```css
-.embed-dialog-overlay { position: fixed; inset: 0; z-index: 10000; display: grid; place-items: center; background: #0009; padding: 12px; }
-.embed-dialog { width: min(100%, 420px); box-sizing: border-box; padding: 16px; border: 1px solid #3b4149; border-radius: 8px; background: #111315; color: #eef1f4; font: 14px system-ui; }
-.embed-dialog h2 { margin: 0 0 12px; font-size: 16px; }
-.embed-dialog button { padding: 8px 12px; margin-right: 8px; background: #282e35; color: #eef1f4; border: 1px solid #68717d; border-radius: 4px; }
-.embed-dialog button:focus-visible { outline: 2px solid #7fc4ff; outline-offset: 2px; }
-.embed-activity-card ol { padding-left: 24px; overflow-wrap: anywhere; }
-.embed-activity-card label { display: flex; gap: 8px; align-items: center; }
-```
-
-Append ownership:
-
-```markdown
-| `browser-first/resonantos-side-panel-extension/src/lib/settings/privacy-section.js` | Explicit recording controls and paged read/delete presentation | Validated host snapshots and safe metadata | Privacy DOM and acknowledged user intents; deletion supersedes older reads | Filesystem policy, authoritative preference cache, payload logs or credentials |
-```
-
-- [ ] Run `node --test browser-first/test/embed-governance-privacy.test.mjs browser-first/test/main-workspace-settings.test.mjs`; expect pass. Red evidence: remove `seq===sequence` from the state-read acknowledgement check and require the delete-recovery race test to fail. Restore. Replace `metadata(r.event)` with `r.event` in `load`; require the rejected-content test to fail, then restore. No failed load may be rendered as empty success.
-- [ ] Run this exact guard-mutation matrix after green. Each `rig-mutate` invocation must return zero (behavioral failure under mutation and byte-identical restoration). Inspect any failure; import or syntax errors are not guard evidence. The strings below are exact edits, not patterns.
-
-```bash
-python3 - <<'PYMUTATE'
-from pathlib import Path
-import shlex, subprocess
-rig=str(Path.home()/'.claude/skills/resonant-rig/scripts/rig-mutate')
-mutations=[('browser-first/resonantos-side-panel-extension/src/lib/settings/privacy-section.js', [('if(!dead&&seq===sequence)renderState(s)', 'if(!dead)renderState(s)')]), ('browser-first/resonantos-side-panel-extension/src/lib/settings/privacy-section.js', [('const event=metadata(r.event)', 'const event=r.event')]), ('browser-first/resonantos-side-panel-extension/src/lib/settings/privacy-section.js', [('if(!accepted||dead)return;', 'if(dead)return;')])]
-test_command='node --test browser-first/test/embed-governance-privacy.test.mjs'
-for filename,changes in mutations:
-    edit='from pathlib import Path\np=Path('+repr(filename)+')\ns=p.read_text()\n'
-    for before,after in changes:
-        edit+='assert '+repr(before)+' in s\ns=s.replace('+repr(before)+','+repr(after)+',1)\n'
-    edit+='p.write_text(s)\n'
-    try:
-        subprocess.run([rig,filename,'python3 -c '+shlex.quote(edit),test_command],check=True)
-    finally:
-        subprocess.run(['node','scripts/prepare-embed-governance.mjs'],check=True)
-subprocess.run(shlex.split('node --test browser-first/test/embed-governance-privacy.test.mjs'),check=True)
-PYMUTATE
-```
-
-- [ ] Commit:
-
-```bash
-git diff --check
-git add browser-first/resonantos-side-panel-extension/src/lib/settings/privacy-section.js browser-first/resonantos-side-panel-extension/src/styles/main-workspace/settings.css browser-first/test/embed-governance-privacy.test.mjs docs/architecture/MODULE-OWNERSHIP.md
-git commit -m "feat(settings): expose embedded harness consent and activity"
-```
 ### Task 11: Write and syntax-check conductor-only live proof
 
 **Files:**
@@ -3187,7 +2380,7 @@ git commit -m "feat(settings): expose embedded harness consent and activity"
 - Consumes: running conductor-managed spike bridge, Manolo's real container, disposable extension copy, external test-owned user root; environment `RESONANTOS_EMBED_LIVE_OUT`, `RESONANTOS_EMBED_LIVE_USER_ROOT`, `RESONANTOS_EMBED_LIVE_EXTENSION_ROOT`, `RESONANTOS_EMBED_LIVE_VERSION`, optional `RESONANTOS_EMBED_LIVE_STAGE=upstream`, optional `RESONANTOS_LIVE_CHROME_PATH`.
 - Produces: external `embed-governance-summary.json` containing version, fixed check names and booleans only. A failed/missing protocol field exits nonzero. Workers execute only syntax/contract checks, never the live command.
 
-This task's proof script can be prepared before Task 7. Run the `upstream` stage before implementing that mapping, then run the full integrated stage after Tasks 7–10. The conductor owns starting/restarting the bridge/container and providing its disposable extension copy with matching generated bridge configuration. The proof does not launch or inspect the container, read its credentials, or infer its product identity from an endpoint.
+Execute this proof-authoring task now, after Task 6 and before Task 7. Task numbers remain stable for existing cross-references. Run the `upstream` stage before implementing that mapping, then run the full integrated stage after Tasks 7–10. The conductor owns starting/restarting the bridge/container and providing its disposable extension copy with matching generated bridge configuration. The proof does not launch or inspect the container, read its credentials, or infer its product identity from an endpoint.
 
 - [ ] Write the failing deterministic script-contract test:
 
@@ -3385,10 +2578,9 @@ The conductor alone runs `browser-first/test/embed-live.mjs` with Manolo's conta
 
 ```bash
 RESONANTOS_EMBED_LIVE_STAGE=upstream node browser-first/test/embed-live.mjs
-RESONANTOS_EMBED_LIVE_STAGE=integration node browser-first/test/embed-live.mjs
 ```
 
-Expected: first command establishes recipient and all seven field-presence booleans before Task 7; second repeats that gate against finished integration and records all acceptance checks. An absent event means nonzero exit and blocked live acceptance. Never retain relay payloads, screenshots of private harness chats, tokens or conversation IDs. Conductor attestations remain labeled separately from protocol observations.
+Expected: the upstream command establishes recipient and all seven field-presence booleans before Task 7. Task 12 runs the integration stage after Tasks 7–10 and records all acceptance checks. An absent event means nonzero exit and blocked live acceptance. Never retain relay payloads, screenshots of private harness chats, tokens or conversation IDs. Conductor attestations remain labeled separately from protocol observations.
 
 - [ ] Red evidence for live acceptance integrity: temporarily remove `conversationId` from the observer's accepted status path and rerun only the deterministic source-contract test with an assertion that the exact assignment `p.conversationId=true` exists; restore. The conductor's missing-field assertion itself must fail when a required upstream field is absent; workers must not fake a passing observation.
 - [ ] Commit code/docs only, whether live acceptance is pending or passed; do not claim live completion from a syntax check:
@@ -3397,6 +2589,907 @@ Expected: first command establishes recipient and all seven field-presence boole
 git diff --check
 git add browser-first/test/embed-live.mjs browser-first/test/embed-live-contract.test.mjs browser-first/README.md
 git commit -m "test(embed): define conductor-owned upstream and consent proof"
+```
+
+### Task 7: Safe relay controller and bounded observation delivery
+
+**Prerequisite:** The conductor must first complete **EMBED-UPSTREAM-1** using Task 11's written proof. The preceding Task 11 block creates the proof and completes its deterministic syntax/contract checks before this task. Do not implement relay mapping until its recipient/version/field checks pass. Missing fields block this task and require a reviewed narrow mapping correction; they do not justify synthetic events. All independent preceding tasks can proceed.
+
+**Files:**
+- Create: `browser-first/resonantos-side-panel-extension/src/lib/embed-governance-controller.js`
+- Create/Test: `browser-first/test/embed-governance-controller.test.mjs`
+- Modify: `docs/architecture/MODULE-OWNERSHIP.md`
+
+**Interfaces:**
+- Consumes: `request(route:string, options?:{method?:string,body?:object,signal?:AbortSignal}):Promise<object>`; `confirmShare(label:string):Promise<boolean>`; `announce(text:string):void`.
+- Produces: `createEmbedGovernanceController({request,windowRef,chromeApi?,confirmShare,announce,uuid?,setTimeoutImpl?,clearTimeoutImpl?,setIntervalImpl?,clearIntervalImpl?})` returning `mount({frame,origin,descriptor}):void`, `relay(event):void`, `refresh():Promise<void>`, `beginShare():Promise<ShareTicket|string>`, `currentShare(ticket):boolean`, `didShare(ticket,url):void`, `stopRecording():void`, `destroy():void`, `history:Array<object>`. `ShareTicket` is `{frame:Window, noticeKey:string, remember:boolean}`. No raw messages escape or survive method return.
+
+- [ ] Write the failing test:
+
+```js
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { createEmbedGovernanceController } from '../resonantos-side-panel-extension/src/lib/embed-governance-controller.js';
+const d={harnessId:'addon.augmentor-embed',interfaceId:'panel',label:'Augmentor',governance:'self-governed',noticeKey:'augmentor-v1-'+ 'a'.repeat(64)};
+const settle=()=>new Promise(r=>setImmediate(r));
+function fixture({enabled=false,post,confirm=true}={}) {
+  const frame={},calls=[],notices=[],listeners=new Map();let polls=0,poll,timeout=()=>{},epoch=randomUUID(),asks=0,noticeKey=d.noticeKey;
+  const state=()=>({recordingEnabled:enabled,writeEpoch:epoch,noticeKey,noticeVersion:1,noticeAcknowledged:false,available:true,problem:null});
+  const request=async(path,options={})=>{calls.push({path,options});if(path.endsWith('/state')){polls++;return state();}return post?post(path,options):{recorded:true,reason:null};};
+  const c=createEmbedGovernanceController({request,uuid:randomUUID,windowRef:{addEventListener:(k,v)=>listeners.set(k,v),removeEventListener:k=>listeners.delete(k)},confirmShare:async()=>{asks++;return confirm;},announce:s=>notices.push(s),setIntervalImpl:(fn,ms)=>{assert.equal(ms,5000);poll=fn;return 1;},clearIntervalImpl(){},setTimeoutImpl:(fn,ms)=>{assert.equal(ms,2000);timeout=fn;return 2;},clearTimeoutImpl(){}});
+  c.mount({frame,origin:'http://127.0.0.1:9',descriptor:d});
+  const relay=data=>c.relay({source:frame,origin:'http://127.0.0.1:9',data});
+  return {c,frame,calls,notices,listeners,relay,enable:v=>enabled=v,epoch:()=>epoch=randomUUID(),poll:()=>poll(),timeout:()=>timeout(),asks:()=>asks,polls:()=>polls,changeRecipient:key=>noticeKey=key};
+}
+test('unknown/off records nothing; enabling has no backfill; exact transitions never persist IDs/content',async()=>{
+  const f=fixture();await f.c.refresh();
+  f.relay({type:'augmentor-event',event:'turn.started',prompt:'CANARY'});assert.equal(f.c.history.length,0);
+  f.enable(true);await f.c.refresh();
+  f.relay({type:'augmentor-status',online:true,busy:false,conversationId:'CANARY-ID-1'});
+  f.relay({type:'augmentor-event',event:'conversation.changed',conversationId:'CANARY-ID-2',text:'CANARY'});
+  f.relay({type:'augmentor-status',online:true,busy:false,conversationId:'CANARY-ID-2'});
+  f.relay({type:'augmentor-event',event:'turn.started'});f.relay({type:'augmentor-event',event:'turn.started'});
+  f.relay({type:'augmentor-event',event:'turn.finished'});f.relay({type:'augmentor-event',event:'turn.finished'});
+  f.relay({type:'augmentor-event',event:'tool.finished',toolName:'read.page',error:false,result:'CANARY'});
+  f.relay({type:'augmentor-event',event:'tool.finished',toolName:'read.page',error:false});
+  for(let i=0;i<10;i++)await settle();
+  const posts=f.calls.filter(c=>c.path.endsWith('/events'));
+  assert.deepEqual(posts.map(p=>p.options.body.event.kind),['conversation-changed','reply-started','reply-finished','tool-finished','tool-finished']);
+  assert.equal(JSON.stringify(posts).includes('CANARY'),false);assert.equal(JSON.stringify(f.c.history).includes('CANARY'),false);
+  const before=posts.length;
+  f.c.relay({source:{},origin:'http://127.0.0.1:9',data:{type:'augmentor-event',event:'turn.started'}});
+  f.c.relay({source:f.frame,origin:'http://evil',data:{type:'augmentor-event',event:'turn.started'}});
+  f.relay({type:'augmentor-result',text:'CANARY'});f.relay({type:'augmentor-status',online:false,busy:false});
+  await settle();assert.equal(f.calls.filter(c=>c.path.endsWith('/events')).length,before);
+  f.c.destroy();assert.equal(f.listeners.size,0);
+});
+test('queue bounds, timeout drops, stale epoch refresh and pagehide cleanup',async()=>{
+  const f=fixture({enabled:true,post:()=>new Promise(()=>{})});await f.c.refresh();
+  for(let i=0;i<60;i++)f.relay({type:'augmentor-event',event:'tool.finished',toolName:'read',error:false});
+  assert.ok(f.c.history.length<=50);await settle();assert.equal(f.calls.filter(c=>c.path.endsWith('/events')).length,1);
+  f.timeout();await settle();assert.equal(f.calls.filter(c=>c.path.endsWith('/events')).length,2);
+  f.listeners.get('pagehide')();await settle();assert.equal(f.c.history.length,0);
+  const stale=fixture({enabled:true,post:async()=>({recorded:false,reason:'stale-epoch'})});await stale.c.refresh();
+  const polls=stale.polls();stale.relay({type:'augmentor-event',event:'turn.started'});await settle();await settle();
+  assert.ok(stale.polls()>polls);assert.equal(stale.calls.filter(c=>c.path.endsWith('/events')).length,1);stale.c.destroy();
+});
+test('notice consent only follows successful-share callback and survives remember failure in this mount',async()=>{
+  const f=fixture({post:async()=>{throw Error('CANARY');}});await f.c.refresh();
+  const ticket=await f.c.beginShare();assert.equal(typeof ticket,'object');
+  assert.equal(f.calls.some(c=>c.path.endsWith('/notice')),false);
+  f.c.didShare(ticket,'https://example.test/path?q=CANARY');await settle();
+  assert.equal(f.calls.filter(c=>c.path.endsWith('/notice')).length,1);
+  assert.equal(f.calls.some(c=>c.path.endsWith('/recording')),false);
+  await f.c.beginShare();assert.equal(f.asks(),1);
+  assert.ok(f.notices.includes('Notice preference could not be saved. It may appear again.'));
+  f.c.mount({frame:{},origin:'http://127.0.0.1:9',descriptor:d});
+  assert.equal(f.c.currentShare(ticket),false);await f.c.beginShare();assert.equal(f.asks(),2);f.c.destroy();
+});
+```
+
+Append a drain test that measures the full bounded queue, including drop-newest order:
+
+```js
+test('one in flight and at most 32 waiting; full queue drops newest without retry',async()=>{
+  const releases=[];
+  const f=fixture({enabled:true,post:()=>new Promise(resolve=>releases.push(resolve))});await f.c.refresh();
+  for(let i=0;i<60;i++)f.relay({type:'augmentor-event',event:'tool.finished',toolName:'tool'+i,error:false});
+  await settle();assert.equal(releases.length,1);
+  for(let i=0;i<33;i++){assert.equal(releases.length,1);releases.shift()({recorded:true,reason:null});await settle();}
+  assert.equal(releases.length,0);
+  assert.deepEqual(f.calls.filter(c=>c.path.endsWith('/events')).map(c=>c.options.body.event.toolName),Array.from({length:33},(_,i)=>'tool'+i));
+  assert.deepEqual(f.notices,['Activity was not recorded']);f.c.destroy();
+});
+```
+
+Append the disablement-history guard case:
+
+```js
+test('disablement clears pending metadata and keeps only bounded ready/status proof',async()=>{
+  const f=fixture({enabled:true});await f.c.refresh();
+  f.relay({type:'augmentor-ready'});f.relay({type:'augmentor-event',event:'turn.started'});await settle();
+  assert.ok(f.c.history.some(row=>row.kind==='reply-started'));
+  f.enable(false);await f.c.refresh();
+  assert.ok(f.c.history.every(row=>row.type==='augmentor-ready'||row.type==='augmentor-status'));
+  const count=f.calls.filter(c=>c.path.endsWith('/events')).length;
+  f.relay({type:'augmentor-event',event:'turn.finished'});await settle();
+  assert.equal(f.calls.filter(c=>c.path.endsWith('/events')).length,count);f.c.destroy();
+});
+```
+
+Append baseline and recipient-change regressions:
+
+```js
+test('offline resets baselines without synthesizing finishes; busy transitions are not turns',async()=>{
+  const f=fixture({enabled:true});await f.c.refresh();
+  f.relay({type:'augmentor-status',online:true,busy:false,conversationId:'first'});
+  f.relay({type:'augmentor-event',event:'turn.started'});
+  f.relay({type:'augmentor-status',online:false,busy:false});
+  f.relay({type:'augmentor-status',online:true,busy:true,conversationId:'second'});
+  f.relay({type:'augmentor-status',online:true,busy:false,conversationId:'second'});
+  await settle();assert.deepEqual(f.calls.filter(c=>c.path.endsWith('/events')).map(c=>c.options.body.event.kind),['reply-started']);
+  f.relay({type:'augmentor-event',event:'turn.started'});await settle();
+  assert.equal(f.calls.filter(c=>c.path.endsWith('/events')).length,2);f.c.destroy();
+});
+test('changed host recipient key invalidates this mounted frame and never remembers a share',async()=>{
+  const f=fixture();await f.c.refresh();const ticket=await f.c.beginShare();
+  f.changeRecipient('augmentor-v1-'+ 'b'.repeat(64));await f.c.refresh();
+  assert.equal(f.c.currentShare(ticket),false);assert.equal(await f.c.beginShare(),'Assistant unavailable');
+  f.c.didShare(ticket,'https://example.test/');await settle();
+  assert.equal(f.calls.some(c=>c.path.endsWith('/notice')),false);f.c.destroy();
+});
+```
+
+- [ ] Run `node --test browser-first/test/embed-governance-controller.test.mjs`; expect missing module. Only proceed with implementation after the conductor's live prerequisite passes.
+The `resonantos.embedRecordingChange` local-storage value is only a notification `{id: UUID, pending: boolean}`. It contains no consent, epoch, recipient, metadata or credential. A pending notification stops submissions, aborts in-flight work, clears the queue, invalidates old reads and holds polling until settlement. A settled notification only requests authenticated host state; it cannot enable recording itself. Ignore stored notification values on mount; durable choice remains host-owned. Remove the listener on destruction. This narrow recording-stop signal adds no harness history or view synchronization. If notification delivery fails, the host still enforces its durable flag on appends; never report other pages disabled from a storage write alone.
+
+- [ ] Create the complete controller:
+
+```js
+import { LIMITS, UUID, metadata, domainFromUrl, validDescriptor } from './generated/embed-governance-contract.js';
+export function createEmbedGovernanceController({request,windowRef=globalThis.window,chromeApi=globalThis.chrome,confirmShare,announce=()=>{},uuid=()=>crypto.randomUUID(),setTimeoutImpl=setTimeout,clearTimeoutImpl=clearTimeout,setIntervalImpl=setInterval,clearIntervalImpl=clearInterval}={}) {
+  let frame=null,origin='',descriptor=null,enabled=false,epoch=null,keyKnown=null,ack=false,stale=false,conversation=null,reply=null,closed=false,generation=0,readSequence=0,failure=false;
+  const history=[],queue=[],pending=new Set(),recordingChanges=new Set();let pumping=false;
+  function tell(text){try{announce(text);}catch{}}
+  function failed(){if(!failure){failure=true;tell('Activity was not recorded');}}
+  function ring(value){history.push(value);if(history.length>LIMITS.history)history.splice(0,history.length-LIMITS.history);}
+  function clear(){generation++;queue.length=0;for(const ac of pending)ac.abort();pending.clear();history.splice(0,history.length,...history.filter(v=>v.type==='augmentor-ready'||v.type==='augmentor-status'));}
+  async function bounded(path,options={}) {
+    const ac=new AbortController();pending.add(ac);let timer;
+    const timeout=new Promise((_,reject)=>{
+      ac.signal.addEventListener('abort',()=>reject(Error('Activity unavailable')),{once:true});
+      timer=setTimeoutImpl(()=>ac.abort(),LIMITS.timeout);
+    });
+    try{return await Promise.race([Promise.resolve().then(()=>{if(ac.signal.aborted)throw Error('Activity unavailable');return request(path,{...options,signal:ac.signal});}),timeout]);}
+    finally{clearTimeoutImpl(timer);pending.delete(ac);}
+  }
+  async function refresh() {
+    if(closed||recordingChanges.size)return;
+    const seq=++readSequence,gen=generation;
+    try {
+      const s=await bounded('/embed-governance/state');
+      if(closed||seq!==readSequence||gen!==generation)return;
+      if(typeof s?.recordingEnabled!=='boolean'||!(s.writeEpoch===null||typeof s.writeEpoch==='string'&&UUID.test(s.writeEpoch))||typeof s.noticeAcknowledged!=='boolean'||s.noticeVersion!==1)throw Error();
+      keyKnown=s.noticeKey;
+      if(descriptor&&s.noticeKey!==descriptor.noticeKey){stale=true;ack=false;enabled=false;epoch=null;clear();return;}
+      if(!s.recordingEnabled||!s.available||s.problem){enabled=false;epoch=null;clear();}
+      else {if(!enabled||epoch!==s.writeEpoch)clear();enabled=true;epoch=s.writeEpoch;}
+      if(s.noticeAcknowledged)ack=true;
+      failure=false;
+    }catch{if(!closed&&seq===readSequence){enabled=false;epoch=null;keyKnown=null;clear();failed();}}
+  }
+  async function pump() {
+    if(pumping||closed)return;pumping=true;
+    try {
+      while(queue.length&&enabled&&!closed) {
+        const item=queue.shift(),gen=generation;
+        try {
+          const result=await bounded('/embed-governance/events',{method:'POST',body:item});
+          if(gen!==generation||closed)continue;
+          if(result.recorded===true){failure=false;continue;}
+          failed();
+          if(['stale-epoch','disabled','unavailable'].includes(result.reason)){enabled=false;clear();await refresh();}
+        }catch{if(gen===generation&&!closed)failed();}
+      }
+    }finally{pumping=false;if(queue.length&&enabled&&!closed)void pump();}
+  }
+  function observe(value) {
+    try {
+      if(!enabled||!epoch||closed)return;
+      const event=metadata(value);if(!event)return;
+      ring(event);
+      if(queue.length>=LIMITS.queue){failed();return;}
+      queue.push({writeEpoch:epoch,eventId:uuid(),event});void pump();
+    }catch{failed();}
+  }
+  function change(id,explicit) {
+    if(typeof id!=='string'||[...id].length<1||[...id].length>128||/[\x00-\x1f\x7f]/.test(id))return;
+    if(id!==conversation){if(conversation!==null||explicit){observe({kind:'conversation-changed'});reply=null;}conversation=id;}
+  }
+  function relay(event) {
+    try {
+      if(closed||!frame||event.source!==frame||event.origin!==origin)return;
+      const data=event.data;if(!data||typeof data!=='object')return;
+      if(data.type==='augmentor-ready'){ring({type:'augmentor-ready'});return;}
+      if(data.type==='augmentor-status') {
+        if(typeof data.online!=='boolean'||typeof data.busy!=='boolean')return;
+        ring({type:'augmentor-status',online:data.online,busy:data.busy});
+        if(!data.online){conversation=null;reply=null;return;}
+        change(data.conversationId,false);return;
+      }
+      if(data.type!=='augmentor-event')return;
+      if(data.event==='conversation.changed')change(data.conversationId,true);
+      else if(data.event==='turn.started'&&reply!=='started'){reply='started';observe({kind:'reply-started'});}
+      else if(data.event==='turn.finished'&&reply!=='finished'){reply='finished';observe({kind:'reply-finished'});}
+      else if(data.event==='tool.finished')observe({kind:'tool-finished',toolName:data.toolName,error:data.error});
+    }catch{failed();}
+  }
+  function mount(value) {
+    if(closed)return;clear();readSequence++;conversation=null;reply=null;ack=false;keyKnown=null;stale=false;enabled=false;epoch=null;history.length=0;
+    frame=value?.frame??null;origin=value?.origin??'';descriptor=validDescriptor(value?.descriptor)?{...value.descriptor}:null;
+    void refresh();
+  }
+  function currentShare(ticket){return !closed&&!stale&&!!descriptor&&ticket?.frame===frame&&ticket?.noticeKey===descriptor.noticeKey;}
+  async function beginShare() {
+    try {
+      if(closed||!frame||!descriptor||stale)return 'Assistant unavailable';
+      const mounted=frame,key=descriptor.noticeKey;
+      await refresh();
+      if(closed||frame!==mounted||descriptor?.noticeKey!==key||stale)return 'Assistant unavailable';
+      const remember=!ack;
+      if(remember&&await confirmShare(descriptor.label)!==true)return '';
+      const ticket={frame:mounted,noticeKey:key,remember};
+      return currentShare(ticket)?ticket:'Assistant unavailable';
+    }catch{return 'Assistant unavailable';}
+  }
+  function didShare(ticket,url) {
+    try {
+      if(!currentShare(ticket))return;
+      if(ticket.remember){ack=true;const gen=generation;
+        void bounded('/embed-governance/notice',{method:'POST',body:{noticeKey:ticket.noticeKey,version:1}}).catch(()=>{
+          if(!closed&&gen===generation)tell('Notice preference could not be saved. It may appear again.');
+        });
+      }
+      const domain=domainFromUrl(url);if(domain)observe({kind:'page-shared',domain});
+    }catch{failed();}
+  }
+  function stopRecording(){enabled=false;epoch=null;readSequence++;clear();}
+  function destroy(){if(closed)return;closed=true;stopRecording();history.length=0;clearIntervalImpl(timer);windowRef?.removeEventListener('focus',focus);windowRef?.removeEventListener('pagehide',destroy);chromeApi?.storage?.onChanged?.removeListener(recordingChanged);recordingChanges.clear();}
+  const recordingChanged=(changes,area)=>{
+    if(closed||area!=='local')return;
+    const change=changes['resonantos.embedRecordingChange']?.newValue;
+    if(!change||typeof change.id!=='string'||!UUID.test(change.id)||typeof change.pending!=='boolean')return;
+    if(change.pending){recordingChanges.add(change.id);stopRecording();}
+    else {recordingChanges.delete(change.id);void refresh();}
+  };
+  const focus=()=>{void refresh();};
+  const timer=setIntervalImpl(focus,LIMITS.poll);
+  windowRef?.addEventListener('focus',focus);windowRef?.addEventListener('pagehide',destroy);chromeApi?.storage?.onChanged?.addListener(recordingChanged);
+  return {mount,relay,refresh,beginShare,currentShare,didShare,stopRecording,destroy,history};
+}
+```
+
+Append ownership:
+
+```markdown
+| `browser-first/resonantos-side-panel-extension/src/lib/embed-governance-controller.js` | Safe relay observations, notice cache and bounded metadata delivery | Validated session descriptor, exact-source relay and authenticated host snapshots | In-memory baselines, projected queue and notice acknowledgement after dispatch | Authority, filesystem, raw transcript retention or credentials in UI |
+```
+
+- [ ] Run `node --test browser-first/test/embed-governance-controller.test.mjs`; expect pass. Test off-to-on explicitly with a new turn after a finish: baselines may track while off but must not emit old observations. Verify polling/focus requests contain no `/recording` or `/notice` call without `didShare`.
+- [ ] Red evidence: individually remove exact source, exact origin, `if(!enabled||!epoch||closed)return`, queue bound, and `currentShare` frame comparison. Require the corresponding controller test failures. Remove metadata-history filtering in `clear`; the disablement-history test must fail. Restore and rerun. Retain only fixed assertion outcomes in mutation evidence; payload tests use synthetic canaries.
+- [ ] Run this exact guard-mutation matrix after green. Each `rig-mutate` invocation must return zero (behavioral failure under mutation and byte-identical restoration). Inspect any failure; import or syntax errors are not guard evidence. The strings below are exact edits, not patterns.
+
+```bash
+python3 - <<'PYMUTATE'
+from pathlib import Path
+import shlex, subprocess
+rig=str(Path.home()/'.claude/skills/resonant-rig/scripts/rig-mutate')
+mutations=[('browser-first/resonantos-side-panel-extension/src/lib/embed-governance-controller.js', [('if(!enabled||!epoch||closed)return;', 'if(closed)return;')]), ('browser-first/resonantos-side-panel-extension/src/lib/embed-governance-controller.js', [('event.source!==frame||event.origin!==origin', 'false')]), ('browser-first/resonantos-side-panel-extension/src/lib/embed-governance-controller.js', [('if(queue.length>=LIMITS.queue)', 'if(false)')]), ('browser-first/resonantos-side-panel-extension/src/lib/embed-governance-controller.js', [("ring({type:'augmentor-status',online:data.online,busy:data.busy})", 'ring(data)')]), ('browser-first/resonantos-side-panel-extension/src/lib/embed-governance-controller.js', [("data.event==='turn.started'&&reply!=='started'", "data.event==='turn.started'")]), ('browser-first/resonantos-side-panel-extension/src/lib/embed-governance-controller.js', [('timer=setTimeoutImpl(()=>ac.abort(),LIMITS.timeout);', 'timer=0;')]), ('browser-first/resonantos-side-panel-extension/src/lib/embed-governance-controller.js', [('ticket?.frame===frame&&', '')]), ('browser-first/resonantos-side-panel-extension/src/lib/embed-governance-controller.js', [("history.filter(v=>v.type==='augmentor-ready'||v.type==='augmentor-status')", 'history')])]
+test_command='node --test browser-first/test/embed-governance-controller.test.mjs'
+for filename,changes in mutations:
+    edit='from pathlib import Path\np=Path('+repr(filename)+')\ns=p.read_text()\n'
+    for before,after in changes:
+        edit+='assert '+repr(before)+' in s\ns=s.replace('+repr(before)+','+repr(after)+',1)\n'
+    edit+='p.write_text(s)\n'
+    try:
+        subprocess.run([rig,filename,'python3 -c '+shlex.quote(edit),test_command],check=True)
+    finally:
+        subprocess.run(['node','scripts/prepare-embed-governance.mjs'],check=True)
+subprocess.run(shlex.split('node --test browser-first/test/embed-governance-controller.test.mjs'),check=True)
+PYMUTATE
+```
+
+- [ ] Commit:
+
+```bash
+git diff --check
+git add browser-first/resonantos-side-panel-extension/src/lib/embed-governance-controller.js browser-first/test/embed-governance-controller.test.mjs docs/architecture/MODULE-OWNERSHIP.md
+git commit -m "feat(embed): capture bounded consented relay metadata"
+```
+
+### Task 8: Accessible first-share dialog and final permission revalidation
+
+**Files:**
+- Create: `browser-first/resonantos-side-panel-extension/src/lib/embed-governance-dialog.js`
+- Modify: `browser-first/resonantos-side-panel-extension/src/lib/embed-bar-actions.js`, `browser-first/test/embed-bar-actions.test.mjs`, `docs/architecture/MODULE-OWNERSHIP.md`
+- Create/Test: `browser-first/test/embed-first-share.test.mjs`
+
+**Interfaces:**
+- Consumes: controller `beginShare():Promise<ShareTicket|string>`, `currentShare(ticket:ShareTicket):boolean`, `didShare(ticket:ShareTicket,url:string):void`; existing `activeTab():Promise<{id:number,url:string,title?:string}|null>`, `permissionForUrl(url:string):Promise<string>`, `pageContextMessage(tab:{url:string,title?:string}):{type:"augmentor-context",context:{source:"resonantos",page:{title:string,url:string}}}|null`.
+- Produces: `confirmEmbedAction({documentRef,heading,description,confirmLabel,returnFocus}):Promise<boolean>`; `confirmEmbedShare({documentRef,label,returnFocus}):Promise<boolean>`; extended `createEmbedBarActions({chromeApi,locationRef,sendContext,beforeShare,isShareCurrent,onShared})`.
+
+- [ ] Write the failing test:
+
+```js
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { JSDOM } from 'jsdom';
+import { createEmbedBarActions } from '../resonantos-side-panel-extension/src/lib/embed-bar-actions.js';
+import { confirmEmbedShare } from '../resonantos-side-panel-extension/src/lib/embed-governance-dialog.js';
+function fixture({confirm=true,change,dispatch=true}={}) {
+  const tab={id:2,url:'https://example.test/path?q=CANARY',title:'Fixture'},sent=[],remembered=[];let mode='read-only',reads=0,notices=0,current=true;
+  const chromeApi={tabs:{query:async()=>[tab],get:async()=>tab},webNavigation:{getAllFrames:async()=>[]},storage:{local:{get:async key=>{if(key==='augmentorSitePermissions'){reads++;return {[key]:{'example.test':mode}};}return {};},set:async()=>{}}}};
+  const ticket={frame:{},noticeKey:'key',remember:true};
+  const actions=createEmbedBarActions({chromeApi,locationRef:{},sendContext:m=>{if(dispatch==='throw')throw Error('CANARY');sent.push(m);return dispatch;},beforeShare:async()=>{notices++;if(change==='url')tab.url='https://example.test/other';if(change==='permission')mode='blocked';if(change==='frame')current=false;if(change==='read')chromeApi.storage.local.get=async()=>{throw Error('CANARY');};return confirm?ticket:'';},isShareCurrent:()=>current,onShared:(value,url)=>remembered.push({value,url})});
+  return {actions,sent,remembered,reads:()=>reads,notices:()=>notices};
+}
+test('cancel, navigation, permission failure, frame replacement and failed dispatch remember nothing',async()=>{
+  for(const opts of [{confirm:false},{change:'url'},{change:'permission'},{change:'frame'},{change:'read'},{dispatch:false},{dispatch:'throw'}]) {
+    const f=fixture(opts);assert.notEqual(await f.actions.sharePage(),'Page shared');assert.deepEqual(f.remembered,[]);
+    if(!Object.hasOwn(opts,'dispatch'))assert.deepEqual(f.sent,[]);
+  }
+  const f=fixture();assert.equal(await f.actions.sharePage(),'Page shared');assert.equal(f.sent.length,1);assert.equal(f.remembered.length,1);assert.equal(f.reads(),2);
+  assert.equal(f.remembered[0].url,'https://example.test/path');
+});
+test('dialog focuses Cancel, traps Tab, escapes, names recipient and restores Page focus',async t=>{
+  const dom=new JSDOM('<button id="page">Page</button>');t.after(()=>dom.window.close());const documentRef=dom.window.document,page=documentRef.querySelector('#page');page.focus();
+  const answer=confirmEmbedShare({documentRef,label:'Augmentor',returnFocus:page});
+  const dialog=documentRef.querySelector('[role=dialog]'),buttons=[...dialog.querySelectorAll('button')];
+  assert.equal(documentRef.activeElement,buttons[0]);assert.equal(dialog.getAttribute('aria-modal'),'true');
+  assert.match(dialog.textContent,/does not give Augmentor permission/);
+  buttons[0].dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Tab',shiftKey:true,bubbles:true,cancelable:true}));assert.equal(documentRef.activeElement,buttons[1]);
+  dialog.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));assert.equal(await answer,false);assert.equal(documentRef.activeElement,page);
+  const yes=confirmEmbedShare({documentRef,label:'Augmentor',returnFocus:page});documentRef.querySelector('[data-confirm]').click();assert.equal(await yes,true);
+});
+```
+
+- [ ] Run `node --test browser-first/test/embed-first-share.test.mjs`; expect missing dialog. For fail-before-fix action evidence temporarily omit only the dialog import/test and run the first test against existing actions; it must fail because current actions ignore cancellation and navigation. Restore the full test.
+- [ ] Create the complete dialog module:
+
+```js
+let sequence=0;
+export function confirmEmbedAction({documentRef=globalThis.document,heading,description,confirmLabel,returnFocus=documentRef.activeElement}) {
+  return new Promise(resolve=>{
+    const overlay=documentRef.createElement('div');overlay.className='embed-dialog-overlay';
+    const dialog=documentRef.createElement('section');dialog.className='embed-dialog';dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');
+    const title=documentRef.createElement('h2'),body=documentRef.createElement('p');
+    const id='embed-dialog-'+(++sequence);title.id=id+'-title';body.id=id+'-body';title.textContent=heading;body.textContent=description;
+    dialog.setAttribute('aria-labelledby',title.id);dialog.setAttribute('aria-describedby',body.id);
+    const cancel=documentRef.createElement('button'),confirm=documentRef.createElement('button');
+    cancel.type=confirm.type='button';cancel.textContent='Cancel';confirm.textContent=confirmLabel;confirm.dataset.confirm='true';
+    dialog.append(title,body,cancel,confirm);overlay.append(dialog);documentRef.body.append(overlay);
+    let done=false;
+    const finish=value=>{if(done)return;done=true;documentRef.removeEventListener('keydown',key,true);documentRef.removeEventListener('focusin',focus,true);documentRef.defaultView?.removeEventListener('pagehide',hide);overlay.remove();returnFocus?.focus?.();resolve(value);};
+    const key=event=>{
+      if(event.key==='Escape'){event.preventDefault();event.stopPropagation();finish(false);}
+      if(event.key==='Tab'){event.preventDefault();(documentRef.activeElement===cancel?confirm:cancel).focus();}
+    };
+    const focus=event=>{if(!dialog.contains(event.target))cancel.focus();};
+    const hide=()=>finish(false);
+    cancel.addEventListener('click',()=>finish(false));confirm.addEventListener('click',()=>finish(true));
+    documentRef.addEventListener('keydown',key,true);documentRef.addEventListener('focusin',focus,true);documentRef.defaultView?.addEventListener('pagehide',hide,{once:true});cancel.focus();
+  });
+}
+export function confirmEmbedShare({documentRef,label,returnFocus}) {
+  return confirmEmbedAction({documentRef,returnFocus,heading:`Share this page with ${label}?`,description:`${label} runs outside ResonantOS approvals. Its own approvals cover its tools. Sharing sends this page's title and address to ${label}. It does not give ${label} permission to use ResonantOS tools or control this page.`,confirmLabel:'Share page'});
+}
+```
+
+Replace its constructor declaration with `export function createEmbedBarActions({ chromeApi, locationRef, sendContext, beforeShare = async () => 'Assistant unavailable', isShareCurrent = () => false, onShared = () => {} }) {`. Replace only its `sharePage` function with:
+
+```js
+  async function candidate() {
+    let tab;try{tab=await activeTab();}catch{return 'No readable page';}
+    if(!isControllableTabUrl(tab?.url))return 'No readable page';
+    let mode;try{mode=await permissionForUrl(tab.url);}catch{return 'Site permissions unavailable';}
+    if(mode==='blocked')return 'Page sharing blocked';
+    if(!['read-only','ask-before-action','trusted-for-safe-actions'].includes(mode))return 'Site permissions unavailable';
+    const message=pageContextMessage(tab);if(!message)return 'Page context unavailable';
+    return {tabId:tab.id,url:message.context.page.url,message};
+  }
+  async function sharePage() {
+    const first=await candidate();if(typeof first==='string')return first;
+    let ticket;try{ticket=await beforeShare();}catch{return 'Assistant unavailable';}
+    if(typeof ticket==='string')return ticket;
+    if(!ticket)return 'Assistant unavailable';
+    const final=await candidate();if(typeof final==='string')return final;
+    if(first.tabId!==final.tabId||first.url!==final.url)return 'Page changed. Select Page again.';
+    if(!isShareCurrent(ticket))return 'Assistant unavailable';
+    // No await between the final checks and this one local dispatch.
+    try{if(sendContext(final.message)!==true)return 'Assistant offline';}catch{return 'Assistant offline';}
+    try{onShared(ticket,final.url);}catch{ /* A successful share is independent of recording. */ }
+    return 'Page shared';
+  }
+```
+
+Existing action tests need explicit host-session callbacks instead of an implicit permission bypass. At each `createEmbedBarActions({` in `browser-first/test/embed-bar-actions.test.mjs`, insert these exact properties:
+
+```js
+beforeShare: async () => ({ frame: {}, noticeKey: 'fixture', remember: false }),
+isShareCurrent: () => true,
+```
+
+Replace the actions ownership row's write column with `Explicit mode preference and permitted context callback after final tab/permission/frame checks; successful-share callback only`. Append:
+
+```markdown
+| `browser-first/resonantos-side-panel-extension/src/lib/embed-governance-dialog.js` | Accessible extension-owned confirmations | Safe text and return-focus element | Modal DOM, focus and boolean user result | Credentials, persistence, grants or harness DOM |
+```
+
+- [ ] Run `node --test browser-first/test/embed-first-share.test.mjs browser-first/test/embed-bar-actions.test.mjs`; expect pass. Red evidence: remove the final candidate read, the tab/URL equality check, the frame check and the `sendContext(final.message)!==true` condition individually; each named failed-share case must turn red. Restore each. Original strict permission tests remain red-sensitive without weakening them.
+- [ ] Run this exact guard-mutation matrix after green. Each `rig-mutate` invocation must return zero (behavioral failure under mutation and byte-identical restoration). Inspect any failure; import or syntax errors are not guard evidence. The strings below are exact edits, not patterns.
+
+```bash
+python3 - <<'PYMUTATE'
+from pathlib import Path
+import shlex, subprocess
+rig=str(Path.home()/'.claude/skills/resonant-rig/scripts/rig-mutate')
+mutations=[('browser-first/resonantos-side-panel-extension/src/lib/embed-bar-actions.js', [('const final=await candidate();', 'const final=first;')]), ('browser-first/resonantos-side-panel-extension/src/lib/embed-bar-actions.js', [('if(first.tabId!==final.tabId||first.url!==final.url)', 'if(false)')]), ('browser-first/resonantos-side-panel-extension/src/lib/embed-bar-actions.js', [('if(!isShareCurrent(ticket))', 'if(false)')]), ('browser-first/resonantos-side-panel-extension/src/lib/embed-bar-actions.js', [('if(sendContext(final.message)!==true)', 'if((sendContext(final.message),false))')])]
+test_command='node --test browser-first/test/embed-first-share.test.mjs'
+for filename,changes in mutations:
+    edit='from pathlib import Path\np=Path('+repr(filename)+')\ns=p.read_text()\n'
+    for before,after in changes:
+        edit+='assert '+repr(before)+' in s\ns=s.replace('+repr(before)+','+repr(after)+',1)\n'
+    edit+='p.write_text(s)\n'
+    try:
+        subprocess.run([rig,filename,'python3 -c '+shlex.quote(edit),test_command],check=True)
+    finally:
+        subprocess.run(['node','scripts/prepare-embed-governance.mjs'],check=True)
+subprocess.run(shlex.split('node --test browser-first/test/embed-first-share.test.mjs'),check=True)
+PYMUTATE
+```
+
+- [ ] Commit:
+
+```bash
+git diff --check
+git add browser-first/resonantos-side-panel-extension/src/lib/embed-governance-dialog.js browser-first/resonantos-side-panel-extension/src/lib/embed-bar-actions.js browser-first/test/embed-bar-actions.test.mjs browser-first/test/embed-first-share.test.mjs docs/architecture/MODULE-OWNERSHIP.md
+git commit -m "feat(embed): confirm first shares after fresh permission checks"
+```
+### Task 9: Visible tier badge and safe frame composition
+
+**Files:**
+- Modify: `browser-first/resonantos-side-panel-extension/src/lib/embed-bar-model.js`, `browser-first/resonantos-side-panel-extension/src/lib/embed-bar.js`, `browser-first/resonantos-side-panel-extension/src/styles/side-panel/base-layout.css`, `browser-first/resonantos-side-panel-extension/src/side-panel-entry.js`, `browser-first/test/embed-bar.test.mjs`, `browser-first/test/side-panel-entry.test.mjs`, `docs/architecture/MODULE-OWNERSHIP.md`
+- Create/Test: `browser-first/test/embed-governance-composition.test.mjs`
+
+**Interfaces:**
+- Consumes: `createEmbedGovernanceController({request,windowRef,chromeApi?,confirmShare,announce,uuid?,setTimeoutImpl?,clearTimeoutImpl?,setIntervalImpl?,clearIntervalImpl?})` with the returned `mount`, `relay`, `beginShare`, `currentShare`, `didShare`, `destroy` methods; `confirmEmbedShare({documentRef,label,returnFocus}):Promise<boolean>`; `validDescriptor(value:unknown):boolean`; session `{hostPath:string,harness:EmbedHarnessDescriptor}`.
+- Produces: `embedGovernanceDescription(descriptor:unknown):string`; bar adds `setDescriptor(value:unknown):void`, `announce(text:string):void`; `window.__resonantosEmbed.last` aliases controller's safe history only.
+
+- [ ] Append the failing badge test to `browser-first/test/embed-bar.test.mjs`:
+
+```js
+test('self-governed badge is visible, focusable, dismissible and never inferred from status',async t=>{
+  const f=fixture();t.after(()=>{f.bar.destroy();f.dom.window.close();});await f.bar.ready;
+  const badge=f.bar.root.querySelector('[data-tier]');assert.ok(badge);assert.equal(badge.textContent,'Self-governed');assert.equal(badge.tabIndex,0);
+  assert.equal(badge.previousElementSibling.dataset.control,'approvals');assert.equal(badge.nextElementSibling.dataset.control,'status');
+  const description=f.dom.window.document.getElementById(badge.getAttribute('aria-describedby'));assert.match(description.textContent,/outside ResonantOS approvals/);
+  badge.focus();assert.equal(description.hidden,false);
+  badge.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));assert.equal(description.hidden,true);
+  f.bar.setDescriptor({governance:'governed',label:'CANARY'});f.bar.setStatus({online:true,busy:false,governance:'governed'});
+  assert.equal(badge.textContent,'Self-governed');assert.equal(description.textContent.includes('CANARY'),false);
+  assert.equal(f.bar.root.querySelector('[data-control=approvals]').title,'ResonantOS approvals: 2 pending');
+});
+```
+
+Create the failing composition test:
+
+```js
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { JSDOM } from 'jsdom';
+import { randomUUID } from 'node:crypto';
+import { mountEmbedView } from '../resonantos-side-panel-extension/src/side-panel-entry.js';
+const d={harnessId:'addon.augmentor-embed',interfaceId:'panel',label:'Augmentor',governance:'self-governed',noticeKey:'augmentor-v1-'+ 'a'.repeat(64)};
+const settle=()=>new Promise(r=>setImmediate(r));
+async function fixture(t,harness=d) {
+  const dom=new JSDOM('<body></body>',{url:'https://extension.test/'});const calls=[];
+  const event={addListener(){},removeListener(){}};
+  const chromeApi={runtime:{getURL:p=>'chrome-extension://cdpdmmalhmokbfcfgogoepnjplaakgnl/'+p},tabs:{query:async()=>[],onUpdated:event,onActivated:event,onRemoved:event},storage:{onChanged:event,local:{get:async()=>({}),set:async()=>{}}}};
+  const view=await mountEmbedView({documentRef:dom.window.document,windowRef:dom.window,chromeApi,locationRef:dom.window.location,getConnection:async()=>({bridgeUrl:'http://127.0.0.1:9',request:async(path)=>{calls.push(path);if(path==='/embed/session')return {hostPath:'/embed-host/?ticket='+ 'a'.repeat(43),harness};return {recordingEnabled:false,writeEpoch:randomUUID(),noticeKey:d.noticeKey,noticeVersion:1,noticeAcknowledged:false,available:true,problem:null};}})});
+  t.after(()=>{view.bar.destroy();dom.window.close();});return {dom,view,calls};
+}
+test('real composition refuses foreign relays and retains safe proof state only',async t=>{
+  const f=await fixture(t),frame=f.view.root.querySelector('iframe');
+  const relay=(data,source=frame.contentWindow,origin='http://127.0.0.1:9')=>f.dom.window.dispatchEvent(new f.dom.window.MessageEvent('message',{source,origin,data}));
+  relay({type:'augmentor-ready'});relay({type:'augmentor-status',online:true,busy:false,conversationId:'CANARY'});
+  relay({type:'augmentor-result',text:'CANARY'});relay({type:'augmentor-event',event:'turn.finished',text:'CANARY'});
+  relay({type:'augmentor-status',online:false,busy:false},{},'http://evil');
+  await settle();assert.equal(f.view.state.ready,true);assert.equal(JSON.stringify(f.view.state.last).includes('CANARY'),false);
+  assert.deepEqual(f.view.state.last,[{type:'augmentor-ready'},{type:'augmentor-status',online:true,busy:false}]);
+  assert.equal(f.calls.some(p=>p.includes('/slots/')||p.includes('/grants')||p.endsWith('/recording')),false);
+});
+test('malformed descriptor never mounts an alternative harness and keeps escape controls',async t=>{
+  const f=await fixture(t,{...d,label:'Other'});assert.equal(f.view.root.querySelector('iframe'),null);
+  assert.ok(f.view.bar.root.querySelector('[data-control=workspace]'));assert.ok(f.view.bar.root.querySelector('[data-control=assistant]'));
+  assert.equal(f.view.bar.root.querySelector('[data-tier]').textContent,'Self-governed');
+});
+```
+
+- [ ] Run `node --test browser-first/test/embed-bar.test.mjs browser-first/test/embed-governance-composition.test.mjs`; expect missing badge and raw-history canary failures.
+- [ ] Append to `embed-bar-model.js`:
+
+```js
+export function embedGovernanceDescription(_descriptor) {
+  return 'Augmentor runs outside ResonantOS approvals. Its own approvals cover its tools. ResonantOS access still requires separate permission.';
+}
+```
+
+Import this function with `embedStatusLabel` in `embed-bar.js`. Before `if (mode === 'embed')` that creates Page, declare `let tierDescription;`. Immediately after the Approvals click listener insert:
+
+```js
+    const badge=documentRef.createElement('span');badge.dataset.tier='self-governed';badge.className='embed-tier';badge.tabIndex=0;badge.textContent='Self-governed';
+    tierDescription=documentRef.createElement('span');tierDescription.id='embed-tier-description';tierDescription.className='embed-tier-description';tierDescription.setAttribute('role','tooltip');tierDescription.textContent=embedGovernanceDescription(null);tierDescription.hidden=true;
+    badge.setAttribute('aria-describedby',tierDescription.id);
+    const showTier=()=>{tierDescription.hidden=false;},hideTier=()=>{tierDescription.hidden=true;};
+    badge.addEventListener('focus',showTier);badge.addEventListener('mouseenter',showTier);badge.addEventListener('blur',hideTier);badge.addEventListener('mouseleave',hideTier);
+    badge.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();hideTier();}});
+    root.append(badge);
+```
+
+Append `tierDescription` after appending Status, keeping it outside the badge/status sibling pair:
+
+```js
+    root.append(tierDescription);
+```
+
+In `setStatus`, replace `status.textContent = label; status.title = label;` with:
+
+```js
+    let text=status.querySelector('.embed-status-text');
+    if(!text){text=documentRef.createElement('span');text.className='embed-status-text';status.append(text);}
+    text.textContent=label;status.title=label;
+```
+
+Replace the Page handler's `.finally(() => { page.disabled = false; });` with `.finally(() => { page.disabled = false; page.focus(); });` so dialog focus restoration completes after the action is reenabled. Change only the non-null Approvals label template to `` `ResonantOS approvals: ${count} pending` ``. Add `announce` and `setDescriptor(value) { if(tierDescription) tierDescription.textContent=embedGovernanceDescription(value); }` to the returned bar object. Append CSS:
+
+```css
+.embed-tier { flex: 0 0 auto; white-space: nowrap; font-size: 11px; line-height: 20px; padding: 0 5px; border: 1px solid var(--embed-bar-line); border-radius: 4px; }
+.embed-tier:focus-visible { outline: 2px solid var(--embed-bar-focus); outline-offset: 1px; }
+.embed-tier-description { position: absolute; top: 36px; right: 6px; max-width: 290px; padding: 8px; background: var(--embed-bar-bg); color: var(--embed-bar-text); border: 1px solid var(--embed-bar-line); border-radius: 4px; white-space: normal; font-size: 12px; }
+@media (max-width: 360px) {
+  .embed-status-text { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .embed-bar-status::before { content: ''; display: block; width: 7px; height: 7px; border-radius: 50%; background: #b2bac4; }
+  .embed-bar-status[data-state="online"]::before { background: #8bd3a6; }
+  .embed-bar-status[data-state="busy"]::before { background: #e7c778; }
+}
+.embed-dialog-overlay { position: fixed; inset: 0; z-index: 10000; display: grid; place-items: center; background: #0009; padding: 12px; }
+.embed-dialog { width: min(100%, 420px); box-sizing: border-box; padding: 16px; border: 1px solid #3b4149; border-radius: 8px; background: #111315; color: #eef1f4; font: 14px system-ui; }
+.embed-dialog h2 { margin: 0 0 12px; font-size: 16px; }
+.embed-dialog button { padding: 8px 12px; margin-right: 8px; background: #282e35; color: #eef1f4; border: 1px solid #68717d; border-radius: 4px; }
+.embed-dialog button:focus-visible { outline: 2px solid #7fc4ff; outline-offset: 2px; }
+```
+
+In `side-panel-entry.js` add these imports, replace its opening declaration with `function mountSidePanelBar({ mode, sendContext = () => false, beforeShare, isShareCurrent, onShared, documentRef = globalThis.document, windowRef = globalThis.window, chromeApi = globalThis.chrome, locationRef = globalThis.location } = {}) {`, and replace its actions initializer with `const actions = createEmbedBarActions({ chromeApi, locationRef, sendContext, beforeShare, isShareCurrent, onShared });`:
+
+```js
+import { createEmbedGovernanceController } from './lib/embed-governance-controller.js';
+import { confirmEmbedShare } from './lib/embed-governance-dialog.js';
+import { validDescriptor } from './lib/generated/embed-governance-contract.js';
+```
+
+Replace `mountEmbedView` in full:
+
+```js
+export async function mountEmbedView({documentRef=globalThis.document,windowRef=globalThis.window,chromeApi=globalThis.chrome,locationRef=globalThis.location,getConnection=createEmbedConnection}={}) {
+  documentRef.documentElement.classList.add('embed-mode');
+  const root=documentRef.createElement('section');root.id='embed-root';documentRef.body.prepend(root);
+  let frame=null,origin='',online=false,connection=null,descriptor=null,disposed=false;
+  const state={ready:false,last:[],send(message){
+    if(disposed||!state.ready||!online||!frame?.contentWindow||!RELAY_COMMANDS.has(message?.type))return false;
+    try{if(message.type==='augmentor-context'&&new TextEncoder().encode(JSON.stringify(message)).byteLength>16000)return false;frame.contentWindow.postMessage(message,origin);return true;}catch{return false;}
+  }};
+  const controller=createEmbedGovernanceController({windowRef,chromeApi,
+    request:(path,options)=>connection?connection.request(path,options):Promise.reject(Error('Activity unavailable')),
+    announce:text=>bar.announce(text),
+    confirmShare:label=>confirmEmbedShare({documentRef,label,returnFocus:bar.root.querySelector('[data-control=page]')})
+  });
+  state.last=controller.history;windowRef.__resonantosEmbed=state;
+  const bar=mountSidePanelBar({mode:'embed',documentRef,windowRef,chromeApi,locationRef,
+    sendContext:message=>state.send(message),beforeShare:controller.beginShare,isShareCurrent:controller.currentShare,onShared:controller.didShare});
+  const offline=()=>{state.ready=false;online=false;bar.setStatus(null);controller.relay({source:frame?.contentWindow,origin,data:{type:'augmentor-status',online:false,busy:false}});};
+  const relay=event=>{
+    if(disposed||!frame||event.source!==frame.contentWindow||event.origin!==origin||!event.data||typeof event.data!=='object')return;
+    if(event.data.type==='augmentor-ready')state.ready=true;
+    if(event.data.type==='augmentor-status'&&typeof event.data.online==='boolean'&&typeof event.data.busy==='boolean'){
+      online=event.data.online;bar.setStatus({online,busy:event.data.busy});
+    }
+    if(['augmentor-ready','augmentor-status','augmentor-event'].includes(event.data.type))controller.relay(event);
+  };
+  const bridgeChanged=(changes,area)=>{if(area==='local'&&changes.bridgeTargetOverride){offline();controller.destroy();descriptor=null;}};
+  windowRef.addEventListener('message',relay);chromeApi?.storage?.onChanged?.addListener(bridgeChanged);
+  const destroy=bar.destroy;
+  bar.destroy=()=>{if(disposed)return;disposed=true;windowRef.removeEventListener('message',relay);chromeApi?.storage?.onChanged?.removeListener(bridgeChanged);controller.destroy();offline();destroy();};
+  try {
+    connection=await bounded(getConnection);
+    const session=await bounded(()=>connection.request('/embed/session',{method:'POST',body:{}}));
+    if(disposed)return {bar,root,state};
+    if(typeof session.hostPath!=='string'||!/^\/embed-host\/\?ticket=[A-Za-z0-9_-]{43}$/.test(session.hostPath)||!validDescriptor(session.harness))throw Error('Invalid embed session');
+    descriptor=session.harness;origin=new URL(connection.bridgeUrl).origin;bar.setDescriptor(descriptor);
+    frame=documentRef.createElement('iframe');frame.title=descriptor.label;frame.allow='clipboard-write';frame.addEventListener('error',offline);
+    frame.src=connection.bridgeUrl.replace(/\/$/,'')+session.hostPath;root.append(frame);
+    controller.mount({frame:frame.contentWindow,origin,descriptor});
+  }catch{offline();root.textContent='Unable to open the embedded chat. Check that the PoC bridge is running and try again.';}
+  return {bar,root,state};
+}
+```
+
+Update the existing composition fixture and raw-history assertion in `browser-first/test/side-panel-entry.test.mjs`, preserving all tab-refresh, permissions, relay-origin and teardown tests:
+
+```bash
+python3 - <<'PYTEST'
+from pathlib import Path
+p=Path('browser-first/test/side-panel-entry.test.mjs');s=p.read_text()
+a="""      assert.equal(route, '/embed/session'); assert.equal(options.method, 'POST');
+      return { hostPath: `/embed-host/?ticket=${'a'.repeat(43)}` };"""
+b="""      const harness = { harnessId: 'addon.augmentor-embed', interfaceId: 'panel', label: 'Augmentor', governance: 'self-governed', noticeKey: 'augmentor-v1-' + 'a'.repeat(64) };
+      if (route === '/embed-governance/state') return { recordingEnabled: false, writeEpoch: '12345678-1234-4234-8234-123456789abc', noticeKey: harness.noticeKey, noticeVersion: 1, noticeAcknowledged: false, available: true, problem: null };
+      assert.equal(route, '/embed/session'); assert.equal(options.method, 'POST');
+      return { hostPath: `/embed-host/?ticket=${'a'.repeat(43)}`, harness };"""
+assert a in s;s=s.replace(a,b,1)
+a="  assert.equal(view.state.last.length, 50); assert.equal(view.state.last[0].i, 10);"
+b="""  assert.deepEqual(view.state.last, [{ type: 'augmentor-ready' }, { type: 'augmentor-status', online: true, busy: false }]);
+  for (let i = 0; i < 60; i++) relay(frame.contentWindow, 'http://127.0.0.1:18873', { type: 'augmentor-status', online: true, busy: false, conversationId: 'CANARY-' + i });
+  assert.equal(view.state.last.length, 50);
+  assert.ok(view.state.last.every(row => JSON.stringify(row) === JSON.stringify({ type: 'augmentor-status', online: true, busy: false })));"""
+assert a in s;s=s.replace(a,b,1)
+p.write_text(s)
+PYTEST
+```
+
+Update ownership: the side-panel-entry row may retain only `Frame identity, lifecycle and projected proof state`; its exclusion column must say `Protocol-domain persistence, raw relay history, new relay authority or slot selection`. The bar-model/bar rows receive safe descriptor data, never credentials. Add badge presentation to their existing responsibility text.
+
+- [ ] Run `node --test browser-first/test/embed-bar.test.mjs browser-first/test/embed-governance-composition.test.mjs browser-first/test/embed-bar-model.test.mjs browser-first/test/side-panel-entry.test.mjs`; expect pass. Red evidence: the pre-fix composition test must expose the raw-history canary; temporarily remove `validDescriptor(session.harness)` and require malformed-descriptor mounting test to fail. Restore. Existing five control order and normal Assistant-only tests remain unchanged.
+- [ ] Run this exact guard-mutation matrix after green. Each `rig-mutate` invocation must return zero (behavioral failure under mutation and byte-identical restoration). Inspect any failure; import or syntax errors are not guard evidence. The strings below are exact edits, not patterns.
+
+```bash
+python3 - <<'PYMUTATE'
+from pathlib import Path
+import shlex, subprocess
+rig=str(Path.home()/'.claude/skills/resonant-rig/scripts/rig-mutate')
+mutations=[('browser-first/resonantos-side-panel-extension/src/side-panel-entry.js', [('||!validDescriptor(session.harness)', '')])]
+test_command='node --test browser-first/test/embed-governance-composition.test.mjs'
+for filename,changes in mutations:
+    edit='from pathlib import Path\np=Path('+repr(filename)+')\ns=p.read_text()\n'
+    for before,after in changes:
+        edit+='assert '+repr(before)+' in s\ns=s.replace('+repr(before)+','+repr(after)+',1)\n'
+    edit+='p.write_text(s)\n'
+    try:
+        subprocess.run([rig,filename,'python3 -c '+shlex.quote(edit),test_command],check=True)
+    finally:
+        subprocess.run(['node','scripts/prepare-embed-governance.mjs'],check=True)
+subprocess.run(shlex.split('node --test browser-first/test/embed-governance-composition.test.mjs'),check=True)
+PYMUTATE
+```
+
+- [ ] Commit:
+
+```bash
+git diff --check
+git add browser-first/resonantos-side-panel-extension/src/lib/embed-bar-model.js browser-first/resonantos-side-panel-extension/src/lib/embed-bar.js browser-first/resonantos-side-panel-extension/src/styles/side-panel/base-layout.css browser-first/resonantos-side-panel-extension/src/side-panel-entry.js browser-first/test/embed-bar.test.mjs browser-first/test/side-panel-entry.test.mjs browser-first/test/embed-governance-composition.test.mjs docs/architecture/MODULE-OWNERSHIP.md
+git commit -m "feat(embed): show self-governed tier and project relay proof safely"
+```
+### Task 10: Privacy recording choice, paged history and durable deletion
+
+**Files:**
+- Modify: `browser-first/resonantos-side-panel-extension/src/lib/settings/privacy-section.js`, `browser-first/resonantos-side-panel-extension/src/styles/main-workspace/settings.css`, `docs/architecture/MODULE-OWNERSHIP.md`
+- Create/Test: `browser-first/test/embed-governance-privacy.test.mjs`
+
+**Interfaces:**
+- Consumes: existing Settings context `getBridgeRequest(): (path:string,options?:{method?:string,body?:object,signal?:AbortSignal})=>Promise<object>`, six route payloads, `confirmEmbedAction(options):Promise<boolean>`.
+- Produces: `mountEmbedActivityCard({container,documentRef,chromeApi?,request,confirm?}): {ready:Promise<void>,refresh():Promise<void>,destroy():void}`; `renderPrivacySection(container, context={})` keeps existing trust-boundary cards and mounts this additional card.
+
+- [ ] Write the failing test:
+
+```js
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { JSDOM } from 'jsdom';
+import { randomUUID } from 'node:crypto';
+import { mountEmbedActivityCard } from '../resonantos-side-panel-extension/src/lib/settings/privacy-section.js';
+import { createEmbedGovernanceController } from '../resonantos-side-panel-extension/src/lib/embed-governance-controller.js';
+const settle=()=>new Promise(r=>setImmediate(r));
+const initial=()=>({recordingEnabled:true,writeEpoch:randomUUID(),noticeKey:'augmentor-v1-'+ 'a'.repeat(64),noticeVersion:1,noticeAcknowledged:true,available:true,problem:null});
+async function fixture(t,request,confirm=async()=>true,chromeApi) {
+  const dom=new JSDOM('<main></main>');t.after(()=>dom.window.close());const container=dom.window.document.querySelector('main');
+  const card=mountEmbedActivityCard({container,documentRef:dom.window.document,chromeApi,request,confirm});t.after(()=>card.destroy());await card.ready;
+  return {dom,container,card,checkbox:container.querySelector('input')};
+}
+test('load fails closed; toggles wait for durable acknowledgement and never display exception text',async t=>{
+  const failed=await fixture(t,async()=>{throw Error('CANARY');});assert.equal(failed.checkbox.checked,false);assert.equal(failed.checkbox.disabled,true);assert.match(failed.container.textContent,/Recording unavailable/);assert.equal(failed.container.textContent.includes('CANARY'),false);
+  let resolveSave;const state=initial();const f=await fixture(t,async(path)=>path.endsWith('/state')?state:new Promise(r=>resolveSave=r));
+  f.checkbox.checked=false;f.checkbox.dispatchEvent(new f.dom.window.Event('change'));await settle();
+  assert.equal(f.container.textContent.includes('Recording is off'),false);
+  resolveSave({recordingEnabled:false,writeEpoch:randomUUID()});await settle();assert.match(f.container.textContent,/Recording is off/);
+});
+test('Settings off reaches another page, clears queued data and fences reads before durable save',async t=>{
+  const listeners=new Set(),signals=[],chromeApi={storage:{onChanged:{addListener:fn=>listeners.add(fn),removeListener:fn=>listeners.delete(fn)},local:{set:async value=>{signals.push(value);for(const fn of listeners)fn(Object.fromEntries(Object.entries(value).map(([key,newValue])=>[key,{newValue}])), 'local');}}}};
+  const panel=new JSDOM('<main></main>');t.after(()=>panel.window.close());
+  const state=initial(),posts=[];let save,oldRead,holdRead=false;
+  const controller=createEmbedGovernanceController({windowRef:panel.window,chromeApi,confirmShare:async()=>true,request:async(path,options)=>{
+    if(path.endsWith('/state'))return holdRead?new Promise(resolve=>oldRead=resolve):{...state};
+    posts.push(options);return new Promise(()=>{});
+  }});t.after(()=>controller.destroy());
+  const frame={},descriptor={harnessId:'addon.augmentor-embed',interfaceId:'panel',label:'Augmentor',governance:'self-governed',noticeKey:state.noticeKey};
+  controller.mount({frame,origin:'http://127.0.0.1:9',descriptor});await controller.refresh();
+  const relay=()=>controller.relay({source:frame,origin:'http://127.0.0.1:9',data:{type:'augmentor-event',event:'tool.finished',toolName:'read',error:false}});
+  relay();relay();await settle();assert.equal(posts.length,1);
+  holdRead=true;const stale=controller.refresh();await settle();
+  const f=await fixture(t,async path=>path.endsWith('/state')?{...state}:new Promise(resolve=>save=resolve),async()=>true,chromeApi);
+  assert.notEqual(f.dom.window,panel.window);
+  f.checkbox.checked=false;f.checkbox.dispatchEvent(new f.dom.window.Event('change'));await settle();
+  assert.equal(signals[0]['resonantos.embedRecordingChange'].pending,true);
+  assert.equal(posts[0].signal.aborted,true);assert.equal(controller.history.length,0);
+  oldRead({...state});await stale;await controller.refresh();relay();await settle();
+  assert.equal(posts.length,1);assert.equal(f.container.textContent.includes('Recording is off'),false);
+  holdRead=false;state.recordingEnabled=false;state.writeEpoch=randomUUID();save({recordingEnabled:false,writeEpoch:state.writeEpoch});await settle();await settle();
+  assert.match(f.container.textContent,/Recording is off/);assert.equal(signals.at(-1)['resonantos.embedRecordingChange'].pending,false);
+  relay();await settle();assert.equal(posts.length,1);
+  controller.destroy();assert.equal(listeners.size,0);
+});
+test('delete recovery snapshot wins over older reads and clears rows before success',async t=>{
+  let reads=0,oldRead;const state={...initial(),problem:'storage-unavailable',writeEpoch:null,recordingEnabled:false,noticeAcknowledged:false};
+  const f=await fixture(t,async(path)=>{
+    if(path.endsWith('/state')){reads++;if(reads===1)return state;return new Promise(r=>oldRead=r);}
+    if(path.endsWith('/events/delete'))return {deleted:true,recordingEnabled:false,writeEpoch:randomUUID(),noticeKey:state.noticeKey,noticeAcknowledged:false};
+    return {events:[],nextBefore:null};
+  });
+  const stale=f.card.refresh();await settle();f.container.querySelector('[data-action=delete]').click();await settle();
+  oldRead(initial());await stale;assert.equal(f.checkbox.checked,false);assert.equal(f.container.dataset.noticeAcknowledged,'false');assert.match(f.container.textContent,/Activity deleted/);
+});
+test('history is text only, pagination expires explicitly and deletion failure retains rows',async t=>{
+  let failDelete=false,expired=false;const state=initial();
+  const f=await fixture(t,async(path)=>{
+    if(path.endsWith('/state'))return state;
+    if(path.endsWith('/events/delete')){if(failDelete)throw Error('CANARY');return {deleted:true,...state};}
+    if(path.includes('?before=')){expired=true;throw Object.assign(Error(),{code:'cursor-expired'});}
+    return {events:[{version:1,eventId:randomUUID(),recordedAt:new Date().toISOString(),harnessId:'addon.augmentor-embed',interfaceId:'panel',governance:'self-governed',source:'local-share',event:{kind:'page-shared',domain:'example.test'}}],nextBefore:randomUUID()};
+  });
+  f.container.querySelector('[data-action=view]').click();await settle();assert.match(f.container.textContent,/example.test/);assert.equal(f.container.querySelectorAll('a').length,0);
+  f.container.querySelector('[data-action=older]').click();await settle();await settle();assert.equal(expired,true);
+  failDelete=true;f.container.querySelector('[data-action=delete]').click();await settle();assert.match(f.container.textContent,/Activity could not be deleted/);assert.match(f.container.textContent,/example.test/);
+});
+```
+
+Append the rejected-content test to that file:
+
+```js
+test('history rejects content-bearing metadata without rendering it',async t=>{
+  const f=await fixture(t,async path=>path.endsWith('/state')?initial():{events:[{version:1,eventId:randomUUID(),recordedAt:new Date().toISOString(),harnessId:'addon.augmentor-embed',interfaceId:'panel',governance:'self-governed',event:{kind:'page-shared',domain:'example.test',url:'CANARY'}}],nextBefore:null});
+  f.container.querySelector('[data-action=view]').click();await settle();
+  assert.match(f.container.textContent,/Activity unavailable/);assert.equal(f.container.textContent.includes('CANARY'),false);
+});
+```
+
+Add a cancellation case for deletion:
+
+```js
+test('cancelled deletion does not mutate host state',async t=>{
+  const calls=[];const f=await fixture(t,async path=>{calls.push(path);return initial();},async()=>false);
+  f.container.querySelector('[data-action=delete]').click();await settle();
+  assert.deepEqual(calls,['/embed-governance/state']);assert.equal(f.container.textContent.includes('Activity deleted'),false);
+});
+```
+
+- [ ] Run `node --test browser-first/test/embed-governance-privacy.test.mjs`; expect missing export.
+- [ ] Add these imports to the existing Privacy module and append the complete card implementation:
+
+```js
+import { confirmEmbedAction } from '../embed-governance-dialog.js';
+import { metadata, UUID, NOTICE_KEY } from '../generated/embed-governance-contract.js';
+export function mountEmbedActivityCard({container,documentRef=globalThis.document,chromeApi=globalThis.chrome,request,confirm=options=>confirmEmbedAction(options)}) {
+  const card=documentRef.createElement('section');card.className='settings-control-list embed-activity-card';card.dataset.embedActivity='true';
+  const heading=documentRef.createElement('h3');heading.textContent='Embedded harness activity';
+  const label=documentRef.createElement('label'),checkbox=documentRef.createElement('input');checkbox.type='checkbox';checkbox.disabled=true;checkbox.checked=false;
+  label.append(checkbox,documentRef.createTextNode('Record harness activity'));
+  const description=documentRef.createElement('p');description.textContent='Save conversation changes, reply starts and finishes, tool names and error flags, and shared page domains on this computer for 30 days. No prompts, replies, tool arguments or results are saved.';
+  const status=documentRef.createElement('p');status.setAttribute('role','status');status.setAttribute('aria-live','polite');status.textContent='Recording unavailable';
+  const note=documentRef.createElement('p');note.textContent='Local metadata only. Harness events are reports from the outside harness, not ResonantOS approval receipts. Recording can miss events while the side panel is closed or disconnected.';
+  const controls=documentRef.createElement('div'),list=documentRef.createElement('ol');list.hidden=true;
+  const buttons={};for(const [key,text] of [['view','View activity'],['refresh','Refresh'],['older','Load older'],['delete','Delete activity']]){const b=documentRef.createElement('button');b.type='button';b.textContent=text;b.dataset.action=key;buttons[key]=b;controls.append(b);}
+  buttons.older.disabled=true;card.append(heading,label,description,status,note,controls,list);container.append(card);
+  let dead=false,sequence=0,pageSequence=0,snapshot=null,nextBefore=null,rows=[];
+  const say=text=>{if(!dead)status.textContent=text;};
+  function validSnapshot(s) {
+    return s&&typeof s.recordingEnabled==='boolean'&&(s.writeEpoch===null||typeof s.writeEpoch==='string'&&UUID.test(s.writeEpoch))&&(s.noticeKey===null||typeof s.noticeKey==='string'&&NOTICE_KEY.test(s.noticeKey))&&typeof s.noticeAcknowledged==='boolean'&&typeof s.available==='boolean'&&[null,'storage-unavailable','retention-failed','log-full'].includes(s.problem);
+  }
+  function renderState(s) {
+    if(!validSnapshot(s))throw Error('Invalid activity state');snapshot=s;
+    checkbox.checked=s.recordingEnabled;checkbox.disabled=s.problem==='storage-unavailable'||(!s.available&&!s.recordingEnabled);
+    container.dataset.noticeAcknowledged=String(s.noticeAcknowledged);
+    container.dataset.writeEpoch=s.writeEpoch??'';
+    const problems={'storage-unavailable':'Recording unavailable','retention-failed':'Retention cleanup failed','log-full':'Activity recording paused: local log is full'};
+    say(problems[s.problem]??(s.recordingEnabled?'Recording is on':'Recording is off'));
+  }
+  function descriptionFor(event) {
+    if(event.kind==='tool-finished')return `Tool: ${event.toolName} — ${event.error?'Error':'No error reported'}`;
+    if(event.kind==='page-shared')return `Page shared: ${event.domain}`;
+    return {'conversation-changed':'Conversation changed','reply-started':'Reply started','reply-finished':'Reply finished'}[event.kind];
+  }
+  function renderRows(){list.replaceChildren();list.hidden=false;for(const record of rows){const li=documentRef.createElement('li');li.textContent=`${record.recordedAt} · Augmentor · Self-governed · ${descriptionFor(record.event)}`;list.append(li);}if(!rows.length){const li=documentRef.createElement('li');li.textContent='No recorded activity';list.append(li);}buttons.older.disabled=!nextBefore;}
+  async function refresh(){const seq=++sequence;try{const s=await request('/embed-governance/state');if(!dead&&seq===sequence)renderState(s);}catch{if(!dead&&seq===sequence){snapshot=null;checkbox.checked=false;checkbox.disabled=true;say('Recording unavailable');}}}
+  async function load(older=false){const seq=++pageSequence;const anchor=older?nextBefore:null;try{
+    const page=await request('/embed-governance/events'+(anchor?'?before='+encodeURIComponent(anchor):''));
+    if(dead||seq!==pageSequence)return;
+    if(!Array.isArray(page.events)||page.events.length>100||!(page.nextBefore===null||typeof page.nextBefore==='string'&&UUID.test(page.nextBefore)))throw Error();
+    const clean=page.events.map(r=>{const event=metadata(r.event);if(!event||typeof r.recordedAt!=='string'||!Number.isFinite(Date.parse(r.recordedAt))||new Date(r.recordedAt).toISOString()!==r.recordedAt||r.harnessId!=='addon.augmentor-embed'||r.interfaceId!=='panel'||r.governance!=='self-governed')throw Error();return {recordedAt:r.recordedAt,event};});
+    rows=older?[...rows,...clean]:clean;nextBefore=page.nextBefore;renderRows();
+  }catch(e){if(dead||seq!==pageSequence)return;if(e?.code==='cursor-expired'){rows=[];nextBefore=null;list.replaceChildren();await load(false);}else say('Activity unavailable');}}
+  checkbox.addEventListener('change',()=>{const enabled=checkbox.checked,seq=++sequence;checkbox.disabled=true;
+    checkbox.checked=snapshot?.recordingEnabled??false;say('Saving recording preference');
+    const changeId=crypto.randomUUID();
+    const signal=pending=>chromeApi?.storage?.local?.set({'resonantos.embedRecordingChange':{id:changeId,pending}});
+    void (async()=>{
+      // Pause recipients before awaiting the durable host write; never store consent here.
+      if(!enabled)try{await signal(true);}catch{ /* Host disablement still proceeds. */ }
+      try{const s=await request('/embed-governance/recording',{method:'POST',body:{enabled}});if(!dead&&seq===sequence)renderState({...snapshot,...s});}
+      catch{if(!dead&&seq===sequence){await refresh();say('Recording preference could not be saved');}}
+      finally{try{await signal(false);}catch{ /* Recipients already paused stay fail-closed until remount if settlement fails. */ }}
+    })();
+  });
+  buttons.view.addEventListener('click',()=>{void load();});buttons.refresh.addEventListener('click',()=>{void refresh();void load();});buttons.older.addEventListener('click',()=>{if(nextBefore)void load(true);});
+  buttons.delete.addEventListener('click',()=>{void(async()=>{
+    const recovery=snapshot?.problem==='storage-unavailable';
+    let accepted;try{accepted=await confirm({documentRef,returnFocus:buttons.delete,heading:recovery?'Reset unreadable harness activity?':'Delete all recorded harness activity on this computer?',description:recovery?'This turns recording off and clears remembered first-share notices.':'This keeps your recording choice and first-share notices.',confirmLabel:'Delete activity'});}catch{say('Activity could not be deleted');return;}
+    if(!accepted||dead)return;
+    const seq=++sequence;++pageSequence;buttons.delete.disabled=true;
+    try{const s=await request('/embed-governance/events/delete',{method:'POST',body:{}});if(dead||seq!==sequence)return;if(s.deleted!==true)throw Error();
+      renderState({...snapshot,...s,problem:null});rows=[];nextBefore=null;renderRows();say('Activity deleted');
+    }catch{if(!dead&&seq===sequence)say('Activity could not be deleted');}
+    finally{if(!dead)buttons.delete.disabled=false;}
+  })();});
+  const ready=refresh();return {ready,refresh,destroy(){dead=true;sequence++;pageSequence++;card.remove();}};
+}
+```
+
+Change the existing signature to `renderPrivacySection(container, context = {})`. After the existing `container.replaceChildren` statement, before the closing brace of `renderPrivacySection`, add:
+
+```js
+  mountEmbedActivityCard({container,documentRef:container.ownerDocument,
+    request:(path,options)=>{
+      const bridge=typeof context.getBridgeRequest==='function'?context.getBridgeRequest():context.bridgeRequest;
+      return typeof bridge==='function'?bridge(path,options):Promise.reject(Error('Activity unavailable'));
+    }
+  });
+```
+
+Append these complete dialog rules to `browser-first/resonantos-side-panel-extension/src/styles/main-workspace/settings.css` (these are the exact rules needed by the workspace, which does not load side-panel CSS):
+
+```css
+.embed-dialog-overlay { position: fixed; inset: 0; z-index: 10000; display: grid; place-items: center; background: #0009; padding: 12px; }
+.embed-dialog { width: min(100%, 420px); box-sizing: border-box; padding: 16px; border: 1px solid #3b4149; border-radius: 8px; background: #111315; color: #eef1f4; font: 14px system-ui; }
+.embed-dialog h2 { margin: 0 0 12px; font-size: 16px; }
+.embed-dialog button { padding: 8px 12px; margin-right: 8px; background: #282e35; color: #eef1f4; border: 1px solid #68717d; border-radius: 4px; }
+.embed-dialog button:focus-visible { outline: 2px solid #7fc4ff; outline-offset: 2px; }
+.embed-activity-card ol { padding-left: 24px; overflow-wrap: anywhere; }
+.embed-activity-card label { display: flex; gap: 8px; align-items: center; }
+```
+
+Append ownership:
+
+```markdown
+| `browser-first/resonantos-side-panel-extension/src/lib/settings/privacy-section.js` | Explicit recording controls and paged read/delete presentation | Validated host snapshots and safe metadata | Privacy DOM and acknowledged user intents; deletion supersedes older reads | Filesystem policy, authoritative preference cache, payload logs or credentials |
+```
+
+- [ ] Run `node --test browser-first/test/embed-governance-privacy.test.mjs browser-first/test/main-workspace-settings.test.mjs`; expect pass. Red evidence: remove `seq===sequence` from the state-read acknowledgement check and require the delete-recovery race test to fail. Restore. Replace `metadata(r.event)` with `r.event` in `load`; require the rejected-content test to fail, then restore. No failed load may be rendered as empty success.
+- [ ] Run this exact guard-mutation matrix after green. Each `rig-mutate` invocation must return zero (behavioral failure under mutation and byte-identical restoration). Inspect any failure; import or syntax errors are not guard evidence. The strings below are exact edits, not patterns.
+
+```bash
+python3 - <<'PYMUTATE'
+from pathlib import Path
+import shlex, subprocess
+rig=str(Path.home()/'.claude/skills/resonant-rig/scripts/rig-mutate')
+mutations=[('browser-first/resonantos-side-panel-extension/src/lib/settings/privacy-section.js', [('if(!dead&&seq===sequence)renderState(s)', 'if(!dead)renderState(s)')]), ('browser-first/resonantos-side-panel-extension/src/lib/settings/privacy-section.js', [('const event=metadata(r.event)', 'const event=r.event')]), ('browser-first/resonantos-side-panel-extension/src/lib/settings/privacy-section.js', [('if(!accepted||dead)return;', 'if(dead)return;')])]
+test_command='node --test browser-first/test/embed-governance-privacy.test.mjs'
+for filename,changes in mutations:
+    edit='from pathlib import Path\np=Path('+repr(filename)+')\ns=p.read_text()\n'
+    for before,after in changes:
+        edit+='assert '+repr(before)+' in s\ns=s.replace('+repr(before)+','+repr(after)+',1)\n'
+    edit+='p.write_text(s)\n'
+    try:
+        subprocess.run([rig,filename,'python3 -c '+shlex.quote(edit),test_command],check=True)
+    finally:
+        subprocess.run(['node','scripts/prepare-embed-governance.mjs'],check=True)
+subprocess.run(shlex.split('node --test browser-first/test/embed-governance-privacy.test.mjs'),check=True)
+PYMUTATE
+```
+
+- [ ] Commit:
+
+```bash
+git diff --check
+git add browser-first/resonantos-side-panel-extension/src/lib/settings/privacy-section.js browser-first/resonantos-side-panel-extension/src/styles/main-workspace/settings.css browser-first/test/embed-governance-privacy.test.mjs docs/architecture/MODULE-OWNERSHIP.md
+git commit -m "feat(settings): expose embedded harness consent and activity"
 ```
 ### Task 12: Final acceptance matrix and complete deterministic gates
 
@@ -3455,6 +3548,14 @@ test('operator docs separate deterministic results from live acceptance and rele
 ```markdown
 Deterministic green does not complete EMBED-UPSTREAM-1 or authorize a merge into dev.
 ```
+
+- [ ] After Tasks 7–10, the conductor repeats the upstream checks and runs final integration with Task 11's prepared script and private configuration:
+
+```bash
+RESONANTOS_EMBED_LIVE_STAGE=integration node browser-first/test/embed-live.mjs
+```
+
+Expected: all live checks pass against the integrated feature. Workers do not execute this command; absent conductor evidence remains pending.
 
 - [ ] Run every touched test file explicitly, then all required repository gates:
 
@@ -3538,4 +3639,6 @@ The sole permitted match is this scan command's own pattern. There are no unspec
 - All six method/path pairs, public codes, capability names, byte limits, payloads and delete snapshots match Global Constraints. No `message` error field replaces `error`.
 - The shared TypeScript scope is explicit in the final gates. Live proof is written/syntax-checked by workers and run only by the conductor. It is not claimed complete by this plan.
 
-- Plan-author validation: Only this plan was written. The documentation validator passed during authoring. JavaScript, TypeScript and Python code fences were syntax-checked through stdin or in memory; object-property fragments were checked in their stated enclosing object. The live script was parsed without execution. All 50 task-owned paths appear in File Structure, and every touched test file appears in Task 12. No implementation tests, mutation commands, live bridge/container proof or commits were executed during planning.
+- Original plan-author validation (before review 1): Only this plan was written. The documentation validator passed during authoring. JavaScript, TypeScript and Python code fences were syntax-checked through stdin or in memory; object-property fragments were checked in their stated enclosing object. The live script was parsed without execution. All 50 task-owned paths appear in File Structure, and every touched test file appears in Task 12. No implementation tests, mutation commands, live bridge/container proof or commits were executed during planning.
+
+- Review 1 revision: see [finding decisions and verification](embed-governance-plan-review-1.md). Only this plan and that review table are changed; approved spec and decisions remain fixed. Execution order is Tasks 1–6, Task 11 proof preparation/upstream gate, Tasks 7–10, then Task 12 integration/final gates.
