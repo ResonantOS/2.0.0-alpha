@@ -8,6 +8,8 @@
 
 **Tech Stack:** Node.js 24.21.0+, ESM, Node test runner, TypeScript contracts and canonical SDK validation, Undici 7.30.0 with a private direct Agent, existing Typert RPC/WebSocket protocol, Vitest/Vite. Undici is promoted from the inspected transitive dependency to an exact production dependency; no DSH package becomes a repository dependency.
 
+> **Review record:** [plan review round 1](dsh-native-auth-plan-review-1.md).
+
 ## Global Constraints
 
 The following requirements are copied verbatim from the approved spec; only their heading depth is adjusted to keep them inside this section. No task may relax these values.
@@ -705,7 +707,7 @@ Execution prerequisite: conductor checks the feature branch against current `dev
 
 **Interfaces:**
 - Consumes: Node `spawn(file, argv, options)`, scratch packages `@deepseek-ai/dsh@0.1.5-rc.1`, `@deepseek-ai/dsh@0.1.7-rc.2`, `@deepseek-ai/dsh@0.2.0-rc.2`, `DEEPSEEK_API_KEY` supplied privately at probe launch; never read another application's configuration.
-- Produces: sanitized per-version `{ version, integrity, auth: 'refresh' | 'once' | 'blocked', provider: 'catalog' | 'structured' | 'blocked', origin: boolean, telemetry: boolean, persistence: boolean, promptDispatches: number }`. These are review evidence, not operator overrides or automatic runtime detection. A `structured` provider result requires a reviewed exact decoder before Task 6 can proceed; an unknown shape must not be generalized.
+- Produces: sanitized per-version `{ version, integrity, auth: 'refresh' | 'once' | 'blocked', provider: 'catalog' | 'structured' | 'blocked', origin: boolean, telemetry: boolean, persistence: boolean, promptDispatches: number, blockedReasons: string[], supportEligible: boolean }`. These are review evidence, not operator overrides or automatic runtime detection. A `structured` provider result requires a reviewed exact decoder before Task 6 can proceed; an unknown shape must not be generalized.
 
 - [ ] **Write the failing evidence assertion.** Run in a private, non-recorded terminal. It deliberately fails before a successful probe exists:
 
@@ -718,16 +720,20 @@ const rows = JSON.parse(await readFile(path, 'utf8').catch(() => '[]'));
 assert.equal(rows.length, 3, 'all three exact packages require live evidence');
 for (const version of ['0.1.5-rc.1', '0.1.7-rc.2', '0.2.0-rc.2']) {
   const row = rows.find(row => row.version === version);
-  assert.ok(row && row.integrity && ['refresh', 'once'].includes(row.auth));
-  assert.equal(row.provider, 'catalog', 'structured rejection needs a separate reviewed decoder');
-  assert.equal(row.origin, true);
-  assert.equal(row.telemetry, true);
-  assert.equal(row.persistence, true);
+  assert.ok(row && ['refresh', 'once', 'blocked'].includes(row.auth));
+  assert.ok(['catalog', 'structured', 'blocked'].includes(row.provider));
+  assert.ok(Array.isArray(row.blockedReasons));
+  assert.ok(row.blockedReasons.every(reason => ['incomplete-observations', 'auth-unobservable', 'provider-unproven', 'origin-unproven', 'telemetry-unproven', 'persistence-unproven'].includes(reason)));
+  for (const key of ['origin', 'telemetry', 'persistence', 'supportEligible']) assert.equal(typeof row[key], 'boolean');
+  if (row.auth !== 'blocked') assert.ok(row.integrity);
+  const eligible = Boolean(row.integrity && ['refresh', 'once'].includes(row.auth) && row.provider === 'catalog' && row.origin && row.telemetry && row.persistence && !row.blockedReasons.length);
+  assert.equal(row.supportEligible, eligible);
+  if (!eligible) assert.ok(row.blockedReasons.length, 'retain an exact-version blocker');
 }
 JS
 ```
 
-Expected: nonzero exit with `all three exact packages require live evidence`. Do not convert missing evidence to a skip.
+Expected before observations: nonzero exit with `all three exact packages require live evidence`. After the probe, this asserts complete accounting, including explicitly blocked rows; it does not certify every version. Missing rows are never skips, and a blocked row cannot grant refresh or a support claim.
 
 - [ ] **Prepare dedicated installs.** These commands are for the conductor, not the plan author. They use no production DSH home, no desktop configuration, no package `latest`, and no port 19387. Refuse an existing task directory rather than reuse unknown state. npm receives no provider key.
 
@@ -892,40 +898,66 @@ async function launch(version, mode, instrumented, sink) {
   child.stderr.resume();
   let exited = false; const exit = new Promise(resolve => child.once('exit', () => { exited = true; resolve(); }));
   let token = '', cookie = '', buffer = '', bytes = 0, announceResolve, announceReject;
+  let protocolReady = false, announcementFailure;
   const announced = new Promise((resolve, reject) => { announceResolve = resolve; announceReject = reject; });
+  announced.catch(() => {});
   const decoder = new StringDecoder('utf8');
-  child.on('error', () => announceReject(new Error('spawn failed')));
-  child.stdout.on('end', () => { if (!token) announceReject(new Error('missing announcement')); });
+  function failAnnouncement() {
+    if (protocolReady || announcementFailure) return;
+    announcementFailure = new Error('announcement refused'); buffer = '';
+    announceReject(announcementFailure); // May already be resolved: the latch is authoritative.
+  }
+  function checkAnnouncement() { if (announcementFailure) throw announcementFailure; }
+  const startupTimer = setTimeout(failAnnouncement, 30000);
+  function ready() {
+    checkAnnouncement(); assert.ok(token && !exited);
+    protocolReady = true; buffer = ''; clearTimeout(startupTimer);
+  }
+  child.on('error', failAnnouncement);
+  child.stdout.on('end', () => {
+    if (protocolReady || announcementFailure) return;
+    buffer += decoder.end();
+    if (!token || buffer.startsWith('dsh web: ')) failAnnouncement();
+    buffer = '';
+  });
   child.stdout.on('data', chunk => {
-    if (token) return;
+    if (protocolReady || announcementFailure) return;
     bytes += chunk.length; buffer += decoder.write(chunk);
-    if (bytes > 1048576) { announceReject(new Error('announcement bound')); return; }
+    if (bytes > 1048576) { failAnnouncement(); return; }
     while (buffer.includes('\n')) {
-      const i = buffer.indexOf('\n'), line = buffer.slice(0, i).replace(/\r$/, ''); buffer = buffer.slice(i + 1);
-      if (Buffer.byteLength(line) > 16384) { announceReject(new Error('announcement line bound')); return; }
+      const i = buffer.indexOf('\n'), raw = buffer.slice(0, i); buffer = buffer.slice(i + 1);
+      if (Buffer.byteLength(raw) > 16384) { failAnnouncement(); return; }
+      const line = raw.replace(/\r$/, '');
       if (!line.startsWith('dsh web: ')) continue;
       try {
-        const url = new URL(line.slice(9));
+        const rawUrl = line.slice(9), url = new URL(rawUrl);
         assert.equal(url.origin, origin); assert.equal(url.pathname, '/');
+        assert.ok(rawUrl.startsWith(origin + '/?token=') && rawUrl === rawUrl.trim());
         assert.equal(url.username + url.password + url.hash, '');
         assert.deepEqual([...url.searchParams.keys()], ['token']);
-        token = url.searchParams.get('token'); assert.match(token, /^[A-Za-z0-9._~-]{1,8192}$/);
-        announceResolve();
-      } catch { announceReject(new Error('bad announcement')); }
+        const value = url.searchParams.get('token'); assert.match(value, /^[A-Za-z0-9._~-]{1,8192}$/);
+        if (token) assert.equal(value, token);
+        else { token = value; announceResolve(); }
+      } catch { failAnnouncement(); return; }
     }
-    if (Buffer.byteLength(buffer) > 16384) announceReject(new Error('announcement line bound'));
+    if (Buffer.byteLength(buffer) > 16384) failAnnouncement();
   });
   async function stop() {
+    clearTimeout(startupTimer);
     for (const socket of sockets) socket.close();
     if (!exited) child.kill('SIGTERM');
     await Promise.race([exit, delay(1000)]);
     if (!exited) child.kill('SIGKILL');
     await within(exit, 1000);
+    checkAnnouncement(); // Even a late conflict after announced resolved fails this version.
   }
   async function exchange() {
+    checkAnnouncement();
     const response = await fetch(`${origin}/?token=${encodeURIComponent(token)}`, { dispatcher: direct, redirect: 'manual', signal: AbortSignal.timeout(10000) });
     await response.body?.cancel();
-    if (response.status !== 303) return null;
+    checkAnnouncement();
+    if ([401, 403].includes(response.status)) return null; // Explicit re-exchange rejection.
+    assert.equal(response.status, 303, 'unobservable exchange is not verified non-reuse');
     const pairs = response.headers.getSetCookie().map(row => row.split(';')[0]).filter(row => /^dsh-auth-/.test(row));
     assert.equal(pairs.length, 1); assert.match(pairs[0], /^dsh-auth-[A-Za-z0-9_-]+=[A-Za-z0-9._~-]+$/);
     assert.equal(new URL(response.headers.get('location') ?? '/', origin).href, origin + '/');
@@ -933,6 +965,7 @@ async function launch(version, mode, instrumented, sink) {
   }
   let sequence = 0, lastPage;
   async function raw(method, args = {}, selectedCookie = cookie) {
+    checkAnnouncement();
     const rpcId = `probe-${++sequence}`;
     const response = await fetch(`${origin}/api/${method}`, {
       dispatcher: direct, redirect: 'manual', signal: AbortSignal.timeout(10000), method: 'POST',
@@ -943,7 +976,7 @@ async function launch(version, mode, instrumented, sink) {
     await response.body?.cancel().catch(() => {});
     if (method === 'session/page' && body?.result?.ok) lastPage = body.result.value;
     if (body) assert.ok(body.type === 'server-response' && body.rpcId === rpcId && typeof body.result?.ok === 'boolean');
-    return { status: response.status, body };
+    checkAnnouncement(); return { status: response.status, body };
   }
   const transport = {
     async request(route, options) {
@@ -952,18 +985,19 @@ async function launch(version, mode, instrumented, sink) {
       return result;
     },
     async openStream({ onMessage, onError, onClose } = {}) {
+      checkAnnouncement();
       const socket = new WebSocket(origin.replace('http:', 'ws:') + '/api/remote.mux', { dispatcher: direct, headers: { cookie } });
       sockets.add(socket);
       socket.addEventListener('message', event => { try { onMessage?.(JSON.parse(event.data)); } catch { onError?.(new Error('invalid message')); } });
       socket.addEventListener('close', () => { sockets.delete(socket); onClose?.(); });
       await within(new Promise((resolve, reject) => { socket.addEventListener('open', resolve, { once: true }); socket.addEventListener('error', () => reject(new Error('opening failed')), { once: true }); }), 10000);
-      return { send: value => socket.send(JSON.stringify(value)), close: () => socket.close() };
+      checkAnnouncement(); return { send: value => socket.send(JSON.stringify(value)), close: () => socket.close() };
     },
     dispose() { for (const socket of sockets) socket.close(); },
   };
   try { await within(announced); secrets.push(token, origin + '/?token=' + token); cookie = await exchange(); assert.ok(cookie); }
   catch (error) { await stop(); throw error; }
-  return { raw, exchange, transport, counts, base, stop, secrets,
+  return { raw, exchange, transport, counts, base, stop, secrets, ready,
     get page() { return lastPage; }, get cookie() { return cookie; }, set cookie(value) { cookie = value; },
   };
 }
@@ -987,6 +1021,7 @@ async function telemetry(version) {
       const adapter = createDshTypertAdapter({ transport: p.transport });
       try {
         const session = await adapter.createSession();
+        await adapter.modelCatalog({ session }); p.ready(); // Validated protocol Ready, not token capture.
         const frames = await within(Array.fromAsync(adapter.invoke({ session, input: { messages: [{ role: 'user', content: 'Reply with the word synthetic. Do not use tools.' }] } })), 120000);
         assert.equal(frames.at(-1)?.type, 'final');
         await adapter.history({ session });
@@ -1092,10 +1127,14 @@ async function inspectPrefix(prefix, { fs = filesystem, deadline, now = Date.now
 const rows = [];
 try {
   for (const version of ['0.1.5-rc.1', '0.1.7-rc.2', '0.2.0-rc.2']) {
-    const lock = JSON.parse(await readFile(join(root, version, 'prefix/package-lock.json'), 'utf8'));
-    const row = { version, integrity: lock.packages['node_modules/@deepseek-ai/dsh'].integrity,
-      auth: 'blocked', provider: 'blocked', origin: false, telemetry: false, persistence: false, promptDispatches: 0 };
+    const row = { version, integrity: null,
+      auth: 'blocked', provider: 'blocked', origin: false, telemetry: false, persistence: false, promptDispatches: 0,
+      blockedReasons: [], supportEligible: false };
     rows.push(row);
+    try {
+    const lock = JSON.parse(await readFile(join(root, version, 'prefix/package-lock.json'), 'utf8'));
+    row.integrity = lock.packages['node_modules/@deepseek-ai/dsh'].integrity;
+    let observedAuth = 'blocked';
     const started = Date.now(), checked = await inspectPrefix(join(root, version, 'prefix'), { deadline: started + 30000 });
     Object.assign(row, { entries: checked.count, depth: checked.depth, walkMs: Date.now() - started });
     for (const instrumented of [true, false]) {
@@ -1103,6 +1142,7 @@ try {
       const adapter = createDshTypertAdapter({ transport: p.transport });
       try {
         const a = await adapter.createSession(), b = await adapter.createSession();
+        await adapter.modelCatalog({ session: a }); p.ready();
         const frames = [];
         const input = { messages: [{ role: 'user', content: 'Return integers one through fifty as plain text. Do not use tools.' }] };
         const ta = Array.fromAsync(adapter.invoke({ session: a, input })).then(v => { frames.push(v); return v; }, () => []);
@@ -1112,7 +1152,7 @@ try {
         assert.ok(!frames.length, 'turns must overlap exchange while active');
         const initialSocket = await p.transport.openStream(); initialSocket.close(); row.origin = true;
         const old = p.cookie, replacement = await p.exchange();
-        const oldValid = (await p.raw('session/modelCatalog', {}, old)).status === 200;
+        const oldStatus = (await p.raw('session/modelCatalog', {}, old)).status, oldValid = oldStatus === 200;
         let replacementValid = false, socketValid = false;
         if (replacement) {
           replacementValid = (await p.raw('session/modelCatalog', {}, replacement)).status === 200;
@@ -1139,8 +1179,17 @@ try {
           assert.equal(p.counts['anchor-missing'] ?? 0, 0);
           assert.equal(p.counts['anchor-prompt'], 1);
           row.promptDispatches = before;
-          row.auth = replacement && oldValid && replacementValid && socketValid && oldSocketValid && restoredSocket && turnsValid && predispatch && rejectedSocket && before === 2 ? 'refresh' : 'once';
-        } else assert.ok(row.origin && (row.auth !== 'refresh' || (turnsValid && oldSocketValid && restoredSocket)), 'uninstrumented protocol replication');
+          const reusable = replacement && oldValid && replacementValid && socketValid && oldSocketValid && restoredSocket && turnsValid && predispatch && rejectedSocket && before === 2;
+          const nonReusable = replacement === null || oldStatus === 401;
+          const postDispatch401 = refused.status === 401 && (p.counts.prompt ?? 0) > before;
+          observedAuth = reusable ? 'refresh' : (nonReusable || postDispatch401) ? 'once' : 'blocked';
+          // A timeout, missing opening/status, or incomplete active-stream observation
+          // is blocked, never silently classified as exchange-once.
+        } else {
+          if (observedAuth === 'refresh') assert.ok(replacement && oldValid && replacementValid && socketValid && oldSocketValid && restoredSocket && turnsValid && predispatch && rejectedSocket, 'uninstrumented protocol replication');
+          // A verified adverse instrumented result stays conservative (once).
+          // Any additional uninstrumented fault throws and leaves row.auth blocked.
+        }
         if (restoredSocket) {
         await adapter.history({ session: a });
         const catalog = await adapter.modelCatalog({ session: a });
@@ -1152,6 +1201,7 @@ try {
       row.persistence = !(await persisted(p.base, p.secrets));
       assert.equal(row.persistence, true);
     }
+    row.auth = observedAuth;
     let providerCatalog = true;
     for (const mode of ['missing', 'rejected']) {
       const p = await launch(version, mode, true);
@@ -1161,16 +1211,59 @@ try {
         providerCatalog &&= catalog.status === 200 && catalog.body?.result?.ok === true && Array.isArray(catalog.body.result.value?.groups);
         if (!providerCatalog) continue;
         const session = await adapter.createSession();
-        await adapter.modelCatalog({ session });
+        await adapter.modelCatalog({ session }); p.ready();
         const frames = await within(Array.fromAsync(adapter.invoke({ session, input: { messages: [{ role: 'user', content: 'Reply OK without tools.' }] } })), 120000);
         assert.ok(['error', 'final'].includes(frames.at(-1)?.type));
       } finally { await adapter.dispose(); await p.stop(); }
     }
     row.provider = providerCatalog ? 'catalog' : 'blocked';
     row.telemetry = await telemetry(version);
+    } catch { row.blockedReasons.push('incomplete-observations'); }
+    if (row.auth === 'blocked') row.blockedReasons.push('auth-unobservable');
+    if (row.provider !== 'catalog') row.blockedReasons.push('provider-unproven');
+    if (!row.origin) row.blockedReasons.push('origin-unproven');
+    if (!row.telemetry) row.blockedReasons.push('telemetry-unproven');
+    if (!row.persistence) row.blockedReasons.push('persistence-unproven');
+    row.supportEligible = Boolean(row.integrity && !row.blockedReasons.length);
+    if (!row.supportEligible) process.exitCode = 1;
   }
-} catch { process.exitCode = 1; console.error('FAIL native live gate; inspect counts and exact source privately.'); }
+} catch { process.exitCode = 1; console.error('FAIL evidence collection; incomplete rows are not certification.'); }
 finally { await direct.close(); await writeFile(join(root, 'results.json'), JSON.stringify(rows, null, 2) + '\n', { mode: 0o600 }); }
+```
+
+- [ ] **Check the probe parser independently before any live launch.** This extracts only its stdout-parser block, attaches synthetic emitters and proves that rejection after the first announcement remains observable. It does not load a DSH package or open a connection. A missing-token EOF fails, valid-token EOF succeeds before Ready, conflicts still fail before Ready, and post-Ready output is discarded. Run with the post-token early return restored, with the conflict assertion removed, and with the unconditional EOF rejection restored; each mutant must fail its named assertion. Restore before running live.
+
+```bash
+node --input-type=module <<'JS'
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { EventEmitter } from 'node:events';
+import { StringDecoder } from 'node:string_decoder';
+const source = await readFile('/Users/dr.tom/2.0.0-alpha/.resonant-rig/dsh-native-task0/probe.mjs', 'utf8');
+const start = source.indexOf("  let token = '', cookie = '', buffer = ''");
+const end = source.indexOf('  async function stop() {', start);
+assert.ok(start >= 0 && end > start);
+const build = new Function('assert', 'StringDecoder', 'child', 'origin', 'exited', source.slice(start, end) +
+  '\nreturn { ready, checkAnnouncement, dispose() { clearTimeout(startupTimer); } };');
+const origin = 'http://127.0.0.1:3081', line = `dsh web: ${origin}/?token=synthetic\n`;
+function check(run) {
+  const child = new EventEmitter(); child.stdout = new EventEmitter();
+  const parser = build(assert, StringDecoder, child, origin, false);
+  try { run(parser, text => child.stdout.emit('data', Buffer.from(text)), () => child.stdout.emit('end')); }
+  finally { parser.dispose(); }
+}
+check((p, write, end) => { write(line); end(); assert.doesNotThrow(p.ready, 'valid announcement EOF is allowed'); });
+check((p, write, end) => { end(); assert.throws(p.ready, 'missing announcement EOF fails'); });
+for (const together of [true, false]) check((p, write) => {
+  const conflict = `dsh web: ${origin}/?token=other\n`;
+  if (together) write(line + conflict); else { write(line); write(conflict); }
+  assert.throws(p.ready, 'conflict after resolved announcement still blocks readiness');
+});
+check((p, write, end) => { write(line); write(`dsh web: ${origin}/?token=other`); end(); assert.throws(p.ready); });
+check((p, write) => { write(line); write(line); assert.doesNotThrow(p.ready); write(`dsh web: ${origin}/?token=other\n`); assert.doesNotThrow(p.checkAnnouncement); });
+check((p, write) => { write(line); for (let i = 0; i < 1024; i++) write('x'.repeat(1023) + '\n'); assert.throws(p.ready, 'post-token bytes still count'); });
+console.log('Synthetic probe-parser assertions passed; no live probe ran.');
+JS
 ```
 
 - [ ] **Run the protocol probe with launch-only key input.** No `set -x`, pipe to `tee`, shell history value, or credential file:
@@ -1190,14 +1283,14 @@ unset dsh_probe_key
 | Second exchange fails, invalidates old cookie, interrupts a stream, or a 401 follows dispatch | Task 4 uses `refreshAllowed: false`; Task 5 fences on confirmed 401 and never resends. A new explicit session is required. |
 | Auth dispatch count or active-stream observation unavailable | Block refresh implementation and support claim for that package. Repeat with an audited count hook; client send counts are insufficient. |
 | Missing/rejected-key catalog validates, including empty groups | Task 6's strict success decoder establishes Ready. Provider failure during a turn remains an operation error without process stop. |
-| Stable machine-readable provider rejection found | Block Task 6 until the exact structure and negative auth/schema controls are recorded; add a strict decoder for that structure with full tests. Never infer from error text. |
+| Stable machine-readable provider rejection found | Block that version's Task 6 decoder and support claim until the exact structure and negative auth/schema controls are recorded; add a strict decoder for that structure with full tests. Never infer from error text. |
 | Provider rejection cannot be distinguished | Block native support for that package; no key-required workaround. |
 | Cookie-only socket without explicit Origin fails | Block that version; do not add Origin or action-token headers. |
-| Disabled feedback has exporter/attempt/traffic, or positive control cannot be observed | Block native support and final certification. Do not weaken the telemetry policy. |
-| A token/cookie is persisted | Block native support. A separate DSH cookie-signing secret is not itself the boot token/cookie, but must stay inside the private home. |
+| Disabled feedback has exporter/attempt/traffic, or positive control cannot be observed | Block native support and final certification for that exact version. Do not weaken the telemetry policy. |
+| A token/cookie is persisted | Block native support for that exact version. A separate DSH cookie-signing secret is not itself the boot token/cookie, but must stay inside the private home. |
 | Package validation exceeds 50,000 entries, depth 64 or 30 seconds | Task 2 refuses launch with the specified fixed result; do not raise a ceiling. |
 
-- [ ] **Run and pass the evidence assertion.** Repeat the first command only after every row is settled. If blocked, retain the failed assertion and the sanitized reason; do not mark this task complete.
+- [ ] **Account for every version with the evidence assertion.** Repeat the first command after collection; keep every blocked row and its fixed reason. A nonzero probe exit means at least one version is blocked, not that other rows are unusable. Tasks 4/6 may proceed for independently verified versions. A verified non-reusable version must be encoded as exchange-once. Unknown versions get no refresh or support claim. Report per-version completion; never claim all three gates passed while any row is blocked.
 - [ ] **Commit:** no repository commit for scratch evidence. Confirm with `git status --short`. Never `git add` the scratch directory. Task 0 produces external evidence only.
 
 ### Task 1: Declare native mode and enforce its capability floor
@@ -1262,9 +1355,30 @@ for (const capability of ['agent-runtime', 'network', 'filesystem', 'shell']) {
     await registry.setGrants(m.id, grants, { consent: true, expectedRevision: 4 });
     for (const operation of m.agentRuntime.supportedOperations) assert.throws(() => registry.assertOperation(authorization, operation));
     assert.equal(registry.snapshot().slots['primary-agent'].generation, 2);
-    saved.state.installations[m.id].manifest = missing;
-    const reloaded = await createHarnessRegistry({ store, reviewedAdapterIds: ['dsh-typert-v1'], bindings });
-    assert.notEqual(reloaded.snapshot().slots['primary-agent']?.available, true);
+  });
+}
+// filesystem/shell are the additional native floor. Unlike agent-runtime/network,
+// this fixture can omit either without violating existing SDK dependencies.
+for (const capability of ['filesystem', 'shell']) {
+  test(`saved native floor ${capability} vacates the owner without invalid grants`, async () => {
+    let saved = null;
+    const store = { read: async () => saved, write: async value => { saved = structuredClone(value); } };
+    const options = { store, reviewedAdapterIds: ['dsh-typert-v1'], bindings };
+    const registry = await createHarnessRegistry(options), m = native();
+    await registry.install(m, { enabled: true, expectedRevision: 0 });
+    await registry.setGrants(m.id, m.requestedCapabilities.map(g => ({ ...g, granted: true })), { consent: true, expectedRevision: 1 });
+    await registry.assignSlot('primary-agent', m.id, { expectedGeneration: 0 });
+    assert.deepEqual(registry.snapshot().slots['primary-agent'], { addonId: m.id, generation: 1, available: true });
+    const entry = saved.state.installations[m.id];
+    entry.manifest.requestedCapabilities = entry.manifest.requestedCapabilities.filter(g => g.capability !== capability);
+    entry.grants = entry.grants.filter(g => g.capability !== capability);
+    assert.equal(validateAddOnManifest(entry.manifest).valid, true);
+    assert.ok(entry.grants.every(g => g.granted && entry.manifest.requestedCapabilities.some(r =>
+      r.capability === g.capability && r.scope === g.scope && r.revocationBehavior === g.revocationBehavior)));
+    const loaded = (await createHarnessRegistry(options)).snapshot();
+    assert.equal(loaded.revision, 3, 'valid document loaded, not the catch/reset path');
+    assert.equal(loaded.installations[m.id].enabled, false);
+    assert.deepEqual(loaded.slots['primary-agent'], { addonId: null, generation: 2, available: false });
   });
 }
 ```
@@ -1305,7 +1419,7 @@ PY
 ```
 
 - [ ] **Run and pass:** `node --test browser-first/test/dsh-native-policy.test.mjs browser-first/test/harness-manifest.test.mjs browser-first/test/harness-policy.test.mjs browser-first/test/harness-registry.test.mjs`.
-- [ ] **Red evidence for every declaration/floor guard:** independently remove the native adapter pairing, endpoint check and native floor return; run the named native test file after each mutation. Each must produce a behavioral failure. Restore the exact block before moving on. Check saved-load, installation, slot and operation denial assertions all run.
+- [ ] **Red evidence for every declaration/floor guard:** independently remove the native adapter pairing, endpoint check and native floor return; run the named native test file after each mutation. Each must produce a behavioral failure. Restore the exact block before moving on. Run `node --test --test-name-pattern="saved native floor" browser-first/test/dsh-native-policy.test.mjs` separately for the native-floor mutant, so an earlier install assertion cannot mask saved-load coverage. It must fail the enabled/owner/generation assertions; unchanged grants or a catch/reset result are invalid evidence. Check installation, slot and operation denial assertions separately.
 - [ ] **Commit:**
 
 ```bash
@@ -1377,11 +1491,38 @@ test('walk includes hoisted dependencies, contained npm links and every ancestor
       t.nodes.get(path).mode = old;
     }
   }
-  for (const target of ['/outside', '../missing', 'js-yaml', '../escape/back']) {
-    t.nodes.get('/safe/p/node_modules/.bin/js-yaml').target = target;
-    await assert.rejects(validateDshPrefix('/safe/p', { fs: t.fs, deadline: Infinity }));
-  }
   await assert.rejects(validateDshPrefix('/safe/p', { fs: t.fs, deadline: 0, now: () => 1 }), { code: 'deadline-exceeded' });
+});
+test('prefix escape fixtures exist and fail containment, not ENOENT', async () => {
+  const link = '/safe/p/node_modules/.bin/js-yaml';
+  for (const target of ['/outside/ok.js', '../../../outside/ok.js', '/safe/p-neighbor/ok.js', '../../../outside/back']) {
+    const t = tree(); t.dir('/outside'); t.file('/outside/ok.js');
+    t.dir('/safe/outside'); t.file('/safe/outside/ok.js');
+    t.dir('/safe/p-neighbor'); t.file('/safe/p-neighbor/ok.js');
+    // The final target is inside, but the intermediate hop escapes the prefix.
+    t.nodes.set('/safe/outside/back', { kind: 'link', mode: 0o777, uid: 0, target: '/safe/p/node_modules/js-yaml/bin/js-yaml.js' });
+    t.nodes.get(link).target = target;
+    let missing = 0;
+    const lstat = t.fs.lstat;
+    t.fs.lstat = async path => { try { return await lstat(path); } catch (error) { if (error.code === 'ENOENT') missing++; throw error; } };
+    await assert.rejects(validateDshPrefix('/safe/p', { fs: t.fs, deadline: Infinity }), { code: 'runtime-unavailable', reason: 'package' });
+    assert.equal(missing, 0, 'all escape hops must exist and have safe ownership/modes');
+  }
+});
+test('prefix rejects dangling links separately from containment', async () => {
+  const t = tree(); t.nodes.get('/safe/p/node_modules/.bin/js-yaml').target = '../missing';
+  await assert.rejects(validateDshPrefix('/safe/p', { fs: t.fs, deadline: Infinity }), { code: 'runtime-unavailable' });
+});
+test('prefix rejects link cycles promptly and directory ancestry cycles', async () => {
+  const t = tree(), a = '/safe/p/node_modules/.bin/js-yaml', b = '/safe/p/node_modules/.bin/back';
+  t.nodes.get(a).target = 'back';
+  t.nodes.set(b, { kind: 'link', mode: 0o777, uid: 0, target: 'js-yaml' });
+  let reads = 0; const readlink = t.fs.readlink;
+  t.fs.readlink = async path => { if (++reads > 4) throw new Error('test cycle watchdog'); return readlink(path); };
+  await assert.rejects(validateDshPrefix('/safe/p', { fs: t.fs, deadline: Infinity }), { code: 'runtime-unavailable', reason: 'package' });
+  assert.equal(reads, 2, 'seen-path guard must reject before the watchdog; a caught watchdog is not cycle proof');
+  const d = tree(); d.nodes.get(a).target = '..';
+  await assert.rejects(validateDshPrefix('/safe/p', { fs: d.fs, deadline: Infinity }), { code: 'runtime-unavailable', reason: 'package' });
 });
 test('fixed inclusive count and depth limits refuse partial validation', async () => {
   const t = tree();
@@ -1475,6 +1616,26 @@ test('prefix ownership, special files, package identity and strict semver are ch
     const t = tree(); t.nodes.get('/safe/p/node_modules/@deepseek-ai/dsh/package.json').text = JSON.stringify({ name: '@deepseek-ai/dsh', version });
     await assert.rejects(validateDshPrefix('/safe/p', { fs: t.fs, deadline: Infinity }));
   }
+});
+test('announcement EOF after a valid line permits later protocol Ready', () => {
+  for (const tail of ['', 'ordinary trailing warning']) {
+    const tokens = [], errors = [];
+    const parser = createDshAnnouncement({ endpoint: binding.endpoint, onToken: t => tokens.push(t), onFailure: e => errors.push(e) });
+    parser.write(Buffer.from(`dsh web: ${binding.endpoint}/?token=synthetic\n${tail}`)); parser.end();
+    assert.deepEqual(tokens, ['synthetic']); assert.deepEqual(errors, []);
+    parser.ready(); assert.deepEqual(errors, []);
+  }
+  for (const tail of [`dsh web: ${binding.endpoint}/?token=other`, `dsh web: ${binding.endpoint}/?token=other\n`]) {
+    let failures = 0;
+    const parser = createDshAnnouncement({ endpoint: binding.endpoint, onToken() {}, onFailure() { failures++; } });
+    parser.write(Buffer.from(`dsh web: ${binding.endpoint}/?token=synthetic\n`));
+    parser.write(Buffer.from(tail)); parser.end(); assert.equal(failures, 1);
+  }
+  let failures = 0;
+  const parser = createDshAnnouncement({ endpoint: binding.endpoint, onToken() {}, onFailure() { failures++; } });
+  parser.write(Buffer.from(`dsh web: ${binding.endpoint}/?token=synthetic\n`));
+  for (let i = 0; i < 1024; i++) parser.write(Buffer.from('x'.repeat(1023) + '\n'));
+  assert.equal(failures, 1, 'the total limit still applies after token capture');
 });
 test('announcement total budget, truncated EOF, equivalent authority and post-Ready discard', () => {
   for (const raw of [`dsh web: http://127.0.0.1:03081/?token=x\n`, `dsh web: ${binding.endpoint}/./?token=x\n`, `dsh web: ${binding.endpoint}/?token=${'x'.repeat(8193)}\n`]) {
@@ -1669,7 +1830,12 @@ export function createDshAnnouncement({ endpoint, onToken, onFailure }) {
       }
       if (Buffer.byteLength(pending) > 16384) reject();
     },
-    end() { if (!done) reject(); },
+    end() {
+      if (done || failed) return;
+      pending += decoder.end();
+      if (token === undefined || pending.startsWith('dsh web: ')) reject();
+      pending = ''; // EOF after a valid line is allowed; readiness is still separate.
+    },
     ready() { done = true; pending = ''; token = undefined; },
   };
 }
@@ -1682,7 +1848,7 @@ export function createDshAnnouncement({ endpoint, onToken, onFailure }) {
 ```
 
 - [ ] **Run and pass:** `node --test browser-first/test/dsh-native-runtime.test.mjs` and `node --test --test-concurrency=1 scripts/module-ownership-doc.test.mjs`.
-- [ ] **Guard red evidence:** independently remove native-only settings gate; native-count check; platform check; source exactness; endpoint regex; absolute-path check; ancestor loop; ownership check; mode check; symlink containment; cycle rejection; file-kind check; count ceiling; depth ceiling; deadline check; announcement origin/token/conflict/bounds checks. Execute the corresponding tests against each mutant, require the named assertion to fail, restore and rerun. A surviving mutant blocks this task; do not claim guard coverage from an import error.
+- [ ] **Guard red evidence:** independently remove native-only settings gate; native-count check; platform check; source exactness; endpoint regex; absolute-path check; ancestor loop; ownership check; mode check; symlink containment (run the existing-target escape test alone; deleting only `bound`'s `inside` rejection must resolve, making `assert.rejects` fail); cycle rejection (mutate `seen.has(path)` and `ancestry.has(end)` separately; the former must fail the read-count assertion and the latter `assert.rejects`); file-kind check; count ceiling; depth ceiling; deadline check; announcement origin/token/conflict/bounds checks. Execute the corresponding tests against each mutant, require the named assertion to fail, restore and rerun. A surviving mutant blocks this task; do not claim guard coverage from an import error.
 - [ ] **Commit:**
 
 ```bash
@@ -1735,13 +1901,21 @@ test('two authorized leases share one child and only final release stops it', as
   assert.deepEqual(f.calls[0].argv.slice(1), ['--profile', 'web', '--no-open', '--host', '127.0.0.1', '--port', '3081']);
   assert.equal(f.calls[0].options.shell, false);
   assert.deepEqual(f.calls[0].options.stdio, ['ignore', 'pipe', 'pipe']);
+  const oldExitHandler = f.children[0].listeners('exit')[0];
+  assert.equal(typeof oldExitHandler, 'function');
   one.ready(); await one.release(); assert.equal(f.children[0].signals.length, 0);
   await two.release(); assert.deepEqual(f.children[0].signals, ['SIGTERM']); assert.deepEqual(f.releases, [true]);
   await assert.rejects(one.use(() => true));
   const three = await f.runtime.acquire({ signal: new AbortController().signal });
   assert.notEqual(three.epoch, one.epoch); three.ready();
-  f.children[0].emit('exit', 0, null);
-  assert.equal(await three.use(() => true), true);
+  const replacement = f.children[1], replacementToken = await three.use(value => value.loginToken);
+  assert.equal(f.children[0].listenerCount('exit'), 0, 'once listener was consumed during stop');
+  oldExitHandler(0, null); // Invoke the captured callback itself after replacement.
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(three.signal.aborted, false);
+  assert.equal(await three.use(value => value.loginToken), replacementToken);
+  assert.equal(f.children[1], replacement); assert.deepEqual(replacement.signals, []);
+  assert.equal(f.calls.length, 2);
   await f.runtime.close();
 });
 test('revoked waiter cannot spawn or publish a late lease', async () => {
@@ -1892,8 +2066,10 @@ export function createDshRuntime({ config, spawnImpl = spawn, validatePrefix = v
       record.exit = new Promise(resolve => {
         child.once('exit', (code, signal) => {
           record.exited = true; record.exitCode = code; record.exitSignal = signal; resolve();
-          if (current !== record || record.fenced) return;
-          record.reject(runtimeError()); void stop(record, 'runtime-unavailable', 'exit');
+          if (current !== record) return;
+          // This callback may act on the active epoch only after identity matches.
+          // stop is already idempotent for a fenced current epoch.
+          record.reject(runtimeError()); void stop(current, 'runtime-unavailable', 'exit');
         });
       });
       child.once('error', () => { record.reject(runtimeError()); void stop(record); });
@@ -1942,7 +2118,7 @@ export function createDshRuntime({ config, spawnImpl = spawn, validatePrefix = v
 ```
 
 - [ ] **Run and pass:** `node --test browser-first/test/dsh-native-runtime.test.mjs`.
-- [ ] **Red evidence:** remove each pre-spawn/after-acquire `active(record)` check in turn, final-lease condition, epoch equality exit guard and `blocked` checks. Run lifecycle tests with a held validation promise, one cancelled and one live waiter, and an unconfirmed child exit. Require cancellation to produce zero spawns, one live waiter to survive, an old exit to leave the replacement intact, and unconfirmed exit to retain the lock/refuse relaunch. Test SIGTERM at or before 1s, SIGKILL at or before 2s and return by 3s with an injected clock and child that ignores TERM. No process-name/PID cleanup is allowed.
+- [ ] **Red evidence:** remove each pre-spawn/after-acquire `active(record)` check in turn, final-lease condition, epoch equality exit guard and `blocked` checks. For the exit mutant remove only `if (current !== record) return;`: the captured old callback must then fence the replacement and fail the signal/token assertions. Re-emitting the consumed once event, or retaining a second fenced/stop early return that masks this mutant, is not evidence. Run lifecycle tests with a held validation promise, one cancelled and one live waiter, and an unconfirmed child exit. Require cancellation to produce zero spawns, one live waiter to survive, an old exit to leave the replacement intact, and unconfirmed exit to retain the lock/refuse relaunch. Test SIGTERM at or before 1s, SIGKILL at or before 2s and return by 3s with an injected clock and child that ignores TERM. No process-name/PID cleanup is allowed.
 - [ ] **Commit:**
 
 ```bash
@@ -2108,17 +2284,30 @@ function createNativeCustody(nativeRuntime, refreshPolicy) {
 }
 ```
 
-The reviewed map is generated from the conductor's sanitized results, then reviewed as ordinary source. It is not loaded from disk at runtime. Unverified patch versions may pass version/startup checks but get no refresh permission and no support claim.
+The reviewed map is generated from the conductor's sanitized results, then reviewed as ordinary source. It is not loaded from disk at runtime. Unverified patch versions may pass version/startup checks but get no refresh permission and no support claim. The evidence assertion validates row shape, not universal support. Each blocked row bakes `false` independently; a verified `once` row also bakes `false`, while its evidence remains explicitly non-reusable. An unrelated blocked row cannot prevent baking verified rows. A `structured` provider result needs its own reviewed decoder before its version becomes eligible.
 
 ```bash
 python3 - <<'PY'
 from pathlib import Path
 import json
 rows=json.loads(Path('/Users/dr.tom/2.0.0-alpha/.resonant-rig/dsh-native-task0/results.json').read_text())
-assert len(rows)==3 and all(r['auth'] in ['refresh','once'] and r['provider']=='catalog' and r['origin'] and r['telemetry'] and r['persistence'] for r in rows)
+versions={'0.1.5-rc.1','0.1.7-rc.2','0.2.0-rc.2'}
+assert len(rows)==3 and {r['version'] for r in rows}==versions
+for r in rows:
+ assert r['auth'] in ['refresh','once','blocked']
+ assert r['provider'] in ['catalog','structured','blocked']
+ assert isinstance(r['blockedReasons'],list)
+ eligible=bool(r.get('integrity') and r['auth'] in ['refresh','once'] and r['provider']=='catalog' and all(r[k] is True for k in ['origin','telemetry','persistence']) and not r['blockedReasons'])
+ assert r['supportEligible'] is eligible
+ assert eligible or r['blockedReasons'], 'blocked versions need explicit reasons'
 p=Path('browser-first/host/harness-credentials.mjs'); s=p.read_text()
 old='export function createHarnessCredentials({ bindings = [], env = process.env } = {}) {'; assert s.count(old)==1
-policy=json.dumps({r['version']:r['auth']=='refresh' for r in rows},sort_keys=True)
+def refresh_allowed(row):
+ return row['auth']=='refresh' and row['supportEligible']
+# Synthetic policy proof only: no assertion here certifies an installed package.
+assert [refresh_allowed(dict(auth=auth,supportEligible=eligible)) for auth,eligible in
+ [('refresh',True),('once',True),('blocked',False),('refresh',False)]] == [True,False,False,False]
+policy=json.dumps({r['version']:refresh_allowed(r) for r in rows},sort_keys=True)
 s=s.replace(old, 'const nativeRefreshByVersion = Object.freeze('+policy+');\nexport function createHarnessCredentials({ bindings = [], env = process.env, nativeRuntime, refreshPolicy = version => nativeRefreshByVersion[version] === true } = {}) {\n  const acquireNative = createNativeCustody(nativeRuntime, refreshPolicy);')
 s=s.replace('async acquire({ addonId, runtime } = {}) {','async acquire({ addonId, runtime, signal } = {}) {')
 anchor='      let actionToken;'; assert s.count(anchor)==1
@@ -2173,7 +2362,10 @@ async function fixture(headers = { 'set-cookie': 'dsh-auth-test=synthetic; HttpO
   let statuses = [], promptCalls = 0;
   class Socket extends EventTarget {
     bufferedAmount = 0;
-    constructor(url, options) { super(); sockets.push({ url: String(url), options }); const outcome = socketOutcomes.shift() ?? 'open'; queueMicrotask(() => this.dispatchEvent(new Event(outcome))); }
+    constructor(url, options) { super(); sockets.push({ url: String(url), options }); const outcome = socketOutcomes.shift() ?? 'open';
+      if (outcome === 'denied') throw Object.assign(new Error('synthetic guard denial'), { code: 'permission-denied' });
+      if (outcome === 'constructor-failure') throw new Error('synthetic constructor failure');
+      queueMicrotask(() => { const event = new Event(outcome === 'status-503' ? 'error' : outcome); if (outcome === 'status-503') event.status = 503; this.dispatchEvent(event); }); }
     close() {} send() {}
   }
   const transport = await createHarnessTransport({ credentials: creds, addonId: 'addon.native', runtime, signal: new AbortController().signal, WebSocketImpl: Socket,
@@ -2226,6 +2418,15 @@ test('uncertain prompt response is sent only once', async () => {
   const f = await fixture(); await f.transport.authenticate(); f.statuses(['lost']);
   await assert.rejects(f.transport.request('/api/session/prompt')); assert.equal(f.promptCalls(), 1);
   assert.equal(f.calls.filter(call => call.url.includes('?token=')).length, 1); await f.transport.dispose();
+});
+for (const outcome of ['denied', 'constructor-failure', 'status-503']) test(`WS ${outcome} never runs an auth diagnostic`, async () => {
+  const f = await fixture(undefined, 303, [outcome]); await f.transport.authenticate();
+  // A tempting diagnostic 401 must never be requested in these cases.
+  f.statuses([401]);
+  await assert.rejects(f.transport.openStream(), { code: outcome === 'denied' ? 'permission-denied' : 'runtime-unavailable' });
+  assert.equal(f.calls.filter(call => new URL(call.url).pathname === '/api/session/modelCatalog').length, 0);
+  assert.equal(f.calls.filter(call => call.url.includes('?token=')).length, 1);
+  await f.transport.dispose();
 });
 for (const diagnostic of [200, 401, 503]) test(`generic WS failure diagnoses ${diagnostic} without guessing auth`, async () => {
   const f = await fixture(undefined, 303, ['error', 'open']); await f.transport.authenticate(); f.statuses([diagnostic]);
@@ -2391,13 +2592,14 @@ Replace the `request` method in the returned transport with this complete method
     },
 ```
 
-Replace the complete `openStream` method with this method. A generic socket failure uses exactly one read-only diagnostic. No uncertain prompt is involved in that diagnostic.
+Replace the complete `openStream` method with this method. Only a completed opening failure without an exposed HTTP status uses one read-only diagnostic. Denial, construction failure, cancellation, and failures after open preserve their original result. No uncertain prompt is involved in that diagnostic.
 
 ```js
     async openStream({ signal, onMessage = () => {}, onError = () => {}, onClose = () => {} } = {}) {
       return bounded(async openingSignal => {
         await authorize(openingSignal); check(openingSignal);
         let attempted;
+        const opaqueOpeningFailure = Symbol('opaque-opening-failure');
         async function openOnce() {
           const values = await lease.use(value => ({ actionToken: value.actionToken, cookie: native ? value.cookie : cookie, generation: value.generation }));
           attempted = values;
@@ -2406,11 +2608,11 @@ Replace the complete `openStream` method with this method. A generic socket fail
           }, socket => new Promise((resolve, reject) => {
             let opened = false, closed = false;
             const streamSignal = AbortSignal.any([lifetime.signal, ...(native ? [lease.signal] : []), ...(signal ? [signal] : [])]);
-            function close() {
+            function close(openingError = fail('runtime-unavailable')) {
               if (closed) return;
               closed = true; streams.delete(close);
               openingSignal.removeEventListener('abort', close); streamSignal.removeEventListener('abort', close);
-              socket.close(); if (!opened) reject(fail('runtime-unavailable'));
+              socket.close(); if (!opened) reject(openingError);
             }
             streams.add(close); openingSignal.addEventListener('abort', close, { once: true }); streamSignal.addEventListener('abort', close, { once: true });
             socket.addEventListener('open', () => {
@@ -2433,13 +2635,21 @@ Replace the complete `openStream` method with this method. A generic socket fail
                 onMessage(lease.sanitize(JSON.parse(event.data)));
               } catch (error) { try { onError(safe(error)); } catch {} close(); }
             });
-            socket.addEventListener('error', () => { if (opened && !closed) { try { onError(fail('runtime-unavailable')); } catch {} } close(); });
-            socket.addEventListener('close', () => { const notify = opened && !closed; close(); if (notify) { try { onClose(); } catch {} } });
+            function openingFailure(event) {
+              const error = fail('runtime-unavailable');
+              // Undici has no stable public handshake status. A trusted connector
+              // exposing a status must not fall through to the opaque diagnostic.
+              if (!opened && !closed && !openingSignal.aborted && !streamSignal.aborted &&
+                  event?.status === undefined && event?.error?.status === undefined) error[opaqueOpeningFailure] = true;
+              return error;
+            }
+            socket.addEventListener('error', event => { if (opened && !closed) { try { onError(fail('runtime-unavailable')); } catch {} } close(openingFailure(event)); });
+            socket.addEventListener('close', event => { const notify = opened && !closed; close(openingFailure(event)); if (notify) { try { onClose(); } catch {} } });
           }));
         }
         try { return await openOnce(); }
         catch (error) {
-          if (!native || openingSignal.aborted) throw error;
+          if (!native || openingSignal.aborted || error?.code === 'permission-denied' || error?.[opaqueOpeningFailure] !== true) throw error;
           const diagnostic = await requestRaw('/api/session/modelCatalog', {
             method: 'POST', headers: { cookie: attempted.cookie, 'content-type': 'application/json' }, signal: openingSignal, consumeBody: false,
             body: JSON.stringify({ type: 'client-request', rpcId: 'native-auth-diagnostic', method: 'session/modelCatalog', payload: { args: {} } }),
@@ -2456,7 +2666,7 @@ Replace the complete `openStream` method with this method. A generic socket fail
 ```
 
 - [ ] **Run and pass:** `node --test browser-first/test/dsh-native-transport.test.mjs browser-first/test/harness-transport.test.mjs browser-first/test/agent-runtime-endpoint.test.mjs browser-first/test/dsh-harness-adapter.test.mjs browser-first/test/dsh-harness-stream.test.mjs`.
-- [ ] **Red evidence:** cookie grammar/cardinality/expiry/size, 303-only, same-origin Location, forbidden native plugin routes, action-header omission, explicit 401-only retry, second-401 fence, response/message bounds and private dispatcher each need a killed mutant. Use a real loopback sink with `NODE_USE_ENV_PROXY=1`, all three proxy variables set and `NO_PROXY` unset; install a hostile Undici global dispatcher, then run both schemes. Assert zero sink traffic and actual direct auth/RPC/WebSocket traffic. Remove the private dispatcher in the mutant and require the sink assertion to fail. Restore global networking only inside the isolated test process; production never changes it.
+- [ ] **Red evidence:** cookie grammar/cardinality/expiry/size, 303-only, same-origin Location, forbidden native plugin routes, action-header omission, explicit 401-only retry, opaque-opening diagnostic eligibility, second-401 fence, response/message bounds and private dispatcher each need a killed mutant. Remove only `error?.[opaqueOpeningFailure] !== true` from the catch predicate and require the constructor/status cases to fail their zero-diagnostic assertion; then remove both diagnostic eligibility checks and require the denial case to fail. Use a real loopback sink with `NODE_USE_ENV_PROXY=1`, all three proxy variables set and `NO_PROXY` unset; install a hostile Undici global dispatcher, then run both schemes. Assert zero sink traffic and actual direct auth/RPC/WebSocket traffic. Remove the private dispatcher in the mutant and require the sink assertion to fail. Restore global networking only inside the isolated test process; production never changes it.
 - [ ] **Commit:**
 
 ```bash
@@ -2888,7 +3098,7 @@ git commit -m "feat(harness): compose native readiness and retire cached chat se
 **Interfaces:**
 - Consumes: `closeHarness() -> Promise<void>`, `closeOpenCode() -> Promise<void>`, `flushPrefs() -> Promise<void>`, `unsubscribe() -> void`, `closeServer() -> Promise<void>`.
 - Produces: `createBridgeShutdown(options) -> () => Promise<void>`; `installBridgeSignals({processImpl = process, shutdown}) -> () => void`.
-- Extends: `ensureOpencodeServer({fetchImpl,spawnImpl,command,hostname="127.0.0.1",port,cwd,env=process.env,sleep,maxWaitMs=12000,pollMs=300,processImpl=process,registerSignalHandlers=true,pidRecord,pickEphemeralPort}) -> Promise<serverInfo>`; its synchronous `exit` hook remains registered regardless of that option. No DSH PID discovery is added to OpenCode.
+- Extends: `ensureOpencodeServer({fetchImpl,spawnImpl,command,hostname="127.0.0.1",port,cwd,env=process.env,sleep,maxWaitMs=12000,pollMs=300,processImpl=process,installSignalHandlers=true,pidRecord,pickEphemeralPort}) -> Promise<serverInfo>`; its synchronous `exit` hook remains registered regardless of that option. No DSH PID discovery is added to OpenCode.
 
 - [ ] **Write the failing test:** create `browser-first/test/dsh-native-shutdown.test.mjs`:
 
@@ -2926,20 +3136,20 @@ test('failed cleanup still drains other owners and closes listener once', async 
   const a = shutdown(), b = shutdown(); assert.equal(a, b); assert.equal(closed, 0);
   wait.resolve(); await a; assert.equal(drained, true); assert.equal(closed, 1);
 });
-for (const registerSignalHandlers of [false, true]) test(`OpenCode signal ownership ${registerSignalHandlers}`, async () => {
+for (const installSignalHandlers of [false, true, undefined]) test(`OpenCode signal ownership ${installSignalHandlers}`, async () => {
   resetOpencodeServerSingletonForTests();
   const processImpl = new EventEmitter(); processImpl.pid = process.pid; processImpl.exit = () => {};
   let killed = 0;
   const child = new EventEmitter(); child.pid = 42001; child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.kill = () => { killed++; child.emit('exit', 0); };
   const info = await ensureOpencodeServer({ command: '/synthetic/opencode', cwd: '/synthetic', env: {}, processImpl,
-    registerSignalHandlers, pickEphemeralPort: async () => 45219,
+    installSignalHandlers, pickEphemeralPort: async () => 45219,
     spawnImpl: () => { setImmediate(() => child.stdout.write('opencode server listening on http://127.0.0.1:45219\n')); return child; },
     fetchImpl: async (_url, options) => ({ status: options?.headers?.Authorization ? 200 : 401, ok: Boolean(options?.headers?.Authorization), text: async () => '{}' }),
     pidRecord: { read: async () => null, write: async () => {}, clear() {}, isAlive: () => false, commandOf: () => '', kill() {} },
   });
   assert.ok(info); assert.equal(processImpl.listenerCount('exit'), 1);
-  assert.equal(processImpl.listenerCount('SIGTERM'), Number(registerSignalHandlers));
-  assert.equal(processImpl.listenerCount('SIGINT'), Number(registerSignalHandlers));
+  assert.equal(processImpl.listenerCount('SIGTERM'), Number(installSignalHandlers !== false));
+  assert.equal(processImpl.listenerCount('SIGINT'), Number(installSignalHandlers !== false));
   processImpl.emit('exit'); assert.equal(killed, 1);
   resetOpencodeServerSingletonForTests();
 });
@@ -2984,18 +3194,18 @@ from pathlib import Path
 p=Path('browser-first/host/opencode-client.mjs');s=p.read_text()
 s=s.replace('let hooksInstalled = false;', 'let exitHooksInstalled = false;\nlet signalHooksInstalled = false;')
 s=s.replace('  hooksInstalled = false;', '  exitHooksInstalled = false;\n  signalHooksInstalled = false;')
-s=s.replace('  processImpl = process,\n  pidRecord', '  processImpl = process,\n  registerSignalHandlers = true,\n  pidRecord')
-s=s.replace('    processImpl,\n    pidRecord,', '    processImpl,\n    registerSignalHandlers,\n    pidRecord,')
-s=s.replace('  processImpl,\n  pidRecord,', '  processImpl,\n  registerSignalHandlers,\n  pidRecord,')
-s=s.replace('installShutdownHooks(processImpl);', 'installShutdownHooks(processImpl, registerSignalHandlers);')
-s=s.replace('function installShutdownHooks(processImpl) {\n  if (hooksInstalled) return;\n  hooksInstalled = true;', 'function installShutdownHooks(processImpl, registerSignalHandlers) {')
-s=s.replace('  processImpl.once?.("exit", killAll);\n  for (const sig', '  if (!exitHooksInstalled) { exitHooksInstalled = true; processImpl.once?.("exit", killAll); }\n  if (!registerSignalHandlers || signalHooksInstalled) return;\n  signalHooksInstalled = true;\n  for (const sig')
+s=s.replace('  processImpl = process,\n  pidRecord', '  processImpl = process,\n  installSignalHandlers = true,\n  pidRecord')
+s=s.replace('    processImpl,\n    pidRecord,', '    processImpl,\n    installSignalHandlers,\n    pidRecord,')
+s=s.replace('  processImpl,\n  pidRecord,', '  processImpl,\n  installSignalHandlers,\n  pidRecord,')
+s=s.replace('installShutdownHooks(processImpl);', 'installShutdownHooks(processImpl, installSignalHandlers);')
+s=s.replace('function installShutdownHooks(processImpl) {\n  if (hooksInstalled) return;\n  hooksInstalled = true;', 'function installShutdownHooks(processImpl, installSignalHandlers) {')
+s=s.replace('  processImpl.once?.("exit", killAll);\n  for (const sig', '  if (!exitHooksInstalled) { exitHooksInstalled = true; processImpl.once?.("exit", killAll); }\n  if (!installSignalHandlers || signalHooksInstalled) return;\n  signalHooksInstalled = true;\n  for (const sig')
 assert 'hooksInstalled' not in s
 p.write_text(s)
 p=Path('browser-first/host/run-bridge-minimal.mjs');s=p.read_text()
 s=s.replace("#!/usr/bin/env node\n", "#!/usr/bin/env node\nimport { createBridgeShutdown, installBridgeSignals } from './bridge-shutdown.mjs';\n", 1)
 anchor='    command: resolveOpenCodeCommand(),';assert s.count(anchor)==1
-s=s.replace(anchor,anchor+'\n    registerSignalHandlers: false,')
+s=s.replace(anchor,anchor+'\n    installSignalHandlers: false,')
 start=s.index('const shutdown = async () => {')
 s=s[:start]+'''const shutdown = createBridgeShutdown({
   closeHarness: () => harnessService.close(),
@@ -3015,7 +3225,7 @@ PY
 ```
 
 - [ ] **Run and pass:** `node --test browser-first/test/dsh-native-shutdown.test.mjs browser-first/test/opencode-client.test.mjs browser-first/test/opencode-execution-revocation.test.mjs`.
-- [ ] **Red evidence:** move `closeHarness` behind `await closeOpenCode` and require the first test to fail its immediate native-call assertion; remove the idempotence check and require duplicate-call failure; gate the exit hook with `registerSignalHandlers` and require the false-mode test to fail. Restore each edit before continuing. These are fail-before-fix proofs for shutdown ownership and ordering.
+- [ ] **Red evidence:** move `closeHarness` behind `await closeOpenCode` and require the first test to fail its immediate native-call assertion; remove the idempotence check and require duplicate-call failure; gate the exit hook with `installSignalHandlers` and require the false-mode test to fail. Restore each edit before continuing. These are fail-before-fix proofs for shutdown ownership and ordering.
 - [ ] **Commit:**
 
 ```bash
@@ -3040,7 +3250,7 @@ git commit -m "fix(bridge): drain native and OpenCode owners before signal exit"
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, mkdir, copyFile, writeFile, readFile, rm, access } from 'node:fs/promises';
+import { mkdtemp, mkdir, copyFile, writeFile, readFile, rm, access, chmod } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
@@ -3055,9 +3265,15 @@ async function setup(t, { occupied = false } = {}) {
   const root = await mkdtemp(join(homedir(), '.resonantos-dsh-test-'));
   const prefix = join(root, 'prefix'), dshHome = join(root, 'state');
   const packageDir = join(prefix, 'node_modules/@deepseek-ai/dsh');
-  await mkdir(join(packageDir, 'lib'), { recursive: true, mode: 0o700 });
+  // Only chmod directories this fixture owns; never repair existing ancestors.
+  await chmod(root, 0o700);
+  for (const path of [prefix, join(prefix, 'node_modules'), join(prefix, 'node_modules/@deepseek-ai'), packageDir, join(packageDir, 'lib')]) {
+    await mkdir(path, { mode: 0o700 }); await chmod(path, 0o700);
+  }
   await writeFile(join(packageDir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.0-rc.2', type: 'module' }), { mode: 0o600 });
   await copyFile(new URL('./dsh-native-fake-child.mjs', import.meta.url), join(packageDir, 'lib/bin.js'));
+  await chmod(join(packageDir, 'package.json'), 0o600);
+  await chmod(join(packageDir, 'lib/bin.js'), 0o600);
   let sentinelRequests = 0;
   const sentinel = createServer((request, response) => { sentinelRequests++; response.end('foreign'); });
   sentinel.listen(0, '127.0.0.1'); await once(sentinel, 'listening');
@@ -3097,7 +3313,10 @@ async function setup(t, { occupied = false } = {}) {
     assert.equal((await call('/addons/slots/assign', { slot: 'primary-agent', addonId: manifest.id, expectedGeneration: host.registry.snapshot().slots['primary-agent']?.generation ?? 0 })).status, 200);
   }
   return { root, dshHome, manifest, get host() { return host; }, children, spawnOptions, receipts, privateTokens,
-    configure: value => writeFile(join(packageDir, 'lib/control.json'), JSON.stringify(value), { mode: 0o600 }),
+    configure: async value => {
+      const path = join(packageDir, 'lib/control.json');
+      await writeFile(path, JSON.stringify(value), { mode: 0o600 }); await chmod(path, 0o600);
+    },
     promptCount: () => promptCount, restart: async () => { await host.close(); host = await createHarnessHostService(composition); }, sentinel, sentinelRequests: () => sentinelRequests, call, install, grant, select };
 }
 test('route authority and grants precede process acquisition; two sessions share one child', async t => {
@@ -3128,6 +3347,20 @@ test('route authority and grants precede process acquisition; two sessions share
   await f.grant(false); await waitFor(() => f.children[0].exitCode !== null || f.children[0].signalCode !== null);
   assert.notEqual((await f.call('/agent/session', payload)).status, 200); assert.equal(f.children.length, 1);
   await assert.rejects(access(join(f.dshHome, '.resonantos/lock')));
+});
+test('valid announcement plus stdout EOF can reach protocol Ready', async t => {
+  const f = await setup(t); await f.configure({ closeStdoutAfterAnnouncement: true, catalogDelay: 100 });
+  await f.install(); await f.grant(true); await f.select();
+  const result = await f.call('/agent/session', { addonId: f.manifest.id });
+  assert.equal(result.status, 200); assert.equal(f.children.length, 1);
+  assert.equal(f.children[0].stdout.readableEnded, true); assert.equal(f.children[0].exitCode, null);
+});
+test('conflicting announcement during protocol probe prevents Ready', async t => {
+  const f = await setup(t); await f.configure({ conflictingAnnouncement: true, catalogDelay: 100 });
+  await f.install(); await f.grant(true); await f.select();
+  const result = await f.call('/agent/session', { addonId: f.manifest.id });
+  assert.notEqual(result.status, 200); assert.equal(f.children.length, 1);
+  await waitFor(() => f.children[0].exitCode !== null || f.children[0].signalCode !== null);
 });
 test('foreign listener is never contacted or killed', async t => {
   const f = await setup(t, { occupied: true }); await f.install(); await f.grant(true); await f.select();
@@ -3246,7 +3479,11 @@ const server = createServer(async (request, response) => {
     const rpc = JSON.parse(Buffer.concat(chunks)); assert.equal(url.pathname, `/api/${rpc.method}`);
     const input = rpc.payload.args.request, method = rpc.method;
     let value = {}, state;
-    if (method === 'session/modelCatalog') value = catalog;
+    if (method === 'session/modelCatalog') {
+      if (control.conflictingAnnouncement) process.stdout.write(`dsh web: http://127.0.0.1:${port}/?token=conflict\n`);
+      await new Promise(resolve => setTimeout(resolve, control.catalogDelay ?? 0));
+      value = catalog;
+    }
     else if (method === 'session/create') sessions.set(input.sessionId, { seq: 0, records: [], sockets: new Set() });
     else {
       state = sessions.get(input.sessionId ?? input.address?.sessionId); assert.ok(state);
@@ -3293,12 +3530,15 @@ server.on('upgrade', (request, socket, head) => {
   }
   socket.on('data', received); if (head.length) received(head);
 });
-setTimeout(() => server.listen(port, '127.0.0.1', () => process.stdout.write(`dsh web: http://127.0.0.1:${port}/?token=${token}\n`)), control.startupDelay ?? 0);
+setTimeout(() => server.listen(port, '127.0.0.1', () => {
+  process.stdout.write(`dsh web: http://127.0.0.1:${port}/?token=${token}\n`);
+  if (control.closeStdoutAfterAnnouncement) process.stdout.end();
+}), control.startupDelay ?? 0);
 process.on('SIGTERM', () => { for (const socket of sockets) socket.destroy(); server.close(() => process.exit(0)); });
 ```
 
-- [ ] **Run and pass:** `node --test browser-first/test/dsh-native-integration.test.mjs`. No skipped loopback, filesystem-permission or process tests count as a pass. A restricted runner must delegate this exact command to the conductor's permitted local environment.
-- [ ] **Red evidence:** the first test must fail when native grants are bypassed, when telemetry inherits from the parent, when cookie sharing is removed, or when one session's disposal kills the other. The sentinel test must fail when port probing is removed. The final test must fail when cache retirement or post-exit epoch isolation is removed. Apply one mutation at a time, run this exact test command, record the failed assertion and restore before continuing.
+- [ ] **Run and pass:** `node --test browser-first/test/dsh-native-integration.test.mjs` and `(umask 002; node --test browser-first/test/dsh-native-integration.test.mjs)`. Both must exercise the actual prefix walker before spawn. No skipped loopback, filesystem-permission or process tests count as a pass. A restricted runner must delegate this exact command to the conductor's permitted local environment.
+- [ ] **Red evidence:** the first test must fail when native grants are bypassed, when telemetry inherits from the parent, when cookie sharing is removed, or when one session's disposal kills the other. The sentinel test must fail when port probing is removed. The crash/cache tests must fail when cache retirement or post-exit epoch isolation is removed. Restore unconditional pre-Ready EOF rejection and require the EOF-positive test to fail; return immediately after token capture and require the conflict-during-catalog test to fail. Apply one mutation at a time, run this exact test command, record the failed assertion and restore before continuing.
 - [ ] **Commit:**
 
 ```bash
@@ -3420,8 +3660,9 @@ uses 15 seconds. Direct turns use 120 seconds; browser chat retains its separate
 Sessions share one epoch cookie but have separate DSH sessions and transports.
 Refresh is permitted only for an exact version whose live probe proves token
 reuse preserves old cookies and streams and that 401 occurs before dispatch.
-Unknown or non-reusable behavior uses single exchange and fences on confirmed
-401. Lost responses, timeouts and uncertain accepted prompts are never replayed.
+Verified non-reusable behavior uses single exchange and fences on confirmed
+401. Unknown behavior grants no refresh permission or support claim for that
+exact version; it does not block separately verified versions. Lost responses, timeouts and uncertain accepted prompts are never replayed.
 Native deltas are withheld; assembled replies and other outputs are sanitized
 before events or signed receipts. Credentials and token-bearing output are
 never logs, evidence files or browser projections.
@@ -3493,10 +3734,15 @@ node --input-type=module <<'JS'
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 const gate = JSON.parse(await readFile('/Users/dr.tom/2.0.0-alpha/.resonant-rig/dsh-native-task0/final-gate.json', 'utf8').catch(() => '{}'));
+const prerequisites = JSON.parse(await readFile('/Users/dr.tom/2.0.0-alpha/.resonant-rig/dsh-native-task0/results.json', 'utf8'));
 assert.equal(gate.deterministic, true);
 assert.equal(gate.liveVersions?.length, 3);
 for (const version of ['0.1.5-rc.1', '0.1.7-rc.2', '0.2.0-rc.2']) {
   const row = gate.liveVersions.find(row => row.version === version);
+  assert.ok(row && ['certified', 'blocked'].includes(row.status));
+  if (row.status === 'blocked') { assert.ok(Array.isArray(row.blockedReasons) && row.blockedReasons.length); continue; }
+  const prerequisite = prerequisites.find(r => r.version === version);
+  assert.equal(prerequisite?.supportEligible, true, 'blocked prerequisite cannot be certified');
   for (const key of ['overlap', 'reply', 'history', 'modelSelection', 'cancel', 'revoke', 'crashRecovery', 'bridgeRestart', 'browserVisible', 'telemetry', 'noSecretPersistence', 'desktopUnaffected', 'pluginCoexistence']) assert.equal(row?.[key], true, `${version}: ${key}`);
 }
 JS
@@ -3519,8 +3765,8 @@ npm run verify:alpha
 
 The shared TypeScript union and SDK validator change, so Vitest and build are mandatory. Run the existing plugin transport and OpenCode suites as part of `test:browser-first`; neither may be silently skipped.
 
-- [ ] **Conductor-only live completion:** for each Task 0 exact install, use its isolated root and an unused approved port other than 19387 with the production bridge and native manifest. Perform the approved design's eight live-lane steps. Require a real attributed browser reply, two concurrent governed sessions under the selected cookie policy, history/model selection/cancel, active revocation, crash then fresh explicit session, clean bridge restart and old-reference rejection. Record prefix entry count/depth/walk time from a direct call to `validateDshPrefix(prefix, {deadline: Date.now()+30000})`; it returns no secrets. Observe the pre-existing desktop process only through the conductor's own app, keep it running and verify its companion before/after; never attach this integration to that process. Repeat plugin/native slot swaps on the separately pinned supported plugin setup. This plan's automated tests do not substitute for those human-visible observations. If any observation is unavailable, leave its boolean false and certification blocked.
-- [ ] **Run and pass:** after the conductor writes actual sanitized observations to the external `final-gate.json`, rerun the assertion above and review the source commits plus red records. Task 0 `blocked` means this task cannot pass. The conductor must identify the governing issue before creating a PR into `dev`; issue 519 is a telemetry dependency, not automatically the governing native-auth issue.
+- [ ] **Conductor-only live completion:** for each eligible Task 0 exact install, use its isolated root and an unused approved port other than 19387 with the production bridge and native manifest. Perform the approved design's eight live-lane steps. Require a real attributed browser reply, two concurrent governed sessions under the selected cookie policy, history/model selection/cancel, active revocation, crash then fresh explicit session, clean bridge restart and old-reference rejection. Record prefix entry count/depth/walk time from a direct call to `validateDshPrefix(prefix, {deadline: Date.now()+30000})`; it returns no secrets. Observe the pre-existing desktop process only through the conductor's own app, keep it running and verify its companion before/after; never attach this integration to that process. Repeat plugin/native slot swaps on the separately pinned supported plugin setup. This plan's automated tests do not substitute for those human-visible observations. If any observation is unavailable, leave its boolean false and certification blocked.
+- [ ] **Run and pass:** after the conductor writes actual sanitized observations to the external `final-gate.json`, rerun the assertion above and review the source commits plus red records. Task 0 `blocked` means only that exact version cannot be certified. Record it as `status: "blocked"` with reasons in `liveVersions`; certify other versions independently as `status: "certified"` only with every observation true. Passing the accounting assertion is not an all-version support claim; report certified and blocked counts explicitly. The conductor must identify the governing issue before creating a PR into `dev`; issue 519 is a telemetry dependency, not automatically the governing native-auth issue.
 - [ ] **Commit:** no extra commit is needed for an evidence-only task. Verify the branch and staged scope with these exact read-only commands; do not stage external evidence:
 
 ```bash
@@ -3563,7 +3809,7 @@ This is a plan coverage map, not a claim that implementation tests or live gates
 | Fixed public errors, safe operator recovery messages, no raw stderr/stdout/paths/tokens, port/home/package/deadline/exit/unconfirmed recovery (590–617) | Tasks 2–5 and 11; no raw error forwarding in proposed runtime/probe |
 | 0.1.x/0.2.x strict semver including prereleases, three exact initial versions, metadata-only version discovery, separate manifest and opt-in demo/native-plugin coexistence (619–650) | Tasks 0, 1, 2, 8 and 11; Task 12 live version and plugin lane |
 | Module ownership for new runtime and shifted existing responsibilities (653–680) | Runtime row in Task 2, custody/composition/boundary rows in Task 8; additional shutdown helper row in Task 9 |
-| DSH-NATIVE-AUTH-1 and DSH-NATIVE-PROVIDER-1 before implementation; unknown facts are not assumed (682–726) | Task 0 conductor-only executable assertions and branch table; Tasks 4/6 cannot proceed past a blocked observation |
+| DSH-NATIVE-AUTH-1 and DSH-NATIVE-PROVIDER-1 before implementation; unknown facts are not assumed (682–726) | Task 0 conductor-only executable assertions and branch table; Tasks 4/6 cannot grant refresh/readiness support to the exact version with a blocked observation; other verified versions proceed |
 | Deterministic unit guard evidence (730–803) | Tasks 1–9 contain focused red/green code and explicit one-guard-at-a-time fail-before-fix instructions |
 | Production manager plus real HTTP/WS fake executable, real registry store, governed routes, overlap/revoke/crash/restart/sentinel, sanitized receipts (805–845) | Task 10; timing and shutdown unit cases in Tasks 3, 8 and 9; complete browser-first regression suite in Task 12 |
 | Exact-package live protocol, browser visibility, feedback telemetry control, no persistence, desktop safety and plugin coexistence (847–882) | Task 0 for the prerequisite probes; Task 12 for production and human-visible certification; Task 11 instructions |
@@ -3610,7 +3856,7 @@ The syntax scan checks proposed snippets without loading runtime modules, launch
 | Task 5 transport | Tasks 6/8 use `request`, `openStream`, `authenticate`, `sanitize`, `dispose`, `epoch`, `runtimeSignal`, `deadline`, and `readinessLease`; the latter is added by Task 8. `credentialLease` is the trusted optional constructor input for shared readiness. |
 | Task 6 adapter | Task 8 calls `probe({native:true,signal})` and checks `protocolReady`; normal adapter session/method names remain unchanged. |
 | Task 7 boundary | Task 8 passes `{signal,bindRuntime}` into resolution, receives `onRetired(ref)`, calls `retireRuntime(epoch,code)` and `isLive(ref)`. References are exactly `{addonId,sessionId,bootEpoch,generation}`. |
-| Task 9 shutdown helper | Launcher supplies the five named cleanup callbacks. `registerSignalHandlers` is passed through the public OpenCode function, private start helper, hook installation and bridge call site. |
+| Task 9 shutdown helper | Launcher supplies the five named cleanup callbacks. `installSignalHandlers` is passed through the public OpenCode function, private start helper, hook installation and bridge call site. |
 | Task 10 fake executable | Runtime starts its copied `lib/bin.js` via the production argv. Its fixture-only control JSON is package-local synthetic data, not a production flag or a public route. Receipts use the existing deliberately public fixture signing seed. |
 
-Only this plan is authored during the planning turn. No implementation test, mutation, live probe, package installation, browser interaction, commit or certification is claimed. Task 0 remains conductor-owned and unrun; all live-dependent support/refresh decisions remain gated by its actual evidence.
+This revision authors only this plan and `docs/planning/dsh-native-auth-plan-review-1.md`. Isolated Node checks validate proposed examples and mutation sensitivity; no repository runtime implementation, Task 0 probe, package installation, browser interaction, commit or certification is claimed. Task 0 remains conductor-owned and unrun; all live-dependent support/refresh decisions remain gated by its actual evidence.
