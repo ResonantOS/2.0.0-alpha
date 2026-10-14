@@ -34,6 +34,7 @@ export async function openEmbedGovernanceStorage({userRoot,repoRoot,fs=nativeFs,
     for(let p=root;;p=dirname(p)) { await directory(p,{pin:true}); if(p===parse(p).root) break; }
   } catch { throw fail(); }
   const browser=join(root,'BrowserFirst'),dir=join(browser,'EmbedGovernance'),lock=join(dir,'writer.lock'),owner=join(lock,'owner.json'),state=join(dir,'state.json');
+  const recovery=join(dir,'writer.lock.recovery'),guardFile=join(recovery,'guard.json');
   const ownership=randomUUID(); let owned=false,closed=false;
   async function check() {
     await directory(root); await directory(browser); await directory(dir,{privateMode:true});
@@ -65,22 +66,76 @@ export async function openEmbedGovernanceStorage({userRoot,repoRoot,fs=nativeFs,
     const v=await lockOwner(); if(v.ownership!==expected) throw fail();
     await file(owner); await fs.unlink(owner); await fs.rmdir(lock);
   }
+  function requireDead(pid) {
+    try { processExists(pid); } catch(error) { if(error.code==='ESRCH') return; throw fail(); }
+    throw fail();
+  }
+  async function writeRecord(path,value) {
+    const handle=await fs.open(path,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);
+    try { await handle.chmod(0o600); await handle.writeFile(JSON.stringify(value)+'\n'); await handle.sync(); } finally { await handle.close(); }
+  }
+  async function guardOwner() {
+    await directory(recovery,{privateMode:true});
+    const v=JSON.parse(await readPrivate(guardFile,512));
+    if(!exact(v,['pid','uuid','created'])||!Number.isSafeInteger(v.pid)||v.pid<=0||!UUID.test(v.uuid)||!Number.isSafeInteger(v.created)||v.created<0) throw fail();
+    return v;
+  }
+  async function removeGuard(expected,abandoned=false) {
+    const cleanup=abandoned?join(recovery,'cleanup'):null;
+    // Serialize abandoned-guard deletion too: a delayed cleaner must never
+    // unlink another recoverer's newly published guard. A crashed cleaner's
+    // marker is unverifiable and is deliberately left fail-closed.
+    if(cleanup) await fs.mkdir(cleanup,{mode:0o700});
+    try {
+      const current=await guardOwner();
+      if(current.pid!==expected.pid||current.uuid!==expected.uuid||current.created!==expected.created) throw fail();
+      if(abandoned) {
+        if(Date.now()-current.created<=60000) throw fail();
+        requireDead(current.pid);
+      }
+      await file(guardFile); await fs.unlink(guardFile);
+    } finally { if(cleanup) await fs.rmdir(cleanup); }
+    await fs.rmdir(recovery);
+  }
+  async function acquireGuard() {
+    try { await fs.mkdir(recovery,{mode:0o700}); }
+    catch(error) {
+      if(error.code!=='EEXIST') throw fail();
+      const abandoned=await guardOwner();
+      if(Date.now()-abandoned.created<=60000) throw fail();
+      requireDead(abandoned.pid);
+      await removeGuard(abandoned,true);
+      // One exclusive attempt: contenders never wait or spin on recovery.
+      await fs.mkdir(recovery,{mode:0o700});
+    }
+    await fs.chmod(recovery,0o700);
+    await directory(recovery,{privateMode:true});
+    const guard={pid:process.pid,uuid:randomUUID(),created:Date.now()};
+    await writeRecord(guardFile,guard);
+    return guard;
+  }
   try {
     await directory(browser,{create:true,pin:true});
     await directory(dir,{create:true,privateMode:true,pin:true});
-    try { await fs.mkdir(lock,{mode:0o700}); }
-    catch(e) {
-      if(e.code!=='EEXIST') throw fail();
-      const old=await lockOwner(); let absent=false;
-      try { processExists(old.pid); } catch(error) { if(error.code==='ESRCH') absent=true; else throw fail(); }
-      if(!absent) throw fail(); await release(old.ownership);
-      await fs.mkdir(lock,{mode:0o700});
-    }
-    await fs.chmod(lock,0o700);
-    await directory(lock,{privateMode:true});
-    const handle=await fs.open(owner,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);
-    try { await handle.chmod(0o600); await handle.writeFile(JSON.stringify({pid:process.pid,ownership})+'\n'); await handle.sync(); } finally { await handle.close(); }
-    owned=true;
+    let guard;
+    try {
+      try { await fs.mkdir(lock,{mode:0o700}); }
+      catch(e) {
+        if(e.code!=='EEXIST') throw fail();
+        const old=await lockOwner(); requireDead(old.pid);
+        guard=await acquireGuard();
+        // A delayed recoverer must not remove a newer owner's lock.
+        const current=await lockOwner();
+        if(current.pid!==old.pid||current.ownership!==old.ownership) throw fail();
+        requireDead(current.pid);
+        await file(owner); await fs.unlink(owner); await fs.rmdir(lock);
+        await fs.mkdir(lock,{mode:0o700});
+      }
+      await fs.chmod(lock,0o700);
+      await directory(lock,{privateMode:true});
+      await writeRecord(owner,{pid:process.pid,ownership});
+      owned=true;
+    } finally { if(guard) await removeGuard(guard); }
     for(const name of await fs.readdir(dir)) if(/^\.state-[0-9a-f-]{36}\.tmp$/.test(name)) {const p=join(dir,name);await file(p);await fs.unlink(p);}
   } catch { if(owned) await release(ownership).catch(()=>{}); throw fail(); }
   return {

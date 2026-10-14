@@ -2,9 +2,114 @@
 
 Execution on `testing/augmentor-embed-sidecar`; Tasks 1–10 and 12, with Task 11 limited to script preparation and syntax validation. No commits, workflow edits, generated bridge configuration edits, or live proof execution are authorized.
 
+## Important review finding: stale-lock recovery
+
+The full Grok review was read as review evidence. This follow-up changes only
+`browser-first/host/embed-governance-storage.mjs`, its storage test, and these
+notes. The two Minor findings remain outside the assigned scope. Normal live
+owner `release()` is unchanged.
+
+The conductor approved replacing the tombstone rename with an exclusive
+`writer.lock.recovery` directory. Normal acquisition still uses exclusive
+`mkdir writer.lock` and creates `owner.json` with `O_EXCL`. Recovery first reads
+a valid dead owner (`ESRCH`), acquires the guard with exclusive `mkdir`, and
+creates private `guard.json` with `O_EXCL`: `pid`, random `uuid`, and `created`
+(milliseconds since the Unix epoch). Under the guard it rereads `owner.json`,
+requires the same PID and ownership UUID, and checks `ESRCH` again before
+removing the stale owner and directory. The guard remains held until the fresh
+writer directory and owner are installed. Cleanup checks the guard's PID, UUID,
+and timestamp before removing it. The tombstone path is removed. Normal
+live-owner `release()` is unchanged.
+
+Guard contention fails closed for activity storage for that bridge run, without
+waiting, spinning, or retrying in the background. The existing service catches
+storage startup failure and keeps metadata recording unavailable; chat and page
+sharing remain independent of successful logging. A subsequent bridge startup
+can reclaim a guard only if its valid recorded PID returns `ESRCH` and its
+`created` timestamp is strictly more than 60 seconds old. An exclusive `cleanup`
+directory inside the abandoned guard serializes its removal, so two delayed
+cleaners cannot remove a newly published guard. Under that marker the identity,
+age, and dead PID are checked again; acquisition then gets one exclusive attempt.
+A live/reused PID or `EPERM` never authorizes removal.
+
+**Residual crash window:** a dead process's guard younger than or equal to 60
+seconds continues to block stale-lock recovery. A bridge that encounters it
+keeps logging unavailable for that run, even after the window elapses; recovery
+requires a later startup. A crash between guard `mkdir` and complete metadata
+publication leaves an unverifiable guard that fails closed regardless of age.
+A crashed cleaner can leave its exclusive `cleanup` marker; that unverifiable
+marker also fails closed rather than recursively starting another recovery
+protocol. These interrupted-publication/cleanup cases require operator repair
+with the bridge stopped. Missing/malformed writer metadata likewise remains
+unrecoverable automatically.
+
+The retained filesystem-hook regression now exercises the late interleaving
+that defeated tombstone rename: delay a recoverer after its initial dead-owner
+check, install the other bridge's fresh live owner, then resume. It checks that
+the winner's lock remains in place, a third bridge cannot acquire it, and the
+winner can still write. With the previous tombstone implementation, the initial
+18-test run had nine passes and nine assertion failures, including the stolen
+live lock. The guarded implementation passes all 22 storage tests. Added cases
+cover a second recoverer while the guard is held, an unpublished guard, younger
+and older abandoned guards, old live/EPERM guards, changed PID/UUID/liveness on
+owner recheck, cleanup preserving a changed guard UUID, concurrent
+abandoned-guard cleaners, and interrupted cleanup. The concurrent-cleaner test
+first failed against the initial guarded implementation (one test, zero passes,
+one assertion failure), then passed with the exclusive cleanup marker.
+
+Three additional `rig-mutate` cases used
+`~/.claude/skills/resonant-rig/scripts/rig-mutate` on the uncommitted source:
+
+- Changing guard creation from exclusive `mkdir` to recursive `mkdir` made the
+  unpublished-guard assertion fail: one test, zero passes, one failure.
+- Removing the PID/ownership UUID recheck made both changed-owner assertions
+  fail: two tests, zero passes, two failures.
+- Making the abandoned-guard cleanup marker nonexclusive made its concurrent
+  cleaner assertion fail: one test, zero passes, one failure.
+
+All three mutation commands exited zero (mutant killed), restored the candidate
+byte-for-byte, and were independently checked against its pre-mutation SHA-256.
+Captured failures are behavioral assertions, not syntax or import errors. The
+restored storage plus consumer command below passes 45 tests, zero failures,
+skips, cancellations, or todo. Mutation scripts and raw logs remain outside Git
+in the temporary execution evidence directory under `guard-followup/`.
+
+Current follow-up validation (Node 24.21.0):
+
+- `node --test browser-first/test/embed-governance-storage.test.mjs`: 22 passed,
+  zero failures, skips or cancellations.
+- Storage plus its direct service consumers: 45 passed, zero failures, skips or
+  cancellations, using the explicit command below.
+- `npm run repo:hygiene`: passed.
+- `npm run docs:check`: passed.
+- `npm run test:docs`: 293 passed, one suite, zero failures, skips or cancellations.
+- `node scripts/security-pipeline/run-check.mjs`: all seven checks passed.
+- Final `npm run test:browser-first`: exit 1; 2,403 tests, 2,393 passed, eight
+  failed, two skipped, zero cancelled or todo (227273.983458 ms). All
+  embed-governance tests passed, including the pagination case. The eight
+  failure names match the historical record below: two CLI artifact self-tests
+  and six SDK fault tests, again reporting absent delegation artifacts and
+  OpenCode HTTP 500/missing-session prerequisites. The same two skips remain:
+  nested macOS sandbox unavailable and no launchable Chrome. This follow-up did
+  not rerun an unchanged baseline and does not claim a clean full suite.
+
+The earlier full-suite run (2,401 tests: 2,391 passes, eight failures, two skips)
+preceded the cleanup-marker additions and is not final-source verification.
+The final run above started after all source changes and mutations finished.
+Only these three files are changed in this follow-up:
+
+- `browser-first/host/embed-governance-storage.mjs`
+- `browser-first/test/embed-governance-storage.test.mjs`
+- `docs/planning/embed-governance-execution-notes.md`
+
+```bash
+node --test --test-concurrency=1 browser-first/test/embed-governance-storage.test.mjs browser-first/test/embed-governance-host-service.test.mjs browser-first/test/embed-governance-acceptance.test.mjs browser-first/test/embed-governance-transport.test.mjs browser-first/test/bridge-route-capability-audit.test.mjs
+```
+
 ## Execution record
 
-Raw command logs and mutation evidence are retained outside Git at `/tmp/embed-governance-execution`.
+Raw command logs and mutation evidence are retained outside Git in the temporary
+`embed-governance-execution/` evidence directory.
 
 ## Deviations and boundaries
 
@@ -43,7 +148,7 @@ Every task's initial test ran before implementation. Missing-module/export failu
 
 The nine exact task mutation matrices report 53 behavioral guard kills, and generated-copy parity adds one (54). Task 11's separate script-contract mutation adds one more (55). Task 7's separately requested source-only and origin-only mutations add two (57 total mutation cases). The Task 7 matrix was rerun successfully after the review fixes. Each guarded source was restored byte-for-byte. Because `rig-mutate` suppresses child output, the behavioral matrices were also replayed with captured output to inspect their actual assertion failures; syntax/import failures were not counted. Detailed synthetic-only evidence stays outside Git.
 
-## Final validation
+## Historical implementation validation
 
 The explicit Node command covers all 24 Node test files referenced anywhere in the plan, including files omitted from its final command but used in individual task checks. After the two review fixes it passes 227 tests, zero failures/skips/cancellations. The exact file list follows in the command appendix.
 
@@ -73,7 +178,7 @@ The eight final failures are:
 
 The first two are in `browser-first/test/addon-cli-execution-inprocess-self-test.test.mjs`; their child self-tests exit 1 because delegation has no result artifact. The other six are in `browser-first/test/live-sdk-lane.test.mjs`: OpenCode session startup returns HTTP 500/500, leaving required sessions absent and/or `OPENCODE_SCAN_INPUT_MISSING: opencode-server.json`. These remain failures; their underlying cause is not established, so none is classified as a proven sandbox artifact.
 
-Unmodified HEAD `00ba8494aa0c7502ad219f1500119bbbde2dcc91` was extracted with `git archive` into `/tmp/embed-governance-execution/baseline`, using a dependency symlink. Running those two files there also reports 32 tests: 23 passed, the same 8 failed, 1 skipped. That initial baseline invocation selected Node 25.7.0; a matched Node 24.21.0 repeat produced the same counts and named failures, recorded in `baseline-head-node24-failing-files.log`. The log named `baseline-failing-files.log` was inadvertently produced in the working tree and is only a current-files repeat, not baseline evidence; the actual unchanged-HEAD evidence uses `baseline-head-` log names.
+Unmodified HEAD `00ba8494aa0c7502ad219f1500119bbbde2dcc91` was extracted with `git archive` into the temporary evidence directory’s `baseline/` subdirectory, using a dependency symlink. Running those two files there also reports 32 tests: 23 passed, the same 8 failed, 1 skipped. That initial baseline invocation selected Node 25.7.0; a matched Node 24.21.0 repeat produced the same counts and named failures, recorded in `baseline-head-node24-failing-files.log`. The log named `baseline-failing-files.log` was inadvertently produced in the working tree and is only a current-files repeat, not baseline evidence; the actual unchanged-HEAD evidence uses `baseline-head-` log names.
 
 The two skips are also retained:
 
@@ -90,9 +195,9 @@ No workflow, generated checkout bridge config, SDK capability vocabulary, slot/g
 node --test --test-concurrency=1 browser-first/test/bridge-capability-token-consistency.test.mjs browser-first/test/bridge-route-capability-audit.test.mjs browser-first/test/bridge-server.test.mjs browser-first/test/embed-bar-actions.test.mjs browser-first/test/embed-bar-model.test.mjs browser-first/test/embed-bar.test.mjs browser-first/test/embed-descriptor.test.mjs browser-first/test/embed-first-share.test.mjs browser-first/test/embed-governance-acceptance.test.mjs browser-first/test/embed-governance-composition.test.mjs browser-first/test/embed-governance-contract.test.mjs browser-first/test/embed-governance-controller.test.mjs browser-first/test/embed-governance-host-service.test.mjs browser-first/test/embed-governance-privacy.test.mjs browser-first/test/embed-governance-storage.test.mjs browser-first/test/embed-governance-transport.test.mjs browser-first/test/embed-host-service.test.mjs browser-first/test/embed-interface-validation.test.mjs browser-first/test/embed-live-contract.test.mjs browser-first/test/main-workspace-settings.test.mjs browser-first/test/side-panel-entry.test.mjs browser-first/test/trace-redaction-packaging.test.mjs browser-first/test/trace-redaction.test.mjs scripts/module-ownership-doc.test.mjs
 ```
 
-## Changed files
+## Historical implementation changed files
 
-50 changed/new files; the existing classic redactor copy is byte-identical and therefore has no diff.
+The earlier implementation covered 50 changed/new files; the existing classic redactor copy is byte-identical and therefore has no diff.
 
 - `browser-first/README.md`
 - `browser-first/host/bridge-capability-tokens.mjs`
