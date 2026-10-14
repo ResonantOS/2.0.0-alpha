@@ -1,6 +1,6 @@
 import http from 'node:http';
 import { lstatSync, readFileSync } from 'node:fs';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 
 const DEFAULT_EXTENSION_ID = 'cdpdmmalhmokbfcfgogoepnjplaakgnl';
 const BODY_LIMIT = 1024 * 1024;
@@ -36,7 +36,9 @@ const embedStatusRoute = (readStatus) => ({
 });
 const disabledService = () => ({
   enabled: false,
-  embedRoutes: [embedStatusRoute(() => ({ available: false, profile: null }))],
+  extensionOrigin: null,
+  getDescriptor: () => null,
+  embedRoutes: [embedStatusRoute(() => ({ available: false, profile: null, harness: null }))],
   matches: () => false,
   setPublicOrigin() {},
   close() {}
@@ -61,6 +63,9 @@ export function createEmbedHostService({ env = process.env, now = Date.now } = {
   if (!token || /[\r\n\x00-\x1f\x7f]/.test(token)) throw new Error('Invalid embed credential');
   const upstream = new URL(config.upstreamUrl);
   const extensionOrigin = `chrome-extension://${config.extensionId}`;
+  const harness = Object.freeze({ harnessId: 'addon.augmentor-embed', interfaceId: 'panel',
+    label: 'Augmentor', governance: 'self-governed', noticeKey: 'augmentor-v1-' +
+      createHash('sha256').update(JSON.stringify(['addon.augmentor-embed', upstream.origin]), 'utf8').digest('hex') });
   const prefix = `/embed/${config.profile}/`;
   const tickets = new Map();
   const sessions = new Map();
@@ -251,14 +256,16 @@ iframe.src = ${JSON.stringify(prefix)};
   }
   return {
     enabled: true,
+    extensionOrigin,
+    getDescriptor: () => closed ? null : { ...harness },
     embedRoutes: [
-      embedStatusRoute(() => ({ available: !closed, profile: closed ? null : config.profile })),
+      embedStatusRoute(() => ({ available: !closed, profile: closed ? null : config.profile, harness: closed ? null : { ...harness } })),
       { method: 'POST', path: '/embed/session', requiredCapability: 'addon-runtime-control', handler: async () => {
         if (closed) throw new Error('Embed service unavailable');
         for (const [ticket, expiry] of tickets) if (expiry <= now()) tickets.delete(ticket);
         const ticket = opaqueId();
         tickets.set(ticket, now() + 60_000);
-        return { hostPath: `/embed-host/?ticket=${ticket}` };
+        return { hostPath: `/embed-host/?ticket=${ticket}`, harness: { ...harness } };
       } }
     ],
     matches, handleHttp, handleUpgrade,

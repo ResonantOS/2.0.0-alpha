@@ -77,8 +77,31 @@ export class HarnessTransportError extends Error {
     this.code = safe.code;
   }
 }
-function routeError(error, family) {
-  return family === 'harness' ? publicHarnessTransportError(error) : boundaryError(error);
+import { activityError, publicActivityError } from '../../src/core/embed-governance-contract.js';
+export function classifyEmbedGovernanceTarget(target) {
+  const raw=String(target??'/');
+  const path=raw.replace(/^https?:\/\/[^/]+/i,'').split('?')[0];
+  let decoded;try{decoded=decodeURIComponent(path);}catch{decoded=path;}
+  if(![path,decoded].some(p=>p==='/embed-governance'||p.startsWith('/embed-governance/')))return null;
+  let pathname=path,malformed=false;
+  try {
+    const u=new URL(raw,'http://127.0.0.1');pathname=u.pathname;
+    malformed=!/^\/(?!\/)[^\s#\\]*$/.test(raw)||/%(?![0-9a-f]{2})/i.test(raw)||pathname!==path||decoded!==path;
+  }catch{malformed=true;}
+  return {pathname,malformed};
+}
+function exactExtensionOrigin(request,extensionOrigin) {
+  const origins=[];
+  for(let i=0;i<(request.rawHeaders??[]).length;i+=2)if(String(request.rawHeaders[i]).toLowerCase()==='origin')origins.push(request.rawHeaders[i+1]);
+  return typeof extensionOrigin==='string'&&/^chrome-extension:\/\/[a-p]{32}$/.test(extensionOrigin)&&origins.length===1&&origins[0]===extensionOrigin&&request.headers.origin===extensionOrigin;
+}
+function governanceBodyShape(request,body) {
+  if(request.method==='GET'&&(request.headers['transfer-encoding']!==undefined||Number(request.headers['content-length']??0)!==0||Object.keys(body??{}).length))throw activityError('invalid-request');
+}
+
+function routeError(error,family) {
+  if(family==='embed-governance')return publicActivityError(error);
+  return family==='harness'?publicHarnessTransportError(error):boundaryError(error);
 }
 export class OpenCodeBoundaryError extends Error {
   constructor(code, status) {
@@ -112,25 +135,31 @@ export function validateLoopbackHost(request, {listenerPort = request.socket?.lo
   return match[2] === String(listenerPort) || match[2] === getPublicPort();
 }
 export function authorizeBridgeRoute(request, {
-  routes = [], bridgeToken, bridgeCapabilityTokens = {}, capabilityBootstrapToken,
-  listenerPort = request.socket?.localPort, getPublicPort = () => undefined, extensionOrigin, allowedOrigins = [],
-} = {}) {
-  const route = compileRoutes(routes).get(routeKey(request.method, request.url));
-  const owned = boundaryPath(request.url) || route?.loopbackHostOnly;
-  const refuse = (status, code, error) => route?.errorFamily === "harness" ? publicHarnessTransportError({ code }, status) : owned ? publicOpenCodeError(code) : {status, payload:{ok:false,error}};
-  if (!isAuthorizedBridgeRequest(request, bridgeToken)) return refuse(401, "OPENCODE_BRIDGE_UNAUTHORIZED", "Unauthorized browser-first bridge request.");
-  if (!route) return refuse(404, "OPENCODE_ROUTE_UNKNOWN", "Unknown browser-first bridge route.");
-  if (route.requiredCapabilityBootstrap && !isAuthorizedCapabilityBootstrapRequest(request, capabilityBootstrapToken))
-    return refuse(403, "OPENCODE_CAPABILITY_REQUIRED", "Bridge route requires capability bootstrap authorization.");
-  if (!route.requiredCapability && !route.requiredCapabilityBootstrap)
-    return refuse(403, "OPENCODE_CAPABILITY_REQUIRED", "Bridge route declares no capability; refused by default.");
-  if (route.requiredCapability && !isAuthorizedCapabilityRequest(request, bridgeCapabilityTokens, route.requiredCapability))
-    return refuse(403, "OPENCODE_CAPABILITY_REQUIRED", `Bridge route requires ${route.requiredCapability} capability.`);
-  if (route.loopbackHostOnly && !validateLoopbackHost(request, {listenerPort,getPublicPort})) return refuse(403, "OPENCODE_HOST_REJECTED", "Host rejected.");
-  if (route.errorFamily === 'harness' && request.headers?.origin &&
-      pickAllowedOrigin(request.headers, extensionOrigin, allowedOrigins) !== request.headers.origin) {
-    return refuse(403, "OPENCODE_HOST_REJECTED", "Origin rejected.");
+  routes=[],bridgeToken,bridgeCapabilityTokens={},capabilityBootstrapToken,
+  listenerPort=request.socket?.localPort,getPublicPort=()=>undefined,extensionOrigin,allowedOrigins=[]
+}={}) {
+  const family=classifyEmbedGovernanceTarget(request.url);
+  let route;
+  try{route=compileRoutes(routes).get(routeKey(request.method,request.url));}catch{if(!family)throw Error('Invalid route');}
+  const owned=!!family||boundaryPath(request.url)||route?.loopbackHostOnly;
+  const refuse=(status,code,error)=>{
+    if(family){const mapped={400:'invalid-request',401:'unauthorized',403:'forbidden',404:'unknown-route',405:'method-not-allowed'};return publicActivityError(activityError(mapped[status]));}
+    return route?.errorFamily==='harness'?publicHarnessTransportError({code},status):owned?publicOpenCodeError(code):{status,payload:{ok:false,error}};
+  };
+  if(!isAuthorizedBridgeRequest(request,bridgeToken))return refuse(401,'OPENCODE_BRIDGE_UNAUTHORIZED','Unauthorized browser-first bridge request.');
+  if(family) {
+    // IncomingMessage headers are prototype accessors; spreading request loses them.
+    if(!validateLoopbackHost({url:'/embed-governance/state',headers:request.headers,rawHeaders:request.rawHeaders,socket:request.socket},{listenerPort,getPublicPort})||!exactExtensionOrigin(request,extensionOrigin))return refuse(403,'OPENCODE_HOST_REJECTED','Host rejected.');
+    if(family.malformed)return refuse(400,'OPENCODE_INVALID_REQUEST','Invalid request.');
+    if(!route)return refuse(routes.some(r=>r.path===family.pathname)?405:404,'OPENCODE_ROUTE_UNKNOWN','Unknown route.');
   }
+  if(!route)return refuse(404,'OPENCODE_ROUTE_UNKNOWN','Unknown browser-first bridge route.');
+  if(route.requiredCapabilityBootstrap&&!isAuthorizedCapabilityBootstrapRequest(request,capabilityBootstrapToken))return refuse(403,'OPENCODE_CAPABILITY_REQUIRED','Bridge route requires capability bootstrap authorization.');
+  if(!route.requiredCapability&&!route.requiredCapabilityBootstrap)return refuse(403,'OPENCODE_CAPABILITY_REQUIRED','Bridge route declares no capability; refused by default.');
+  if(route.requiredCapability&&!isAuthorizedCapabilityRequest(request,bridgeCapabilityTokens,route.requiredCapability))return refuse(403,'OPENCODE_CAPABILITY_REQUIRED',`Bridge route requires ${route.requiredCapability} capability.`);
+  if(route.loopbackHostOnly&&!validateLoopbackHost(request,{listenerPort,getPublicPort}))return refuse(403,'OPENCODE_HOST_REJECTED','Host rejected.');
+  if(route.requiredOrigin==='extension'&&!exactExtensionOrigin(request,extensionOrigin))return refuse(403,'OPENCODE_HOST_REJECTED','Origin rejected.');
+  if(route.errorFamily==='harness'&&request.headers?.origin&&pickAllowedOrigin(request.headers,extensionOrigin,allowedOrigins)!==request.headers.origin)return refuse(403,'OPENCODE_HOST_REJECTED','Origin rejected.');
   return {route};
 }
 
@@ -435,7 +464,30 @@ export async function writeBridgeEventStream(response, request, subscription, {e
   }
 }
 
-async function readJsonBody(request, boundaryOwned = false) {
+async function readJsonBody(request, boundaryOwned = false, maxBodyBytes, errorFamily) {
+  if(errorFamily==='embed-governance') {
+    return new Promise((resolve,reject)=>{
+      const chunks=[];let bytes=0,finished=false;
+      const fail=code=>{if(finished)return;finished=true;chunks.length=0;reject(activityError(code));};
+      request.on('data',chunk=>{
+        if(finished)return;
+        // No setEncoding: IncomingMessage chunks are Buffers, counted before decoding.
+        bytes+=chunk.length;
+        if(bytes>maxBodyBytes){fail(maxBodyBytes===0?'invalid-request':'request-too-large');return;}
+        chunks.push(chunk);
+      });
+      request.once('end',()=>{
+        if(finished)return;
+        try {
+          const text=new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(chunks));
+          if(maxBodyBytes===0){finished=true;resolve({});return;}
+          const value=JSON.parse(text);finished=true;resolve(value);
+        } catch {fail('invalid-request');}
+      });
+      request.once('error',()=>fail('invalid-request'));
+      request.once('aborted',()=>fail('invalid-request'));
+    });
+  }
   return new Promise((resolve, reject) => {
     let body = "", bytes = 0, rejected = false;
     request.setEncoding("utf8");
@@ -1243,7 +1295,8 @@ export async function evaluateBridgeRequestForSelfTest({
   let errorFamily;
   let owned = boundaryPath(url) || routes.some(route => route.loopbackHostOnly && route.path === String(url).split("?")[0]);
   try {
-    errorFamily = compileRoutes(routes).get(routeKey(method, url))?.errorFamily;
+    errorFamily = classifyEmbedGovernanceTarget(url) ? 'embed-governance' : compileRoutes(routes).get(routeKey(method, url))?.errorFamily;
+    owned ||= errorFamily === 'embed-governance';
     const request = {method, url, headers:normalizeHeaders(headers), rawHeaders, selfTest,
       openCodeTransport:{listenerPort,getPublicPort},
       bridgeTransport:{listenerPort,getPublicPort,extensionOrigin,allowedOrigins}};
@@ -1252,10 +1305,15 @@ export async function evaluateBridgeRequestForSelfTest({
     if (!authorization.route) return authorization;
     const {route} = authorization;
     owned ||= route.loopbackHostOnly;
+    if (errorFamily === 'embed-governance') {
+      governanceBodyShape(request, body);
+      if (method === 'POST' && Buffer.byteLength(JSON.stringify(body)) > route.maxBodyBytes) throw activityError('request-too-large');
+    }
     const result = await route.handler(method === "POST" ? body : {}, request);
     if (route.responseType === "sse" && result?.stream !== true) throw new OpenCodeBoundaryError("OPENCODE_INTERNAL");
     return {status:200,payload:route.responseType === "sse" ? {stream:true} : {ok:true,...result}};
   } catch (error) {
+    if (errorFamily === 'embed-governance') return publicActivityError(error);
     if (error instanceof HarnessTransportError) return publicHarnessTransportError(error);
     return owned ? routeError(error, errorFamily) : {status:500,payload:{ok:false,error:error instanceof Error ? error.message : String(error)}};
   }
@@ -1310,7 +1368,9 @@ export function createBridgeRequestHandler({
     let errorFamily;
     let owned = boundaryPath(request.url) || internalRoutes.some(route => route.loopbackHostOnly && route.path === String(request.url).split("?")[0]);
     try {
-      errorFamily = compileRoutes(internalRoutes).get(routeKey(request.method, request.url))?.errorFamily;
+      errorFamily = classifyEmbedGovernanceTarget(request.url) ? 'embed-governance' : compileRoutes(internalRoutes).get(routeKey(request.method, request.url))?.errorFamily;
+      owned ||= errorFamily === 'embed-governance';
+      if (errorFamily === 'embed-governance') response.setHeader('Cache-Control', 'no-store');
       if (request.method === "OPTIONS") {
         drainRefusedRequest(request, response);
         writeJson(response, 204, {}, extensionOrigin, request.headers, allowedOrigins);
@@ -1318,7 +1378,7 @@ export function createBridgeRequestHandler({
       }
       if (!clientIpAllowed(request.socket?.remoteAddress, allowedCidrs)) {
         drainRefusedRequest(request, response);
-        writeJson(response, 403, {ok:false,error:"Client IP not allowlisted for browser-first bridge."}, extensionOrigin, request.headers, allowedOrigins);
+        writeJson(response, 403, errorFamily === 'embed-governance' ? publicActivityError(activityError('forbidden')).payload : {ok:false,error:'Client IP not allowlisted for browser-first bridge.'}, extensionOrigin, request.headers, allowedOrigins);
         return;
       }
       if (embedService?.matches(request.url)) {
@@ -1341,6 +1401,7 @@ export function createBridgeRequestHandler({
       }
       const {route} = authorization;
       owned ||= route.loopbackHostOnly;
+      if (errorFamily === 'embed-governance') governanceBodyShape(request, {});
       if (route.errorFamily === 'harness' && request.method === 'GET' &&
           (request.headers['transfer-encoding'] || Number(request.headers['content-length'] ?? 0) !== 0)) {
         throw new OpenCodeBoundaryError("OPENCODE_INVALID_REQUEST");
@@ -1353,8 +1414,13 @@ export function createBridgeRequestHandler({
         return;
       }
       let body = {};
-      try { if (request.method === "POST") body = await readJsonBody(request, owned); }
-      catch (error) { if (owned) throw new OpenCodeBoundaryError("OPENCODE_INVALID_REQUEST"); throw error; }
+      try {
+        if (request.method === "POST" || errorFamily === 'embed-governance') body = await readJsonBody(request, owned, route.maxBodyBytes, errorFamily);
+      } catch (error) {
+        if (errorFamily === 'embed-governance') throw error;
+        if (owned) throw new OpenCodeBoundaryError("OPENCODE_INVALID_REQUEST");
+        throw error;
+      }
       const result = await evaluateBridgeRequestForSelfTest({method:request.method,url:request.url,
         headers:request.headers,rawHeaders:request.rawHeaders,body,bridgeToken,bridgeCapabilityTokens,
         capabilityBootstrapToken,routes:internalRoutes,listenerPort,getPublicPort,selfTest:false,extensionOrigin,allowedOrigins});

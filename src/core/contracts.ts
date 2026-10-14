@@ -616,7 +616,21 @@ export interface AddOnDeterministicSmokeTest {
   requiredCapabilities: Capability[];
 }
 
+export type AddOnInterfaceMode = "adapter-chat" | "embed";
+export type AddOnInterfaceGovernance = "governed" | "self-governed";
+type AddOnInterfaceBase = {
+  id: string;
+  label: string;
+  governance: AddOnInterfaceGovernance;
+  requiredCapabilities: Capability[];
+};
+export type AddOnInterface = AddOnInterfaceBase & (
+  | { mode: "adapter-chat"; agentRuntimeRef: "agentRuntime"; surfaceId?: never }
+  | { mode: "embed"; surfaceId: string; agentRuntimeRef?: never }
+);
+
 export interface AddOnManifest {
+  interfaces?: AddOnInterface[];
   sdkVersion?: string;
   id: string;
   name: string;

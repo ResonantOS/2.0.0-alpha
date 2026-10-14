@@ -1,3 +1,4 @@
 #!/usr/bin/env node
-
-import "./browser-first/host/run-bridge-minimal.mjs";
+import { prepareEmbedGovernance } from "./scripts/prepare-embed-governance.mjs";
+await prepareEmbedGovernance();
+await import("./browser-first/host/run-bridge-minimal.mjs");

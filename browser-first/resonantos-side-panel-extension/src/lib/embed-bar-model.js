@@ -27,3 +27,7 @@ export function agentViewUrl(href, mode) {
   if (url.searchParams.has('agentView')) url.searchParams.set('agentView', mode);
   return url.href;
 }
+
+export function embedGovernanceDescription(_descriptor) {
+  return 'Augmentor runs outside ResonantOS approvals. Its own approvals cover its tools. ResonantOS access still requires separate permission.';
+}

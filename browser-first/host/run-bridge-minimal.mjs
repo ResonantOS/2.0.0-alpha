@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createEmbedGovernanceHostService } from './embed-governance-host-service.mjs';
 import { createEmbedHostService } from './embed-host-service.mjs';
 
 import { spawn } from "node:child_process";
@@ -413,9 +414,16 @@ const providerBridgeRoutes = harnessService.composeProviderRoutes(legacyProvider
 
 const embedService = createEmbedHostService();
 const { embedRoutes } = embedService;
+const governanceService = await createEmbedGovernanceHostService({
+  userRoot: userRoot(), repoRoot,
+  getDescriptor: () => embedService.extensionOrigin === resonantExtensionOrigin ? embedService.getDescriptor() : null
+});
+const { governanceRoutes } = governanceService;
+
 
 const bridgeRoutes = [
   ...embedRoutes,
+  ...governanceRoutes,
   ...browserDiagnosticsRoutes,
   ...providerBridgeRoutes,
   ...agentControlRoutes,
@@ -459,26 +467,34 @@ const selfTestHandled = await runBrowserFirstSelfTest({
 });
 
 if (selfTestHandled) {
+  await governanceService.close();
   process.exit(0);
 }
 
 if (!existsSync(path.join(resonantExtension, "manifest.json"))) {
   console.error(`ResonantOS extension is missing: ${resonantExtension}`);
+  await governanceService.close();
   process.exit(1);
 }
 
 const bridgePort = Number(args.get("bridge-port") ?? process.env.RESONANTOS_BROWSER_FIRST_BRIDGE_PORT ?? defaultBridgePort);
-const bridgeInfo = await startBridgeServerWithFallback({
-  port: bridgePort,
-  bridgeToken,
-  bridgeCapabilityTokens,
-  capabilityBootstrapToken,
-  extensionOrigin: resonantExtensionOrigin,
-  routes: bridgeRoutes,
-  embedService,
-  host: getBridgeHost(),
-  getPublicPort,
-});
+let bridgeInfo;
+try {
+  bridgeInfo = await startBridgeServerWithFallback({
+    port: bridgePort,
+    bridgeToken,
+    bridgeCapabilityTokens,
+    capabilityBootstrapToken,
+    extensionOrigin: resonantExtensionOrigin,
+    routes: bridgeRoutes,
+    embedService,
+    host: getBridgeHost(),
+    getPublicPort,
+  });
+} catch (error) {
+  await governanceService.close();
+  throw error;
+}
 
 const activeBridgePort = bridgeInfo.actualPort;
 const bridgePublicUrl = getBridgePublicUrl(activeBridgePort);
@@ -505,6 +521,7 @@ console.log(JSON.stringify({
 console.log(`Load ${resonantExtension} in Chrome as an unpacked extension.`);
 
 const shutdown = async () => {
+  await governanceService.close();
   embedService.close();
   await flushPendingExtensionPrefs().catch(() => undefined);
   try { unsubscribeOpenCodeExecution(); } catch { /* noop */ }

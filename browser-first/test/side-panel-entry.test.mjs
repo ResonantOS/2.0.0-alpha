@@ -75,8 +75,10 @@ test('mounted embed preserves relay boundaries, history and bar placement', asyn
   const sent = [];
   const view = await mountEmbedView({ ...f.options, getConnection: async () => ({
     bridgeUrl: 'http://127.0.0.1:18873', request: async (route, options) => {
+      const harness = { harnessId: 'addon.augmentor-embed', interfaceId: 'panel', label: 'Augmentor', governance: 'self-governed', noticeKey: 'augmentor-v1-' + 'a'.repeat(64) };
+      if (route === '/embed-governance/state') return { recordingEnabled: false, writeEpoch: '12345678-1234-4234-8234-123456789abc', noticeKey: harness.noticeKey, noticeVersion: 1, noticeAcknowledged: false, available: true, problem: null };
       assert.equal(route, '/embed/session'); assert.equal(options.method, 'POST');
-      return { hostPath: `/embed-host/?ticket=${'a'.repeat(43)}` };
+      return { hostPath: `/embed-host/?ticket=${'a'.repeat(43)}`, harness };
     }
   }) });
   t.after(() => view.bar.destroy());
@@ -97,7 +99,10 @@ test('mounted embed preserves relay boundaries, history and bar placement', asyn
   assert.equal(view.state.ready, true);
   assert.equal(view.bar.root.querySelector('[data-control=status]').textContent, 'Online · idle');
   for (let i = 0; i < 60; i++) relay(frame.contentWindow, 'http://127.0.0.1:18873', { type: 'augmentor-event', i });
-  assert.equal(view.state.last.length, 50); assert.equal(view.state.last[0].i, 10);
+  assert.deepEqual(view.state.last, [{ type: 'augmentor-ready' }, { type: 'augmentor-status', online: true, busy: false }]);
+  for (let i = 0; i < 60; i++) relay(frame.contentWindow, 'http://127.0.0.1:18873', { type: 'augmentor-status', online: true, busy: false, conversationId: 'CANARY-' + i });
+  assert.equal(view.state.last.length, 50);
+  assert.ok(view.state.last.every(row => JSON.stringify(row) === JSON.stringify({ type: 'augmentor-status', online: true, busy: false })));
   for (const type of ['augmentor-focus', 'augmentor-prompt', 'augmentor-new-chat', 'augmentor-context']) {
     assert.equal(view.state.send({ type }), true);
   }

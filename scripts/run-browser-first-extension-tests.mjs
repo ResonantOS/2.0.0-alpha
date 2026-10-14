@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+import { prepareEmbedGovernance } from "./prepare-embed-governance.mjs";
+
 import { readdir } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
@@ -7,6 +9,8 @@ import { spawn } from "node:child_process";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const testRoot = path.join(repoRoot, "browser-first", "test");
+
+await prepareEmbedGovernance();
 
 const files = (await readdir(testRoot))
   .filter((file) => file.endsWith(".test.mjs"))

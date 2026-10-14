@@ -1,7 +1,8 @@
+import { createEmbedGovernanceHostService } from '../host/embed-governance-host-service.mjs';
 import { createEmbedHostService } from '../host/embed-host-service.mjs';
 import { writeFile } from 'node:fs/promises';
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { realpath, mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -160,7 +161,9 @@ async function withBridgeRoutes(callback) {
       RESONANTOS_EMBED_POC: '1', RESONANTOS_EMBED_UPSTREAM_URL: 'http://127.0.0.1:18872',
       RESONANTOS_EMBED_PROFILE: 'poc', RESONANTOS_EMBED_TOKEN_FILE: embedTokenFile,
     } });
+    const governance = await createEmbedGovernanceHostService({ userRoot: await realpath(root), getDescriptor: () => embed.getDescriptor() });
     const routeArrays = {
+      governanceRoutes: governance.governanceRoutes,
       embedRoutes: embed.embedRoutes,
       harnessRoutes: harness.harnessRoutes,
       browserDiagnosticsRoutes: diagnostics.browserDiagnosticsRoutes,
@@ -173,7 +176,7 @@ async function withBridgeRoutes(callback) {
     };
     const routes = Object.values(routeArrays).flat();
 
-    try { await callback(routes, routeArrays); } finally { embed.close(); await harness.close(); }
+    try { await callback(routes, routeArrays); } finally { await governance.close(); embed.close(); await harness.close(); }
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -281,5 +284,19 @@ test('embed routes have exactly the declared capability boundary', async () => {
     ]);
     assert.equal(capabilityForBridgeRoute('/embed/status?probe=1', 'GET'),
       'addon-runtime-control');
+  });
+});
+
+test('governance routes have exact capabilities, origin and byte boundaries',async()=>{
+  await withBridgeRoutes(async(_routes,arrays)=>{
+    assert.deepEqual(arrays.governanceRoutes.map(r=>[bridgeRouteKey(r),r.requiredCapability,r.maxBodyBytes]),[
+      ['GET /embed-governance/state','addon-runtime-read',0],
+      ['POST /embed-governance/recording','embed-governance-consent-write',512],
+      ['POST /embed-governance/notice','embed-governance-consent-write',512],
+      ['POST /embed-governance/events','addon-record-write',2048],
+      ['GET /embed-governance/events','addon-record-read',0],
+      ['POST /embed-governance/events/delete','addon-record-write',512]
+    ]);
+    for(const r of arrays.governanceRoutes){assert.equal(r.loopbackHostOnly,true);assert.equal(r.requiredOrigin,'extension');assert.equal(r.errorFamily,'embed-governance');}
   });
 });

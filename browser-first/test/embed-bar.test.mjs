@@ -177,3 +177,15 @@ test('menu arrows move in opposite directions and wrap across all choices; Home 
   assert.equal(fromOutside('ArrowUp'), choices.at(-1));
   assert.equal(fromOutside('ArrowDown'), choices[0]);
 });
+
+test('self-governed badge is visible, focusable, dismissible and never inferred from status',async t=>{
+  const f=fixture();t.after(()=>{f.bar.destroy();f.dom.window.close();});await f.bar.ready;
+  const badge=f.bar.root.querySelector('[data-tier]');assert.ok(badge);assert.equal(badge.textContent,'Self-governed');assert.equal(badge.tabIndex,0);
+  assert.equal(badge.previousElementSibling.dataset.control,'approvals');assert.equal(badge.nextElementSibling.dataset.control,'status');
+  const description=f.dom.window.document.getElementById(badge.getAttribute('aria-describedby'));assert.match(description.textContent,/outside ResonantOS approvals/);
+  badge.focus();assert.equal(description.hidden,false);
+  badge.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));assert.equal(description.hidden,true);
+  f.bar.setDescriptor({governance:'governed',label:'CANARY'});f.bar.setStatus({online:true,busy:false,governance:'governed'});
+  assert.equal(badge.textContent,'Self-governed');assert.equal(description.textContent.includes('CANARY'),false);
+  assert.equal(f.bar.root.querySelector('[data-control=approvals]').title,'ResonantOS approvals: 2 pending');
+});

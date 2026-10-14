@@ -21,6 +21,8 @@
 // --<arg> or set the env var to pin a stable token) — do not rename them.
 
 export const BRIDGE_CAPABILITY_TOKEN_SPECS = Object.freeze([
+  { capability: 'embed-governance-consent-write', arg: 'embed-governance-consent-token', env: 'RESONANTOS_BROWSER_FIRST_EMBED_GOVERNANCE_CONSENT_TOKEN' },
+
   { capability: "provider-credential-write", arg: "provider-credential-token", env: "RESONANTOS_BROWSER_FIRST_PROVIDER_CREDENTIAL_TOKEN" },
   { capability: "provider-routing-write", arg: "provider-routing-token", env: "RESONANTOS_BROWSER_FIRST_PROVIDER_ROUTING_TOKEN" },
   { capability: "provider-diagnostics-read", arg: "provider-diagnostics-token", env: "RESONANTOS_BROWSER_FIRST_PROVIDER_DIAGNOSTICS_TOKEN" },

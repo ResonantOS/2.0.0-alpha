@@ -23,7 +23,10 @@ function fixture({ mode = 'ask-before-action', failPermissions = false,
       set: async value => { if (failWrite) throw Error('write failed'); writes.push(value); }
     } }
   };
-  const actions = createEmbedBarActions({ chromeApi,
+  const actions = createEmbedBarActions({
+beforeShare: async () => ({ frame: {}, noticeKey: 'fixture', remember: false }),
+isShareCurrent: () => true,
+ chromeApi,
     locationRef: { href: 'https://test.invalid/p?agentView=embed', assign: url => assigned.push(url) },
     sendContext: message => { sent.push(message); return true; }
   });
@@ -62,7 +65,10 @@ test('allowed read modes share; restricted tabs and failed sends do not report s
   assert.equal(await restricted.actions.sharePage(), 'No readable page');
   assert.deepEqual(restricted.sent, []);
   const f = fixture();
-  const actions = createEmbedBarActions({ chromeApi: f.chromeApi,
+  const actions = createEmbedBarActions({
+beforeShare: async () => ({ frame: {}, noticeKey: 'fixture', remember: false }),
+isShareCurrent: () => true,
+ chromeApi: f.chromeApi,
     locationRef: {}, sendContext: () => false });
   assert.equal(await actions.sharePage(), 'Assistant offline');
 });

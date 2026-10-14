@@ -755,7 +755,7 @@ is why recording is off by default and the user can inspect and delete it.
 
 ## Findings
 
-Read-only baseline: branch `testing/augmentor-embed-sidecar`; working tree initially clean. No branch switch, container launch, bridge launch, implementation, or commit is part of authoring this plan. The approved testing-branch exception controls this experiment; no merge into `dev` is authorized. `RTK.md` is absent in the worktree; the inherited `/Users/dr.tom/RTK.md` was read. The spec's new module paths do not exist yet.
+Read-only baseline: branch `testing/augmentor-embed-sidecar`; working tree initially clean. No branch switch, container launch, bridge launch, implementation, or commit is part of authoring this plan. The approved testing-branch exception controls this experiment; no merge into `dev` is authorized. `RTK.md` is absent in the worktree; the inherited `~/RTK.md` was read. The spec's new module paths do not exist yet.
 
 | Fact resolved before task design | Repository evidence |
 | --- | --- |
@@ -850,7 +850,7 @@ Each row names one responsibility. Generated files are committed deterministic s
 
 ## Execution rules
 
-All shell commands below run from `/Users/dr.tom/2.0.0-alpha/.resonant-rig/worktrees/poc-augembed`. Commit commands are instructions for later implementation only. Before each commit run `git diff --check`; stage only the enumerated files. Never stage generated bridge config, evidence or user roots. Existing tests remain; additions below are complete code unless explicitly described as a whole-file replacement. No task changes SDK capabilities, slots, grants, DSH, or harness lifecycle.
+All shell commands below run from `.resonant-rig/worktrees/poc-augembed`. Commit commands are instructions for later implementation only. Before each commit run `git diff --check`; stage only the enumerated files. Never stage generated bridge config, evidence or user roots. Existing tests remain; additions below are complete code unless explicitly described as a whole-file replacement. No task changes SDK capabilities, slots, grants, DSH, or harness lifecycle.
 
 For each security guard, the named failing-test step is its required fail-before-fix red evidence: run it against the pre-task code, retain its nonzero result outside Git, then run the same assertion after the fix. A missing-module failure establishes only introduction, not guard sensitivity. Where a guard is new, execute the task's executable `rig-mutate` matrix after green and inspect the named behavioral assertion. The wrapper snapshots and restores only the guarded file, then verifies byte identity. A syntax/import failure is not acceptable red evidence. All filesystem mutation fixtures use a synthetic repository beneath their own external temporary root, so removing containment cannot write into the real repository. Do not count import failures as mutation kills. Do not commit a mutation.
 

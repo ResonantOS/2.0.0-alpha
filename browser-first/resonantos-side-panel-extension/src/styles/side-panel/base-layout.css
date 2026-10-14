@@ -291,3 +291,18 @@ html.has-embed-bar:not(.embed-mode) .chat-shell { height: calc(100vh - var(--emb
 @media (prefers-reduced-motion: reduce) {
   .embed-bar, .embed-bar * { animation: none !important; transition: none !important; }
 }
+
+.embed-tier { flex: 0 0 auto; white-space: nowrap; font-size: 11px; line-height: 20px; padding: 0 5px; border: 1px solid var(--embed-bar-line); border-radius: 4px; }
+.embed-tier:focus-visible { outline: 2px solid var(--embed-bar-focus); outline-offset: 1px; }
+.embed-tier-description { position: absolute; top: 36px; right: 6px; max-width: 290px; padding: 8px; background: var(--embed-bar-bg); color: var(--embed-bar-text); border: 1px solid var(--embed-bar-line); border-radius: 4px; white-space: normal; font-size: 12px; }
+@media (max-width: 360px) {
+  .embed-status-text { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .embed-bar-status::before { content: ''; display: block; width: 7px; height: 7px; border-radius: 50%; background: #b2bac4; }
+  .embed-bar-status[data-state="online"]::before { background: #8bd3a6; }
+  .embed-bar-status[data-state="busy"]::before { background: #e7c778; }
+}
+.embed-dialog-overlay { position: fixed; inset: 0; z-index: 10000; display: grid; place-items: center; background: #0009; padding: 12px; }
+.embed-dialog { width: min(100%, 420px); box-sizing: border-box; padding: 16px; border: 1px solid #3b4149; border-radius: 8px; background: #111315; color: #eef1f4; font: 14px system-ui; }
+.embed-dialog h2 { margin: 0 0 12px; font-size: 16px; }
+.embed-dialog button { padding: 8px 12px; margin-right: 8px; background: #282e35; color: #eef1f4; border: 1px solid #68717d; border-radius: 4px; }
+.embed-dialog button:focus-visible { outline: 2px solid #7fc4ff; outline-offset: 2px; }

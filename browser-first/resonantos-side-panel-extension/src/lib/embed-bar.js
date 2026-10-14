@@ -1,4 +1,4 @@
-import { embedStatusLabel } from './embed-bar-model.js';
+import { embedStatusLabel, embedGovernanceDescription } from './embed-bar-model.js';
 
 export function mountEmbedBar({ documentRef, parent, mode, toggleWorkspace,
   workspaceVisible, openWorkspace, selectAssistant, sharePage, readApprovals }) {
@@ -82,28 +82,41 @@ export function mountEmbedBar({ documentRef, parent, mode, toggleWorkspace,
   documentRef.addEventListener('keydown', keydown);
   documentRef.addEventListener('pointerdown', outside);
   documentRef.defaultView?.addEventListener('blur', closeMenu);
+  let tierDescription;
   if (mode === 'embed') {
     const page = button('Page', 'page', 'M5 3h10l4 4v14H5z M14 3v5h5 M8 12h8 M8 16h6');
     page.addEventListener('click', () => {
       if (page.disabled) return;
       page.disabled = true;
       void run(async () => announce(await sharePage()), 'Page context unavailable')
-        .finally(() => { page.disabled = false; });
+        .finally(() => { page.disabled = false; page.focus(); });
     });
     approvals = button('Approvals unavailable', 'approvals', 'M5 4h14v16H5z M8 12l3 3 5-6');
     const count = documentRef.createElement('span'); count.className = 'embed-approval-count';
     count.setAttribute('aria-hidden', 'true'); count.textContent = '—'; approvals.append(count);
     approvals.addEventListener('click', () => run(() => openWorkspace(), 'Workspace unavailable'));
+    const badge=documentRef.createElement('span');badge.dataset.tier='self-governed';badge.className='embed-tier';badge.tabIndex=0;badge.textContent='Self-governed';
+    tierDescription=documentRef.createElement('span');tierDescription.id='embed-tier-description';tierDescription.className='embed-tier-description';tierDescription.setAttribute('role','tooltip');tierDescription.textContent=embedGovernanceDescription(null);tierDescription.hidden=true;
+    badge.setAttribute('aria-describedby',tierDescription.id);
+    const showTier=()=>{tierDescription.hidden=false;},hideTier=()=>{tierDescription.hidden=true;};
+    badge.addEventListener('focus',showTier);badge.addEventListener('mouseenter',showTier);badge.addEventListener('blur',hideTier);badge.addEventListener('mouseleave',hideTier);
+    badge.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();hideTier();}});
+    root.append(badge);
+
     status = documentRef.createElement('span'); status.dataset.control = 'status';
     status.className = 'embed-bar-status'; status.setAttribute('aria-live', 'polite');
     root.append(status);
+    root.append(tierDescription);
+
   }
   root.append(menu, notice);
   parent.prepend(root);
   function setStatus(value) {
     if (!status || disposed) return;
     const label = embedStatusLabel(value);
-    status.textContent = label; status.title = label;
+    let text=status.querySelector('.embed-status-text');
+    if(!text){text=documentRef.createElement('span');text.className='embed-status-text';status.append(text);}
+    text.textContent=label;status.title=label;
     status.setAttribute('aria-label', `Status: ${label}`);
     status.dataset.state = value?.online === true ? (value.busy === true ? 'busy' : 'online') : 'offline';
   }
@@ -125,7 +138,7 @@ export function mountEmbedBar({ documentRef, parent, mode, toggleWorkspace,
           // A newer request invalidates this snapshot and requires only one more read.
           if (sequence !== refreshSequence) continue;
           workspace.setAttribute('aria-pressed', String(visible));
-          const label = count === null ? 'Approvals unavailable' : `Approvals: ${count} pending`;
+          const label = count === null ? 'Approvals unavailable' : `ResonantOS approvals: ${count} pending`;
           approvals.title = label; approvals.setAttribute('aria-label', label);
           approvals.querySelector('span').textContent = count === null ? '—' : String(count);
         } while (sequence !== refreshSequence);
@@ -135,7 +148,7 @@ export function mountEmbedBar({ documentRef, parent, mode, toggleWorkspace,
   }
   setStatus(null);
   const ready = refresh();
-  return { root, ready, refresh, setStatus, destroy() {
+  return { root, ready, refresh, setStatus, announce, setDescriptor(value) { if(tierDescription) tierDescription.textContent=embedGovernanceDescription(value); }, destroy() {
     disposed = true;
     documentRef.removeEventListener('keydown', keydown);
     documentRef.removeEventListener('pointerdown', outside);

@@ -232,3 +232,18 @@ Current responsibility, verified status, and release workflow are routed by
 [Module Ownership](../docs/architecture/MODULE-OWNERSHIP.md),
 [Status](../docs/STATUS.md), and
 [Project Governance](../docs/PROJECT_GOVERNANCE.md).
+
+## Testing-branch embedded harness activity
+
+The embed experiment remains outside Alpha and off unless `RESONANTOS_EMBED_POC=1` is set. Its bar shows Self-governed: Augmentor's own tool approvals do not approve ResonantOS operations. Changing Assistant view does not assign a primary-agent slot.
+
+Settings > Privacy > Embedded harness activity controls opt-in metadata recording, which defaults off. The bridge stores conversation changes, reply transitions, validated tool names/error flags and shared page hostnames for 30 days under its external user root. No prompt, reply, tool arguments/results, page title, URL path, query or fragment belongs in this log. Recording is best effort, local, inspectable and deletable; it is not an approval receipt.
+
+First permitted page sharing asks about the configured Augmentor recipient. Cancel or failed local dispatch remembers nothing. A successful local share may remember the notice even while activity recording is off. A changed upstream origin or port asks again. Deleting readable history preserves that choice and notices; recovery of an unreadable store turns recording off and clears notices.
+
+The conductor alone runs `browser-first/test/embed-live.mjs` with Manolo's container and the spike bridge. Workers write and syntax-check the proof. `EMBED-UPSTREAM-1` must verify the real recipient/version and every required relay field before mapping implementation; fixtures cannot satisfy it. Live evidence stays outside Git. A reviewed ADR number is required before any merge into dev.
+
+Deterministic green does not complete EMBED-UPSTREAM-1 or authorize a merge into dev.
+
+Implementation deviations and deterministic results are recorded in the
+[execution notes](../docs/planning/embed-governance-execution-notes.md).

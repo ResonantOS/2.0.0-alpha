@@ -295,6 +295,71 @@ const validateEnum = <T extends string>(
   }
 };
 
+const validateInterfaces = (issues: AddOnValidationIssue[], candidate: Record<string, unknown>): void => {
+  if (candidate.interfaces === undefined) return;
+  const add = (code: string, path: string, message: string) => pushIssue(issues, "error", code, path, message);
+  const entries = candidate.interfaces;
+  if (!Array.isArray(entries) || entries.length > 16) {
+    add("interfaces-array", "interfaces", "Interfaces must be an array of at most 16 entries."); return;
+  }
+  const records = (value: unknown): Record<string, unknown>[] => Array.isArray(value) ? value.filter(isRecord) : [];
+  const caps = (value: unknown): unknown[] => Array.isArray(value) ? value : [];
+  const requested = new Set(records(candidate.requestedCapabilities).map(v => v.capability));
+  const seen = new Set<string>();
+  entries.forEach((entry: unknown, index: number) => {
+    const p = `interfaces[${index}]`;
+    if (!isRecord(entry) || ![Object.prototype, null].includes(Object.getPrototypeOf(entry))) {
+      add("interface-object", p, "Interface must be a plain JSON object."); return;
+    }
+    const allowed = ["id", "label", "mode", "governance", "requiredCapabilities",
+      ...(entry.mode === "embed" ? ["surfaceId"] : entry.mode === "adapter-chat" ? ["agentRuntimeRef"] : [])];
+    for (const key of Object.keys(entry)) if (!allowed.includes(key)) add("interface-field", `${p}.${key}`, "Interface field is not allowed.");
+    if (typeof entry.id !== "string" || !/^[a-z][a-z0-9-]{0,63}$/.test(entry.id)) add("interface-id", `${p}.id`, "Interface ID must be a bounded stable name.");
+    else {
+      if (seen.has(entry.id)) add("duplicate-interface-id", `${p}.id`, "Interface IDs must be unique.");
+      seen.add(entry.id);
+    }
+    if (typeof entry.label !== "string" || [...entry.label].length < 1 || [...entry.label].length > 80 ||
+        /[\x00-\x1f\x7f]/.test(entry.label) || entry.label.trim() !== entry.label) add("interface-label", `${p}.label`, "Interface label must be bounded text without controls or surrounding whitespace.");
+    if (!["adapter-chat", "embed"].includes(entry.mode as string)) add("interface-mode", `${p}.mode`, "Interface mode is not supported.");
+    if (!["governed", "self-governed"].includes(entry.governance as string)) add("interface-governance", `${p}.governance`, "Interface governance must be explicit.");
+    const requirements = new Set<unknown>();
+    if (!Array.isArray(entry.requiredCapabilities)) add("interface-capabilities", `${p}.requiredCapabilities`, "Interface capabilities must be an array.");
+    else entry.requiredCapabilities.forEach((capability: unknown, i: number) => {
+      const q = `${p}.requiredCapabilities[${i}]`;
+      if (!ADDON_CAPABILITIES.includes(capability as Capability) || requirements.has(capability)) add("interface-capabilities", q, "Interface capabilities must be unique supported values.");
+      else if (!requested.has(capability)) add("interface-unrequested-capability", q, "Interface capability must be requested by the manifest.");
+      requirements.add(capability);
+    });
+    const dependencies: unknown[] = [];
+    if (entry.mode === "embed") {
+      const matches = records(candidate.surfaces).filter(s => s.id === entry.surfaceId);
+      if (typeof entry.surfaceId !== "string" || matches.length !== 1 || matches[0].type !== "embedded-pane") add("interface-surface-reference", `${p}.surfaceId`, "Embed must reference exactly one embedded-pane surface.");
+      if (Object.hasOwn(entry, "agentRuntimeRef")) add("interface-surface-reference", `${p}.agentRuntimeRef`, "Embed cannot reference an agent runtime.");
+      dependencies.push("ui-embedding");
+      const nav = matches.length === 1 && isRecord(matches[0].shellNavigation) ? matches[0].shellNavigation : null;
+      dependencies.push(...caps(nav?.requiredCapabilities));
+      if (isRecord(candidate.embeddedWorkspace) && candidate.embeddedWorkspace.surfaceId === entry.surfaceId) dependencies.push(...caps(candidate.embeddedWorkspace.requiredCapabilities));
+    }
+    if (entry.mode === "adapter-chat") {
+      const runtime = isRecord(candidate.agentRuntime) ? candidate.agentRuntime : null;
+      const runtimeErrors = issues.some(i => i.severity === "error" && (i.path === "agentRuntime" || i.path.startsWith("agentRuntime.")));
+      if (entry.agentRuntimeRef !== "agentRuntime" || !runtime || runtime.adapterVersion !== 1 || runtimeErrors) add("interface-runtime-reference", `${p}.agentRuntimeRef`, "Adapter chat requires a valid version 1 agent runtime.");
+      if (Object.hasOwn(entry, "surfaceId")) add("interface-runtime-reference", `${p}.surfaceId`, "Adapter chat cannot reference a surface.");
+      dependencies.push("agent-runtime", ...caps(runtime?.requiredCapabilities));
+      const tools = records(candidate.tools);
+      const invocation = tools.find(t => t.name === runtime?.invocationTool);
+      dependencies.push(...caps(invocation?.requiredCapabilities));
+      if (runtime?.supportsModelSelection === true && isRecord(runtime.modelSelection)) {
+        dependencies.push(...caps(runtime.modelSelection.requiredCapabilities));
+        const change = tools.find(t => t.name === (runtime.modelSelection as Record<string, unknown>).changeTool);
+        dependencies.push(...caps(change?.requiredCapabilities));
+      }
+    }
+    if (dependencies.some(c => !requirements.has(c))) add("interface-missing-capability", `${p}.requiredCapabilities`, "Interface must include every referenced dependency capability.");
+  });
+};
+
 export const validateAddOnManifest = (
   candidate: unknown,
   options: { source?: AddOnManifestSource } = {},
@@ -1162,6 +1227,8 @@ export const validateAddOnManifest = (
       );
     }
   }
+
+  validateInterfaces(issues, candidate);
 
   if (Array.isArray(candidate.smokeTests)) {
     candidate.smokeTests.forEach((smokeTest, index) => {

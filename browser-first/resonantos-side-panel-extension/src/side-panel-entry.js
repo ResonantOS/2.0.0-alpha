@@ -1,3 +1,6 @@
+import { createEmbedGovernanceController } from './lib/embed-governance-controller.js';
+import { confirmEmbedShare } from './lib/embed-governance-dialog.js';
+import { validDescriptor } from './lib/generated/embed-governance-contract.js';
 import { resolveBridgeConfig, initCapabilityTokens, createBridgeClient } from './lib/bridge-client.js';
 import { createMainWorkspaceToggle } from './lib/main-workspace-toggle.js';
 import { createEmbedBarActions } from './lib/embed-bar-actions.js';
@@ -34,13 +37,11 @@ export async function probeEmbedAvailability(getConnection = createEmbedConnecti
     });
   } catch { return false; }
 }
-function mountSidePanelBar({ mode, sendContext = () => false,
-  documentRef = globalThis.document, windowRef = globalThis.window,
-  chromeApi = globalThis.chrome, locationRef = globalThis.location } = {}) {
+function mountSidePanelBar({ mode, sendContext = () => false, beforeShare, isShareCurrent, onShared, documentRef = globalThis.document, windowRef = globalThis.window, chromeApi = globalThis.chrome, locationRef = globalThis.location } = {}) {
   const workspace = createMainWorkspaceToggle({ tabsApi: chromeApi?.tabs,
     windowsApi: chromeApi?.windows,
     getWorkspaceUrl: () => chromeApi.runtime.getURL('src/main-workspace.html') });
-  const actions = createEmbedBarActions({ chromeApi, locationRef, sendContext });
+  const actions = createEmbedBarActions({ chromeApi, locationRef, sendContext, beforeShare, isShareCurrent, onShared });
   const bar = mountEmbedBar({ documentRef, parent: documentRef.body, mode,
     toggleWorkspace: workspace.toggle, workspaceVisible: workspace.isVisible,
     openWorkspace: workspace.open, ...actions });
@@ -67,58 +68,46 @@ function mountSidePanelBar({ mode, sendContext = () => false,
   windowRef.addEventListener('pagehide', onPageHide, { once: true });
   return bar;
 }
-export async function mountEmbedView({ documentRef = globalThis.document,
-  windowRef = globalThis.window, chromeApi = globalThis.chrome,
-  locationRef = globalThis.location, getConnection = createEmbedConnection } = {}) {
+export async function mountEmbedView({documentRef=globalThis.document,windowRef=globalThis.window,chromeApi=globalThis.chrome,locationRef=globalThis.location,getConnection=createEmbedConnection}={}) {
   documentRef.documentElement.classList.add('embed-mode');
-  const root = documentRef.createElement('section'); root.id = 'embed-root';
-  documentRef.body.prepend(root);
-  let frame = null, origin = '', online = false;
-  const state = { ready: false, last: [], send(message) {
-    if (!state.ready || !online || !frame?.contentWindow || !RELAY_COMMANDS.has(message?.type)) return false;
-    try {
-      if (message.type === 'augmentor-context' &&
-          new TextEncoder().encode(JSON.stringify(message)).byteLength > 16000) return false;
-      frame.contentWindow.postMessage(message, origin); return true;
-    } catch { return false; }
-  } };
-  windowRef.__resonantosEmbed = state;
-  const bar = mountSidePanelBar({ mode: 'embed', documentRef, windowRef, chromeApi,
-    locationRef, sendContext: message => state.send(message) });
-  const offline = () => { state.ready = false; online = false; bar.setStatus(null); };
-  const relay = event => {
-    if (!frame || event.source !== frame.contentWindow || event.origin !== origin) return;
-    if (!event.data || typeof event.data !== 'object') return;
-    state.last.push(event.data);
-    if (state.last.length > 50) state.last.splice(0, state.last.length - 50);
-    if (event.data.type === 'augmentor-ready') state.ready = true;
-    if (event.data.type === 'augmentor-status') {
-      online = event.data.online === true;
-      bar.setStatus({ online, busy: event.data.busy === true });
+  const root=documentRef.createElement('section');root.id='embed-root';documentRef.body.prepend(root);
+  let frame=null,origin='',online=false,connection=null,descriptor=null,disposed=false;
+  const state={ready:false,last:[],send(message){
+    if(disposed||!state.ready||!online||!frame?.contentWindow||!RELAY_COMMANDS.has(message?.type))return false;
+    try{if(message.type==='augmentor-context'&&new TextEncoder().encode(JSON.stringify(message)).byteLength>16000)return false;frame.contentWindow.postMessage(message,origin);return true;}catch{return false;}
+  }};
+  const controller=createEmbedGovernanceController({windowRef,chromeApi,
+    request:(path,options)=>connection?connection.request(path,options):Promise.reject(Error('Activity unavailable')),
+    announce:text=>bar.announce(text),
+    confirmShare:label=>confirmEmbedShare({documentRef,label,returnFocus:bar.root.querySelector('[data-control=page]')})
+  });
+  state.last=controller.history;windowRef.__resonantosEmbed=state;
+  const bar=mountSidePanelBar({mode:'embed',documentRef,windowRef,chromeApi,locationRef,
+    sendContext:message=>state.send(message),beforeShare:controller.beginShare,isShareCurrent:controller.currentShare,onShared:controller.didShare});
+  const offline=()=>{state.ready=false;online=false;bar.setStatus(null);controller.relay({source:frame?.contentWindow,origin,data:{type:'augmentor-status',online:false,busy:false}});};
+  const relay=event=>{
+    if(disposed||!frame||event.source!==frame.contentWindow||event.origin!==origin||!event.data||typeof event.data!=='object')return;
+    if(event.data.type==='augmentor-ready')state.ready=true;
+    if(event.data.type==='augmentor-status'&&typeof event.data.online==='boolean'&&typeof event.data.busy==='boolean'){
+      online=event.data.online;bar.setStatus({online,busy:event.data.busy});
     }
+    if(['augmentor-ready','augmentor-status','augmentor-event'].includes(event.data.type))controller.relay(event);
   };
-  windowRef.addEventListener('message', relay);
-  const destroy = bar.destroy;
-  bar.destroy = () => {
-    windowRef.removeEventListener('message', relay);
-    offline(); destroy();
-  };
+  const bridgeChanged=(changes,area)=>{if(area==='local'&&changes.bridgeTargetOverride){offline();controller.destroy();descriptor=null;}};
+  windowRef.addEventListener('message',relay);chromeApi?.storage?.onChanged?.addListener(bridgeChanged);
+  const destroy=bar.destroy;
+  bar.destroy=()=>{if(disposed)return;disposed=true;windowRef.removeEventListener('message',relay);chromeApi?.storage?.onChanged?.removeListener(bridgeChanged);controller.destroy();offline();destroy();};
   try {
-    const connection = await bounded(getConnection);
-    const { hostPath } = await bounded(() => connection.request('/embed/session', { method: 'POST', body: {} }));
-    if (typeof hostPath !== 'string' || !/^\/embed-host\/\?ticket=[A-Za-z0-9_-]{43}$/.test(hostPath)) {
-      throw new Error('Invalid embed session');
-    }
-    origin = new URL(connection.bridgeUrl).origin;
-    frame = documentRef.createElement('iframe'); frame.title = 'Augmentor'; frame.allow = 'clipboard-write';
-    frame.addEventListener('error', offline);
-    frame.src = `${connection.bridgeUrl.replace(/\/$/, '')}${hostPath}`;
-    root.append(frame);
-  } catch {
-    offline();
-    root.textContent = 'Unable to open the embedded chat. Check that the PoC bridge is running and try again.';
-  }
-  return { bar, root, state };
+    connection=await bounded(getConnection);
+    const session=await bounded(()=>connection.request('/embed/session',{method:'POST',body:{}}));
+    if(disposed)return {bar,root,state};
+    if(typeof session.hostPath!=='string'||!/^\/embed-host\/\?ticket=[A-Za-z0-9_-]{43}$/.test(session.hostPath)||!validDescriptor(session.harness))throw Error('Invalid embed session');
+    descriptor=session.harness;origin=new URL(connection.bridgeUrl).origin;bar.setDescriptor(descriptor);
+    frame=documentRef.createElement('iframe');frame.title=descriptor.label;frame.allow='clipboard-write';frame.addEventListener('error',offline);
+    frame.src=connection.bridgeUrl.replace(/\/$/,'')+session.hostPath;root.append(frame);
+    controller.mount({frame:frame.contentWindow,origin,descriptor});
+  }catch{offline();root.textContent='Unable to open the embedded chat. Check that the PoC bridge is running and try again.';}
+  return {bar,root,state};
 }
 export async function bootSidePanel({ search = globalThis.location?.search ?? '',
   storage = globalThis.chrome?.storage?.local,

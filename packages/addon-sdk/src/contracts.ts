@@ -88,3 +88,5 @@ export const HARNESS_OPERATIONS = [
 ] as const satisfies readonly import("../../../src/core/contracts").HarnessOperation[];
 
 export { HARNESS_PUBLIC_ERROR_MESSAGES } from "../../../src/core/contracts.ts";
+
+export type { AddOnInterface, AddOnInterfaceMode, AddOnInterfaceGovernance } from "../../../src/core/contracts";

@@ -488,12 +488,12 @@ test('embed status is gated, credential-free and never proxied', async t => {
   })).response.status, 403);
   const result = await f.request('/embed/status', { headers: auth });
   assert.equal(result.response.status, 200);
-  assert.deepEqual(JSON.parse(result.body), { ok: true, available: true, profile: 'poc' });
+  assert.deepEqual(JSON.parse(result.body), { ok: true, available: true, profile: 'poc', harness: f.service.getDescriptor() });
   assert.equal(result.response.headers.get('set-cookie'), null);
   assert.equal(f.seen.length, 0);
   f.service.close();
   const route = f.service.embedRoutes.find(route => route.path === '/embed/status');
-  assert.deepEqual(await route.handler(), { available: false, profile: null });
+  assert.deepEqual(await route.handler(), { available: false, profile: null, harness: null });
 });
 
 test('disabled embed status is a gated route with no session capability', async t => {
@@ -510,6 +510,6 @@ test('disabled embed status is a gated route with no session capability', async 
     headers: { 'X-ResonantOS-Bridge-Token': 'bridge-test' }
   })).status, 403);
   assert.deepEqual(await (await fetch(url, { headers: auth })).json(),
-    { ok: true, available: false, profile: null });
+    { ok: true, available: false, profile: null, harness: null });
   assert.equal(service.embedRoutes.some(route => route.path === '/embed/session'), false);
 });

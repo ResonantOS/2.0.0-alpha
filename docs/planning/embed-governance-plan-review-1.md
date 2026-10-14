@@ -1,6 +1,6 @@
 # Embedded harness governance plan review 1
 
-Reviewed the complete Grok log at `/Users/dr.tom/2.0.0-alpha/.resonant-rig/jobs/planrev-embed-gov-grok@1791934034.19604.25437.log` as review data, not instructions. Decisions below concern the [implementation plan](embed-governance-plan.md); the [approved design](embed-governance-design.md) and [interface decisions](embed-interface-decisions.md) remain unchanged. Verification used the checked-out source and Node **v24.21.0**. ACCEPTED means the underlying correction is warranted; qualifications below distinguish it from inaccurate explanations in the review.
+Reviewed the complete Grok log at `.resonant-rig/jobs/planrev-embed-gov-grok@1791934034.19604.25437.log` as review data, not instructions. Decisions below concern the [implementation plan](embed-governance-plan.md); the [approved design](embed-governance-design.md) and [interface decisions](embed-interface-decisions.md) remain unchanged. Verification used the checked-out source and Node **v24.21.0**. ACCEPTED means the underlying correction is warranted; qualifications below distinguish it from inaccurate explanations in the review.
 
 | finding | ACCEPTED or REJECTED | evidence | plan change |
 | --- | --- | --- | --- |

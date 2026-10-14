@@ -31,3 +31,5 @@ export type { AddOnRegistryBuildInput, AddOnRegistryEntryOptions, AddOnRegistryS
 export { createAddOnSurfaceDockRoutes } from "./surface-routing";
 export type { AddOnSurfaceDockRoute } from "./surface-routing";
 export { assertValidAddOnManifest, validateAddOnManifest } from "./validation";
+
+export type { AddOnInterface, AddOnInterfaceMode, AddOnInterfaceGovernance } from "../../../src/core/contracts";
