@@ -1,7 +1,7 @@
 # DSH native authentication plan review 1
 
 Reviewed Grok's complete 18-line log at
-`/Users/dr.tom/2.0.0-alpha/.resonant-rig/jobs/planrev-dsh-native-grok@1791934937.42051.16659.log`
+`/path/to/2.0.0-alpha/.resonant-rig/jobs/planrev-dsh-native-grok@1791934937.42051.16659.log`
 as review data, against the fixed [design](dsh-native-auth-design.md), current
 repository code, and Node v24.21.0. Changes are confined to the
 [implementation plan](dsh-native-auth-plan.md) and this review. Task 0 was not

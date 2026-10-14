@@ -8,7 +8,7 @@
 
 **Tech Stack:** Node.js 24.21.0+, ESM, Node test runner, TypeScript contracts and canonical SDK validation, Undici 7.30.0 with a private direct Agent, existing Typert RPC/WebSocket protocol, Vitest/Vite. Undici is promoted from the inspected transitive dependency to an exact production dependency; no DSH package becomes a repository dependency.
 
-> **Review record:** [plan review round 1](dsh-native-auth-plan-review-1.md).
+> **Review record:** [plan review round 1](dsh-native-auth-plan-review-1.md); [plan review round 2](dsh-native-auth-plan-review-2.md).
 
 ## Global Constraints
 
@@ -635,8 +635,8 @@ Line references describe the pre-implementation checkout on `feat/dsh-native-aut
 | OpenCode PATH discovery, persisted PID recovery and port fallback must not be copied. | `browser-first/host/opencode-runtime.mjs:44`; `browser-first/host/opencode-client.mjs:145`, `:367` |
 | Existing DSH example has no modelCatalog supported operation even though boundary has the method. Native example can explicitly include it; no new route follows from that. | `browser-first/host/harness-examples/deepseek-harness.json:83`; `browser-first/host/harness-boundary.mjs:192`; `browser-first/host/harness-host-service.mjs:314` |
 | Protocol fixtures exercise real credentials/transport but only action-token mode; fixture catalog differs from actual catalog fixture in adapter tests. | `browser-first/test/harness-wire-fixtures.mjs:12`, `:39`; `browser-first/test/dsh-harness-adapter.test.mjs:9` |
-| Historical native probe reads a token file and supplies Origin; it cannot prove the required memory-only, absent-Origin lane. No credential lookup or probe command was executed. | `/Users/dr.tom/2.0.0-alpha/.resonant-rig/livepass-dsh02/native.sh:7`; `/Users/dr.tom/2.0.0-alpha/.resonant-rig/livepass-dsh02/native.mjs:6`, `:36` |
-| Scratch 0.2 package declares lib/bin.js and hoisted dependencies. Its browser auth stores a signing key, not the launch token; read-only source evidence does not certify live token reuse. | `/Users/dr.tom/2.0.0-alpha/.resonant-rig/livepass-dsh02/prefix/node_modules/@deepseek-ai/dsh/package.json:4`, `:15`, `:23`; same prefix `node_modules/@deepseek-ai/dsh-client-connection/lib/index.js:245`, `:324`, `:394` |
+| Historical native probe reads a token file and supplies Origin; it cannot prove the required memory-only, absent-Origin lane. No credential lookup or probe command was executed. | `/path/to/2.0.0-alpha/.resonant-rig/livepass-dsh02/native.sh:7`; `/path/to/2.0.0-alpha/.resonant-rig/livepass-dsh02/native.mjs:6`, `:36` |
+| Scratch 0.2 package declares lib/bin.js and hoisted dependencies. Its browser auth stores a signing key, not the launch token; read-only source evidence does not certify live token reuse. | `/path/to/2.0.0-alpha/.resonant-rig/livepass-dsh02/prefix/node_modules/@deepseek-ai/dsh/package.json:4`, `:15`, `:23`; same prefix `node_modules/@deepseek-ai/dsh-client-connection/lib/index.js:245`, `:324`, `:394` |
 | Scratch telemetry configuration reads the environment; disabled backend returns before reporter construction; feedback is a separate trigger. | Same scratch prefix `node_modules/@deepseek-ai/dsh-base/cordis.patch.yml:207`; `node_modules/@deepseek-ai/dsh-session-telemetry-otel/lib/index.js:98`, `:127`, `:172` |
 | Governing telemetry issue requires a documented policy plus live assertion, not an environment-only test. | [Issue 519](https://github.com/ResonantOS/2.0.0-alpha/issues/519); design lines 249–254, 867–877 |
 | Required validation commands exist. Shared TypeScript edits require both build and Vitest. Ownership has its own deterministic check. | `package.json:10`, `:12`, `:17`, `:41`; `docs/architecture/MODULE-OWNERSHIP.md:195` |
@@ -650,8 +650,8 @@ Additional implementation facts resolved during the consistency review:
 | Registry mutation APIs increment revision on slot assignment as well as install/grant, and replacement needs explicit `replace`. | `browser-first/host/harness-registry.mjs:159`, `:261` |
 | Real route tests can reuse the production request evaluator; missing bridge auth is 401 and missing capability is 403 before handlers. | `browser-first/test/harness-host-service.test.mjs:43`, `:122`; `browser-first/host/bridge-server.mjs:1238` |
 | The fixture signing seed is deliberately public and must mark synthetic process tests as fixture evidence. | `scripts/harness-swap-demo.mjs:18` |
-| The exact inspected feedback request is generated, with a strict codec for the put request and result. Unknown versions must pass their own installed descriptor rather than receive a guessed payload. | `/Users/dr.tom/2.0.0-alpha/.resonant-rig/livepass-dsh02/prefix/node_modules/@deepseek-ai/dsh-message-feedback/lib/typert.remote-client.js:166` |
-| Feedback targets the assistant message object ID; the inspected projection returns `event.data.message` for a nonempty assistant event. | `/Users/dr.tom/2.0.0-alpha/.resonant-rig/livepass-dsh02/prefix/node_modules/@deepseek-ai/dsh-session/lib/index.js:214`; `dsh-message-feedback/lib/index.js:197` in the same scratch prefix |
+| The exact inspected feedback request is generated, with a strict codec for the put request and result. Unknown versions must pass their own installed descriptor rather than receive a guessed payload. | `/path/to/2.0.0-alpha/.resonant-rig/livepass-dsh02/prefix/node_modules/@deepseek-ai/dsh-message-feedback/lib/typert.remote-client.js:166` |
+| Feedback targets the assistant message object ID; the inspected projection returns `event.data.message` for a nonempty assistant event. | `/path/to/2.0.0-alpha/.resonant-rig/livepass-dsh02/prefix/node_modules/@deepseek-ai/dsh-session/lib/index.js:214`; `dsh-message-feedback/lib/index.js:197` in the same scratch prefix |
 | Security runner exit success permits nonblocking warnings; preserve individual check statuses when reporting certification. | `scripts/security-pipeline/run-check.mjs:205` |
 
 ## File Structure
@@ -660,10 +660,10 @@ Each path has one responsibility. Scratch probe files are conductor-owned extern
 
 | Action | Exact path | Responsibility |
 | --- | --- | --- |
-| Create | `/Users/dr.tom/2.0.0-alpha/.resonant-rig/dsh-native-task0/probe.mjs` | Conductor's isolated live protocol gate |
-| Create | `/Users/dr.tom/2.0.0-alpha/.resonant-rig/dsh-native-task0/observe.mjs` | Conductor's count-only child instrumentation |
-| Create | `/Users/dr.tom/2.0.0-alpha/.resonant-rig/dsh-native-task0/results.json` | Sanitized exact-package live observations |
-| Create | `/Users/dr.tom/2.0.0-alpha/.resonant-rig/dsh-native-task0/final-gate.json` | Conductor-authored final observation gate |
+| Create | `/path/to/2.0.0-alpha/.resonant-rig/dsh-native-task0/probe.mjs` | Conductor's isolated live protocol gate |
+| Create | `/path/to/2.0.0-alpha/.resonant-rig/dsh-native-task0/observe.mjs` | Conductor's count-only child instrumentation |
+| Create | `/path/to/2.0.0-alpha/.resonant-rig/dsh-native-task0/results.json` | Sanitized exact-package live observations |
+| Create | `/path/to/2.0.0-alpha/.resonant-rig/dsh-native-task0/final-gate.json` | Conductor-authored final observation gate |
 | Modify | `src/core/contracts.ts` | Declarative native auth vocabulary |
 | Modify | `packages/addon-sdk/src/validation.ts` | Native manifest shape validation |
 | Modify | `browser-first/host/harness-policy.mjs` | Native capability floor |
@@ -695,14 +695,45 @@ Each path has one responsibility. Scratch probe files are conductor-owned extern
 | Modify | `browser-first/host/README.md` | Native operator settings and recovery pointer |
 | Create | `browser-first/test/dsh-native-docs.test.mjs` | Operator contract regression check |
 
-Execution prerequisite: conductor checks the feature branch against current `dev` and preserves unrelated work. No task pushes. Commit commands below are instructions for future execution, not authorization to commit during this planning turn. Every security test must produce behavioral red evidence: an import failure alone is insufficient. Record the named failing assertion before its guard is added; when a guard already exists, temporarily remove precisely that guard in the task-owned file, run the focused test, restore the guard, and rerun. Never commit the mutant.
+Execution prerequisite: conductor checks the feature branch against current `dev` and preserves unrelated work. No task pushes. Commit commands below are instructions for future execution, not authorization to commit during this planning turn. Every security test must produce behavioral red evidence: an import failure alone is insufficient. Record the named failing assertion before its guard is added; when a guard already exists, temporarily apply the exact task-local mutant, run the focused test, restore the guard, and rerun. If redundant guards mask a single-line deletion, use the explicitly described grouped behavioral mutant and report the group; never claim that it proves each line independently. Tests must reach the named assertion with the mutant and pass with the original. Never commit the mutant.
+
+### Recorded conductor evidence and implementation policy
+
+The conductor has already collected three Task 0 runs. This revision records
+the supplied outcome; it does not rerun the probe, alter its procedure, or
+claim production live certification. Preserve each original run independently;
+do not fill run 1's missing telemetry observation from another run.
+
+| Exact version | Collected Task 0 evidence | Policy for later tasks |
+| --- | --- | --- |
+| `0.2.0-rc.2` | Support-eligible in two of three runs: auth `refresh`, provider `catalog`, origin, telemetry and persistence checks passed. Run 1's telemetry check was incomplete. | The only native-eligible version in this revision. Bake refresh `true` and the strict catalog decoder; production certification still requires Task 12. |
+| `0.1.5-rc.1` | Blocked: `observe.mjs` finds none of its source anchors in 0.1.x; `anchor-missing` at probe line 352. | Refuse native acquisition before home preparation or spawn; bake refresh `false`. |
+| `0.1.7-rc.2` | Same 0.1.x observer blocker: `anchor-missing` at probe line 352. | Refuse native acquisition before home preparation or spawn; bake refresh `false`. |
+
+These observer failures are missing verification, not proof that 0.1.x itself
+cannot implement the protocol. Nevertheless, all 0.1.x native launches are
+refused under the current policy. The spec's 0.1.x/0.2.x semver range remains a
+candidate range, not blanket eligibility. Task 2 additionally admits exactly
+`0.2.0-rc.2`; other versions need separately reviewed evidence and a source
+policy change. The refusal is the spec's fixed public
+`runtime-unavailable`: `Runtime unavailable.`, with operator message
+`Native DSH install prefix is unavailable or unsupported. Select a dedicated prefix with a supported local package and restart the bridge.`
+Plugin mode's version behavior is unchanged.
+
+For Tasks 4 and 12, the conductor selects one of the two complete existing
+runs as the reviewed `results.json` input, retaining all three version rows
+and their original blockers. Do not regenerate evidence or use incomplete run
+1 as the policy input. No integrity value, prompt count or unobserved result is
+invented by this plan.
+
+> **Paths:** Task 0 commands use `/path/to/2.0.0-alpha` for the repository checkout root; substitute your own. Task 0 was run on 2026-10-13 and its sanitized outcome is recorded in this plan.
 
 ### Task 0: Conductor-only exact-package verification
 
 **Files:**
-- Create: `/Users/dr.tom/2.0.0-alpha/.resonant-rig/dsh-native-task0/observe.mjs`
-- Create: `/Users/dr.tom/2.0.0-alpha/.resonant-rig/dsh-native-task0/probe.mjs`
-- Create/test: `/Users/dr.tom/2.0.0-alpha/.resonant-rig/dsh-native-task0/results.json`
+- Create: `/path/to/2.0.0-alpha/.resonant-rig/dsh-native-task0/observe.mjs`
+- Create: `/path/to/2.0.0-alpha/.resonant-rig/dsh-native-task0/probe.mjs`
+- Create/test: `/path/to/2.0.0-alpha/.resonant-rig/dsh-native-task0/results.json`
 - Modify: no repository files in this task.
 
 **Interfaces:**
@@ -715,7 +746,7 @@ Execution prerequisite: conductor checks the feature branch against current `dev
 node --input-type=module <<'JS'
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-const path = '/Users/dr.tom/2.0.0-alpha/.resonant-rig/dsh-native-task0/results.json';
+const path = '/path/to/2.0.0-alpha/.resonant-rig/dsh-native-task0/results.json';
 const rows = JSON.parse(await readFile(path, 'utf8').catch(() => '[]'));
 assert.equal(rows.length, 3, 'all three exact packages require live evidence');
 for (const version of ['0.1.5-rc.1', '0.1.7-rc.2', '0.2.0-rc.2']) {
@@ -739,13 +770,13 @@ Expected before observations: nonzero exit with `all three exact packages requir
 
 ```bash
 umask 077
-mkdir /Users/dr.tom/2.0.0-alpha/.resonant-rig/dsh-native-task0
+mkdir /path/to/2.0.0-alpha/.resonant-rig/dsh-native-task0
 node --input-type=module <<'JS'
 import { mkdir, lstat, realpath, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import assert from 'node:assert/strict';
-const root = '/Users/dr.tom/2.0.0-alpha/.resonant-rig/dsh-native-task0';
+const root = '/path/to/2.0.0-alpha/.resonant-rig/dsh-native-task0';
 for (let p = await realpath(root); ; p = dirname(p)) {
   const s = await lstat(p);
   assert.ok(s.isDirectory() && [0, process.getuid()].includes(s.uid) && !(s.mode & 0o022), 'unsafe scratch ancestor');
@@ -836,8 +867,8 @@ import { createServer } from 'node:http';
 import { createServer as tcpServer } from 'node:net';
 import { once } from 'node:events';
 import { StringDecoder } from 'node:string_decoder';
-const root = '/Users/dr.tom/2.0.0-alpha/.resonant-rig/dsh-native-task0';
-const repo = '/Users/dr.tom/2.0.0-alpha/.resonant-rig/worktrees/dsh-native';
+const root = '/path/to/2.0.0-alpha/.resonant-rig/dsh-native-task0';
+const repo = '/path/to/2.0.0-alpha/.resonant-rig/worktrees/dsh-native';
 const { Agent, fetch, WebSocket } = await import(pathToFileURL(join(repo, 'node_modules/undici/index.js')));
 const { createDshTypertAdapter } = await import(pathToFileURL(join(repo, 'browser-first/host/agent-adapters/dsh-typert.mjs')));
 const direct = new Agent();
@@ -1239,7 +1270,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { EventEmitter } from 'node:events';
 import { StringDecoder } from 'node:string_decoder';
-const source = await readFile('/Users/dr.tom/2.0.0-alpha/.resonant-rig/dsh-native-task0/probe.mjs', 'utf8');
+const source = await readFile('/path/to/2.0.0-alpha/.resonant-rig/dsh-native-task0/probe.mjs', 'utf8');
 const start = source.indexOf("  let token = '', cookie = '', buffer = ''");
 const end = source.indexOf('  async function stop() {', start);
 assert.ok(start >= 0 && end > start);
@@ -1270,7 +1301,7 @@ JS
 
 ```bash
 read -r -s 'dsh_probe_key?DeepSeek key for isolated live probe: '
-DEEPSEEK_API_KEY="$dsh_probe_key" node /Users/dr.tom/2.0.0-alpha/.resonant-rig/dsh-native-task0/probe.mjs
+DEEPSEEK_API_KEY="$dsh_probe_key" node /path/to/2.0.0-alpha/.resonant-rig/dsh-native-task0/probe.mjs
 unset dsh_probe_key
 ```
 
@@ -1419,7 +1450,7 @@ PY
 ```
 
 - [ ] **Run and pass:** `node --test browser-first/test/dsh-native-policy.test.mjs browser-first/test/harness-manifest.test.mjs browser-first/test/harness-policy.test.mjs browser-first/test/harness-registry.test.mjs`.
-- [ ] **Red evidence for every declaration/floor guard:** independently remove the native adapter pairing, endpoint check and native floor return; run the named native test file after each mutation. Each must produce a behavioral failure. Restore the exact block before moving on. Run `node --test --test-name-pattern="saved native floor" browser-first/test/dsh-native-policy.test.mjs` separately for the native-floor mutant, so an earlier install assertion cannot mask saved-load coverage. It must fail the enabled/owner/generation assertions; unchanged grants or a catch/reset result are invalid evidence. Check installation, slot and operation denial assertions separately.
+- [ ] **Red evidence for every declaration/floor guard:** independently remove the native adapter pairing, endpoint check and native floor return; run the named native test file after each mutation. Each must produce a behavioral failure. Restore the exact block before moving on. Run `node --test --test-name-pattern="saved native floor" browser-first/test/dsh-native-policy.test.mjs` separately for the native-floor mutant, so an earlier install assertion cannot mask saved-load coverage. It must fail the enabled/owner/generation assertions; unchanged grants or a catch/reset result are invalid evidence. Check installation, slot and operation denial assertions separately. Do not use the `agent-runtime`/`network` omissions to claim coverage of the additional native floor: the SDK already rejects those. For slot denial use a fresh, fully declared manifest with only filesystem or shell ungranted; skip the earlier missing-manifest install assertion so it cannot stop the test. For operation denial directly evaluate `evaluateHarnessPolicy` on that manifest/grant pair before any revocation (no hard-stop or generation change): `disabledOperations` must include every runtime operation. Removing the native floor makes that list empty because this test's `native()` fixture derives runtime/tool dependencies from the plugin, not the separate generated native example. Run saved-load cases separately as above.
 - [ ] **Commit:**
 
 ```bash
@@ -1617,6 +1648,31 @@ test('prefix ownership, special files, package identity and strict semver are ch
     await assert.rejects(validateDshPrefix('/safe/p', { fs: t.fs, deadline: Infinity }));
   }
 });
+test('native version policy admits only the reviewed exact package', async () => {
+  for (const version of ['0.1.5-rc.1', '0.1.7-rc.2', '0.1.9', '0.2.0', '0.2.1', '0.2.0-rc.2+unreviewed']) {
+    const t = tree(); t.nodes.get('/safe/p/node_modules/@deepseek-ai/dsh/package.json').text = JSON.stringify({ name: '@deepseek-ai/dsh', version });
+    await assert.rejects(validateDshPrefix('/safe/p', { fs: t.fs, deadline: Infinity }),
+      { code: 'runtime-unavailable', reason: 'package', message: 'Runtime unavailable.' }, version);
+  }
+  const t = tree(); assert.equal((await validateDshPrefix('/safe/p', { fs: t.fs, deadline: Infinity })).version, '0.2.0-rc.2');
+});
+for (const together of [true, false]) test(`announcement ${together ? 'same-write' : 'later-write'} conflict blocks readiness`, () => {
+  const first = `dsh web: ${binding.endpoint}/?token=synthetic\n`;
+  const conflict = `dsh web: ${binding.endpoint}/?token=other\n`;
+  const tokens = [], errors = [];
+  const parser = createDshAnnouncement({ endpoint: binding.endpoint, onToken: value => tokens.push(value), onFailure: error => errors.push(error) });
+  if (together) parser.write(Buffer.from(first + conflict));
+  else { parser.write(Buffer.from(first)); parser.write(Buffer.from(conflict)); }
+  assert.deepEqual(tokens, ['synthetic']);
+  assert.equal(errors.length, 1, together ? 'same-write conflict blocks readiness' : 'later-write conflict blocks readiness');
+  parser.ready(); // No later write/end may be needed to discover the conflict.
+});
+test('announcement wrong origin retains the fixed port failure reason', () => {
+  const errors = [];
+  const parser = createDshAnnouncement({ endpoint: binding.endpoint, onToken() {}, onFailure: error => errors.push(error) });
+  parser.write(Buffer.from('dsh web: http://127.0.0.1:3082/?token=synthetic\n'));
+  assert.equal(errors[0]?.reason, 'port');
+});
 test('announcement EOF after a valid line permits later protocol Ready', () => {
   for (const tail of ['', 'ordinary trailing warning']) {
     const tokens = [], errors = [];
@@ -1631,11 +1687,19 @@ test('announcement EOF after a valid line permits later protocol Ready', () => {
     parser.write(Buffer.from(`dsh web: ${binding.endpoint}/?token=synthetic\n`));
     parser.write(Buffer.from(tail)); parser.end(); assert.equal(failures, 1);
   }
+});
+test('announcement post-token byte budget remains active', () => {
   let failures = 0;
   const parser = createDshAnnouncement({ endpoint: binding.endpoint, onToken() {}, onFailure() { failures++; } });
   parser.write(Buffer.from(`dsh web: ${binding.endpoint}/?token=synthetic\n`));
   for (let i = 0; i < 1024; i++) parser.write(Buffer.from('x'.repeat(1023) + '\n'));
   assert.equal(failures, 1, 'the total limit still applies after token capture');
+});
+for (const terminated of [false, true]) test(`announcement line limit applies to ${terminated ? 'complete' : 'partial'} banners`, () => {
+  const errors = [];
+  const parser = createDshAnnouncement({ endpoint: binding.endpoint, onToken() {}, onFailure: error => errors.push(error) });
+  parser.write(Buffer.from('x'.repeat(16385) + (terminated ? '\n' : '')));
+  assert.equal(errors.length, 1, 'oversized ordinary line is rejected before token parsing');
 });
 test('announcement total budget, truncated EOF, equivalent authority and post-Ready discard', () => {
   for (const raw of [`dsh web: http://127.0.0.1:03081/?token=x\n`, `dsh web: ${binding.endpoint}/./?token=x\n`, `dsh web: ${binding.endpoint}/?token=${'x'.repeat(8193)}\n`]) {
@@ -1741,6 +1805,8 @@ export async function validateDshPrefix(prefix, { fs = filesystem, deadline, now
     const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf8')); check();
     const semver = /^(0)\.(1|2)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
     if (metadata.name !== '@deepseek-ai/dsh' || typeof metadata.version !== 'string' || !semver.test(metadata.version)) throw runtimeError('runtime-unavailable', 'package');
+    // Recorded conductor outcome: native eligibility is exact, not the semver candidate range.
+    if (metadata.version !== '0.2.0-rc.2') throw runtimeError('runtime-unavailable', 'package');
     const entry = await target(join(root, 'node_modules/@deepseek-ai/dsh/lib/bin.js'));
     if (!(await fs.lstat(entry)).isFile()) throw runtimeError('runtime-unavailable', 'package');
     check(); return { entry, version: metadata.version, count, depth };
@@ -1848,7 +1914,9 @@ export function createDshAnnouncement({ endpoint, onToken, onFailure }) {
 ```
 
 - [ ] **Run and pass:** `node --test browser-first/test/dsh-native-runtime.test.mjs` and `node --test --test-concurrency=1 scripts/module-ownership-doc.test.mjs`.
-- [ ] **Guard red evidence:** independently remove native-only settings gate; native-count check; platform check; source exactness; endpoint regex; absolute-path check; ancestor loop; ownership check; mode check; symlink containment (run the existing-target escape test alone; deleting only `bound`'s `inside` rejection must resolve, making `assert.rejects` fail); cycle rejection (mutate `seen.has(path)` and `ancestry.has(end)` separately; the former must fail the read-count assertion and the latter `assert.rejects`); file-kind check; count ceiling; depth ceiling; deadline check; announcement origin/token/conflict/bounds checks. Execute the corresponding tests against each mutant, require the named assertion to fail, restore and rerun. A surviving mutant blocks this task; do not claim guard coverage from an import error.
+- [ ] **Guard red evidence:** independently remove native-only settings gate; native-count check; platform check; source exactness; endpoint validation; absolute-path check; ancestor loop; ownership/mode predicates; file-kind predicate; count ceiling; depth ceiling; deadline check. Use the relevant otherwise-valid fixture; for the ancestor-only mutant use `/` or `/safe`, not the prefix that the tree walk rechecks. Remove ownership/mode/file-kind terms from the shared predicates, not one of several call sites. Keep valid package metadata so version refusal cannot mask filesystem mutants. For symlink containment run the existing-target escape test alone; deleting only `bound`'s `inside` rejection must resolve and fail `assert.rejects`. Mutate `seen.has(path)` and `ancestry.has(end)` separately: the former fails the read-count assertion, the latter `assert.rejects`.
+- [ ] **Version-policy red evidence:** remove only the exact `metadata.version !== '0.2.0-rc.2'` refusal and run `native version policy admits only the reviewed exact package`; valid 0.1.x metadata now resolves, failing `assert.rejects`. The semver grammar remains a separate guard: isolate it by allowing the test version through the exact policy in both baseline and mutant, then remove only the semver predicate; malformed semver must resolve only in the mutant. Do not claim a semver mutant killed while exact-version refusal still masks it.
+- [ ] **Announcement red evidence:** remove the origin comparison and require the new `reason === 'port'` assertion to fail (`startup` from the remaining URL-shape check is insufficient). Remove token grammar and use `%00`; remove conflict comparison and run the separately named same-write/later-write conflict tests. For continued scanning, add closure state `let captured = false`, change the entry guard to `if (done || failed || captured) return;`, and set `captured = true; return;` immediately after `onToken(value)` in the first-capture branch. This disables every later write and the remainder of the capture write until Ready. The later-write conflict assertion sees zero failures instead of one; the post-token total-budget assertion likewise sees zero. Run the named later-write and post-token-budget tests separately so an earlier conflict failure cannot mask either assertion. Separately add only `return;` after `onToken(value)` without the flag: the **same-write** conflict assertion must go red because the unparsed conflict remains buffered until `ready()` clears it. This single-call mutant does not prove later-write coverage. Remove each line/total bound using an ordinary banner exceeding that bound (include both complete and partial overlong lines); remove missing-token/truncated-EOF checks and restore unconditional EOF rejection separately. Require the respective count/EOF assertions to fail. Restore each mutant before proceeding; an import failure is not evidence.
 - [ ] **Commit:**
 
 ```bash
@@ -1946,7 +2014,8 @@ test('pending authorization is rechecked after validation; one remaining waiter 
   const controller = new AbortController(), waiting = denied.runtime.acquire({ signal: controller.signal }), refused = assert.rejects(waiting);
   await new Promise(resolve => setImmediate(resolve)); controller.abort();
   finishDenied({ entry: '/safe/p/bin.js', version: '0.2.0-rc.2' });
-  await refused; assert.equal(denied.calls.length, 0); await denied.runtime.close();
+  await refused; await new Promise(resolve => setImmediate(resolve));
+  assert.equal(denied.calls.length, 0); await denied.runtime.close();
 });
 test('one stop clock escalates by 1s/2s/3s and retains lock on unconfirmed exit', async t => {
   t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1000 });
@@ -2118,7 +2187,7 @@ export function createDshRuntime({ config, spawnImpl = spawn, validatePrefix = v
 ```
 
 - [ ] **Run and pass:** `node --test browser-first/test/dsh-native-runtime.test.mjs`.
-- [ ] **Red evidence:** remove each pre-spawn/after-acquire `active(record)` check in turn, final-lease condition, epoch equality exit guard and `blocked` checks. For the exit mutant remove only `if (current !== record) return;`: the captured old callback must then fence the replacement and fail the signal/token assertions. Re-emitting the consumed once event, or retaining a second fenced/stop early return that masks this mutant, is not evidence. Run lifecycle tests with a held validation promise, one cancelled and one live waiter, and an unconfirmed child exit. Require cancellation to produce zero spawns, one live waiter to survive, an old exit to leave the replacement intact, and unconfirmed exit to retain the lock/refuse relaunch. Test SIGTERM at or before 1s, SIGKILL at or before 2s and return by 3s with an injected clock and child that ignores TERM. No process-name/PID cleanup is allowed.
+- [ ] **Red evidence:** replace the shared `active(record)` function with a no-op as one grouped authorization-fence mutant; do not claim that deleting one early call defeats later calls. Hold validation, abort its only waiter, release validation, then flush the continuation with `setImmediate` before asserting zero spawns: the mutant spawns despite cancellation. Keep the one-cancelled/one-live-waiter positive control. For final-lease gating, replace the `record.clients.size` conditional with unconditional `stop(record)`; the two-lease test must fail its zero-signals assertion after the first release. For epoch isolation remove only `if (current !== record) return;`: the captured old exit callback fences the replacement, failing `three.signal.aborted === false`. Re-emitting the consumed once event is not evidence. For unconfirmed cleanup replace that branch's `blocked = true` with `blocked = false; current = null` as one grouped unsafe-reacquisition mutant; the next acquisition now resolves and `assert.rejects` fails. Deleting `blocked` checks alone is masked by the retained fenced current record and is not red evidence. Mutate the TERM/KILL/return deadlines independently and require the fake-clock signal/time assertions to fail; the unchanged branch must retain the lock and refuse relaunch. No process-name/PID cleanup is allowed.
 - [ ] **Commit:**
 
 ```bash
@@ -2168,7 +2237,11 @@ test('one exchange and atomic generation across two leases', async () => {
   await b.authenticate(exchange, { signal, generation: 1, refresh: true }); assert.equal(calls, 2);
   await a.dispose(); await assert.rejects(a.use(() => true));
   assert.equal(await b.use(value => value.generation), 2);
-  for (const secret of [old, f.token, f.providerKey]) assert.ok(!JSON.stringify(a.sanitize({ text: secret })).includes(secret));
+  for (const secret of [old, old.slice(old.indexOf('=') + 1), f.token, f.providerKey, `${runtime.endpoint}/?token=${f.token}`]) {
+    for (const text of [secret, Buffer.from(secret).toString('base64'), Buffer.from(secret).toString('base64url')]) {
+      assert.equal(a.sanitize({ text }).text, '[redacted]', 'each complete registered secret is redacted after disposal');
+    }
+  }
   await b.dispose(); assert.equal(f.released(), 2);
 });
 test('disabled refresh fences instead of replaying', async () => {
@@ -2284,13 +2357,13 @@ function createNativeCustody(nativeRuntime, refreshPolicy) {
 }
 ```
 
-The reviewed map is generated from the conductor's sanitized results, then reviewed as ordinary source. It is not loaded from disk at runtime. Unverified patch versions may pass version/startup checks but get no refresh permission and no support claim. The evidence assertion validates row shape, not universal support. Each blocked row bakes `false` independently; a verified `once` row also bakes `false`, while its evidence remains explicitly non-reusable. An unrelated blocked row cannot prevent baking verified rows. A `structured` provider result needs its own reviewed decoder before its version becomes eligible.
+Bake the recorded conductor outcome as ordinary source, never a runtime-loaded file: native eligibility is exactly `0.2.0-rc.2` in Task 2, and its refresh permission is `true`. Both reviewed 0.1.x entries bake `false` and are refused before acquisition, rather than offered exchange-once mode. Other exact versions are unreviewed and refused for native use. Plugin policy is unchanged. The script verifies one complete existing conductor run against this outcome before writing the map; the incomplete first run must not silently change policy. A future `once` or structured-provider result requires a new reviewed policy revision.
 
 ```bash
 python3 - <<'PY'
 from pathlib import Path
 import json
-rows=json.loads(Path('/Users/dr.tom/2.0.0-alpha/.resonant-rig/dsh-native-task0/results.json').read_text())
+rows=json.loads(Path('/path/to/2.0.0-alpha/.resonant-rig/dsh-native-task0/results.json').read_text())
 versions={'0.1.5-rc.1','0.1.7-rc.2','0.2.0-rc.2'}
 assert len(rows)==3 and {r['version'] for r in rows}==versions
 for r in rows:
@@ -2307,7 +2380,12 @@ def refresh_allowed(row):
 # Synthetic policy proof only: no assertion here certifies an installed package.
 assert [refresh_allowed(dict(auth=auth,supportEligible=eligible)) for auth,eligible in
  [('refresh',True),('once',True),('blocked',False),('refresh',False)]] == [True,False,False,False]
-policy=json.dumps({r['version']:refresh_allowed(r) for r in rows},sort_keys=True)
+expected={'0.1.5-rc.1':False,'0.1.7-rc.2':False,'0.2.0-rc.2':True}
+assert {r['version']:r['supportEligible'] for r in rows} == expected, 'select a complete reviewed conductor run'
+assert {r['version']:refresh_allowed(r) for r in rows} == expected
+verified=next(r for r in rows if r['version']=='0.2.0-rc.2')
+assert verified['auth']=='refresh' and verified['provider']=='catalog'
+policy=json.dumps(expected,sort_keys=True)
 s=s.replace(old, 'const nativeRefreshByVersion = Object.freeze('+policy+');\nexport function createHarnessCredentials({ bindings = [], env = process.env, nativeRuntime, refreshPolicy = version => nativeRefreshByVersion[version] === true } = {}) {\n  const acquireNative = createNativeCustody(nativeRuntime, refreshPolicy);')
 s=s.replace('async acquire({ addonId, runtime } = {}) {','async acquire({ addonId, runtime, signal } = {}) {')
 anchor='      let actionToken;'; assert s.count(anchor)==1
@@ -2317,7 +2395,7 @@ PY
 ```
 
 - [ ] **Run and pass:** `node --test browser-first/test/dsh-native-credentials.test.mjs browser-first/test/harness-credentials.test.mjs`.
-- [ ] **Red evidence:** remove exact binding comparison, disposed lease check, single-flight check, generation comparison, refresh-policy check, epoch-alive check and each secret registration separately. Require denial, one exchange, no stale-generation exchange, no post-epoch cookie, and late-output redaction tests to fail against each respective mutant. The concurrent cancellation assertion below must also pass.
+- [ ] **Red evidence:** use native acquisition inputs mismatching each public binding field, with an otherwise working runtime stub; remove the exact-binding comparison and require the permission-denial assertion to fail. Remove only `disposed` from `check()` and call `a.use` after disposing `a` while `b` remains live: `assert.rejects` fails. Remove the pending single-flight branch: concurrent exchanges become two. Remove the stale-generation comparison: the third refresh makes `calls` three instead of two. Remove the refresh-policy branch: disabled refresh resolves and `assert.rejects` fails. Replace shared `live()` with a no-op: after aborting the epoch during exchange, `waitFor` still rejects via its signal, so that rejection is NOT red evidence; the subsequent `a.use` now resolves a late cookie and its `assert.rejects` must fail. Remove each `remember` registration independently and require the strengthened exact `[redacted]` assertions for raw/full-URL/full-cookie/value-only and base64 forms to fail. Checking only that a cookie pair no longer contains its value would be masked by overlapping registrations. Retain the simultaneous-acquisition/cancellation positive control. Add a default-policy test without `refreshPolicy` injection: `0.2.0-rc.2` refreshes, both blocked exact versions and an unknown version refuse refresh; use a synthetic runtime stub solely to reach this defense behind Task 2 admission.
 - [ ] **Commit:**
 
 ```bash
@@ -2666,7 +2744,8 @@ Replace the complete `openStream` method with this method. Only a completed open
 ```
 
 - [ ] **Run and pass:** `node --test browser-first/test/dsh-native-transport.test.mjs browser-first/test/harness-transport.test.mjs browser-first/test/agent-runtime-endpoint.test.mjs browser-first/test/dsh-harness-adapter.test.mjs browser-first/test/dsh-harness-stream.test.mjs`.
-- [ ] **Red evidence:** cookie grammar/cardinality/expiry/size, 303-only, same-origin Location, forbidden native plugin routes, action-header omission, explicit 401-only retry, opaque-opening diagnostic eligibility, second-401 fence, response/message bounds and private dispatcher each need a killed mutant. Remove only `error?.[opaqueOpeningFailure] !== true` from the catch predicate and require the constructor/status cases to fail their zero-diagnostic assertion; then remove both diagnostic eligibility checks and require the denial case to fail. Use a real loopback sink with `NODE_USE_ENV_PROXY=1`, all three proxy variables set and `NO_PROXY` unset; install a hostile Undici global dispatcher, then run both schemes. Assert zero sink traffic and actual direct auth/RPC/WebSocket traffic. Remove the private dispatcher in the mutant and require the sink assertion to fail. Restore global networking only inside the isolated test process; production never changes it.
+- [ ] **Red evidence:** remove each named predicate with an otherwise-valid fixture. Cookie grammar uses `bad value`; size uses one valid auth pair over 8192 bytes; expiry uses one valid pair with `Max-Age=0` or a past Expires independently. Cardinality uses **two valid auth cookies**: zero cookies still throw at `auth[0].split` if the length guard is deleted and therefore do not kill that mutant. Remove `response.status !== 303` and use a 200 response with a valid cookie: a 302 is independently rejected by the endpoint guard. Remove only Location validation and use a foreign root URL. Remove the native `/api/augmentor` exclusion and require its permission-denial assertion to fail; add an action header to native socket options and require exact cookie-only headers to fail. Broaden the 401 retry predicate to include 503 and require the no-5xx-replay rejection/count assertions to fail; remove the second-401 fence and require `failed() === 1` to fail. Use valid oversized JSON/message payloads to isolate byte bounds from JSON/schema failures, and test inbound and outbound limits separately.
+- [ ] **Opening/connector red evidence:** remove only `error?.[opaqueOpeningFailure] !== true` from the catch predicate and require constructor/status cases to fail their zero-diagnostic assertion; remove both that predicate and `permission-denied` exclusion for the denial case. The remaining exclusion otherwise masks a denial-only deletion. Use the real loopback proxy sink under the hostile environment/global dispatcher as specified in the test. Remove HTTP and WebSocket `dispatcher: directDispatcher` arguments in separate mutants; each must increment sink traffic and fail `proxyTraffic === 0`. The test records connection errors before asserting the sink count, so early network rejection cannot hide the observation. Restore global networking inside the isolated test process only.
 - [ ] **Commit:**
 
 ```bash
@@ -2683,7 +2762,7 @@ git commit -m "feat(harness): authenticate native DSH over direct bounded connec
 **Interfaces:**
 - Consumes: authenticated `transport.request(route, options)`, Task 0's provider result.
 - Produces: `decodeDshCatalog(catalog) -> {groups,default?}` and `adapter.probe({signal,native?:boolean}) -> Promise<{available,protocolReady?,providerAvailable?,...capabilities}>`. Native probe success means validated protocol, not a working provider. Plugin probe retains its previous return and behavior.
-- Dependency gate: execute this task's supplied implementation only for Task 0 `provider: 'catalog'`. A distinct structured rejection is an explicit blocked branch requiring that exact decoder and its auth/schema counterexamples, not an inferred classification.
+- Dependency gate: the recorded `0.2.0-rc.2` result is `provider: 'catalog'`; use this strict success decoder for that sole native-eligible version. Task 2 refuses 0.1.x before transport/probe. No structured-provider decoder or 0.1.x fallback is authorized by the collected evidence; plugin probe behavior stays unchanged.
 
 - [ ] **Write failing tests:**
 
@@ -2709,7 +2788,10 @@ test('native validates catalog while plugin probe keeps its existing behavior', 
 });
 test('unknown or auth-shaped error is never manufactured into provider readiness', async () => {
   for (const error of [{ code: 'unauthorized' }, { code: 'unknown' }, { message: 'provider key missing' }]) {
-    const a = adapter(null, { ok: false, error }); await assert.rejects(a.probe({ native: true }), { code: 'runtime-unavailable' }); await a.dispose();
+    for (const value of [undefined, { groups: [] }]) {
+      const a = adapter(null, { ok: false, error, value });
+      await assert.rejects(a.probe({ native: true }), { code: 'runtime-unavailable' }, 'error envelope must fail even with a valid catalog value'); await a.dispose();
+    }
   }
 });
 test('valid model catalog establishes availability', async () => {
@@ -2744,7 +2826,7 @@ PY
 ```
 
 - [ ] **Run and pass:** `node --test browser-first/test/dsh-native-readiness.test.mjs browser-first/test/dsh-harness-adapter.test.mjs browser-first/test/dsh-harness-stream.test.mjs`.
-- [ ] **Red evidence:** replace `decodeDshCatalog(value)` with `{ groups: [] }`, then run the malformed-catalog test and require rejection assertions to fail. Restore. Change `rpc`'s `result.ok` guard to accept errors; require the unknown/auth-shaped tests to fail. Restore. No free-text provider classifier may be added.
+- [ ] **Red evidence:** replace `decodeDshCatalog(value)` with `{ groups: [] }`, then run the malformed-catalog test and require rejection assertions to fail. Restore. Remove only `body.result?.ok !== true` from `rpc`'s rejection predicate; require the error-envelope case carrying `value: { groups: [] }` to fail `assert.rejects`. The mutant returns a valid catalog and reaches Ready. The undefined-value cases still reject at the decoder and do not kill this mutant. Restore. No free-text provider classifier may be added.
 - [ ] **Commit:**
 
 ```bash
@@ -2776,12 +2858,13 @@ function registry() {
 }
 function adapter() { return { createSession: async () => ({}), dispose: async () => {}, async *invoke() { yield { type: 'final', data: { text: 'reply' } }; } }; }
 test('pending authorization signal crosses resolution and fences before late acquisition', async () => {
-  const r = registry(); let args, release;
-  const boundary = createHarnessBoundary({ registry: r, resolveAdapter: async (_authorization, options) => { args = options; await new Promise(resolve => { release = resolve; }); return adapter(); } });
+  const r = registry(); let args, release, creates = 0;
+  const boundary = createHarnessBoundary({ registry: r, resolveAdapter: async (_authorization, options) => { args = options; await new Promise(resolve => { release = resolve; }); return { ...adapter(), createSession: async () => { creates++; return {}; } }; } });
   const result = boundary.createSession({ addonId: 'addon.native' });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(args.signal.aborted, false); const revoking = r.revoke(); assert.equal(args.signal.aborted, true);
-  release(); await assert.rejects(result, { code: 'ownership-conflict' }); await revoking; await boundary.close();
+  release(); await assert.rejects(result, { code: 'ownership-conflict' });
+  assert.equal(creates, 0, 'revoked resolution cannot dispatch createSession'); await revoking; await boundary.close();
 });
 test('runtime retirement emits one error, invalidates reference and notifies synchronously', async () => {
   const retired = [], r = registry();
@@ -2853,7 +2936,7 @@ PY
 ```
 
 - [ ] **Run and pass:** `node --test browser-first/test/dsh-native-boundary.test.mjs browser-first/test/harness-boundary.test.mjs browser-first/test/harness-event-bus.test.mjs`.
-- [ ] **Red evidence:** remove signal propagation, each post-resolution authorization check, epoch filtering, synchronous notification and liveness authorization check independently. The relevant tests must fail behaviorally. Runtime failure must produce a terminal error before bus closure; revocation must retain ownership-conflict and existing policy semantics. Confirm late output cannot enter the closed bus.
+- [ ] **Red evidence:** remove the `signal` resolution option and require the pending test's signal assertion to fail. Remove the adjacent post-resolution `check(ctx)` and `registry.assertOperation(..., 'createSession')` as one grouped dispatch-fence mutant; neither deletion alone defeats the other. The pending test still rejects at the later check, but now `creates === 0` fails because the signal-ignoring synthetic adapter was called. Test the final post-create pair separately by holding `adapter.createSession`, revoking, then resolving `{}`; remove both final checks together and require session creation to reject (the mutant resolves). Remove epoch filtering and require the replacement `isLive(next) === true` assertion to fail. Remove/defer `onRetired` and require the immediately inspected `retired` array to fail. To isolate `isLive`'s operation check, use a registry stub whose `isCurrent` stays true but whose `assertOperation` starts throwing after creation, without emitting a fence; require `isLive(ref) === false`. Ordinary revocation removes the session and cannot kill that mutant. Keep terminal-error-before-close and late-output assertions as independent positive contracts; do not credit them to an unrelated guard deletion.
 - [ ] **Commit:**
 
 ```bash
@@ -2942,6 +3025,20 @@ test('late old-epoch retirement cannot erase replacement compatibility cache', a
   await f.host.executeBridgeChat(input); f.crash(); const replacement = await f.host.executeBridgeChat(input);
   f.lateCrash(); const reused = await f.host.executeBridgeChat(input);
   assert.equal(reused.harness.sessionId, replacement.harness.sessionId); assert.equal(f.resolves(), 2);
+});
+
+test('retirement callback compares each of the four reference fields', async () => {
+  const source = await readFile(new URL('../host/harness-host-service.mjs', import.meta.url), 'utf8');
+  const signature = '    onRetired(ref) {', start = source.indexOf(signature);
+  const end = source.indexOf('\n    },', start);
+  assert.ok(start >= 0 && end > start);
+  const retire = new Function('compatibilitySession', 'ref', source.slice(start + signature.length, end) + '\nreturn compatibilitySession;');
+  const current = { addonId: 'addon.native', sessionId: 'session', bootEpoch: 'boot', generation: 2 };
+  assert.equal(retire(current, { ...current }), undefined);
+  for (const key of Object.keys(current)) {
+    const stale = { ...current, [key]: key === 'generation' ? 1 : 'old-' + current[key] };
+    assert.equal(retire(current, stale), current, `retirement must compare ${key}`);
+  }
 });
 
 test('retirement between session return and cache assignment cannot retain a dead reference', async t => {
@@ -3080,7 +3177,8 @@ PY
 ```
 
 - [ ] **Run and pass:** `node --test browser-first/test/dsh-native-host.test.mjs browser-first/test/dsh-native-credentials.test.mjs browser-first/test/harness-host-service.test.mjs browser-first/test/harness-provider-dispatch.test.mjs`.
-- [ ] **Red evidence:** native delta suppression, assembled history/catalog/status/selection sanitation, four-field cache match, local per-call reference, pre-cache liveness, shared readiness independence and close-time stop draining each require a failing mutant. Include a token split across upstream history parts; assert both returned history and signed receipt omit the reconstructed token. Include retirement before cache assignment, late retirement of an old reference, active-turn exit, no replay into replacement, revocation and unconfirmed cleanup. A mocked adapter test does not replace the production composition lane below.
+- [ ] **Red evidence:** remove native delta suppression and require the first published event to be `final` (the mutant publishes `delta`). Remove each assembled method wrapper separately and require the corresponding route result to omit the synthetic secret; remove final-frame sanitation and require `[redacted]`. Keep Task 10's split-history/token and signed-receipt test: transport sanitation of individual parts cannot mask the missing assembled-history wrapper. For four-field cache matching, drop each field from the comparison in turn and run the extracted production callback test with exactly that field different; unconditional clearing also fails it. The old-epoch host test alone is insufficient because boundary epoch filtering can prevent the callback from running at all. Remove pre-cache `isLive(created)` and require the cache-race test's next explicit chat to succeed: the mutant caches the dead reference and that next call fails.
+- [ ] **Add targeted red cases before crediting the remaining host guards:** for `local per-call reference`, capture the 30-second timer callback during a held chat, retire its session (which clears the cache), invoke that captured callback with a spy replacing `boundary.cancel`, and assert the spy receives the original four-field reference and turn ID. Change only the timeout's `callSession` to `compatibilitySession`; it passes `undefined`, failing the reference assertion even though both chats reject. For shared readiness, hold the first authentication while two authorized acquisitions wait, cancel only the first, then release authentication; the second must reach Ready. Mutate readiness to reuse the first session's lease/transport instead of the shared capability; the second fails. For close-time drain, hold `nativeRuntime.close()` while resource disposal settles/expires; assert host close is still pending, then release the held stop and assert completion. Omit the native stop from the awaited set; the pending assertion fails. These cases need their own named assertions; a generic active-crash rejection does not prove any of them. Retain production composition coverage in Task 10.
 - [ ] **Commit:**
 
 ```bash
@@ -3225,7 +3323,7 @@ PY
 ```
 
 - [ ] **Run and pass:** `node --test browser-first/test/dsh-native-shutdown.test.mjs browser-first/test/opencode-client.test.mjs browser-first/test/opencode-execution-revocation.test.mjs`.
-- [ ] **Red evidence:** move `closeHarness` behind `await closeOpenCode` and require the first test to fail its immediate native-call assertion; remove the idempotence check and require duplicate-call failure; gate the exit hook with `installSignalHandlers` and require the false-mode test to fail. Restore each edit before continuing. These are fail-before-fix proofs for shutdown ownership and ordering.
+- [ ] **Red evidence:** delay `closeHarness` until `closeOpenCode` resolves and require the first test's immediate native-call count to fail (zero instead of one). Remove `if (closing) return closing` from `createBridgeShutdown` and use the second test's direct `shutdown()` calls: `a === b` fails and both callbacks run twice; repeated signals alone would be masked by `exiting`. Separately remove the `if (!exiting)` condition in `installBridgeSignals` and require the first test's exactly-one-exit assertion to fail (two finally callbacks), while shutdown itself stays idempotent. Gate the exit hook with `installSignalHandlers` and require the false-mode `listenerCount('exit') === 1` assertion to fail. Restore each mutant before continuing.
 - [ ] **Commit:**
 
 ```bash
@@ -3437,7 +3535,7 @@ test('split token is sanitized after assembly in final history and valid signed 
 
 ```
 
-- [ ] **Run red:** `node --test browser-first/test/dsh-native-integration.test.mjs`. Before the fake executable exists, the copy fails. After creating it, remove only the runtime's port reservation temporarily and require the foreign-listener test to fail; remove only the native grant floor and require the unauthorized-session assertions to fail. Restore each guard before the green run. An absent fixture is not security evidence.
+- [ ] **Run red:** `node --test browser-first/test/dsh-native-integration.test.mjs`. Before the fake executable exists, the copy fails. After creating it, remove only the runtime's port reservation temporarily and require the foreign-listener test's zero-child assertion to fail (the attempted child subsequently fails its bind). Prove the additional native grant floor in Task 1's isolated filesystem/shell cases; removing it alone does not bypass the first integration test's unassigned slot or existing agent-runtime/network requirements. Restore each guard before the green run. An absent fixture is not security evidence.
 - [ ] **Minimal implementation:** create `browser-first/test/dsh-native-fake-child.mjs` with this complete executable. It uses only Node built-ins; the fixed WebSocket encoder handles the bounded synthetic messages used here, including masked client frames and ping/close frames.
 
 ```js
@@ -3538,7 +3636,8 @@ process.on('SIGTERM', () => { for (const socket of sockets) socket.destroy(); se
 ```
 
 - [ ] **Run and pass:** `node --test browser-first/test/dsh-native-integration.test.mjs` and `(umask 002; node --test browser-first/test/dsh-native-integration.test.mjs)`. Both must exercise the actual prefix walker before spawn. No skipped loopback, filesystem-permission or process tests count as a pass. A restricted runner must delegate this exact command to the conductor's permitted local environment.
-- [ ] **Red evidence:** the first test must fail when native grants are bypassed, when telemetry inherits from the parent, when cookie sharing is removed, or when one session's disposal kills the other. The sentinel test must fail when port probing is removed. The crash/cache tests must fail when cache retirement or post-exit epoch isolation is removed. Restore unconditional pre-Ready EOF rejection and require the EOF-positive test to fail; return immediately after token capture and require the conflict-during-catalog test to fail. Apply one mutation at a time, run this exact test command, record the failed assertion and restore before continuing.
+- [ ] **Red evidence:** make the managed environment omit/override forced disabled telemetry and require the first test's successful session assertion to fail because the fake child's telemetry assertion aborts startup. Remove credential record reuse (`records.get(owned.epoch)`) so each acquired lease gets a fresh cookie record; the fake child's second exchange returns 500 and at least one session's `status === 200` fails. Make every runtime lease release call `stop(record)` and require the first-disposal assertion that the other session's child remains live to fail. Remove only port reservation: the sentinel test must fail `children.length === 0`, even though EADDRINUSE still refuses startup and zero sentinel traffic remains true. Remove `onRetired` cache clearing: the explicit post-crash chat rejects instead of returning a fresh session. Old-exit callback identity is proved by Task 3's direct captured-callback test, not by an OS child that emits exit only once. Grant-floor proof remains in Task 1, not a claim that this integration fixture kills it.
+- [ ] **Announcement red evidence:** restore unconditional pre-Ready EOF rejection; `valid announcement plus stdout EOF can reach protocol Ready` must fail `result.status === 200`. For `conflicting announcement during protocol probe prevents Ready`, apply exactly the Task 2 persistent scanning mutant to `createDshAnnouncement`: add closure flag `captured`, test it at the start of **every** `write`, and set it plus return after the first `onToken(value)`. Reason through the trace: initial announcement captures token → authentication succeeds → catalog handler emits conflict in a later write → entry guard discards it → valid delayed catalog completes → `sharedLease.ready()` succeeds → session creation returns HTTP 200. Thus `assert.notEqual(result.status, 200)` must go red (actual 200); record that assertion, not a timeout or unrelated child-exit failure. A bare return after token capture affects only the current call and still parses this later conflict, so it is explicitly excluded from this proof. Kill that distinct bare-return mutant with Task 2's same-write test. Apply one specified mutant at a time, restore it and rerun this task's exact command before proceeding.
 - [ ] **Commit:**
 
 ```bash
@@ -3568,7 +3667,8 @@ test('native operator documentation preserves isolation, consent and coexistence
   for (const text of ['## Native DSH authentication', 'RESONANTOS_DSH_PACKAGE_ROOT', 'RESONANTOS_DSH_HOME',
     'managedDsh', 'DSH_TELEMETRY_MODE=DISABLED', '50000', 'depth 64', '30 seconds', '3 seconds',
     'dsh-native-cookie', 'dsh-action-token', 'shell', 'filesystem', 'No automatic migration', 'No automatic restart',
-    'DEEPSEEK_API_KEY', 'No provider key is required for protocol readiness', 'unconfirmed exit', 'local sink']) assert.ok(doc.includes(text), text);
+    'DEEPSEEK_API_KEY', 'No provider key is required for protocol readiness', 'unconfirmed exit', 'local sink',
+    '0.2.0-rc.2', '0.1.5-rc.1', '0.1.7-rc.2', 'anchor-missing', 'Runtime unavailable.']) assert.ok(doc.includes(text), text);
   assert.ok(readme.includes('../../docs/addons/harness-adapter-demo.md#native-dsh-authentication'));
 });
 ```
@@ -3590,9 +3690,16 @@ Use a dedicated, locally installed npm prefix containing
 `node_modules/@deepseek-ai/dsh`, including its hoisted dependencies. Set
 `RESONANTOS_DSH_PACKAGE_ROOT` to the absolute prefix, not `node_modules` or the
 DSH package directory. Installation and updates are operator work; the bridge
-never downloads or searches for DSH. Supported version ranges are 0.1.x and
-0.2.x, including prereleases; live certification is per exact package version
-and integrity, not a claim that every release has been tested.
+never downloads or searches for DSH. Native mode currently admits only
+`0.2.0-rc.2`. It was support-eligible in two of three conductor prerequisite runs; run 1's telemetry check was incomplete.
+`0.1.5-rc.1` and `0.1.7-rc.2` are blocked because the observer found none of its
+0.1.x source anchors (`anchor-missing`, probe line 352). All 0.1.x versions and
+other unreviewed versions are refused for native use with `runtime-unavailable`:
+`Runtime unavailable.` The fixed operator message is:
+`Native DSH install prefix is unavailable or unsupported. Select a dedicated prefix with a supported local package and restart the bridge.`
+The spec's 0.1.x/0.2.x ranges are candidate versions, not blanket launch
+permission. Plugin mode's version behavior is unchanged. Production live
+certification is still required for the exact eligible version and integrity.
 
 The whole real prefix and every ancestor through `/` must be owned by the
 current user or root and not writable by group/other. All regular files and
@@ -3658,11 +3765,11 @@ uses 15 seconds. Direct turns use 120 seconds; browser chat retains its separate
 30-second reply clock after startup and turn allocation. These are fixed bounds.
 
 Sessions share one epoch cookie but have separate DSH sessions and transports.
-Refresh is permitted only for an exact version whose live probe proves token
-reuse preserves old cookies and streams and that 401 occurs before dispatch.
-Verified non-reusable behavior uses single exchange and fences on confirmed
-401. Unknown behavior grants no refresh permission or support claim for that
-exact version; it does not block separately verified versions. Lost responses, timeouts and uncertain accepted prompts are never replayed.
+The reviewed refresh map enables only `0.2.0-rc.2`: the conductor proved token
+reuse, old-cookie/stream preservation and pre-dispatch 401. The blocked 0.1.x
+versions are refused for native use, not offered as exchange-once fallbacks.
+Unknown versions receive neither native admission nor refresh permission.
+Lost responses, timeouts and uncertain accepted prompts are never replayed.
 Native deltas are withheld; assembled replies and other outputs are sanitized
 before events or signed receipts. Credentials and token-bearing output are
 never logs, evidence files or browser projections.
@@ -3719,7 +3826,7 @@ git commit -m "docs(harness): explain native isolation consent recovery and live
 ### Task 12: Final deterministic checks and conductor live certification
 
 **Files:**
-- Create (conductor only): `/Users/dr.tom/2.0.0-alpha/.resonant-rig/dsh-native-task0/final-gate.json`
+- Create (conductor only): `/path/to/2.0.0-alpha/.resonant-rig/dsh-native-task0/final-gate.json`
 - Modify: no repository files.
 - Test: `browser-first/test/dsh-native-policy.test.mjs`, `browser-first/test/dsh-native-runtime.test.mjs`, `browser-first/test/dsh-native-credentials.test.mjs`, `browser-first/test/dsh-native-transport.test.mjs`, `browser-first/test/dsh-native-readiness.test.mjs`, `browser-first/test/dsh-native-boundary.test.mjs`, `browser-first/test/dsh-native-host.test.mjs`, `browser-first/test/dsh-native-shutdown.test.mjs`, `browser-first/test/dsh-native-integration.test.mjs`, `browser-first/test/dsh-native-docs.test.mjs`.
 
@@ -3733,13 +3840,14 @@ git commit -m "docs(harness): explain native isolation consent recovery and live
 node --input-type=module <<'JS'
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-const gate = JSON.parse(await readFile('/Users/dr.tom/2.0.0-alpha/.resonant-rig/dsh-native-task0/final-gate.json', 'utf8').catch(() => '{}'));
-const prerequisites = JSON.parse(await readFile('/Users/dr.tom/2.0.0-alpha/.resonant-rig/dsh-native-task0/results.json', 'utf8'));
+const gate = JSON.parse(await readFile('/path/to/2.0.0-alpha/.resonant-rig/dsh-native-task0/final-gate.json', 'utf8').catch(() => '{}'));
+const prerequisites = JSON.parse(await readFile('/path/to/2.0.0-alpha/.resonant-rig/dsh-native-task0/results.json', 'utf8'));
 assert.equal(gate.deterministic, true);
 assert.equal(gate.liveVersions?.length, 3);
 for (const version of ['0.1.5-rc.1', '0.1.7-rc.2', '0.2.0-rc.2']) {
   const row = gate.liveVersions.find(row => row.version === version);
   assert.ok(row && ['certified', 'blocked'].includes(row.status));
+  if (version !== '0.2.0-rc.2') assert.equal(row.status, 'blocked', '0.1.x cannot be certified under the recorded policy');
   if (row.status === 'blocked') { assert.ok(Array.isArray(row.blockedReasons) && row.blockedReasons.length); continue; }
   const prerequisite = prerequisites.find(r => r.version === version);
   assert.equal(prerequisite?.supportEligible, true, 'blocked prerequisite cannot be certified');
@@ -3765,8 +3873,8 @@ npm run verify:alpha
 
 The shared TypeScript union and SDK validator change, so Vitest and build are mandatory. Run the existing plugin transport and OpenCode suites as part of `test:browser-first`; neither may be silently skipped.
 
-- [ ] **Conductor-only live completion:** for each eligible Task 0 exact install, use its isolated root and an unused approved port other than 19387 with the production bridge and native manifest. Perform the approved design's eight live-lane steps. Require a real attributed browser reply, two concurrent governed sessions under the selected cookie policy, history/model selection/cancel, active revocation, crash then fresh explicit session, clean bridge restart and old-reference rejection. Record prefix entry count/depth/walk time from a direct call to `validateDshPrefix(prefix, {deadline: Date.now()+30000})`; it returns no secrets. Observe the pre-existing desktop process only through the conductor's own app, keep it running and verify its companion before/after; never attach this integration to that process. Repeat plugin/native slot swaps on the separately pinned supported plugin setup. This plan's automated tests do not substitute for those human-visible observations. If any observation is unavailable, leave its boolean false and certification blocked.
-- [ ] **Run and pass:** after the conductor writes actual sanitized observations to the external `final-gate.json`, rerun the assertion above and review the source commits plus red records. Task 0 `blocked` means only that exact version cannot be certified. Record it as `status: "blocked"` with reasons in `liveVersions`; certify other versions independently as `status: "certified"` only with every observation true. Passing the accounting assertion is not an all-version support claim; report certified and blocked counts explicitly. The conductor must identify the governing issue before creating a PR into `dev`; issue 519 is a telemetry dependency, not automatically the governing native-auth issue.
+- [ ] **Conductor-only live completion:** for the sole eligible Task 0 exact install, `0.2.0-rc.2`, use its isolated root and an unused approved port other than 19387 with the production bridge and native manifest. Perform the approved design's eight live-lane steps. Require a real attributed browser reply, two concurrent governed sessions under the selected cookie policy, history/model selection/cancel, active revocation, crash then fresh explicit session, clean bridge restart and old-reference rejection. Record prefix entry count/depth/walk time from a direct call to `validateDshPrefix(prefix, {deadline: Date.now()+30000})`; it returns no secrets. Observe the pre-existing desktop process only through the conductor's own app, keep it running and verify its companion before/after; never attach this integration to that process. Repeat plugin/native slot swaps on the separately pinned supported plugin setup. This plan's automated tests do not substitute for those human-visible observations. If any observation is unavailable, leave its boolean false and certification blocked.
+- [ ] **Run and pass:** after the conductor writes actual sanitized observations to the external `final-gate.json`, rerun the assertion above and review the source commits plus red records. Retain `0.1.5-rc.1` and `0.1.7-rc.2` as `status: "blocked"` with the observer anchor blocker in `liveVersions`; neither may be certified or launched in native mode under this revision. Only `0.2.0-rc.2` may become `status: "certified"`, and only with every production observation true; otherwise record it as blocked too. Passing the accounting assertion is not an all-version support claim; report certified and blocked counts explicitly. The conductor must identify the governing issue before creating a PR into `dev`; issue 519 is a telemetry dependency, not automatically the governing native-auth issue.
 - [ ] **Commit:** no extra commit is needed for an evidence-only task. Verify the branch and staged scope with these exact read-only commands; do not stage external evidence:
 
 ```bash
@@ -3777,6 +3885,31 @@ git diff --cached --name-only
 ```
 
 ## Self-review
+
+### Red-evidence audit for revision 2
+
+This is a control-flow audit of every red-evidence step, not a claim that the
+future implementation suites ran. Use the exact mutant/input/assertion pairs
+in the tasks. A surviving single-line mutant with a second effective guard is
+not evidence of a behavioral regression; grouped mutants are labelled as such.
+
+| Step | Why the named observation goes red / qualification |
+| --- | --- |
+| Task 0 evidence accounting | Missing rows fail the three-version assertion. Existing conductor evidence has now been collected; that historical pre-observation failure is not to be reproduced by deleting evidence. Procedure unchanged. |
+| Task 0 parser mutations | A restored handler-entry post-token return discards later chunks; the same-chunk case also kills a return inside capture. Removing conflict comparison leaves the failure latch unset; unconditional EOF rejection makes valid-token EOF fail. The existing named readiness/budget assertions distinguish these outcomes. Audited by reading only; this revision does not run Task 0. |
+| Task 1 declarations/floor | Wrong adapter and loopback forms become valid without their native predicates. Additional filesystem/shell tests isolate the new floor from SDK dependencies, early install failures and hard-stop revocation; saved-load mutation enables the saved installation without resetting revision. |
+| Task 2 config/prefix/home | Native settings Proxy detects an unauthorized read; valid malformed config cases reach each refusal. Existing outside targets remove ENOENT masking; link watchdog count and directory-cycle success distinguish cycle guards. Shared ownership/mode/type predicates, ancestor-only paths and exact limit boundaries isolate filesystem checks. Home tests assert protected paths, owner/marker modes, exclusive lock and confirmed-exit release; no separate home mutation claim was specified. |
+| Task 2 parser/version | Persistent capture flag kills later-write conflict/budget; bare return kills same-write conflict. Origin reason distinguishes the remaining shape rejection. Exact-version refusal is independently tested; malformed semver needs the explicitly isolated policy seam. EOF and ordinary-banner bounds do not depend on token syntax. |
+| Task 3 lifecycle | Shared `active` bypass lets a cancelled validation continuation spawn; final-release bypass stops a still-leased child. Captured old exit callback fences replacement. Unsafe unconfirmed-cleanup group permits a new acquisition; deleting only `blocked` checks is masked. Fake-clock assertions distinguish escalation timing. |
+| Task 4 custody | Separate live lease isolates disposed access; overlapping/stale exchanges have exact counts. Epoch-loss `use` rejection kills the shared live-check bypass even though signal-aware wait still rejects. Exact full-string redaction distinguishes overlapping token/URL and cookie/value registrations. Binding mismatches and default refresh policy need their specified native inputs, not an injected always-true policy. |
+| Task 5 transport | Two valid cookies isolate cardinality; 200 isolates status from connector redirect rejection. Oversized valid JSON isolates byte bounds. Explicit retry/diagnostic inputs distinguish counts and zero-diagnostic assertions. Separate HTTP/WS dispatcher mutants increment the observed proxy sink before assertion. |
+| Task 6 readiness | Decoder bypass accepts malformed catalogs. An error envelope with a valid catalog value isolates `ok` rejection; absent value alone would still fail decoding. |
+| Task 7 boundary | Grouped post-resolution checks permit an observable upstream create even when a later check still rejects; grouped final checks publish a revoked session. Operation-only denial isolates liveness from registry identity/fencing. Epoch filter and synchronous callback have direct replacement/reference assertions. |
+| Task 8 composition | First delta and assembled output are directly inspected. Extracted callback inputs reach each cache comparator, bypassing unrelated epoch filtering. Cache-race follow-up distinguishes a stored dead reference. Targeted captured-timeout, two-waiter readiness and held-close tests are required to observe the remaining mutants; generic crash rejection is insufficient. |
+| Task 9 shutdown | Held OpenCode close exposes delayed native stop. Direct repeated shutdown calls bypass signal deduplication; repeated signals expose duplicate exit callbacks separately. False-mode listener count isolates the independent exit hook. |
+| Task 10 integration | Port mutant creates a child even though bind failure still rejects. Per-lease cookie records cause a second exchange rejected by the fake child. Early stop ends the other lease's child; omitted cache clear breaks explicit recovery. Persistent scanning mutant reaches HTTP 200 despite the later conflict; EOF mutant prevents HTTP 200. Floor and consumed exit-callback claims belong to Tasks 1/3. |
+| Task 11 docs | Existing docs lack the native heading. Required policy/version/error literals also fail if omitted from the new section. This is a documentation content check, not runtime proof. |
+| Task 12 final accounting | Missing gate yields `deterministic !== true`; no live evidence is invented. Additional version assertion prevents either blocked 0.1.x row being marked certified even with fabricated success flags. Accounting may pass with blocked rows; report exact certified/blocked counts. |
 
 ### Spec coverage
 
@@ -3859,4 +3992,4 @@ The syntax scan checks proposed snippets without loading runtime modules, launch
 | Task 9 shutdown helper | Launcher supplies the five named cleanup callbacks. `installSignalHandlers` is passed through the public OpenCode function, private start helper, hook installation and bridge call site. |
 | Task 10 fake executable | Runtime starts its copied `lib/bin.js` via the production argv. Its fixture-only control JSON is package-local synthetic data, not a production flag or a public route. Receipts use the existing deliberately public fixture signing seed. |
 
-This revision authors only this plan and `docs/planning/dsh-native-auth-plan-review-1.md`. Isolated Node checks validate proposed examples and mutation sensitivity; no repository runtime implementation, Task 0 probe, package installation, browser interaction, commit or certification is claimed. Task 0 remains conductor-owned and unrun; all live-dependent support/refresh decisions remain gated by its actual evidence.
+This second revision authors only this plan and `docs/planning/dsh-native-auth-plan-review-2.md`. The mutation audit is control-flow reasoning about proposed tests, with isolated syntax/parser checks reported in review-2; it is not an implementation or integration test run. Task 0's procedure remains unchanged and was not run by this reviser. The conductor's supplied outcome is recorded above: only `0.2.0-rc.2` is native-eligible, both reviewed 0.1.x versions are blocked, and production certification remains outstanding. No runtime implementation, package installation, browser interaction or commit is claimed.
