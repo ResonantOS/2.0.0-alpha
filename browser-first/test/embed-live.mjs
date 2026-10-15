@@ -2,15 +2,19 @@
 // EMBED-UPSTREAM-1 and final live acceptance. Conductor only; never a deterministic test.
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import net from 'node:net';
+import { execFile } from 'node:child_process';
+import { constants } from 'node:fs';
 import { once } from 'node:events';
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import { chromium } from 'playwright';
-import { mkdtemp, realpath, mkdir, readFile, writeFile, rm, lstat } from 'node:fs/promises';
+import { mkdtemp, realpath, mkdir, readFile, writeFile, rm, lstat, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve, relative, isAbsolute, sep, join, dirname } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 const env=process.env,stage=env.RESONANTOS_EMBED_LIVE_STAGE??'integration';
+const attestMode=env.RESONANTOS_EMBED_LIVE_ATTEST==='screenshot'?'screenshot':'human';
 const version=env.RESONANTOS_EMBED_LIVE_VERSION;
 assert.ok(typeof version==='string'&&/^[A-Za-z0-9][A-Za-z0-9._+-]{0,79}$/.test(version),'Supply the verified upstream version, not an endpoint.');
 assert.ok(['upstream','integration'].includes(stage));
@@ -28,32 +32,125 @@ async function external(name,create=false) {
   const canonical=await realpath(value),r=relative(repository,canonical);
   assert.ok(r&&(r==='..'||r.startsWith('..'+sep)||isAbsolute(r)),name+' must be outside Git');return canonical;
 }
+async function validateControl() {
+  if(attestMode!=='screenshot'||stage!=='integration')return null;
+  try {
+    const value=await external('RESONANTOS_EMBED_LIVE_CONTROL');
+    assert.ok((await lstat(value)).isFile());
+    await access(value,constants.X_OK);return value;
+  }catch{throw new Error('Screenshot integration requires a valid external executable RESONANTOS_EMBED_LIVE_CONTROL.');}
+}
+const control=await validateControl();
+const controlCheckpointActions={restartSameRecipient:'restart',restartAfterDeletion:'restart',stoppedForRetention:'stop',restartedForRetention:'start'};
 const out=await external('RESONANTOS_EMBED_LIVE_OUT',true),userRoot=await external('RESONANTOS_EMBED_LIVE_USER_ROOT'),extensionPath=await external('RESONANTOS_EMBED_LIVE_EXTENSION_ROOT');
 const extensionId='cdpdmmalhmokbfcfgogoepnjplaakgnl',panelUrl=`chrome-extension://${extensionId}/src/side-panel.html?agentView=embed`;
 const statePath=join(userRoot,'BrowserFirst','EmbedGovernance','state.json');
 const profile=await mkdtemp(join(await realpath(tmpdir()),'embed-live-profile-'));
-const terminal=createInterface({input:stdin,output:stdout});
-const summary={pass:false,stage,upstreamVersion:version,checks:{},protocol:{}};
+const terminal=attestMode==='screenshot'?null:createInterface({input:stdin,output:stdout});
+const summary={pass:false,stage,upstreamVersion:version,attestationStatus:attestMode==='screenshot'?'conductor-verified screenshots pending owner review':'human attestations',checks:{},attestations:{},protocol:{},controlActions:[]};
 let context,page,workspace;
 const fixtureTitle='Fixture '+randomUUID(),fixture=http.createServer((_req,res)=>{res.writeHead(200,{'Content-Type':'text/html','Cache-Control':'no-store'});res.end(`<title>${fixtureTitle}</title><h1>Local page sharing fixture</h1>`);});
-async function attest(key,text){assert.equal((await terminal.question(text+' Type yes when verified: ')).trim(),'yes');summary.checks[key]=true;}
+async function controlConfig() {
+  // Same JSON-only wrapper parser as bridge-client.js; never execute this file.
+  try {
+    const source=await readFile(join(extensionPath,'src','bridge-config.generated.js'),'utf8');
+    const text=source.trim(),prefix='globalThis.__RESONANTOS_BRIDGE_CONFIG__ = Object.freeze(',suffix=');';
+    if(!text.startsWith(prefix)||!text.endsWith(suffix))throw Error();
+    const config=JSON.parse(text.slice(prefix.length,-suffix.length));
+    const match=/^http:\/\/127\.0\.0\.1:([1-9][0-9]{0,4})$/.exec(config.bridgeUrl);
+    if(!match||Number(match[1])>65535||typeof config.bridgeToken!=='string'||!config.bridgeToken)throw Error();
+    return {token:config.bridgeToken,url:config.bridgeUrl,digest:createHash('sha256').update(config.bridgeToken).digest('hex'),host:'127.0.0.1',port:Number(match[1])};
+  }catch{throw new Error('Control config unavailable or invalid.');}
+}
+async function controlTcp(config,timeout) {
+  return new Promise(resolve=>{
+    const socket=net.connect({host:config.host,port:config.port});
+    const finish=value=>{socket.destroy();resolve(value);};
+    socket.once('connect',()=>finish('connected'));
+    socket.once('error',error=>finish(error.code==='ECONNREFUSED'?'refused':'unavailable'));
+    socket.setTimeout(timeout,()=>finish('unavailable'));
+  });
+}
+async function controlAuthStatus(config,token) {
+  // authorizeBridgeRoute checks bridge auth before Origin/capabilities on this read route.
+  // Credentials stay in memory; neither responses nor request details enter evidence.
+  try {
+    const response=await fetch(config.url+'/embed-governance/state',{
+      headers:{'X-ResonantOS-Bridge-Token':token},redirect:'error',signal:AbortSignal.timeout(1000),
+    });
+    await response.body?.cancel();return response.status;
+  }catch{return null;}
+}
+async function runControl(key,action) {
+  const result={key,action,ok:false};summary.controlActions.push(result);
+  const lifecycle=['stop','start','restart'].includes(action);
+  const before=lifecycle?await controlConfig():null;
+  await new Promise((resolve,reject)=>execFile(control,[action],{timeout:120000},error=>error?reject(error):resolve()));
+  // Storage actions are marked observed by the state assertions after restart.
+  if(!lifecycle)return result;
+  const deadline=Date.now()+(action==='stop'?15000:60000);
+  while(Date.now()<deadline) {
+    let current;
+    try{current=action==='stop'?before:await controlConfig();}catch{}
+    const remaining=deadline-Date.now();
+    if(remaining<=0)break;
+    if(current&&(action==='stop'||current.digest!==before.digest)) {
+      const state=await controlTcp(current,Math.min(1000,remaining));
+      if(state===(action==='stop'?'refused':'connected')) {
+        if(action!=='stop') {
+          if(await controlAuthStatus(current,before.token)!==401)throw new Error('Control old credential rejection was not observed.');
+          const status=await controlAuthStatus(current,current.token);
+          if(status===null||status===401)throw new Error('Control new credential acceptance was not observed.');
+        }
+        result.ok=true;result.observed=true;return result;
+      }
+    }
+    await new Promise(resolve=>setTimeout(resolve,Math.min(200,Math.max(0,deadline-Date.now()))));
+  }
+  throw new Error('Control action effect was not observed.');
+}
+async function attest(key,text,evidencePage=page) {
+  if(attestMode==='screenshot') {
+    try {
+      if(controlCheckpointActions[key])await runControl(key,controlCheckpointActions[key]);
+      if(key==='storageFailureIsolation'){await verifyStorageFailure(key);evidencePage=page;}
+      await evidencePage.screenshot({path:join(out,`attest-${key}.png`),fullPage:true});
+      summary.checks[key]='conductor-screenshot';
+      summary.attestations[key]=text;
+    }finally{
+      if(key==='storageFailureIsolation'){
+        const restored=await runControl(key,'storage-restore');await runControl(key,'restart');await launch();
+        const state=await bridge('/embed-governance/state');
+        assert.equal(state.problem,null);assert.equal(state.available,true);
+        restored.ok=true;restored.observed=true;
+      }
+    }
+    return;
+  }
+  assert.equal((await terminal.question(text+' Type yes when verified: ')).trim(),'yes');
+  summary.checks[key]=true;
+}
 async function launch() {
+  // Screenshot mode retains the relevant page across external restart checkpoints.
+  // Close it only after those screenshots, before launching the next context.
+  await context?.close();context=null;workspace=null;
   context=await chromium.launchPersistentContext(profile,{headless:false,viewport:{width:420,height:900},args:[`--disable-extensions-except=${extensionPath}`,`--load-extension=${extensionPath}`,'--no-first-run','--no-default-browser-check'],...(env.RESONANTOS_LIVE_CHROME_PATH?{executablePath:env.RESONANTOS_LIVE_CHROME_PATH}:{})});
   await context.addInitScript(()=>{
-    window.__embedProtocol={status:false,conversationId:false,conversationChanged:false,replyStarted:false,replyFinished:false,toolSuccess:false,toolError:false};
+    window.__embedProtocol={status:false,online:false,conversationId:false,conversationChanged:false,replyStarted:false,replyFinished:false,toolSuccess:false,toolError:false};
     window.addEventListener('message',event=>{
       const frame=document.querySelector('#embed-root iframe');if(!frame||event.source!==frame.contentWindow||event.origin!==new URL(frame.src).origin)return;
       const d=event.data,p=window.__embedProtocol;
       if(d?.type==='augmentor-status'){
-        if(typeof d.online==='boolean'&&typeof d.busy==='boolean')p.status=true;
-        if(typeof d.conversationId==='string'&&[...d.conversationId].length>=1&&[...d.conversationId].length<=128&&!/[\x00-\x1f\x7f]/.test(d.conversationId))p.conversationId=true;
+        if(typeof d.online!=='boolean'||typeof d.busy!=='boolean')return;
+        p.status=true;p.online=d.online;
+        if(typeof d.sessionId==='string'&&[...d.sessionId].length>=1&&[...d.sessionId].length<=128&&!/[\x00-\x1f\x7f]/.test(d.sessionId))p.conversationId=true;
       }
       if(d?.type==='augmentor-event'){
-        if(d.event==='conversation.changed'&&typeof d.conversationId==='string'&&[...d.conversationId].length>=1&&[...d.conversationId].length<=128&&!/[\x00-\x1f\x7f]/.test(d.conversationId))p.conversationChanged=true;
+        if(d.event==='session.changed'&&typeof d.data?.sessionId==='string'&&[...d.data.sessionId].length>=1&&[...d.data.sessionId].length<=128&&!/[\x00-\x1f\x7f]/.test(d.data.sessionId))p.conversationChanged=true;
         if(d.event==='turn.started')p.replyStarted=true;
         if(d.event==='turn.finished')p.replyFinished=true;
-        if(d.event==='tool.finished'&&typeof d.toolName==='string'&&/^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/.test(d.toolName)){
-          if(d.error===false)p.toolSuccess=true;if(d.error===true)p.toolError=true;
+        if(d.event==='tool.completed'&&d.data?.tool==='probe_read'){
+          if(d.data.isError===false)p.toolSuccess=true;if(d.data.isError===true)p.toolError=true;
         }
       }
     });
@@ -64,9 +161,23 @@ async function launch() {
 }
 async function protocol() {
   await attest('recipient','Verify in Manolo’s container/version UI that the configured recipient is Augmentor and matches the supplied version.');
-  await attest('upstreamExercise','In the real harness, change conversation, start/finish a reply, and exercise a safe tool success and a safe tool error. Do not enter credentials or perform an external mutation.');
-  summary.protocol=await page.evaluate(()=>({...window.__embedProtocol}));
-  assert.deepEqual(summary.protocol,{status:true,conversationId:true,conversationChanged:true,replyStarted:true,replyFinished:true,toolSuccess:true,toolError:true},'EMBED-UPSTREAM-1 failed: a required field/event is absent. Stop mapping implementation; obtain a reviewed narrow spec update.');
+  await page.waitForFunction(()=>window.__embedProtocol.online===true,null,{timeout:90000});
+  await page.evaluate(()=>{const p=window.__embedProtocol;p.conversationChanged=false;p.replyStarted=false;p.replyFinished=false;p.toolSuccess=false;p.toolError=false;});
+  const observed={toolSuccess:false,toolError:false};
+  for(const fail of [false,true]) {
+    assert.equal(await page.evaluate(fail=>{
+      const p=window.__embedProtocol;p.replyFinished=false;p.toolSuccess=false;p.toolError=false;
+      return window.__resonantosEmbed.send({type:'augmentor-prompt',requestId:crypto.randomUUID(),text:fail
+        ?'Call probe_read exactly once with fail true. This intentional fixed error is expected; do not retry or call any other tool. Then finish your reply.'
+        :'Call probe_read exactly once with no arguments. Do not call any other tool. Then finish your reply.',send:true,fresh:!fail});
+    },fail),true);
+    await page.waitForFunction(fail=>{const p=window.__embedProtocol;return p.replyFinished&&(fail?p.toolError&&!p.toolSuccess:p.toolSuccess&&!p.toolError);},fail,{timeout:180000});
+    const turn=await page.evaluate(()=>({...window.__embedProtocol}));
+    observed.toolSuccess ||= turn.toolSuccess;observed.toolError ||= turn.toolError;
+  }
+  await attest('upstreamExercise','Verify the fresh conversation, completed replies, and probe_read success and intentional error in the real harness. Do not enter credentials or perform an external mutation.');
+  summary.protocol={...await page.evaluate(()=>({...window.__embedProtocol})),...observed};
+  assert.deepEqual(summary.protocol,{status:true,online:true,conversationId:true,conversationChanged:true,replyStarted:true,replyFinished:true,toolSuccess:true,toolError:true},'EMBED-UPSTREAM-1 failed: a required field/event is absent. Stop mapping implementation; obtain a reviewed narrow spec update.');
   summary.checks.upstream=true;
 }
 async function bridge(route,options={}) {
@@ -79,20 +190,55 @@ async function privacy() {
   await page.locator('[data-control=workspace]').click();
   workspace=context.pages().find(p=>p.url().includes('/src/main-workspace.html'));
   if(!workspace){workspace=await context.waitForEvent('page');await workspace.waitForURL('**/src/main-workspace.html');}
-  await workspace.locator('[data-workspace=settings]').click();
+  await workspace.locator('.rail-settings[data-workspace=settings]').click();
   await workspace.getByRole('button',{name:/Privacy/}).click();
   await workspace.getByText('Embedded harness activity',{exact:true}).waitFor();
   return workspace.locator('[data-embed-activity]');
 }
 async function recording(card,enabled) {
-  await card.getByLabel('Record harness activity').setChecked(enabled);
+  // The card shows only durable host state: a click reverts and disables the box
+  // until the bridge confirms, so setChecked() cannot observe the change.
+  await card.locator('input[type=checkbox]:not([disabled])').waitFor();
+  const box=card.getByLabel('Record harness activity');
+  if(await box.isChecked()!==enabled)await box.click();
   await card.getByText(enabled?'Recording is on':'Recording is off',{exact:true}).waitFor();
+  await card.locator('input[type=checkbox]:not([disabled])').waitFor();
+  assert.equal(await box.isChecked(),enabled);
 }
-async function clickPage(){await page.evaluate(()=>{const n=document.querySelector('.embed-bar-notice');if(n)n.textContent='';});await page.locator('[data-control=page]').click();}
+// Sharing before the harness reports online is correctly refused ('Assistant offline');
+// every share follows a launch, so wait for the relay status first.
+async function clickPage(){await page.waitForFunction(()=>window.__embedProtocol?.online===true,null,{timeout:90000});await page.evaluate(()=>{const n=document.querySelector('.embed-bar-notice');if(n)n.textContent='';});await page.locator('[data-control=page]').click();}
 async function durable(){return JSON.parse(await readFile(statePath,'utf8'));}
 async function choose(mode) {
   await page.locator('[data-control=assistant]').click();
   await Promise.all([page.waitForNavigation(),page.locator(`[data-mode=${mode}]`).click()]);
+}
+async function verifyStorageFailure(key) {
+  const damaged=await runControl(key,'storage-fail');await runControl(key,'restart');await launch();
+  // An unreadable store is unavailable, not silently reset (governance design).
+  const state=await bridge('/embed-governance/state');
+  assert.equal(state.problem,'storage-unavailable');
+  assert.equal(state.recordingEnabled,false);assert.equal(state.noticeAcknowledged,false);
+  damaged.ok=true;damaged.observed=true;
+  await page.waitForFunction(()=>window.__embedProtocol.online===true,null,{timeout:90000});
+  await page.evaluate(()=>{const s=window.__resonantosEmbed,send=s.send;window.__storageShares=0;s.send=m=>{const ok=send(m);if(ok&&m?.type==='augmentor-context')window.__storageShares++;return ok;};});
+  await clickPage();await page.getByRole('dialog').waitFor();
+  await page.getByRole('button',{name:'Share page',exact:true}).click();
+  // The persistence warning can replace Page shared before Playwright observes it.
+  await page.waitForFunction(()=>window.__storageShares===1);
+  assert.equal(await page.evaluate(()=>window.__storageShares),1);
+  await page.getByText('Notice preference could not be saved. It may appear again.',{exact:true}).waitFor();
+  assert.equal(await page.evaluate(()=>window.__resonantosEmbed.send({type:'augmentor-prompt',requestId:crypto.randomUUID(),text:'Reply with OK for the storage isolation check.',send:true})),true);
+  const card=await privacy();await card.getByText('Recording unavailable',{exact:true}).waitFor();
+  await page.bringToFront();
+  await choose('normal');await page.locator('#command-input').waitFor();
+  await choose('embed');await page.waitForFunction(()=>window.__resonantosEmbed?.ready);
+}
+async function closeForRestart() {
+  // External stop/restart instructions still require conductor action and owner
+  // review; a screenshot records the UI, not proof that a process was restarted.
+  if(attestMode==='screenshot')return;
+  await context.close();context=null;
 }
 try {
   fixture.listen(0,'127.0.0.1');await once(fixture,'listening');await launch();
@@ -111,11 +257,11 @@ try {
     await clickPage();await page.getByRole('button',{name:'Share page',exact:true}).click();await page.getByText('Page shared',{exact:true}).waitFor();assert.equal(await page.evaluate(()=>window.__localShares),1);
     const inner=page.frames().find(f=>f.parentFrame()?.parentFrame()===page.mainFrame()&&new URL(f.url()).pathname.startsWith('/embed/'));assert.ok(inner);
     const before=await inner.getByText(fixtureTitle,{exact:true}).count();
-    assert.equal(await page.evaluate(()=>window.__resonantosEmbed.send({type:'augmentor-prompt',text:'What is the title of the page shared by ResonantOS? Reply with exactly that title and no other text.',send:true,fresh:true})),true);
+    assert.equal(await page.evaluate(()=>window.__resonantosEmbed.send({type:'augmentor-prompt',requestId:crypto.randomUUID(),text:'What is the title of the page shared by ResonantOS? Reply with exactly that title and no other text.',send:true,fresh:true})),true);
     await inner.getByText(fixtureTitle,{exact:true}).nth(before).waitFor({timeout:180000});summary.checks.fixtureReply=true;
     assert.deepEqual((await bridge('/embed-governance/events')).events,[]);
     await clickPage();await page.getByText('Page shared',{exact:true}).waitFor();assert.equal(await page.getByRole('dialog').count(),0);
-    await context.close();context=null;
+    await closeForRestart();
     await attest('restartSameRecipient','Restart the spike bridge with the SAME external user root and upstream origin, refresh the disposable extension configuration, and leave recording off.');
     await launch();await clickPage();await page.getByText('Page shared',{exact:true}).waitFor();assert.equal(await page.getByRole('dialog').count(),0);
     let card=await privacy();await recording(card,true);await page.bringToFront();await page.waitForTimeout(5200);await protocol();
@@ -124,18 +270,18 @@ try {
     const stored=await durable(),events=(await bridge('/embed-governance/events')).events;
     assert.ok(events.some(r=>r.event.kind==='page-shared'&&r.event.domain==='127.0.0.1'));
     for(const kind of ['conversation-changed','reply-started','reply-finished','tool-finished'])assert.ok(events.some(r=>r.event.kind===kind),kind);
-    for(const error of [true,false])assert.ok(events.some(r=>r.event.kind==='tool-finished'&&r.event.error===error));
+    for(const error of [true,false])assert.ok(events.some(r=>r.event.kind==='tool-finished'&&r.event.toolName==='probe_read'&&r.event.error===error));
     for(const r of stored.events){assert.equal(Object.hasOwn(r,'conversationId'),false);assert.equal(Object.hasOwn(r.event,'conversationId'),false);assert.equal(Object.hasOwn(r.event,'text'),false);assert.equal(Object.hasOwn(r.event,'url'),false);assert.equal(Object.hasOwn(r.event,'title'),false);}
     assert.equal(JSON.stringify(stored).includes(fixtureTitle),false);assert.equal(JSON.stringify(stored).includes('canary'),false);summary.checks.domainOnly=true;
     await workspace.bringToFront();await card.getByRole('button',{name:'View activity',exact:true}).click();await card.getByText(/Page shared: 127.0.0.1/).waitFor();
     await recording(card,false);const count=(await durable()).events.length;await page.bringToFront();await clickPage();await page.waitForTimeout(2200);assert.equal((await durable()).events.length,count);
     await workspace.bringToFront();await card.getByRole('button',{name:'Delete activity',exact:true}).click();await workspace.getByRole('dialog').getByRole('button',{name:'Delete activity',exact:true}).click();await card.getByText('Activity deleted',{exact:true}).waitFor();
     assert.deepEqual((await durable()).events,[]);assert.ok(Object.keys((await durable()).notices).length>0);
-    await context.close();context=null;
-    await attest('restartAfterDeletion','Restart the bridge with the same test root and recipient; refresh the disposable extension configuration.');
+    await closeForRestart();
+    await attest('restartAfterDeletion','Restart the bridge with the same test root and recipient; refresh the disposable extension configuration.',workspace);
     await launch();assert.deepEqual((await bridge('/embed-governance/events')).events,[]);assert.equal((await bridge('/embed-governance/state')).noticeAcknowledged,true);
     await clickPage();await page.getByText('Page shared',{exact:true}).waitFor();assert.equal(await page.getByRole('dialog').count(),0);summary.checks.deleteSurvivesRestart=true;
-    await context.close();context=null;
+    await closeForRestart();
     await attest('stoppedForRetention','Stop the bridge before seeding this test-owned state. Verify no bridge owns this root.');
     const seed=await durable();seed.events=[{version:1,eventId:randomUUID(),recordedAt:new Date(Date.now()-2592000001).toISOString(),harnessId:'addon.augmentor-embed',interfaceId:'panel',governance:'self-governed',source:'harness-report',event:{kind:'reply-finished'}}];await writeFile(statePath,JSON.stringify(seed)+'\n',{mode:0o600});
     await attest('restartedForRetention','Restart the bridge with the same test root; refresh the disposable extension config.');await launch();assert.deepEqual((await bridge('/embed-governance/events')).events,[]);assert.deepEqual((await durable()).events,[]);summary.checks.retention=true;
@@ -147,7 +293,7 @@ try {
   }
 }catch{summary.pass=false;summary.failure='Live acceptance incomplete; inspect fixed check names and rerun with the conductor.';process.exitCode=1;}
 finally{
-  terminal.close();await context?.close();fixture.closeAllConnections();if(fixture.listening)await new Promise(r=>fixture.close(r));await rm(profile,{recursive:true,force:true});
+  terminal?.close();await context?.close();fixture.closeAllConnections();if(fixture.listening)await new Promise(r=>fixture.close(r));await rm(profile,{recursive:true,force:true});
   await writeFile(join(out,'embed-governance-summary.json'),JSON.stringify(summary,null,2)+'\n',{mode:0o600});
 }
 console.log(JSON.stringify(summary));

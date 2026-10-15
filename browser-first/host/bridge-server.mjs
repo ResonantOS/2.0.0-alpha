@@ -95,6 +95,18 @@ function exactExtensionOrigin(request,extensionOrigin) {
   for(let i=0;i<(request.rawHeaders??[]).length;i+=2)if(String(request.rawHeaders[i]).toLowerCase()==='origin')origins.push(request.rawHeaders[i+1]);
   return typeof extensionOrigin==='string'&&/^chrome-extension:\/\/[a-p]{32}$/.test(extensionOrigin)&&origins.length===1&&origins[0]===extensionOrigin&&request.headers.origin===extensionOrigin;
 }
+function governanceRequestOrigin(request,extensionOrigin) {
+  if(exactExtensionOrigin(request,extensionOrigin))return true;
+  if(typeof extensionOrigin!=='string'||!/^chrome-extension:\/\/[a-p]{32}$/.test(extensionOrigin)||request.method!=='GET')return false;
+  const values=name=>{
+    const found=[];
+    for(let i=0;i<(request.rawHeaders??[]).length;i+=2)if(String(request.rawHeaders[i]).toLowerCase()===name)found.push(request.rawHeaders[i+1]);
+    return found;
+  };
+  if(values('origin').length!==0)return false;
+  const site=values('sec-fetch-site'),mode=values('sec-fetch-mode'),dest=values('sec-fetch-dest');
+  return site.length===1&&site[0]==='none'&&mode.length===1&&mode[0]==='cors'&&dest.length===1&&dest[0]==='empty';
+}
 function governanceBodyShape(request,body) {
   if(request.method==='GET'&&(request.headers['transfer-encoding']!==undefined||Number(request.headers['content-length']??0)!==0||Object.keys(body??{}).length))throw activityError('invalid-request');
 }
@@ -149,7 +161,7 @@ export function authorizeBridgeRoute(request, {
   if(!isAuthorizedBridgeRequest(request,bridgeToken))return refuse(401,'OPENCODE_BRIDGE_UNAUTHORIZED','Unauthorized browser-first bridge request.');
   if(family) {
     // IncomingMessage headers are prototype accessors; spreading request loses them.
-    if(!validateLoopbackHost({url:'/embed-governance/state',headers:request.headers,rawHeaders:request.rawHeaders,socket:request.socket},{listenerPort,getPublicPort})||!exactExtensionOrigin(request,extensionOrigin))return refuse(403,'OPENCODE_HOST_REJECTED','Host rejected.');
+    if(!validateLoopbackHost({url:'/embed-governance/state',headers:request.headers,rawHeaders:request.rawHeaders,socket:request.socket},{listenerPort,getPublicPort})||!governanceRequestOrigin(request,extensionOrigin))return refuse(403,'OPENCODE_HOST_REJECTED','Host rejected.');
     if(family.malformed)return refuse(400,'OPENCODE_INVALID_REQUEST','Invalid request.');
     if(!route)return refuse(routes.some(r=>r.path===family.pathname)?405:404,'OPENCODE_ROUTE_UNKNOWN','Unknown route.');
   }
@@ -158,7 +170,7 @@ export function authorizeBridgeRoute(request, {
   if(!route.requiredCapability&&!route.requiredCapabilityBootstrap)return refuse(403,'OPENCODE_CAPABILITY_REQUIRED','Bridge route declares no capability; refused by default.');
   if(route.requiredCapability&&!isAuthorizedCapabilityRequest(request,bridgeCapabilityTokens,route.requiredCapability))return refuse(403,'OPENCODE_CAPABILITY_REQUIRED',`Bridge route requires ${route.requiredCapability} capability.`);
   if(route.loopbackHostOnly&&!validateLoopbackHost(request,{listenerPort,getPublicPort}))return refuse(403,'OPENCODE_HOST_REJECTED','Host rejected.');
-  if(route.requiredOrigin==='extension'&&!exactExtensionOrigin(request,extensionOrigin))return refuse(403,'OPENCODE_HOST_REJECTED','Origin rejected.');
+  if(route.requiredOrigin==='extension'&&!(route.errorFamily==='embed-governance'?governanceRequestOrigin(request,extensionOrigin):exactExtensionOrigin(request,extensionOrigin)))return refuse(403,'OPENCODE_HOST_REJECTED','Origin rejected.');
   if(route.errorFamily==='harness'&&request.headers?.origin&&pickAllowedOrigin(request.headers,extensionOrigin,allowedOrigins)!==request.headers.origin)return refuse(403,'OPENCODE_HOST_REJECTED','Origin rejected.');
   return {route};
 }

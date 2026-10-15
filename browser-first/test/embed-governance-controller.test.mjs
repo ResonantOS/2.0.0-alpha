@@ -13,36 +13,38 @@ function fixture({enabled=false,post,confirm=true}={}) {
   const relay=data=>c.relay({source:frame,origin:'http://127.0.0.1:9',data});
   return {c,frame,calls,notices,listeners,relay,enable:v=>enabled=v,epoch:()=>epoch=randomUUID(),poll:()=>poll(),timeout:()=>timeout(),asks:()=>asks,polls:()=>polls,changeRecipient:key=>noticeKey=key};
 }
+// Wire shapes copied from augmentor-agent apps/browser/embed/entry.mjs at 79784a5.
+// Additional CANARY fields exercise projection of untrusted payloads.
 test('unknown/off records nothing; enabling has no backfill; exact transitions never persist IDs/content',async()=>{
   const f=fixture();await f.c.refresh();
-  f.relay({type:'augmentor-event',event:'turn.started',prompt:'CANARY'});assert.equal(f.c.history.length,0);
+  f.relay({type:'augmentor-event',event:'turn.started',data:{sessionId:'CANARY-ID-2'},prompt:'CANARY'});assert.equal(f.c.history.length,0);
   f.enable(true);await f.c.refresh();
-  f.relay({type:'augmentor-status',online:true,busy:false,conversationId:'CANARY-ID-1'});
-  f.relay({type:'augmentor-event',event:'conversation.changed',conversationId:'CANARY-ID-2',text:'CANARY'});
-  f.relay({type:'augmentor-status',online:true,busy:false,conversationId:'CANARY-ID-2'});
-  f.relay({type:'augmentor-event',event:'turn.started'});f.relay({type:'augmentor-event',event:'turn.started'});
-  f.relay({type:'augmentor-event',event:'turn.finished'});f.relay({type:'augmentor-event',event:'turn.finished'});
-  f.relay({type:'augmentor-event',event:'tool.finished',toolName:'read.page',error:false,result:'CANARY'});
-  f.relay({type:'augmentor-event',event:'tool.finished',toolName:'read.page',error:false});
+  f.relay({type:'augmentor-status',online:true,busy:false,sessionId:'CANARY-ID-1'});
+  f.relay({type:'augmentor-event',event:'session.changed',data:{sessionId:'CANARY-ID-2',text:'CANARY'}});
+  f.relay({type:'augmentor-status',online:true,busy:false,sessionId:'CANARY-ID-2'});
+  f.relay({type:'augmentor-event',event:'turn.started',data:{sessionId:'CANARY-ID-2'}});f.relay({type:'augmentor-event',event:'turn.started',data:{sessionId:'CANARY-ID-2'}});
+  f.relay({type:'augmentor-event',event:'turn.finished',data:{sessionId:'CANARY-ID-2',reason:'completed'}});f.relay({type:'augmentor-event',event:'turn.finished',data:{sessionId:'CANARY-ID-2',reason:'completed'}});
+  f.relay({type:'augmentor-event',event:'tool.completed',data:{sessionId:'CANARY-ID-2',tool:'read.page',isError:false,arguments:'CANARY',result:'CANARY'}});
+  f.relay({type:'augmentor-event',event:'tool.completed',data:{sessionId:'CANARY-ID-2',tool:'read.page',isError:false}});
   for(let i=0;i<10;i++)await settle();
   const posts=f.calls.filter(c=>c.path.endsWith('/events'));
   assert.deepEqual(posts.map(p=>p.options.body.event.kind),['conversation-changed','reply-started','reply-finished','tool-finished','tool-finished']);
   assert.equal(JSON.stringify(posts).includes('CANARY'),false);assert.equal(JSON.stringify(f.c.history).includes('CANARY'),false);
   const before=posts.length;
-  f.c.relay({source:{},origin:'http://127.0.0.1:9',data:{type:'augmentor-event',event:'turn.started'}});
-  f.c.relay({source:f.frame,origin:'http://evil',data:{type:'augmentor-event',event:'turn.started'}});
+  f.c.relay({source:{},origin:'http://127.0.0.1:9',data:{type:'augmentor-event',event:'turn.started',data:{sessionId:'CANARY-ID-2'}}});
+  f.c.relay({source:f.frame,origin:'http://evil',data:{type:'augmentor-event',event:'turn.started',data:{sessionId:'CANARY-ID-2'}}});
   f.relay({type:'augmentor-result',text:'CANARY'});f.relay({type:'augmentor-status',online:false,busy:false});
   await settle();assert.equal(f.calls.filter(c=>c.path.endsWith('/events')).length,before);
   f.c.destroy();assert.equal(f.listeners.size,0);
 });
 test('queue bounds, timeout drops, stale epoch refresh and pagehide cleanup',async()=>{
   const f=fixture({enabled:true,post:()=>new Promise(()=>{})});await f.c.refresh();
-  for(let i=0;i<60;i++)f.relay({type:'augmentor-event',event:'tool.finished',toolName:'read',error:false});
+  for(let i=0;i<60;i++)f.relay({type:'augmentor-event',event:'tool.completed',data:{sessionId:'CANARY-ID-2',tool:'read',isError:false}});
   assert.ok(f.c.history.length<=50);await settle();assert.equal(f.calls.filter(c=>c.path.endsWith('/events')).length,1);
   f.timeout();await settle();assert.equal(f.calls.filter(c=>c.path.endsWith('/events')).length,2);
   f.listeners.get('pagehide')();await settle();assert.equal(f.c.history.length,0);
   const stale=fixture({enabled:true,post:async()=>({recorded:false,reason:'stale-epoch'})});await stale.c.refresh();
-  const polls=stale.polls();stale.relay({type:'augmentor-event',event:'turn.started'});await settle();await settle();
+  const polls=stale.polls();stale.relay({type:'augmentor-event',event:'turn.started',data:{sessionId:'CANARY-ID-2'}});await settle();await settle();
   assert.ok(stale.polls()>polls);assert.equal(stale.calls.filter(c=>c.path.endsWith('/events')).length,1);stale.c.destroy();
 });
 test('notice consent only follows successful-share callback and survives remember failure in this mount',async()=>{
@@ -61,7 +63,7 @@ test('notice consent only follows successful-share callback and survives remembe
 test('one in flight and at most 32 waiting; full queue drops newest without retry',async()=>{
   const releases=[];
   const f=fixture({enabled:true,post:()=>new Promise(resolve=>releases.push(resolve))});await f.c.refresh();
-  for(let i=0;i<60;i++)f.relay({type:'augmentor-event',event:'tool.finished',toolName:'tool'+i,error:false});
+  for(let i=0;i<60;i++)f.relay({type:'augmentor-event',event:'tool.completed',data:{sessionId:'CANARY-ID-2',tool:'tool'+i,isError:false}});
   await settle();assert.equal(releases.length,1);
   for(let i=0;i<33;i++){assert.equal(releases.length,1);releases.shift()({recorded:true,reason:null});await settle();}
   assert.equal(releases.length,0);
@@ -71,24 +73,24 @@ test('one in flight and at most 32 waiting; full queue drops newest without retr
 
 test('disablement clears pending metadata and keeps only bounded ready/status proof',async()=>{
   const f=fixture({enabled:true});await f.c.refresh();
-  f.relay({type:'augmentor-ready'});f.relay({type:'augmentor-event',event:'turn.started'});await settle();
+  f.relay({type:'augmentor-ready'});f.relay({type:'augmentor-event',event:'turn.started',data:{sessionId:'CANARY-ID-2'}});await settle();
   assert.ok(f.c.history.some(row=>row.kind==='reply-started'));
   f.enable(false);await f.c.refresh();
   assert.ok(f.c.history.every(row=>row.type==='augmentor-ready'||row.type==='augmentor-status'));
   const count=f.calls.filter(c=>c.path.endsWith('/events')).length;
-  f.relay({type:'augmentor-event',event:'turn.finished'});await settle();
+  f.relay({type:'augmentor-event',event:'turn.finished',data:{sessionId:'CANARY-ID-2',reason:'completed'}});await settle();
   assert.equal(f.calls.filter(c=>c.path.endsWith('/events')).length,count);f.c.destroy();
 });
 
 test('offline resets baselines without synthesizing finishes; busy transitions are not turns',async()=>{
   const f=fixture({enabled:true});await f.c.refresh();
-  f.relay({type:'augmentor-status',online:true,busy:false,conversationId:'first'});
-  f.relay({type:'augmentor-event',event:'turn.started'});
+  f.relay({type:'augmentor-status',online:true,busy:false,sessionId:'first'});
+  f.relay({type:'augmentor-event',event:'turn.started',data:{sessionId:'CANARY-ID-2'}});
   f.relay({type:'augmentor-status',online:false,busy:false});
-  f.relay({type:'augmentor-status',online:true,busy:true,conversationId:'second'});
-  f.relay({type:'augmentor-status',online:true,busy:false,conversationId:'second'});
+  f.relay({type:'augmentor-status',online:true,busy:true,sessionId:'second'});
+  f.relay({type:'augmentor-status',online:true,busy:false,sessionId:'second'});
   await settle();assert.deepEqual(f.calls.filter(c=>c.path.endsWith('/events')).map(c=>c.options.body.event.kind),['reply-started']);
-  f.relay({type:'augmentor-event',event:'turn.started'});await settle();
+  f.relay({type:'augmentor-event',event:'turn.started',data:{sessionId:'CANARY-ID-2'}});await settle();
   assert.equal(f.calls.filter(c=>c.path.endsWith('/events')).length,2);f.c.destroy();
 });
 test('changed host recipient key invalidates this mounted frame and never remembers a share',async()=>{
@@ -101,11 +103,11 @@ test('changed host recipient key invalidates this mounted frame and never rememb
 
 test('off-to-on emits only new transitions and focus/poll never write consent',async()=>{
   const f=fixture();await f.c.refresh();
-  f.relay({type:'augmentor-event',event:'turn.started'});
-  f.relay({type:'augmentor-event',event:'turn.finished'});
+  f.relay({type:'augmentor-event',event:'turn.started',data:{sessionId:'CANARY-ID-2'}});
+  f.relay({type:'augmentor-event',event:'turn.finished',data:{sessionId:'CANARY-ID-2',reason:'completed'}});
   f.enable(true);await f.c.refresh();f.listeners.get('focus')();f.poll();await settle();
   assert.equal(f.calls.some(c=>c.path.endsWith('/recording')||c.path.endsWith('/notice')||c.path.endsWith('/events')),false);
-  f.relay({type:'augmentor-event',event:'turn.started'});await settle();
+  f.relay({type:'augmentor-event',event:'turn.started',data:{sessionId:'CANARY-ID-2'}});await settle();
   assert.deepEqual(f.calls.filter(c=>c.path.endsWith('/events')).map(c=>c.options.body.event),[{kind:'reply-started'}]);f.c.destroy();
 });
 
@@ -142,4 +144,40 @@ test('recording-off refresh preserves notice persistence and reports a later sav
     rejectNotice(Error('CANARY'));await settle();
     assert.deepEqual(announcements,['Notice preference could not be saved. It may appear again.']);
   } finally {c.destroy();}
+});
+
+
+test('status sessionId and explicit session.changed share one validated in-memory baseline',async()=>{
+  const f=fixture({enabled:true});await f.c.refresh();
+  try {
+    f.relay({type:'augmentor-status',online:true,busy:false,sessionId:'CANARY-first'});
+    f.relay({type:'augmentor-status',online:true,busy:false,sessionId:'CANARY-second'});
+    f.relay({type:'augmentor-event',event:'session.changed',data:{sessionId:'CANARY-second'}});
+    for(const sessionId of ['',null,42,'a'.repeat(129),'bad\nID']) {
+      f.relay({type:'augmentor-status',online:true,busy:false,sessionId});
+      f.relay({type:'augmentor-event',event:'session.changed',data:{sessionId}});
+    }
+    f.relay({type:'augmentor-status',online:false,busy:false});
+    f.relay({type:'augmentor-event',event:'session.changed',data:{sessionId:'CANARY-third'}});
+    f.relay({type:'augmentor-status',online:true,busy:false,sessionId:'CANARY-third'});
+    for(let i=0;i<5;i++)await settle();
+    const events=f.calls.filter(c=>c.path.endsWith('/events')).map(c=>c.options.body.event);
+    assert.deepEqual(events,[{kind:'conversation-changed'},{kind:'conversation-changed'}]);
+    assert.equal(JSON.stringify([events,f.c.history]).includes('CANARY'),false);
+  } finally {f.c.destroy();}
+});
+
+test('tool.completed maps nested tool and strict isError only, without arguments or results',async()=>{
+  const f=fixture({enabled:true});await f.c.refresh();
+  try {
+    for(const isError of [false,true,undefined,null,0,1,'false','true']) {
+      f.relay({type:'augmentor-event',event:'tool.completed',data:{sessionId:'CANARY',tool:'probe_read',isError,arguments:'CANARY',result:'CANARY'},toolName:'wrong',error:true});
+    }
+    for(const data of [undefined,null,{}, {tool:'bad name',isError:false}])f.relay({type:'augmentor-event',event:'tool.completed',data});
+    f.relay({type:'augmentor-event',event:'tool.finished',toolName:'wrong',error:false});
+    for(let i=0;i<5;i++)await settle();
+    const events=f.calls.filter(c=>c.path.endsWith('/events')).map(c=>c.options.body.event);
+    assert.deepEqual(events,[{kind:'tool-finished',toolName:'probe_read',error:false},{kind:'tool-finished',toolName:'probe_read',error:true}]);
+    assert.equal(JSON.stringify([events,f.c.history]).includes('CANARY'),false);
+  } finally {f.c.destroy();}
 });

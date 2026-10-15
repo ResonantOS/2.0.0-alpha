@@ -28,7 +28,7 @@ test('Settings off reaches another page, clears queued data and fences reads bef
   }});t.after(()=>controller.destroy());
   const frame={},descriptor={harnessId:'addon.augmentor-embed',interfaceId:'panel',label:'Augmentor',governance:'self-governed',noticeKey:state.noticeKey};
   controller.mount({frame,origin:'http://127.0.0.1:9',descriptor});await controller.refresh();
-  const relay=()=>controller.relay({source:frame,origin:'http://127.0.0.1:9',data:{type:'augmentor-event',event:'tool.finished',toolName:'read',error:false}});
+  const relay=()=>controller.relay({source:frame,origin:'http://127.0.0.1:9',data:{type:'augmentor-event',event:'tool.completed',data:{sessionId:'CANARY',tool:'read',isError:false}}});
   relay();relay();await settle();assert.equal(posts.length,1);
   holdRead=true;const stale=controller.refresh();await settle();
   const f=await fixture(t,async path=>path.endsWith('/state')?{...state}:new Promise(resolve=>save=resolve),async()=>true,chromeApi);

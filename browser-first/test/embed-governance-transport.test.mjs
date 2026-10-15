@@ -95,3 +95,77 @@ test('cookie cannot authorize, parser errors stay fixed, GET bodies and IP refus
   const denied=await fetch(`http://127.0.0.1:${server.address().port}/embed-governance/state`);
   assert.equal(denied.headers.get('cache-control'),'no-store');error({status:denied.status,payload:await denied.json()},'forbidden');
 });
+
+const extensionFetchMetadata=['Sec-Fetch-Site','none','Sec-Fetch-Mode','cors','Sec-Fetch-Dest','empty'];
+function chromeRequest(f,{path='/embed-governance/state',method='GET',metadata=extensionFetchMetadata,origins=[],host=`127.0.0.1:${f.port}`,bridge='bridge',capability=method==='POST'?'write':'read'}={}) {
+  return new Promise((resolve,reject)=>{
+    const headers=['Host',host,'X-ResonantOS-Bridge-Token',bridge,'X-ResonantOS-Bridge-Capability-Token',capability,...metadata,...origins];
+    const req=http.request({host:'127.0.0.1',port:f.port,path,method,headers},res=>{
+      let body='';res.on('data',chunk=>body+=chunk);res.on('error',reject);res.on('end',()=>{
+        try{assert.equal(res.headers['cache-control'],'no-store');resolve({status:res.statusCode,payload:JSON.parse(body)});}catch(e){reject(e);}
+      });
+    });
+    req.on('error',reject);req.setTimeout(1500,()=>req.destroy(Error('Raw request timed out')));req.end(method==='POST'?'{}':undefined);
+  });
+}
+test('Chrome extension GET without Origin accepts exact fetch metadata',async t=>{
+  const f=await fixture(t);
+  for(const [path,capability] of [['/embed-governance/state','read'],['/embed-governance/events','records']]) {
+    assert.equal((await chromeRequest(f,{path,capability})).status,200);
+  }
+  assert.equal(f.calls(),2);
+});
+test('Origin-less harness iframe GET is rejected',async t=>{
+  const f=await fixture(t);
+  error(await chromeRequest(f,{metadata:['Sec-Fetch-Site','same-origin',...extensionFetchMetadata.slice(2)]}),'forbidden');
+  assert.equal(f.calls(),0);
+});
+test('Origin-less GET rejects web pages, navigations, absent, duplicate and non-exact metadata',async t=>{
+  const f=await fixture(t);
+  const cases=[[],['Sec-Fetch-Site','same-site',...extensionFetchMetadata.slice(2)],['Sec-Fetch-Site','cross-site',...extensionFetchMetadata.slice(2)]];
+  for(let i=0;i<extensionFetchMetadata.length;i+=2) {
+    cases.push(extensionFetchMetadata.filter((_,index)=>index!==i&&index!==i+1));
+    cases.push([...extensionFetchMetadata,extensionFetchMetadata[i].toLowerCase(),extensionFetchMetadata[i+1]]);
+    const changed=[...extensionFetchMetadata];changed[i+1]=changed[i+1].toUpperCase();cases.push(changed);
+  }
+  for(const [name,value] of [['Sec-Fetch-Mode','navigate'],['Sec-Fetch-Dest','document'],['Sec-Fetch-Dest','iframe'],['Sec-Fetch-Dest','']]) {
+    const changed=[...extensionFetchMetadata];changed[changed.indexOf(name)+1]=value;cases.push(changed);
+  }
+  for(const metadata of cases)error(await chromeRequest(f,{metadata}),'forbidden');
+  assert.equal(f.calls(),0);
+});
+test('present Origin cannot fall back to fetch metadata and POST still requires exact Origin',async t=>{
+  const f=await fixture(t);
+  const invalid=[['Origin',''],['Origin','null'],['Origin','chrome-extension://foreign'],['Origin',`http://127.0.0.1:${f.port}`],['Origin','chrome-extension://'+'a'.repeat(32)],['Origin',origin,'origin',origin]];
+  for(const origins of invalid)error(await chromeRequest(f,{origins}),'forbidden');
+  for(const origins of [[],...invalid])error(await chromeRequest(f,{path:'/embed-governance/events/delete',method:'POST',origins}),'forbidden');
+  assert.equal(f.calls(),0);
+  assert.equal((await chromeRequest(f,{origins:['Origin',origin]})).status,200);
+  assert.equal((await chromeRequest(f,{path:'/embed-governance/events/delete',method:'POST',origins:['Origin',origin],metadata:[]})).status,200);
+});
+test('Origin-less GET retains Host, token, capability and configured-origin gates',async t=>{
+  const f=await fixture(t);
+  error(await chromeRequest(f,{host:'evil.test'}),'forbidden');
+  error(await chromeRequest(f,{bridge:''}),'unauthorized');
+  error(await chromeRequest(f,{capability:''}),'forbidden');
+  error(await chromeRequest(f,{capability:'write'}),'forbidden');
+  for(const extensionOrigin of ['',undefined,'https://example.test']) {
+    const server=await startBridgeServer({...f.options,extensionOrigin});
+    try{error(await chromeRequest({...f,port:server.address().port}),'forbidden');}
+    finally{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
+  }
+  assert.equal(f.calls(),0);
+});
+
+test('non-governance extension route rejects absent Origin despite fetch metadata',async t=>{
+  let dispatched=0;
+  const server=await startBridgeServer({port:0,host:'127.0.0.1',bridgeToken:'bridge',bridgeCapabilityTokens:caps,extensionOrigin:origin,
+    routes:[{method:'GET',path:'/fake-extension',requiredOrigin:'extension',requiredCapability:'addon-runtime-read',handler:()=>{dispatched++;return {ok:true};}}]});
+  t.after(async()=>{server.closeAllConnections();await new Promise(r=>server.close(r));});
+  const request=origins=>new Promise((resolve,reject)=>{
+    const req=http.request({host:'127.0.0.1',port:server.address().port,path:'/fake-extension',headers:['Host',`127.0.0.1:${server.address().port}`,'X-ResonantOS-Bridge-Token','bridge','X-ResonantOS-Bridge-Capability-Token','read',...extensionFetchMetadata,...origins]},res=>{res.resume();res.on('end',()=>resolve(res.statusCode));});
+    req.on('error',reject);req.end();
+  });
+  assert.equal(await request([]),403);assert.equal(dispatched,0);
+  assert.equal(await request(['Origin',origin]),200);assert.equal(dispatched,1);
+});

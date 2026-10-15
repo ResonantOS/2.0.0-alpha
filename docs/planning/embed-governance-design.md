@@ -5,6 +5,26 @@ document. It applies to `testing/augmentor-embed-sidecar` and targets beta.
 The embed experiment remains off unless `RESONANTOS_EMBED_POC=1` is set.
 It is outside the Alpha release.
 
+## Upstream protocol amendment (2026-10-15)
+
+EMBED-UPSTREAM-1 exposed incorrect upstream field names in this spec. The
+source is `augmentor-agent` at `79784a5`, `apps/browser/embed/entry.mjs`,
+lines 44–54 and 78. This amendment supersedes the relay names below:
+
+- Status is `{type:'augmentor-status', online, busy, sessionId?}`.
+- Events use `{type:'augmentor-event', event, data}`: `session.changed` and
+  `turn.started` carry `{sessionId}`; `turn.finished` carries
+  `{sessionId, reason}`; `tool.completed` carries `{sessionId, tool, isError}`.
+- Replace status `conversationId` with `sessionId`, `conversation.changed`
+  with `session.changed` and nested `data.sessionId`, and `tool.finished`
+  with `tool.completed` and nested `data.tool` / `data.isError` (strict boolean).
+
+Internal metadata remains `conversation-changed`, `reply-started`,
+`reply-finished`, and `tool-finished` with `toolName` / `error`. Session IDs
+remain in-memory baselines only; no prompts, arguments, results or finish
+reasons are retained. The live observer uses these same wire shapes and waits
+for a valid online status before sending its first command.
+
 ## Authority and scope
 
 The [interface decisions](embed-interface-decisions.md), approved by the project
@@ -743,14 +763,45 @@ Every route requires the bridge token, the capability below and
 `loopbackHostOnly: true`. Add `requiredOrigin: "extension"`,
 `errorFamily: "embed-governance"` and `maxBodyBytes` route options for these
 routes. In `authorizeBridgeRoute`, require exact string equality between the
-single request Origin and the configured `extensionOrigin`. A missing configured
-origin fails closed. Reject missing or duplicate Origin, the bridge page origin
-and every other origin, even when an allowed-origin wildcard matches it.
+single raw request Origin and the configured `extensionOrigin`, or the narrow
+Origin-less GET alternative in the live amendment below. A missing configured
+origin fails closed. Reject duplicate Origin, the bridge page origin and every
+other origin, even when an allowed-origin wildcard matches it.
 Do not use `pickAllowedOrigin` for authorization. The bridge and embed service
 must use the same configured extension origin or governance is unavailable.
 Enforce the check before invoking a service. CORS headers alone
 are not authorization. Use fixed public errors for this route family and
 `Cache-Control: no-store` on every response. Do not return exception strings.
+
+**Live amendment 2026-10-15 (Brief O).** The conductor captured the following
+credential-excluded bridge headers from real Chrome for Testing 1217 with the
+unpacked extension and host permission:
+
+| Request | Origin | Sec-Fetch-Site | Sec-Fetch-Mode | Sec-Fetch-Dest |
+| --- | --- | --- | --- | --- |
+| Extension page `GET /embed-governance/state` | absent | `none` | `cors` | `empty` |
+| Extension page `GET /embed-governance/events` | absent | `none` | `cors` | `empty` |
+| Extension page `POST /embed-governance/notice` | `chrome-extension://cdpdmmalhmokbfcfgogoepnjplaakgnl` | `none` | `cors` | `empty` |
+
+Chrome's GETs failed with 403 under the original missing-Origin rule; tests had
+supplied Origin themselves. Governance authorization now accepts either (a)
+exactly one raw Origin equal to the configured extension origin, or (b)
+`request.method === 'GET'`, **no raw Origin header**, and **exactly one raw
+header each** of `Sec-Fetch-Site: none`, `Sec-Fetch-Mode: cors` and
+`Sec-Fetch-Dest: empty`, with exact, case-sensitive values. Header names remain
+case-insensitive. Any present Origin must pass (a); it cannot fall back to (b).
+POST still requires (a). Missing or duplicate fetch metadata, `same-origin`,
+`same-site`, `cross-site`, `navigate`, and any dest other than `empty` fail (b).
+
+The governance family block uses `governanceRequestOrigin(request, extensionOrigin)`.
+The generic `requiredOrigin: 'extension'` check uses `governanceRequestOrigin`
+only when `route.errorFamily === 'embed-governance'`, and `exactExtensionOrigin`
+otherwise. Bridge-token, capability-token, Host and valid
+configured-extension-origin requirements remain unchanged and fail closed.
+This preserves the browser-context intent: fetch metadata separates extension
+GETs from harness iframe pages, web pages and navigations. Headers remain
+forgeable by local processes, as already acknowledged by the design; tokens
+still gate access. This evidence is conductor-supplied, not a new live proof.
 
 | Method and path | Capability | Exact input | Successful payload, in the existing `ok: true` envelope |
 | --- | --- | --- | --- |

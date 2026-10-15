@@ -67,13 +67,13 @@ export function createEmbedGovernanceController({request,windowRef=globalThis.wi
         if(typeof data.online!=='boolean'||typeof data.busy!=='boolean')return;
         ring({type:'augmentor-status',online:data.online,busy:data.busy});
         if(!data.online){conversation=null;reply=null;return;}
-        change(data.conversationId,false);return;
+        change(data.sessionId,false);return;
       }
       if(data.type!=='augmentor-event')return;
-      if(data.event==='conversation.changed')change(data.conversationId,true);
+      if(data.event==='session.changed')change(data.data?.sessionId,true);
       else if(data.event==='turn.started'&&reply!=='started'){reply='started';observe({kind:'reply-started'});}
       else if(data.event==='turn.finished'&&reply!=='finished'){reply='finished';observe({kind:'reply-finished'});}
-      else if(data.event==='tool.finished')observe({kind:'tool-finished',toolName:data.toolName,error:data.error});
+      else if(data.event==='tool.completed')observe({kind:'tool-finished',toolName:data.data?.tool,error:data.data?.isError});
     }catch{failed();}
   }
   function mount(value) {

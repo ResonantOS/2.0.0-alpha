@@ -8,6 +8,26 @@
 
 **Tech Stack:** Node.js 24.21.0, TypeScript, native ESM JavaScript, Chrome MV3, node:test, jsdom, Vitest, Playwright, Node filesystem/crypto/http APIs. No new dependency.
 
+## Upstream protocol amendment (2026-10-15)
+
+EMBED-UPSTREAM-1 confirmed that the spec and copied examples below used wrong
+upstream names. `augmentor-agent` at `79784a5`,
+`apps/browser/embed/entry.mjs` lines 44–54 and 78, emits status
+`{type:'augmentor-status', online, busy, sessionId?}` and events
+`{type:'augmentor-event', event, data}`. `session.changed` and `turn.started`
+carry `{sessionId}`; `turn.finished` carries `{sessionId, reason}`;
+`tool.completed` carries `{sessionId, tool, isError}`.
+
+This amendment supersedes `conversationId`, `conversation.changed`, and
+`tool.finished` with top-level `toolName` / `error` in upstream examples.
+Use status `sessionId`, `session.changed` with `data.sessionId`, and
+`tool.completed` with `data.tool` / strict boolean `data.isError`.
+Internal metadata kinds and `toolName` / `error` fields stay unchanged;
+IDs remain in memory and prompts, arguments, results and reasons are excluded.
+Update the live observer likewise and wait for online status before its first
+send. Verify with failing upstream-shaped controller tests before the fix,
+passing tests after it, and `rig-mutate` red evidence for `tool.completed`.
+
 ## Global Constraints
 
 The following normative excerpts are copied verbatim from the approved spec. Every task inherits them. References to implementation below are future work; this plan authoring task changes only this document and makes no commit.
@@ -1982,6 +2002,36 @@ git commit -m "feat(embed): persist consent and bounded metadata history"
 ```
 ### Task 6: Enforce the governance transport family and compose the service
 
+**Live amendment 2026-10-15 (Brief O).** The conductor's real Chrome for Testing
+1217 evidence table in [Routes and authorization](embed-governance-design.md#routes-and-authorization)
+shows absent Origin on extension state/events GETs and exact extension Origin
+on notice POST, with `none` / `cors` / `empty` fetch metadata on all three.
+This supersedes Task 6's original reject-missing-Origin assumption and helper
+call sites below. The governance family block uses
+`governanceRequestOrigin(request, extensionOrigin)`. The generic
+`requiredOrigin: 'extension'` check uses `governanceRequestOrigin` only when
+`route.errorFamily === 'embed-governance'`, and `exactExtensionOrigin` otherwise.
+Accept exactly one raw Origin equal to the configured extension origin, or
+`request.method === 'GET'`, no raw Origin header, and exactly one raw header
+each of `Sec-Fetch-Site: none`, `Sec-Fetch-Mode: cors` and
+`Sec-Fetch-Dest: empty` (exact, case-sensitive values). A present Origin cannot
+use the GET alternative. POST requires exact Origin. Missing configured origin
+still fails closed; Host, bridge-token and capability-token gates are unchanged.
+Fetch metadata separates extension GETs from harness pages, web pages and
+navigations, preserving the intent. Local processes can forge headers; tokens
+still gate access.
+
+- [ ] Cover both GET routes with raw HTTP acceptance and rejection cases for
+  missing/duplicate metadata, case changes, same-origin/same-site/cross-site,
+  navigate/non-empty dest, present invalid/duplicate Origin, POST without exact
+  Origin, missing configured origin, Host and credential failures.
+- [ ] Use `~/.claude/skills/resonant-rig/scripts/rig-mutate` to disable the GET
+  alternative and require the acceptance test to fail; separately allow
+  `same-origin` and require the harness-iframe rejection test to fail. Restore
+  byte-identically and rerun the deterministic checks. Live proof belongs to
+  the conductor.
+
+
 **Files:**
 - Modify: `browser-first/host/bridge-server.mjs`, `browser-first/host/bridge-capability-tokens.mjs`, `browser-first/resonantos-side-panel-extension/src/lib/bridge-client.js`, `browser-first/host/run-bridge-minimal.mjs`, `browser-first/test/bridge-route-capability-audit.test.mjs`, `docs/architecture/MODULE-OWNERSHIP.md`
 - Create/Test: `browser-first/test/embed-governance-transport.test.mjs`
@@ -2371,6 +2421,8 @@ git add browser-first/host/bridge-server.mjs browser-first/host/bridge-capabilit
 git commit -m "feat(bridge): enforce embed governance transport boundaries"
 ```
 ### Task 11: Write and syntax-check conductor-only live proof
+
+Screenshot integration proof requires `RESONANTOS_EMBED_LIVE_CONTROL`, an absolute path to a conductor-owned executable outside the repository; a missing, invalid or non-executable hook fails closed at startup. The hook accepts `restart`, `stop`, `start`, `storage-fail` and `storage-restore`; the conductor preserves the disposable user root and upstream and refreshes the disposable extension configuration on restart. Screenshot-mode restart verification requires bridge credentials that rotate on restart. Do not pin `RESONANTOS_BROWSER_FIRST_BRIDGE_TOKEN` for live proof: a pinned token makes the check fail closed. Start/restart proof requires a changed digest of the parsed bridge token, rejection of the old token with HTTP 401, and a non-401 response to the new token from the listening bridge. Storage failure proof reopens the damaged store, checks isolation, then restores and restarts it. Exit zero records that the conductor ran the requested action in `summary.controlActions`; it is not owner proof, and screenshot attestations remain pending owner review.
 
 **Files:**
 - Modify: `browser-first/test/embed-live.mjs`, `browser-first/README.md`

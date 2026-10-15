@@ -249,3 +249,15 @@ The earlier implementation covered 50 changed/new files; the existing classic re
 - `src/core/embed-governance-contract.js`
 - `src/core/trace-redaction-core.js`
 - `src/core/trace-redaction.js`
+
+- Live amendment 2026-10-15 (Brief O): governance GETs accept absent raw Origin only with single exact `none` / `cors` / `empty` fetch metadata; POST and token/Host/configured-origin gates remain strict. See the [design evidence table](embed-governance-design.md#routes-and-authorization) and Task 6 amendment. Both requested `rig-mutate` probes failed their target assertions and restored the source byte-identically; live proof remains with the conductor.
+
+- Brief P item 1: each prompt resets reply/tool flags and requires exactly its expected outcome; cumulative booleans preserve both outcomes in the summary, with reset mutation evidence.
+- Brief P item 2: control checkpoints require SHA-256 config rotation plus TCP readiness (start/restart) or TCP refusal (stop); storage restoration also requires available state with no problem, and exit status alone cannot mark an action observed.
+- Brief P item 3: fake-I/O contracts reject absent error-turn tools, mixed first-turn outcomes, unchanged config, and unobserved socket effects; valid effects pass, and ignored-tool/control mutations go red.
+- Brief P item 4: the fetch-metadata Origin exception is limited to the embed-governance error family; a non-governance transport regression rejects absent Origin, and reverting the scope goes red with byte-identical restoration.
+
+- Brief Q item 1: start/restart compare parsed-token SHA-256 digests and require old-token HTTP 401 plus new-token non-401 on the same authenticated read route; fake-I/O failing-first tests reject byte-only edits, old-token acceptance and new-token rejection, while genuine rotation passes. Stop still requires pre-action port refusal; tokens remain only in memory.
+- Brief Q item 2: storage-fail becomes ok/observed only after both recording and notice assertions; each failing-first state regression leaves the action unobserved.
+- Brief Q item 3: design and plan now scope the generic Origin exception to the embed-governance error family, retaining exactExtensionOrigin elsewhere.
+- Brief Q item 4: live-proof instructions require restart credential rotation and prohibit pinning RESONANTOS_BROWSER_FIRST_BRIDGE_TOKEN; pinned credentials fail closed. Live execution remains conductor-owned.

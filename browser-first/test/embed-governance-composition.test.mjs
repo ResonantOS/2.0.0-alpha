@@ -15,7 +15,7 @@ async function fixture(t,harness=d) {
 test('real composition refuses foreign relays and retains safe proof state only',async t=>{
   const f=await fixture(t),frame=f.view.root.querySelector('iframe');
   const relay=(data,source=frame.contentWindow,origin='http://127.0.0.1:9')=>f.dom.window.dispatchEvent(new f.dom.window.MessageEvent('message',{source,origin,data}));
-  relay({type:'augmentor-ready'});relay({type:'augmentor-status',online:true,busy:false,conversationId:'CANARY'});
+  relay({type:'augmentor-ready'});relay({type:'augmentor-status',online:true,busy:false,sessionId:'CANARY'});
   relay({type:'augmentor-result',text:'CANARY'});relay({type:'augmentor-event',event:'turn.finished',text:'CANARY'});
   relay({type:'augmentor-status',online:false,busy:false},{},'http://evil');
   await settle();assert.equal(f.view.state.ready,true);assert.equal(JSON.stringify(f.view.state.last).includes('CANARY'),false);
