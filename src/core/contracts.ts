@@ -523,7 +523,7 @@ export interface AddOnAgentRuntimeAdapterContract {
   adapterVersion: 1;
   adapterId: string;
   endpoint?: string;
-  authScheme: "none" | "dsh-action-token" | "bearer";
+  authScheme: "none" | "dsh-action-token" | "dsh-native-cookie" | "bearer";
   credentialBinding?: string;
   supportedOperations: HarnessOperation[];
   contextRoleFidelity: "text-only" | "structured-messages";

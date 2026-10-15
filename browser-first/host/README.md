@@ -83,3 +83,12 @@ capability-token map coverage, WebSocket upgrades). Follow the
 [bridge first-time-setup runbook](../../docs/browser-first-bridge-setup-runbook.md),
 and use the checked-in [`caddy-bridge-h1.json`](caddy-bridge-h1.json) to pin
 Caddy's TLS ALPN to `http/1.1` (required for the dashboard WebSockets).
+
+### Optional native DSH
+
+The opt-in `dsh-native-cookie` harness owns a dedicated local DSH web child on
+macOS/Linux. Its operator-only `RESONANTOS_DSH_PACKAGE_ROOT` and optional
+`RESONANTOS_DSH_HOME` settings are inspected only with a native binding.
+Install/enable/grant/slot consent remains required; no child starts at bridge
+startup. Follow [native setup, recovery and certification](../../docs/addons/harness-adapter-demo.md#native-dsh-authentication).
+Plugin `dsh-action-token` bindings remain supported independently.

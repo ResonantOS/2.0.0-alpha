@@ -153,8 +153,13 @@ const validateRuntimeAdapter = (issues: AddOnValidationIssue[], runtime: Record<
   if (typeof runtime.adapterId !== "string" || !/^[a-z][a-z0-9-]{0,63}$/.test(runtime.adapterId)) {
     reject("adapter-id", "adapterId", "Adapter IDs must be bounded names, never executable paths.");
   }
-  if (!["none", "dsh-action-token", "bearer"].includes(runtime.authScheme as string)) {
+  if (!["none", "dsh-action-token", "dsh-native-cookie", "bearer"].includes(runtime.authScheme as string)) {
     reject("auth-scheme", "authScheme", "Unsupported authentication scheme.");
+  }
+  if (runtime.authScheme === "dsh-native-cookie") {
+    if (runtime.adapterId !== "dsh-typert-v1") reject("auth-scheme", "authScheme", "Native authentication requires the reviewed DSH adapter.");
+    const match = typeof runtime.endpoint === "string" && /^http:\/\/127\.0\.0\.1:([1-9][0-9]{3,4})$/.exec(runtime.endpoint);
+    if (!match || Number(match[1]) < 1024 || Number(match[1]) > 65535) reject("endpoint", "endpoint", "Native DSH requires an exact numeric loopback origin and approved port.");
   }
   if (runtime.authScheme !== "none" || runtime.credentialBinding !== undefined) {
     if (typeof runtime.credentialBinding !== "string" || runtime.credentialBinding.length > 128 ||

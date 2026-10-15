@@ -1,5 +1,7 @@
 // Shared outbound harness boundary, extracting the DNS/socket guard concepts
 // attributed to #444. No adapter protocol, credential, or grant policy lives here.
+import { Agent, fetch as directFetch, WebSocket as DirectWebSocket } from 'undici';
+const directDispatcher = new Agent();
 import { lookup as dnsLookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { publicHarnessError } from './harness-adapter-contract.mjs';
@@ -28,7 +30,7 @@ function check(signal) {
  * Neither method caches DNS; both connect to the validated numeric address.
  */
 export function createAgentRuntimeEndpoint({ endpoint, lookup = dnsLookup,
-  fetchImpl = globalThis.fetch, WebSocketImpl = globalThis.WebSocket } = {}) {
+  fetchImpl = directFetch, WebSocketImpl = DirectWebSocket } = {}) {
   let origin;
   try { origin = new URL(endpoint); } catch { throw fail('permission-denied'); }
   if (!['http:', 'https:'].includes(origin.protocol) || !origin.port || Number(origin.port) === 0 ||
@@ -57,7 +59,7 @@ export function createAgentRuntimeEndpoint({ endpoint, lookup = dnsLookup,
     async connectHttp(path, { method = 'GET', headers = {}, body, signal } = {}, acceptRedirect) {
       const url = await resolveEndpoint(path, signal);
       check(signal);
-      const response = await fetchImpl(url, { method, headers, body, signal, redirect: 'manual' });
+      const response = await fetchImpl(url, { method, headers, body, signal, redirect: 'manual', dispatcher: directDispatcher });
       check(signal);
       if (response.status >= 300 && response.status < 400 && !acceptRedirect?.(response)) {
         await response.body?.cancel();
@@ -70,7 +72,7 @@ export function createAgentRuntimeEndpoint({ endpoint, lookup = dnsLookup,
       check(signal);
       // Node's native WebSocket refuses redirects; this explicit option also
       // preserves that policy for a trusted ws-compatible host implementation.
-      const socket = new WebSocketImpl(url, { headers, followRedirects: false });
+      const socket = new WebSocketImpl(url, { headers, followRedirects: false, dispatcher: directDispatcher });
       // Awaited so an asynchronous handler rejection also closes the socket here,
       // not only a synchronous throw (review round 1).
       try { return await handleSocket(socket); }

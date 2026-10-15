@@ -467,3 +467,127 @@ The whole harness-adapter project therefore costs the serial suite about 8.5 s
   file-watcher daemon and is covered by CI on Linux.
 - The live two-harness run is an operator gate and is recorded separately with
   its signed evidence bundle and the host fingerprint the witnesses saw.
+
+## Native DSH authentication
+
+Native DSH is an optional macOS/Linux harness using `dsh-native-cookie` and
+`dsh-typert-v1`. The bridge owns a dedicated DSH web child; it captures the boot
+login token from its private stdout pipe and exchanges it for a cookie in
+memory. It does not use the Augmentor plugin. Windows native launch is refused.
+Existing `dsh-action-token` plugin bindings keep working on their existing
+platforms. No automatic migration or fallback occurs.
+
+Use a dedicated, locally installed npm prefix containing
+`node_modules/@deepseek-ai/dsh`, including its hoisted dependencies. Set
+`RESONANTOS_DSH_PACKAGE_ROOT` to the absolute prefix, not `node_modules` or the
+DSH package directory. Installation and updates are operator work; the bridge
+never downloads or searches for DSH. Native mode currently admits only
+`0.2.0-rc.2`. It was support-eligible in two of three conductor prerequisite runs; run 1's telemetry check was incomplete.
+`0.1.5-rc.1` and `0.1.7-rc.2` are blocked because the observer found none of its
+0.1.x source anchors (`anchor-missing`, probe line 352). All 0.1.x versions and
+other unreviewed versions are refused for native use with `runtime-unavailable`:
+`Runtime unavailable.` The fixed operator message is:
+`Native DSH install prefix is unavailable or unsupported. Select a dedicated prefix with a supported local package and restart the bridge.`
+The spec's 0.1.x/0.2.x ranges are candidate versions, not blanket launch
+permission. Plugin mode's version behavior is unchanged. Production live
+certification is still required for the exact eligible version and integrity.
+
+The whole real prefix and every ancestor through `/` must be owned by the
+current user or root and not writable by group/other. All regular files and
+directories in the prefix must satisfy those rules. Symlinks are allowed only
+when each hop stays inside the prefix, including npm `.bin` links. Dangling
+links, cycles and special files are refused. Validation stops at 50000 entries,
+depth 64, or the startup deadline. Do not use a temporary world-writable
+ancestor, remove checks, or alter an existing install's permissions to force
+acceptance. Select a dedicated compliant install.
+
+Configure exactly one native binding per bridge. This is an example, not a
+port default:
+
+```json
+{
+  "name": "dsh.native",
+  "addonId": "addon.deepseek-harness-native",
+  "adapterId": "dsh-typert-v1",
+  "authScheme": "dsh-native-cookie",
+  "endpoint": "http://127.0.0.1:3081",
+  "source": { "managedDsh": true }
+}
+```
+
+Place that object in `RESONANTOS_HARNESS_BINDINGS`. Match its five public
+identity fields to `browser-first/host/harness-examples/deepseek-harness-native.json`.
+Choose an unused port from 1024 through 65535 and update both manifest and
+binding together before restarting/reinstalling. The endpoint must have exactly
+the illustrated form, without a trailing slash. No credentials, executable
+paths or managed-home paths belong in the manifest.
+
+`RESONANTOS_DSH_HOME` optionally selects an absolute dedicated home. Its default
+is `<userRoot>/BrowserFirst/Harnesses/dsh-native`. The bridge refuses repository
+paths, the OS home itself, `~/.dsh`, the Augmentor-managed DSH home and their
+protected subtrees, symlinked managed paths, foreign content, mismatched markers
+or an existing lock. Directories are created with mode 0700 and private marker
+and lock files with mode 0600. The marker binds version, binding name and
+canonical user root. It is not a credential. There is no automatic adoption,
+permission repair or PID recovery. After an unconfirmed exit, inspect the
+previously owned process and state manually; do not delete a lock merely
+because a stored PID appears stale.
+
+Without a native binding, neither native setting is read and no native child
+starts. A configured native binding is not consent: explicitly install and
+enable the native example, grant `agent-runtime`, `network`, `filesystem` and
+`shell`, and assign `primary-agent` through existing governed add-on controls.
+Missing or revoked floor capabilities deny execution before spawn. Demo mode
+only offers the candidate when a native binding exists; it grants nothing.
+
+Supply `DEEPSEEK_API_KEY` privately to the bridge process if model use requires
+it. No provider key is required for protocol readiness. The native integration
+does not read dotenv files, another app's credentials or Settings > Providers.
+The child receives only LANG, LC_ALL, TZ and the optional DeepSeek key from the
+parent, plus its isolated HOME, DSH_HOME, XDG paths, TMPDIR and fixed PATH.
+Node options, proxies, desktop settings and unrelated provider keys are not
+inherited. The bridge always forces `DSH_TELEMETRY_MODE=DISABLED`; there is no
+telemetry opt-in setting for the managed child.
+
+The child launches lazily after authorization. An occupied approved port is
+never contacted or adopted. Startup, authentication and protocol validation
+share 30 seconds. HTTP/socket opening uses a 10-second bound; follow readiness
+uses 15 seconds. Direct turns use 120 seconds; browser chat retains its separate
+30-second reply clock after startup and turn allocation. These are fixed bounds.
+
+Sessions share one epoch cookie but have separate DSH sessions and transports.
+The reviewed refresh map enables only `0.2.0-rc.2`: the conductor proved token
+reuse, old-cookie/stream preservation and pre-dispatch 401. The blocked 0.1.x
+versions are refused for native use, not offered as exchange-once fallbacks.
+Unknown versions receive neither native admission nor refresh permission.
+Lost responses, timeouts and uncertain accepted prompts are never replayed.
+Native deltas are withheld; assembled replies and other outputs are sanitized
+before events or signed receipts. Credentials and token-bearing output are
+never logs, evidence files or browser projections.
+
+No automatic restart occurs. A child exit retires old sessions; the next
+explicit chat or session request may create a fresh child after confirmed
+cleanup. Governance and grants persist; old session/turn references do not.
+Last-lease release, revocation and bridge close fence authority immediately.
+Cleanup has a total budget of 3 seconds: cancellation gets at most 1 second, TERM is
+sent by 1 second, KILL by 2 seconds, and exit must be confirmed by 3 seconds.
+Unconfirmed exit retains the lock and blocks reacquisition. Only the owned
+child handle is signalled; desktop and plugin processes are untouched.
+
+For migration, install the separate native identity alongside the plugin
+identity and explicitly change `primary-agent` ownership. Switching back does
+not kill the plugin service. The native child is stopped when its last lease
+is released. Keep endpoint bindings and homes distinct.
+
+Before calling an exact version certified, the conductor runs Task 0 in the
+[native implementation plan](../planning/dsh-native-auth-plan.md), then the
+production live lane in the [approved design](../planning/dsh-native-auth-design.md#live-lane).
+The probe uses separate scratch HOME and DSH_HOME and never touches the user's
+DSH home, desktop app or port 19387. It must exercise two overlapping sessions,
+cookie reuse, pre-dispatch 401, no explicit Origin, missing/rejected provider
+keys, a real reply, history, model selection, cancellation and in-memory secret
+persistence checks. Feedback telemetry is tested with synthetic data: disabled
+mode has zero exporter construction/export attempts/traffic; an enabled
+positive control exports only to a local sink. An environment variable alone
+is not telemetry evidence. Preserve sanitized version/integrity, counts and
+human-visible browser proof outside the repository. A fixture is not live proof.

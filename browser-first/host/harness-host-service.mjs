@@ -5,6 +5,7 @@ import { createHash, createPublicKey, generateKeyPairSync, randomUUID, sign } fr
 import { createHarnessRegistry } from './harness-registry.mjs';
 import { createHarnessRegistryStore } from './harness-registry-store.mjs';
 import { createHarnessBoundary } from './harness-boundary.mjs';
+import { snapshotDshConfig, createDshRuntime } from './dsh-runtime.mjs';
 import { createHarnessCredentials } from './harness-credentials.mjs';
 import { createHarnessTransport } from './harness-transport.mjs';
 import { createOpenAICompatibleAdapter } from './agent-adapters/openai-compatible.mjs';
@@ -113,11 +114,20 @@ export function createHarnessStreamSubscription(reader) {
 
 export async function createHarnessHostService({ userRoot, stateRoot, store = createHarnessRegistryStore({ userRoot, stateRoot }),
   bindings = [], env = process.env, providerHost, cleanupTimeoutMs = 1000, onReceipt = () => {}, fixtureSigningKey,
-  transportFactory = createHarnessTransport, dshAdapterFactory = createDshTypertAdapter, openaiAdapterFactory = createOpenAICompatibleAdapter } = {}) {
+  nativeRuntimeFactory = createDshRuntime, transportFactory = createHarnessTransport, dshAdapterFactory = createDshTypertAdapter, openaiAdapterFactory = createOpenAICompatibleAdapter } = {}) {
   if (!Number.isSafeInteger(cleanupTimeoutMs) || cleanupTimeoutMs < 1 || cleanupTimeoutMs > 30000) throw new TypeError('Bounded cleanup required.');
   const approvedBindings = structuredClone(bindings);
-  const credentials = createHarnessCredentials({ bindings: approvedBindings, env });
-  const manifests = new Map(), resources = new Set();
+  const manifests = new Map(), resources = new Set(), readyByEpoch = new Map();
+  let boundary, compatibilitySession;
+  const nativeConfig = snapshotDshConfig({ bindings: approvedBindings, env, userRoot });
+  const nativeRuntime = nativeConfig ? nativeRuntimeFactory({ config: nativeConfig,
+    onFailure({ epoch, code }) {
+      readyByEpoch.delete(epoch);
+      void boundary?.retireRuntime(epoch, code);
+    },
+    beforeStop: (epoch, signal) => Promise.allSettled([...resources].filter(resource => resource.epoch === epoch).map(resource => resource.cancel(signal))),
+  }) : null;
+  const credentials = createHarnessCredentials({ bindings: approvedBindings, env, nativeRuntime });
   let closed = false, closing;
   const trackedStore = {
     async read() {
@@ -153,14 +163,14 @@ export async function createHarnessHostService({ userRoot, stateRoot, store = cr
     fingerprint: signer.fingerprint, algorithm: signer.algorithm, mode: fixtureSigningKey ? 'fixture' : 'live' }));
   issue({ kind: 'boot', projection: registry.snapshot() });
   const candidates = env.RESONANTOS_HARNESS_DEMO === '1'
-    ? await Promise.all(['deepseek-harness', 'provider-chat-demo'].map(async name => JSON.parse(await readFile(new URL(`./harness-examples/${name}.json`, import.meta.url), 'utf8')))) : [];
+    ? await Promise.all(['deepseek-harness', 'provider-chat-demo', ...(nativeConfig ? ['deepseek-harness-native'] : [])].map(async name => JSON.parse(await readFile(new URL(`./harness-examples/${name}.json`, import.meta.url), 'utf8')))) : [];
   async function bounded(operation) {
     let timer;
     try { return await Promise.race([Promise.resolve().then(operation), new Promise(resolve => { timer = setTimeout(resolve, cleanupTimeoutMs); })]); }
     catch { /* Local authority has already been withdrawn. */ }
     finally { clearTimeout(timer); }
   }
-  async function resolveAdapter(authorization) {
+  async function resolveAdapter(authorization, { signal, bindRuntime } = {}) {
     let adapter, transport;
     if (authorization.runtime.adapterId === 'provider-fabric-v1') {
       adapter = createProviderFabricAdapter({ executeRawProviderChat: providerHost?.executeRawProviderChat,
@@ -170,15 +180,49 @@ export async function createHarnessHostService({ userRoot, stateRoot, store = cr
         } });
       if (!(await adapter.probe()).available) throw fail('runtime-unavailable');
     } else if (authorization.runtime.adapterId === 'dsh-typert-v1') {
-      transport = await transportFactory({ credentials, addonId: authorization.addonId, runtime: authorization.runtime });
+      transport = await transportFactory({ credentials, addonId: authorization.addonId, runtime: authorization.runtime, signal });
       try { adapter = dshAdapterFactory({ transport }); }
       catch (error) { await bounded(() => transport.dispose()); throw error; }
+      if (authorization.runtime.authScheme === 'dsh-native-cookie') {
+        try {
+          bindRuntime(transport.epoch);
+          if (!readyByEpoch.has(transport.epoch)) {
+            const sharedLease = transport.readinessLease();
+            const ready = (async () => {
+              const startupSignal = AbortSignal.any([transport.runtimeSignal, AbortSignal.timeout(Math.max(1, transport.deadline - Date.now()))]);
+              let readinessTransport, readinessAdapter;
+              try {
+                readinessTransport = await transportFactory({ credentialLease: sharedLease, credentials, addonId: authorization.addonId, runtime: authorization.runtime, signal: startupSignal });
+                await readinessTransport.authenticate({ signal: startupSignal });
+                readinessAdapter = dshAdapterFactory({ transport: readinessTransport });
+                const probe = await readinessAdapter.probe({ native: true, signal: startupSignal });
+                if (!probe.protocolReady) throw fail('runtime-unavailable');
+                sharedLease.ready();
+              } catch (error) {
+                await sharedLease.fail(startupSignal.aborted && !transport.runtimeSignal.aborted ? 'deadline-exceeded' : 'runtime-unavailable'); throw error;
+              } finally { await readinessAdapter?.dispose(); await readinessTransport?.dispose(); await sharedLease.dispose(); }
+            })();
+            readyByEpoch.set(transport.epoch, ready); ready.catch(() => {});
+          }
+          let abortReady;
+          try {
+            await Promise.race([readyByEpoch.get(transport.epoch), new Promise((_, reject) => {
+              abortReady = () => reject(fail('runtime-unavailable'));
+              if (signal.aborted) abortReady(); else signal.addEventListener('abort', abortReady, { once: true });
+            })]);
+          } finally { signal.removeEventListener('abort', abortReady); }
+          if (signal.aborted || transport.runtimeSignal.aborted) throw fail('runtime-unavailable');
+        } catch (error) { await transport.dispose(); throw error; }
+      }
     } else if (authorization.runtime.adapterId === 'openai-compatible-v1') {
       try { adapter = await openaiAdapterFactory({ credentials, addonId: authorization.addonId, runtime: authorization.runtime }); }
       catch (error) { await bounded(() => adapter?.dispose()); throw error; }
     } else throw fail('permission-denied');
     let disposed = false;
+    let upstream;
     const resource = {
+      epoch: transport?.epoch,
+      cancel: signal => upstream ? adapter.cancel?.({ session: upstream, signal }) : Promise.resolve(),
       async dispose(args) {
         if (disposed) return;
         disposed = true;
@@ -190,7 +234,17 @@ export async function createHarnessHostService({ userRoot, stateRoot, store = cr
     };
     resources.add(resource);
     if (closed) { await resource.dispose({}); throw fail('runtime-unavailable'); }
-    return { ...adapter, dispose: resource.dispose,
+    const native = authorization.runtime.authScheme === 'dsh-native-cookie';
+    const methods = {};
+    for (const name of ['history', 'modelCatalog', 'status', 'selectModel']) {
+      if (native && typeof adapter[name] === 'function') methods[name] = async args => transport.sanitize(await adapter[name](args));
+    }
+    return { ...adapter, ...methods, dispose: resource.dispose,
+      async createSession(args) {
+        upstream = await adapter.createSession(args);
+        if (native) transport.bindSession(upstream.sessionId);
+        return upstream;
+      },
       async *invoke(args) {
         const dispatch = { dispatchId: randomUUID(), addonId: authorization.addonId,
           generation: authorization.generation, adapterId: authorization.runtime.adapterId,
@@ -199,12 +253,21 @@ export async function createHarnessHostService({ userRoot, stateRoot, store = cr
         const aborted = () => issue({ kind: 'adapter-abort', ...dispatch });
         args.signal.addEventListener('abort', aborted, { once: true });
         if (args.signal.aborted) aborted();
-        try { yield* await adapter.invoke(args); }
+        try {
+          for await (const frame of adapter.invoke(args)) {
+            if (native && frame.type === 'delta') continue;
+            yield native ? transport.sanitize(frame) : frame;
+          }
+        }
         finally { args.signal.removeEventListener('abort', aborted); }
       },
     };
   }
-  const boundary = createHarnessBoundary({ registry, resolveAdapter, cleanupTimeoutMs });
+  boundary = createHarnessBoundary({ registry, resolveAdapter, cleanupTimeoutMs,
+    onRetired(ref) {
+      if (compatibilitySession && ['addonId', 'sessionId', 'bootEpoch', 'generation'].every(key => compatibilitySession[key] === ref[key])) compatibilitySession = undefined;
+    },
+  });
   const snapshot = () => {
     const projection = registry.snapshot();
     for (const [addonId, entry] of Object.entries(projection.installations)) entry.supportedOperations = [...(manifests.get(addonId)?.agentRuntime?.supportedOperations ?? [])];
@@ -320,7 +383,7 @@ export async function createHarnessHostService({ userRoot, stateRoot, store = cr
       return { selection: await boundary.selectModel(session, p.model) };
     }),
   ];
-  let compatibilitySession, compatibilityBusy = false;
+  let compatibilityBusy = false;
   async function executeBridgeChat(payload, request) {
     const projection = registry.snapshot();
     if (!projection.governanceActivated) {
@@ -346,21 +409,24 @@ export async function createHarnessHostService({ userRoot, stateRoot, store = cr
     registry.authorize('primary-agent', owner?.addonId);
     if (compatibilityBusy) throw fail('ownership-conflict');
     compatibilityBusy = true;
-    let reader, timer, turn;
+    let reader, timer, turn, callSession;
     try {
       if (!compatibilitySession || compatibilitySession.generation !== owner.generation || compatibilitySession.addonId !== owner.addonId) {
-        compatibilitySession = await boundary.createSession({ addonId: owner.addonId });
+        const created = await boundary.createSession({ addonId: owner.addonId });
+        if (!boundary.isLive(created)) throw fail('runtime-unavailable');
+        compatibilitySession = created;
       }
-      reader = boundary.events(compatibilitySession);
-      const context = { session: structuredClone(compatibilitySession) };
-      turn = turnReceiptContext.run(context, () => boundary.invoke(compatibilitySession, input));
+      callSession = structuredClone(compatibilitySession);
+      reader = boundary.events(callSession);
+      const context = { session: structuredClone(callSession) };
+      turn = turnReceiptContext.run(context, () => boundary.invoke(callSession, input));
       context.turnId = turn.turnId;
       return await Promise.race([
         (async () => {
           for await (const event of reader) {
             if (event.type === 'final') {
               issue({ kind: 'event', operation: '/augmentor/chat', event });
-              return { reply: event.data.text, harness: { ...compatibilitySession, turnId: turn.turnId } };
+              return { reply: event.data.text, harness: { ...callSession, turnId: turn.turnId } };
             }
             if (event.type === 'error') throw fail(event.data.code);
             if (event.type === 'cancelled') throw fail('cancelled');
@@ -368,7 +434,7 @@ export async function createHarnessHostService({ userRoot, stateRoot, store = cr
           throw fail('runtime-unavailable');
         })(),
         new Promise((_, reject) => { timer = setTimeout(() => {
-          void boundary.cancel(compatibilitySession, turn.turnId).catch(() => {});
+          void boundary.cancel(callSession, turn.turnId).catch(() => {});
           reject(fail('deadline-exceeded'));
         }, 30000); }),
       ]);
@@ -383,7 +449,8 @@ export async function createHarnessHostService({ userRoot, stateRoot, store = cr
     close() {
       if (!closing) {
         closed = true;
-        closing = boundary.close().catch(() => {}).then(() => Promise.allSettled([...resources].map(resource => resource.dispose({}))));
+        const nativeStop = nativeRuntime?.close();
+        closing = Promise.allSettled([nativeStop, boundary.close(), ...[...resources].map(resource => resource.dispose({}))]);
       }
       return closing;
     },

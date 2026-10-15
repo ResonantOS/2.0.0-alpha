@@ -37,6 +37,25 @@ function selection(value, allowUnknown = false) {
   return { provider: identifier(value.provider), model: identifier(value.model) };
 }
 
+export function decodeDshCatalog(catalog) {
+  if (!Array.isArray(catalog?.groups) || catalog.groups.length > 100) throw fail('invalid-event');
+  let total = 0;
+  const groups = catalog.groups.map(group => {
+    if (!Array.isArray(group?.models) || group.models.length > 200) throw fail('invalid-event');
+    const provider = identifier(group.id);
+    const models = group.models.map(model => {
+      if (!record(model)) throw fail('invalid-event');
+      const value = { model: identifier(model.id), ...(model.name === undefined ? {} : { name: text(model.name) }) };
+      total += Buffer.byteLength(JSON.stringify(value));
+      if (total > 65536) throw fail('invalid-event');
+      return value;
+    });
+    total += Buffer.byteLength(provider); if (total > 65536) throw fail('invalid-event');
+    return { provider, models };
+  });
+  return { groups, ...(catalog.default === undefined ? {} : { default: selection(catalog.default, true) }) };
+}
+
 export function createDshTypertAdapter({ transport, followTimeoutMs = 15000, turnTimeoutMs = 120000, maxQueueBytes = 262144 } = {}) {
   if (!transport || !['request', 'openStream', 'dispose'].every(key => typeof transport[key] === 'function') ||
       ![followTimeoutMs, turnTimeoutMs, maxQueueBytes].every(value => Number.isSafeInteger(value) && value > 0 && value <= 2147483647)) throw fail('runtime-unavailable');
@@ -157,7 +176,10 @@ export function createDshTypertAdapter({ transport, followTimeoutMs = 15000, tur
     if (!turn && state.cancellation) return state.cancellation;
     turn?.finish(frame('cancelled', {}));
     disconnect(state);
-    state.cancellation = turn?.dispatched ? rpc('session/cancel', { request: { sessionId: state.id } }, signal).catch(error => {
+    const cancel = async () => transport.cancelOwnedSession
+      ? transport.cancelOwnedSession(state.id, { signal })
+      : rpc('session/cancel', { request: { sessionId: state.id } }, signal);
+    state.cancellation = turn?.dispatched ? cancel().catch(error => {
       disconnect(state, error); throw error;
     }) : (state.cancellation ?? Promise.resolve());
     if (turn) turn.cancellation = state.cancellation;
@@ -165,7 +187,12 @@ export function createDshTypertAdapter({ transport, followTimeoutMs = 15000, tur
   }
   const adapter = {
     capabilities,
-    async probe({ signal } = {}) { await rpc('session/modelCatalog', {}, signal); return { available: true, ...capabilities }; },
+    async probe({ signal, native = false } = {}) {
+      const value = await rpc('session/modelCatalog', {}, signal);
+      if (!native) return { available: true, ...capabilities };
+      const catalog = decodeDshCatalog(value);
+      return { available: true, protocolReady: true, providerAvailable: catalog.groups.some(group => group.models.length > 0), ...capabilities };
+    },
     async createSession({ signal } = {}) {
       if (closed || sessions.size >= 64) throw fail('runtime-unavailable');
       const session = Object.freeze({ sessionId: `resonantos-${randomUUID()}` });
@@ -257,22 +284,7 @@ export function createDshTypertAdapter({ transport, followTimeoutMs = 15000, tur
     async modelCatalog({ session, signal } = {}) {
       stateFor(session);
       const catalog = await rpc('session/modelCatalog', {}, signal);
-      if (!Array.isArray(catalog?.groups) || catalog.groups.length > 100) throw fail('invalid-event');
-      let total = 0;
-      const groups = catalog.groups.map(group => {
-        if (!Array.isArray(group?.models) || group.models.length > 200) throw fail('invalid-event');
-        const provider = identifier(group.id);
-        const models = group.models.map(model => {
-          if (!record(model)) throw fail('invalid-event');
-          const value = { model: identifier(model.id), ...(model.name === undefined ? {} : { name: text(model.name) }) };
-          total += Buffer.byteLength(JSON.stringify(value));
-          if (total > 65536) throw fail('invalid-event');
-          return value;
-        });
-        total += Buffer.byteLength(provider); if (total > 65536) throw fail('invalid-event');
-        return { provider, models };
-      });
-      return { groups, ...(catalog.default === undefined ? {} : { default: selection(catalog.default, true) }) };
+      return decodeDshCatalog(catalog);
     },
     async selectModel({ session, input, signal } = {}) {
       const state = stateFor(session);

@@ -8,7 +8,7 @@
 
 **Tech Stack:** Node.js 24.21.0+, ESM, Node test runner, TypeScript contracts and canonical SDK validation, Undici 7.30.0 with a private direct Agent, existing Typert RPC/WebSocket protocol, Vitest/Vite. Undici is promoted from the inspected transitive dependency to an exact production dependency; no DSH package becomes a repository dependency.
 
-> **Review record:** [plan review round 1](dsh-native-auth-plan-review-1.md); [plan review round 2](dsh-native-auth-plan-review-2.md).
+> **Review record:** [plan review round 1](dsh-native-auth-plan-review-1.md); [plan review round 2](dsh-native-auth-plan-review-2.md); [execution notes](dsh-native-auth-execution-notes.md).
 
 ## Global Constraints
 
