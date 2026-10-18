@@ -13,7 +13,7 @@ function fixture(refresh = true, version = '0.2.0-rc.2', injectPolicy = true) {
   let released = 0, failed = 0, acquired = 0;
   const nativeRuntime = { async acquire() {
     acquired++;
-    return { epoch: 'epoch-1', signal: controller.signal, deadline: Date.now() + 30000, version,
+    return { isChildAlive: () => true, epoch: 'epoch-1', signal: controller.signal, deadline: Date.now() + 30000, version,
       use: callback => callback({ endpoint: runtime.endpoint, loginToken: token, providerKey }),
       ready() {}, fail() { failed++; controller.abort(); }, release() { released++; } };
   } };

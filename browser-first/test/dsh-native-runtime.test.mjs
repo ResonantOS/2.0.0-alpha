@@ -31,7 +31,7 @@ function tree() {
   const get = path => { if (!nodes.has(path)) throw Object.assign(new Error('missing'), { code: 'ENOENT' }); return nodes.get(path); };
   const fs = {
     realpath: async path => { get(path); return path; },
-    lstat: async path => { const row = get(path); return { ...row, isDirectory: () => row.kind === 'dir', isFile: () => row.kind === 'file', isSymbolicLink: () => row.kind === 'link' }; },
+    lstat: async path => { const row = get(path); return { dev: 1, ino: 1, ...row, isDirectory: () => row.kind === 'dir', isFile: () => row.kind === 'file', isSymbolicLink: () => row.kind === 'link' }; },
     readlink: async path => get(path).target,
     readFile: async path => get(path).text,
     readdir: async path => [...nodes.keys()].filter(key => key !== path && key.slice(0, key.lastIndexOf('/')) === (path === '/' ? '' : path)).map(key => key.slice(key.lastIndexOf('/') + 1)),
@@ -418,4 +418,33 @@ test('reentrant failure stop keeps the old home locked until its one release set
   const next = await fresh; next.ready(); await next.release(); await f.runtime.close();
   assert.equal(observedReleases, 1, 'one stop owns home cleanup despite synchronous reentry');
   assert.equal(observedHomes, 1, 'fresh acquisition waits for old home release');
+});
+
+for (const [name, change] of [
+  ['group-write', node => { node.mode |= 0o020; }],
+  ['world-write', node => { node.mode |= 0o002; }],
+  ['sticky-world-write', node => { node.mode = 0o1777; }],
+  ['foreign-owner', node => { node.uid = process.getuid() + 1; }],
+]) test(`home ancestry refuses ${name}`, async () => {
+  const t = homeTree(); change(t.nodes.get('/safe'));
+  await assert.rejects(prepareDshHome(t.config, { fs: t.fs }), { reason: 'home' });
+});
+for (const swap of ['symlink', 'inode', 'device']) test(`home ${swap} swap before spawn is refused`, async t => {
+  const tree = homeTree();
+  const f = lifecycle({
+    prepareHome: () => prepareDshHome(tree.config, { fs: tree.fs }),
+    reservePort: async () => {
+      const node = tree.nodes.get(tree.config.dshHome);
+      if (swap === 'symlink') node.kind = 'link';
+      else if (swap === 'inode') node.ino = 2;
+      else node.dev = 2;
+    },
+  });
+  t.after(() => f.runtime.close());
+  await assert.rejects(f.runtime.acquire({ signal: new AbortController().signal }), { reason: 'home' });
+  assert.equal(f.calls.length, 0, 'changed home never reaches spawn');
+});
+test('native config refuses the desktop port with a fixed error', () => {
+  assert.throws(() => snapshotDshConfig({ bindings: [{ ...binding, endpoint: 'http://127.0.0.1:19387' }], env: {}, userRoot: '/safe/user' }),
+    { message: 'Invalid native DSH configuration. Check the native binding and DSH settings, then restart the bridge.' });
 });

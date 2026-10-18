@@ -84,3 +84,10 @@ for (const capability of ['filesystem', 'shell']) {
     assert.deepEqual(evaluateHarnessPolicy(m, granted(m, capability)).disabledOperations, m.agentRuntime.supportedOperations);
   });
 }
+
+test('native manifest refuses desktop port without changing plugin validation', () => {
+  const m = native(); m.agentRuntime.endpoint = 'http://127.0.0.1:19387';
+  assert.equal(validateAddOnManifest(m).valid, false);
+  m.agentRuntime.authScheme = 'dsh-action-token';
+  assert.equal(validateAddOnManifest(m).valid, true);
+});

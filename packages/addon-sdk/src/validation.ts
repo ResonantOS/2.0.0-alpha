@@ -159,7 +159,7 @@ const validateRuntimeAdapter = (issues: AddOnValidationIssue[], runtime: Record<
   if (runtime.authScheme === "dsh-native-cookie") {
     if (runtime.adapterId !== "dsh-typert-v1") reject("auth-scheme", "authScheme", "Native authentication requires the reviewed DSH adapter.");
     const match = typeof runtime.endpoint === "string" && /^http:\/\/127\.0\.0\.1:([1-9][0-9]{3,4})$/.exec(runtime.endpoint);
-    if (!match || Number(match[1]) < 1024 || Number(match[1]) > 65535) reject("endpoint", "endpoint", "Native DSH requires an exact numeric loopback origin and approved port.");
+    if (!match || Number(match[1]) < 1024 || Number(match[1]) > 65535 || Number(match[1]) === 19387) reject("endpoint", "endpoint", "Native DSH requires an exact numeric loopback origin and approved port.");
   }
   if (runtime.authScheme !== "none" || runtime.credentialBinding !== undefined) {
     if (typeof runtime.credentialBinding !== "string" || runtime.credentialBinding.length > 128 ||

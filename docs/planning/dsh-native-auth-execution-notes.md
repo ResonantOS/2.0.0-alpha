@@ -240,3 +240,19 @@ use synthetic receipts and fixtures, never live DSH or browser lanes.
 4. The screenshot privacy guard now also admits the shell's static seed greeting, but only as an exact string literal from `src/core/defaults.ts`.
 
 The deterministic Task 12 checks and the final review gate remain.
+
+
+Brief V (2026-10-17) addresses the confirmed final-gate findings: crash cleanup
+skips upstream cancellation after the owned child exits, and native custody
+independently refuses cleanup cookie access using the runtime's child liveness
+check; a child-exit abort signal also fences the asynchronous connector before
+it sends cleanup credentials. The home component walk now mirrors prefix ownership and write-mode
+validation without a sticky-bit exemption or chmod, and checks the captured
+device/inode identity immediately before spawn. Native configuration and the
+SDK native manifest validator refuse desktop port 19387 with fixed errors. The
+shared-readiness regression now traverses real native custody and transport.
+Failing-first tests reproduce crash cancellation, direct cleanup to a rebound
+foreign listener, unsafe ancestry, home replacement and desktop-port acceptance;
+a readiness mutation fails and restores the custody source byte-identically.
+Existing live-child cancellation and foreign-listener isolation remain covered.
+No live lanes or commits were performed for this brief.

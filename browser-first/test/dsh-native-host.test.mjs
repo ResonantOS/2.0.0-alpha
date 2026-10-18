@@ -1,16 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { createHarnessTransport } from '../host/harness-transport.mjs';
 import { createHarnessHostService } from '../host/harness-host-service.mjs';
 const native = JSON.parse(await readFile(new URL('../host/harness-examples/deepseek-harness-native.json', import.meta.url)));
-async function fixture(t, { sessionGate, invokeGate, nativeClose = async () => {}, transportFactoryOverride, sessionRejectDisposed = false } = {}) {
+async function fixture(t, { sessionGate, invokeGate, nativeClose = async () => {}, transportFactoryOverride, sessionRejectDisposed = false, nativeRuntimeOverride } = {}) {
   let stored = null, epoch = 0, onFailure, resolves = 0;
   const receipts = [], secret = randomBytes(24).toString('base64url');
   const host = await createHarnessHostService({ userRoot: '/safe/user', env: {},
     bindings: [{ name: 'dsh.native', addonId: native.id, adapterId: 'dsh-typert-v1', authScheme: 'dsh-native-cookie', endpoint: native.agentRuntime.endpoint, source: { managedDsh: true } }],
     store: { read: async () => stored, write: async value => { stored = structuredClone(value); } }, onReceipt: receipt => receipts.push(receipt),
-    nativeRuntimeFactory(options) { onFailure = options.onFailure; return { close: nativeClose }; },
+    nativeRuntimeFactory(options) { onFailure = options.onFailure; return nativeRuntimeOverride ?? { close: nativeClose }; },
     transportFactory: transportFactoryOverride ?? (async () => ({ epoch: `epoch-${epoch}`, runtimeSignal: new AbortController().signal, deadline: Date.now() + 30000,
       authenticate: async () => {}, markReady() {}, failRuntime() {}, bindSession() {}, dispose: async () => {},
       readinessLease: () => ({ ready() {}, fail: async () => {}, dispose: async () => {} }), sanitize: value => JSON.parse(JSON.stringify(value).split(secret).join('[redacted]')),
@@ -18,7 +19,7 @@ async function fixture(t, { sessionGate, invokeGate, nativeClose = async () => {
     dshAdapterFactory: ({ transport }) => ({ probe: async () => ({ protocolReady: true, providerAvailable: true }),
       createSession: async () => { resolves++; if (sessionGate) await sessionGate;
         if (sessionRejectDisposed && transport.isDisposed) throw new Error('first waiter transport disposed');
-        return {}; }, dispose: async () => {}, cancel: async () => {},
+        return { sessionId: `resonantos-${randomUUID()}` }; }, dispose: async () => {}, cancel: async () => {},
       async *invoke() { if (invokeGate) await invokeGate; yield { type: 'delta', data: { text: secret.slice(0, 12) } }; yield { type: 'delta', data: { text: secret.slice(12) } }; yield { type: 'final', data: { text: secret } }; },
       history: async () => ({ messages: [{ role: 'assistant', content: secret }], hasMore: false }), status: async () => ({ status: 'idle', detail: secret }), modelCatalog: async () => ({ groups: [], detail: secret }), selectModel: async () => ({ selected: true, detail: secret }),
     }),
@@ -119,34 +120,42 @@ test('timeout cancellation keeps the local four-field session reference after re
   assert.equal(calls[0][1], first.turnId, 'timeout uses original turn ID');
   release();
 });
-test('shared readiness survives disposal of the first waiting transport', async t => {
-  let releaseAuth, authStarted;
+test('shared readiness through real custody survives first transport disposal', async t => {
+  let releaseAuth, authStarted, firstTransport, created = 0, ready = 0, exchanges = 0, acquired = 0;
   const authentication = new Promise(resolve => { releaseAuth = resolve; });
   const started = new Promise(resolve => { authStarted = resolve; });
-  let firstTransport, created = 0, ready = 0;
-  const f = await fixture(t, { sessionRejectDisposed: true, transportFactoryOverride: async ({ credentialLease } = {}) => {
-    const own = credentialLease ?? { alive: true };
-    const transport = { epoch: 'epoch-0', runtimeSignal: new AbortController().signal, deadline: Date.now() + 30000,
-      async authenticate() { authStarted(); await authentication; if (!own.alive) throw new Error('disposed transport'); },
-      markReady() { ready++; }, failRuntime() {}, bindSession() {}, async dispose() { if (!credentialLease) { own.alive = false; transport.isDisposed = true; } },
-      readinessLease: () => ({ alive: true, ready() { ready++; }, async fail() {}, async dispose() {} }),
-      sanitize: value => value,
-    };
-    if (!credentialLease && !firstTransport) firstTransport = transport;
-    created++;
-    return transport;
-  } });
+  const epoch = new AbortController();
+  const f = await fixture(t, { sessionRejectDisposed: true,
+    nativeRuntimeOverride: { close: async () => {}, async acquire() {
+      acquired++;
+      return { epoch: 'real-custody-epoch', signal: epoch.signal, deadline: Date.now() + 30000, version: '0.2.0-rc.2',
+        use: callback => callback({ endpoint: native.agentRuntime.endpoint, loginToken: 'synthetic' }),
+        ready() { ready++; }, fail() { epoch.abort(); }, release: async () => {}, isChildAlive: () => true };
+    } },
+    transportFactoryOverride: async options => {
+      const real = await createHarnessTransport({ ...options, fetchImpl: async () => {
+        exchanges++; authStarted(); await authentication;
+        return new Response(null, { status: 303, headers: { 'set-cookie': 'dsh-auth-test=synthetic-cookie' } });
+      } });
+      const transport = { ...real, isDisposed: false, async dispose() { transport.isDisposed = true; await real.dispose(); } };
+      if (!options.credentialLease && !firstTransport) firstTransport = transport;
+      created++; return transport;
+    },
+  });
   const first = f.host.boundary.createSession({ addonId: native.id }); first.catch(() => {});
   await started;
   const second = f.host.boundary.createSession({ addonId: native.id });
+  for (let i = 0; acquired < 2 && i < 50; i++) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(acquired, 2, 'both waiters own a custody lease');
   await new Promise(resolve => setImmediate(resolve));
   await firstTransport.dispose();
   releaseAuth();
   const secondRef = await second;
-  assert.equal(f.host.boundary.isLive(secondRef), true, 'second waiter reaches Ready after first transport disposal');
+  assert.equal(f.host.boundary.isLive(secondRef), true);
   assert.equal(created, 3, 'two session transports share one readiness transport');
+  assert.equal(exchanges, 1, 'real custody shares the authentication exchange');
   assert.equal(ready, 1, 'runtime marked Ready once');
-  await assert.rejects(first, /runtime/i, 'first disposed waiter fails without poisoning second');
+  await assert.rejects(first, /runtime/i);
 });
 test('host close waits for the native stop after resource drain', async t => {
   let releaseStop;

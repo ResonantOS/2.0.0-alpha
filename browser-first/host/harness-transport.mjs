@@ -139,9 +139,9 @@ export async function createHarnessTransport({ credentials, credentialLease, add
         if (cleanupClosed || !ownedSessionId || sessionId !== ownedSessionId || !lease.cleanupUse) throw fail('permission-denied');
         if (cleanupPending) return cleanupPending;
         const cleanupSignal = AbortSignal.any([AbortSignal.timeout(1000), ...(signal ? [signal] : [])]);
-        const operation = Promise.resolve().then(() => lease.cleanupUse(async currentCookie => {
+        const operation = Promise.resolve().then(() => lease.cleanupUse(async (currentCookie, childExitSignal) => {
           const response = await endpointGuard.connectHttp('/api/session/cancel', {
-            method: 'POST', signal: cleanupSignal,
+            method: 'POST', signal: childExitSignal ? AbortSignal.any([cleanupSignal, childExitSignal]) : cleanupSignal,
             headers: { cookie: currentCookie, 'content-type': 'application/json' },
             body: JSON.stringify({ type: 'client-request', rpcId: `augmentor-${randomUUID()}`,
               method: 'session/cancel', payload: { args: { request: { sessionId: ownedSessionId } } } }),

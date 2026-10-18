@@ -110,10 +110,12 @@ function createNativeCustody(nativeRuntime, refreshPolicy) {
         },
         remember(value) { check(); record.remember(value); },
         cleanupUse(callback, signal) {
-          if (shared || typeof callback !== 'function' || signal?.aborted || !record.cookie ||
+          // Stop fences normal access before cancellation; only child exit
+          // forbids cleanup, including a connector still awaiting its send.
+          if (!owned.isChildAlive?.() || shared || typeof callback !== 'function' || signal?.aborted || !record.cookie ||
               (disposed && Date.now() >= cleanupUntil) ||
               (record.cleanupDeadline && Date.now() >= record.cleanupDeadline)) throw fail('runtime-unavailable');
-          return callback(record.cookie);
+          return callback(record.cookie, owned.childExitSignal);
         },
         sanitize(value) { try { return sanitizeOpenCodePayload(value, [...record.forbidden]); } catch { throw fail('runtime-unavailable'); } },
         async dispose() {

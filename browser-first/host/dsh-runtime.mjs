@@ -19,7 +19,7 @@ export function snapshotDshConfig({ bindings = [], env = process.env, userRoot, 
   const binding = structuredClone(native[0]);
   if (!['name', 'addonId', 'adapterId', 'authScheme', 'endpoint'].every(k => typeof binding[k] === 'string' && binding[k]) || binding.adapterId !== 'dsh-typert-v1' || !binding.source || Object.keys(binding.source).length !== 1 || binding.source.managedDsh !== true) refuse();
   const match = /^http:\/\/127\.0\.0\.1:([1-9][0-9]{3,4})$/.exec(binding.endpoint);
-  if (!match || +match[1] < 1024 || +match[1] > 65535) refuse();
+  if (!match || +match[1] < 1024 || +match[1] > 65535 || +match[1] === 19387) refuse();
   const prefix = env.RESONANTOS_DSH_PACKAGE_ROOT ?? '';
   const configuredHome = env.RESONANTOS_DSH_HOME ?? '';
   if ([prefix, configuredHome].some(p => typeof p !== 'string' || (p && !isAbsolute(p))) || !isAbsolute(userRoot)) refuse();
@@ -105,9 +105,11 @@ export async function prepareDshHome(config, { fs = filesystem } = {}) {
     if (path === realHome || inside(repository, path) || inside(await normalized(join(realHome, '.dsh')), path) || inside(await normalized(join(realHome, 'Library/Application Support/Augmentor/data/augmentor/managed-dsh/home')), path)) throw runtimeError();
     // Inspect every managed path component. Never chmod existing state into compliance.
     let current = '/';
+    const rootStat = await fs.lstat(current);
+    if (!rootStat.isDirectory() || !safeNode(rootStat)) throw runtimeError();
     for (const part of requested.split('/').filter(Boolean)) {
       current = join(current, part);
-      try { const stat = await fs.lstat(current); if (stat.isSymbolicLink() || !stat.isDirectory()) throw runtimeError(); }
+      try { const stat = await fs.lstat(current); if (stat.isSymbolicLink() || !stat.isDirectory() || !safeNode(stat)) throw runtimeError(); }
       catch (error) { if (error.code !== 'ENOENT') throw error; await fs.mkdir(current, { mode: 0o700 }); }
     }
     const stat = await fs.lstat(path);
@@ -141,7 +143,12 @@ export async function prepareDshHome(config, { fs = filesystem } = {}) {
         if (!s.isDirectory() || s.isSymbolicLink() || s.uid !== process.getuid() || (s.mode & 0o077)) throw runtimeError();
       }
       if ((await fs.readdir(join(reserved, 'cwd'))).length) throw runtimeError();
-      return { cwd: join(reserved, 'cwd'), release, env: {
+      return { cwd: join(reserved, 'cwd'), release, async verifyIdentity() {
+        try {
+          const latest = await fs.lstat(requested);
+          if (latest.isSymbolicLink() || !latest.isDirectory() || latest.dev !== stat.dev || latest.ino !== stat.ino) throw runtimeError();
+        } catch { throw runtimeError('runtime-unavailable', 'home'); }
+      }, env: {
         ...config.inherited, HOME: join(reserved, 'home'), DSH_HOME: path, TMPDIR: join(reserved, 'tmp'),
         XDG_CONFIG_HOME: join(reserved, 'home/config'), XDG_DATA_HOME: join(reserved, 'home/data'),
         XDG_STATE_HOME: join(reserved, 'home/state'), XDG_CACHE_HOME: join(reserved, 'home/cache'),
@@ -222,6 +229,7 @@ export function createDshRuntime({ config, spawnImpl = spawn, validatePrefix = v
     record.controller.abort(runtimeError(code, reason));
     try { onFailure({ epoch: record.epoch, code }); } catch {}
   }
+  const childAlive = record => Boolean(record.child && !record.exited && record.child.exitCode == null && record.child.signalCode == null);
   function stop(record, code = 'runtime-unavailable', reason = 'startup') {
     if (record.stop) return record.stop;
     // Publish the stop promise before fencing: abort and failure callbacks may
@@ -233,7 +241,11 @@ export function createDshRuntime({ config, spawnImpl = spawn, validatePrefix = v
     const start = now(); fence(record, code, reason); transition(record, 'Stopping', reason);
     const cleanup = new AbortController();
     const job = (async () => {
-      await Promise.race([Promise.resolve().then(() => beforeStop(record.epoch, cleanup.signal)).catch(() => {}), wait(start + 1000 - now())]);
+      if (childAlive(record)) {
+        await Promise.race([Promise.resolve().then(() => {
+          if (childAlive(record)) return beforeStop(record.epoch, cleanup.signal);
+        }).catch(() => {}), wait(start + 1000 - now())]);
+      }
       cleanup.abort();
       if (record.child && !record.exited) {
         try { record.child.kill('SIGTERM'); } catch {}
@@ -256,7 +268,7 @@ export function createDshRuntime({ config, spawnImpl = spawn, validatePrefix = v
     if (current !== record || record.fenced || closing || ![...record.clients].some(client => !client.signal.aborted)) throw record.controller.signal.reason ?? runtimeError();
   }
   function begin() {
-    const record = { epoch: randomUUID(), controller: new AbortController(), clients: new Set(), deadline: now() + 30000, child: null, exited: false, token: '', fenced: false };
+    const record = { epoch: randomUUID(), controller: new AbortController(), childExit: new AbortController(), clients: new Set(), deadline: now() + 30000, child: null, exited: false, token: '', fenced: false };
     current = record;
     record.timer = setTimeout(() => { record.reject?.(runtimeError('deadline-exceeded', 'deadline')); void stop(record, 'deadline-exceeded', 'deadline'); }, 30000);
     // Start on a microtask so acquire registers its first authorized waiter first.
@@ -267,13 +279,15 @@ export function createDshRuntime({ config, spawnImpl = spawn, validatePrefix = v
       const home = await prepareHome(config); record.home = home;
       try { active(record); } catch (error) { await home.release(true); throw error; }
       await reservePort(config.port); active(record);
+      await home.verifyIdentity?.(); active(record);
       if (now() >= record.deadline) throw runtimeError('deadline-exceeded', 'deadline');
       const announced = new Promise((resolve, reject) => { record.resolve = resolve; record.reject = reject; });
       record.child = spawnImpl(process.execPath, [install.entry, '--profile', 'web', '--no-open', '--host', '127.0.0.1', '--port', String(config.port)], { shell: false, cwd: home.cwd, env: home.env, stdio: ['ignore', 'pipe', 'pipe'] });
       const child = record.child;
       record.exit = new Promise(resolve => {
         child.once('exit', (code, signal) => {
-          record.exited = true; record.exitCode = code; record.exitSignal = signal; resolve();
+          record.exited = true; record.exitCode = code; record.exitSignal = signal;
+          record.childExit.abort(runtimeError()); resolve();
           if (current !== record) return;
           // This callback may act on the active epoch only after identity matches.
           // stop is already idempotent for a fenced current epoch.
@@ -314,6 +328,7 @@ export function createDshRuntime({ config, spawnImpl = spawn, validatePrefix = v
         await Promise.race([record.started, cancelled]);
         if (signal.aborted || client.released) throw runtimeError(); active(record);
         return Object.freeze({
+          isChildAlive: () => childAlive(record), childExitSignal: record.childExit.signal,
           epoch: record.epoch, signal: record.controller.signal, deadline: record.deadline, version: record.version,
           async use(callback) { if (client.released || signal.aborted) throw runtimeError(); active(record); return callback({ endpoint: config.binding.endpoint, loginToken: record.token, providerKey: config.inherited.DEEPSEEK_API_KEY }); },
           ready() { active(record); clearTimeout(record.timer); record.parser.ready(); if (record.state !== 'Ready') transition(record, 'Ready'); },
