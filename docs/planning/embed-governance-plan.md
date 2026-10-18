@@ -2422,6 +2422,8 @@ git commit -m "feat(bridge): enforce embed governance transport boundaries"
 ```
 ### Task 11: Write and syntax-check conductor-only live proof
 
+The keyboard and accessibility checkpoint is automated before first Page sharing, including consent focus and Escape; the retained keyboardAndLayout screenshot is layout evidence only.
+
 Screenshot integration proof requires `RESONANTOS_EMBED_LIVE_CONTROL`, an absolute path to a conductor-owned executable outside the repository; a missing, invalid or non-executable hook fails closed at startup. The hook accepts `restart`, `stop`, `start`, `storage-fail` and `storage-restore`; the conductor preserves the disposable user root and upstream and refreshes the disposable extension configuration on restart. Screenshot-mode restart verification requires bridge credentials that rotate on restart. Do not pin `RESONANTOS_BROWSER_FIRST_BRIDGE_TOKEN` for live proof: a pinned token makes the check fail closed. Start/restart proof requires a changed digest of the parsed bridge token, rejection of the old token with HTTP 401, and a non-401 response to the new token from the listening bridge. Storage failure proof reopens the damaged store, checks isolation, then restores and restarts it. Exit zero records that the conductor ran the requested action in `summary.controlActions`; it is not owner proof, and screenshot attestations remain pending owner review.
 
 **Files:**

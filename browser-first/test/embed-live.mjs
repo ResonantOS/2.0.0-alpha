@@ -234,6 +234,163 @@ async function verifyStorageFailure(key) {
   await choose('normal');await page.locator('#command-input').waitFor();
   await choose('embed');await page.waitForFunction(()=>window.__resonantosEmbed?.ready);
 }
+function keyboardCheck(name,value) {
+  summary.checks.keyboard ??= {};
+  summary.checks.keyboard[name]=value===true;
+  assert.equal(summary.checks.keyboard[name],true,'keyboard.'+name);
+}
+async function keyboard() {
+  await page.bringToFront();
+  // Design literals must not shrink when a required control disappears.
+  const expectedControls=['workspace','assistant','page','approvals','tier','status'];
+  const actualControls=await page.locator('#resonantos-bar [data-control], #resonantos-bar [data-tier]').evaluateAll(nodes=>nodes.map(n=>n.hasAttribute('data-tier')?'tier':n.dataset.control));
+  keyboardCheck('expectedControls',JSON.stringify(actualControls)===JSON.stringify(expectedControls));
+  // Status remains a live text label, not an interactive tooltip/tab-order target.
+  const interactive='#resonantos-bar :is(button,a[href],input,select,textarea,[tabindex]:not([tabindex="-1"]))[data-control]';
+  const targets=['workspace','assistant','page','approvals','tier'];
+  const resetFocus=()=>page.evaluate(()=>{
+    const body=document.body,previous=body.getAttribute('tabindex');
+    body.setAttribute('tabindex','-1');body.focus();
+    if(previous===null)body.removeAttribute('tabindex');else body.setAttribute('tabindex',previous);
+  });
+  const pointerAway=()=>page.mouse.move(0,page.viewportSize().height-1);
+  await pointerAway();await resetFocus();
+  const badge=page.locator('#resonantos-bar [data-tier]');
+  const description=await badge.getAttribute('aria-describedby');
+  const tooltip=description?page.locator('[id='+JSON.stringify(description)+']'):null;
+  keyboardCheck('badgeInitiallyHidden',Boolean(tooltip&&await tooltip.count()===1&&!await tooltip.isVisible()));
+  const blurred=await page.locator(`${interactive}, #resonantos-bar [data-tier]`).evaluateAll(nodes=>Object.fromEntries(nodes.map(n=>{
+    const s=getComputedStyle(n);
+    return [n.hasAttribute('data-tier')?'tier':n.dataset.control,{outlineStyle:s.outlineStyle,outlineWidth:s.outlineWidth,outlineColor:s.outlineColor,boxShadow:s.boxShadow}];
+  })));
+  const visited=[],indicators=[];
+  for(let i=0;i<targets.length+2;i++) {
+    await page.keyboard.press('Tab');
+    const focus=await page.evaluate(blurred=>{
+      const n=document.activeElement;
+      if(!n?.closest('#resonantos-bar')||!n.matches('[data-control], [data-tier]'))return null;
+      const name=n.hasAttribute('data-tier')?'tier':n.dataset.control,s=getComputedStyle(n),before=blurred[name];
+      const background=getComputedStyle(document.querySelector('#resonantos-bar')).backgroundColor;
+      const changedOutline=before&&(s.outlineStyle!==before.outlineStyle||s.outlineWidth!==before.outlineWidth||s.outlineColor!==before.outlineColor);
+      return {name,visible:Boolean(before&&n.matches(':focus-visible')&&(
+        (s.outlineStyle!=='none'&&parseFloat(s.outlineWidth)>0&&s.outlineColor!==background&&changedOutline)||s.boxShadow!==before.boxShadow))};
+    },blurred);
+    if(focus){visited.push(focus.name);indicators.push(focus.visible);}
+    if(visited.length===targets.length)break;
+  }
+  keyboardCheck('tabOrder',JSON.stringify(visited)===JSON.stringify(targets));
+  keyboardCheck('visibleFocus',indicators.length===targets.length&&indicators.every(Boolean));
+  // CDP returns Chromium's computed name, excluding aria-hidden descendants.
+  const cdp=await context.newCDPSession(page);
+  let named=true;
+  try {
+    const {root}=await cdp.send('DOM.getDocument');
+    for(const name of targets) {
+      const selector=name==='tier'?'#resonantos-bar [data-tier]':`#resonantos-bar [data-control="${name}"]`;
+      const {nodeId}=await cdp.send('DOM.querySelector',{nodeId:root.nodeId,selector});
+      const {nodes}=await cdp.send('Accessibility.getPartialAXTree',{nodeId,fetchRelatives:false});
+      named=Boolean(nodes[0]&&!nodes[0].ignored&&nodes[0].name?.value?.trim())&&named;
+    }
+  } finally {await cdp.detach();}
+  keyboardCheck('accessibleNames',named);
+  keyboardCheck('tooltips',await page.locator(interactive).evaluateAll(nodes=>nodes.length>0&&nodes.every(n=>Boolean(n.getAttribute('title')?.trim()))));
+  const tabTo=async target=>{
+    await resetFocus();
+    for(let i=0;i<targets.length+2;i++) {
+      await page.keyboard.press('Tab');
+      if(await target.evaluate(n=>document.activeElement===n))return;
+    }
+    assert.fail('Keyboard could not reach control');
+  };
+  await tabTo(badge);
+  keyboardCheck('badgeDescription',await tooltip.isVisible()&&
+    (await tooltip.textContent()).trim()==='Augmentor runs outside ResonantOS approvals. Its own approvals cover its tools. ResonantOS access still requires separate permission.');
+  await page.keyboard.press('Escape');
+  keyboardCheck('badgeEscape',!await tooltip.isVisible());
+  await tabTo(badge);
+  keyboardCheck('badgeRefocus',await tooltip.isVisible());
+  await page.keyboard.press('Tab');
+  keyboardCheck('badgeBlur',!await tooltip.isVisible());
+  await pointerAway();await badge.hover();
+  keyboardCheck('badgeHover',await tooltip.isVisible());
+  // Leave by two realistic paths: onto the bar, and a stepped move down into the
+  // harness frame. A single-event jump from the badge straight into the
+  // cross-origin frame delivers no boundary event to this document at all
+  // (conductor evidence 2026-10-17: zero mouseleave/mouseout/pointerleave/blur),
+  // so no parent listener can observe it; that browser limit is documented.
+  const box=await badge.boundingBox(),frame=await page.locator('#embed-root iframe').boundingBox();
+  await page.mouse.move(2,box.y+box.height/2,{steps:6});
+  const leftToBar=!await tooltip.isVisible();
+  await badge.hover();
+  await page.mouse.move(box.x+box.width/2,frame.y+40,{steps:8});
+  keyboardCheck('badgeLeave',leftToBar&&!await tooltip.isVisible());
+  const assistant=page.locator('#resonantos-bar [data-control=assistant]');
+  await tabTo(assistant);await page.keyboard.press('Enter');
+  const menu=page.getByRole('menu',{name:'Assistant',exact:true});
+  keyboardCheck('assistantOpen',await menu.isVisible());
+  keyboardCheck('assistantFocusEntered',await menu.evaluate(n=>n.contains(document.activeElement)));
+  await page.keyboard.press('Escape');
+  keyboardCheck('assistantEscape',!await menu.isVisible()&&await assistant.getAttribute('aria-expanded')==='false');
+  keyboardCheck('assistantFocusRestored',await assistant.evaluate(n=>document.activeElement===n));
+  const status=page.locator('#resonantos-bar [data-control=status]');
+  keyboardCheck('statusLabel',await status.evaluate(n=>{
+    return Boolean((n.getAttribute('aria-label')||n.textContent).trim())&&!n.closest('[aria-hidden="true"],[hidden]')&&getComputedStyle(n).visibility==='visible';
+  }));
+  keyboardCheck('statusTooltip',await status.evaluate(n=>{
+    const title=n.getAttribute('title'),label=n.querySelector('.embed-status-text')?.textContent;
+    return Boolean(title?.trim()&&title===label&&n.getAttribute('aria-label')===`Status: ${label}`);
+  }));
+  const viewport=page.viewportSize();
+  await page.emulateMedia({reducedMotion:'reduce'});
+  const motion=[];
+  try {
+    for(const width of [320,420]) {
+      await page.setViewportSize({width,height:viewport.height});
+      motion.push(await page.evaluate(()=>{
+        const seconds=value=>value.trim().endsWith('ms')?parseFloat(value)/1000:parseFloat(value);
+        const bar=document.querySelector('#resonantos-bar');
+        const nodes=bar?[bar,...bar.querySelectorAll('*')]:[];
+        return matchMedia('(prefers-reduced-motion: reduce)').matches&&nodes.length>0&&nodes.every(n=>[null,'::before','::after'].every(pseudo=>{
+          const s=getComputedStyle(n,pseudo);
+          return (s.animationName.split(',').every(v=>v.trim()==='none')||s.animationDuration.split(',').every(v=>seconds(v)===0))&&
+            s.transitionDuration.split(',').every(v=>seconds(v)<=0.01);
+        }));
+      }));
+    }
+  } finally {await page.setViewportSize(viewport);}
+  keyboardCheck('reducedMotion',motion.length===2&&motion.every(Boolean));
+}
+async function keyboardConsent() {
+  const before=await page.evaluate(()=>window.__localShares);
+  await clickPage();
+  const dialog=page.getByRole('dialog');await dialog.waitFor();
+  const cancel=dialog.getByRole('button',{name:'Cancel',exact:true});
+  const share=dialog.getByRole('button',{name:'Share page',exact:true});
+  keyboardCheck('consentInitialFocus',await cancel.evaluate(n=>document.activeElement===n));
+  let trapped=true;
+  // Check both boundaries and repeated cycles, not merely one interior Tab.
+  for(let i=0;i<3;i++) {
+    await page.keyboard.press('Tab');
+    trapped=await share.evaluate(n=>document.activeElement===n)&&trapped;
+    await page.keyboard.press('Tab');
+    trapped=await cancel.evaluate(n=>document.activeElement===n)&&trapped;
+  }
+  await page.keyboard.press('Shift+Tab');
+  trapped=await share.evaluate(n=>document.activeElement===n)&&trapped;
+  await page.keyboard.press('Shift+Tab');
+  trapped=await cancel.evaluate(n=>document.activeElement===n)&&trapped;
+  keyboardCheck('consentFocusTrap',trapped);
+  // Exercise the focusin guard independently of the keyboard Tab handler.
+  await page.locator('#resonantos-bar [data-control=assistant]').focus();
+  keyboardCheck('consentExternalFocusTrap',await dialog.evaluate(n=>n.contains(document.activeElement)));
+  await page.keyboard.press('Escape');
+  await dialog.waitFor({state:'hidden'});
+  keyboardCheck('consentEscape',!await dialog.isVisible());
+  keyboardCheck('consentNoShare',await page.evaluate(()=>window.__localShares)===before);
+  // Page is re-enabled and focused by the async share action's finally handler.
+  await page.locator('#resonantos-bar [data-control=page]:not([disabled])').waitFor();
+  keyboardCheck('consentFocusRestored',await page.locator('#resonantos-bar [data-control=page]').evaluate(n=>document.activeElement===n));
+}
 async function closeForRestart() {
   // External stop/restart instructions still require conductor action and owner
   // review; a screenshot records the UI, not proof that a process was restarted.
@@ -251,8 +408,10 @@ try {
       assert.ok(layout.height<=36&&layout.height>0&&layout.aligned&&layout.fit&&layout.tier);summary.checks['layout'+width]=true;
     }
     await page.emulateMedia({reducedMotion:'reduce'});
-    await attest('keyboardAndLayout','Verify keyboard focus, badge description and Escape, reduced motion, and that the harness panel looks unchanged.');
+    await attest('keyboardAndLayout','Verify layout only: the harness panel looks unchanged. Keyboard and accessibility are automated.');
+    await keyboard();
     await page.evaluate(()=>{const s=window.__resonantosEmbed,send=s.send;window.__localShares=0;s.send=m=>{const ok=send(m);if(ok&&m?.type==='augmentor-context')window.__localShares++;return ok;};});
+    await keyboardConsent();
     await clickPage();await page.getByRole('button',{name:'Cancel',exact:true}).click();assert.equal(await page.evaluate(()=>window.__localShares),0);
     await clickPage();await page.getByRole('button',{name:'Share page',exact:true}).click();await page.getByText('Page shared',{exact:true}).waitFor();assert.equal(await page.evaluate(()=>window.__localShares),1);
     const inner=page.frames().find(f=>f.parentFrame()?.parentFrame()===page.mainFrame()&&new URL(f.url()).pathname.startsWith('/embed/'));assert.ok(inner);

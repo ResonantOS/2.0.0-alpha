@@ -296,3 +296,157 @@ for(const field of ['recordingEnabled','noticeAcknowledged']) {
     assert.equal(damaged.ok,false);assert.equal(damaged.observed,undefined);
   });
 }
+
+const keyboardNames=['expectedControls','badgeInitiallyHidden','badgeRefocus','badgeBlur','badgeLeave','assistantFocusEntered','statusTooltip','consentExternalFocusTrap','tabOrder','visibleFocus','accessibleNames','tooltips','badgeDescription','badgeEscape','badgeHover','assistantOpen','assistantEscape','assistantFocusRestored','statusLabel','reducedMotion','consentInitialFocus','consentFocusTrap','consentEscape','consentNoShare','consentFocusRestored'];
+test('keyboard step precedes first integration Page share and keeps layout screenshot',()=>{
+  const integration=source.slice(source.indexOf("if(stage==='upstream')"));
+  assert.ok(integration.indexOf('await keyboard();')>0);
+  assert.ok(integration.indexOf('await keyboard();')<integration.indexOf('await clickPage();'));
+  assert.match(integration,/attest\('keyboardAndLayout'/);
+  assert.match(integration,/await keyboardConsent\(\);/);
+});
+test('keyboard records and asserts every required boolean, including false results',()=>{
+  const fn=source.match(/function keyboardCheck\(name,value\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(fn,'missing keyboard assertion');
+  for(const name of keyboardNames) {
+    assert.ok(source.includes("keyboardCheck('"+name+"',"),name);
+    const summary={checks:{}};
+    const check=runInNewContext(fn+';keyboardCheck',{summary,assert});
+    check(name,true);assert.equal(summary.checks.keyboard[name],true);
+    assert.throws(()=>check(name,false),{name:'AssertionError'});
+    assert.equal(summary.checks.keyboard[name],false);
+  }
+});
+test('keyboard proof uses real key input and DOM focus, descriptions and computed motion',()=>{
+  for(const text of ["page.keyboard.press('Tab')","page.keyboard.press('Shift+Tab')","page.keyboard.press('Escape')","page.keyboard.press('Enter')","document.activeElement",":focus-visible","outlineStyle","boxShadow","aria-describedby","animationName","transitionDuration","__localShares"])assert.ok(source.includes(text),text);
+});
+
+// Contract-level browser fake: execute only keyboard declarations, never the live runner.
+// State faults model independent regressions; computed AX names are supplied by CDP,
+// deliberately separate from DOM text (including aria-hidden descendants).
+async function keyboardFixture(fault='', input=source, consent=false) {
+  const { JSDOM }=await import('jsdom');
+  const dom=new JSDOM(`<body><nav id="resonantos-bar">
+    ${['workspace','assistant','page','approvals'].map(name=>`<button data-control="${name}" title="${name}" aria-label="${name}"><span aria-hidden="true">icon</span></button>`).join('')}
+    <span data-tier="self-governed" tabindex="0" aria-describedby="tip">Self-governed</span>
+    <span data-control="status" title="Online" aria-label="Status: Online"><span class="embed-status-text">Online</span></span>
+    <span id="tip" hidden>Augmentor runs outside ResonantOS approvals. Its own approvals cover its tools. ResonantOS access still requires separate permission.</span>
+    <div role="menu" aria-label="Assistant" hidden><button>Augmentor</button></div>
+  </nav><button id="outside">Outside</button><div role="dialog" hidden><button>Cancel</button><button>Share page</button></div></body>`,{runScripts:'outside-only'});
+  const w=dom.window,d=w.document,bar=d.querySelector('nav'),badge=d.querySelector('[data-tier]'),tip=d.querySelector('#tip'),assistant=d.querySelector('[data-control=assistant]'),menu=d.querySelector('[role=menu]'),dialog=d.querySelector('[role=dialog]');
+  const visible=n=>Boolean(n&&!n.closest('[hidden]'));
+  if(fault==='missing-control')d.querySelector('[data-control=approvals]').remove();
+  if(fault==='extra-control')bar.insertAdjacentHTML('afterbegin','<button data-control="extra" title="extra" aria-label="extra">Extra</button>');
+  if(fault==='status-title')d.querySelector('[data-control=status]').title='';
+  if(fault==='status-mismatch')d.querySelector('[data-control=status]').title='Busy';
+  if(fault==='hidden-name')assistant.removeAttribute('aria-label');
+  if(fault==='badge-initial')tip.hidden=false;
+  badge.addEventListener('focus',()=>{if(fault!=='badge-keyboard')tip.hidden=false;});
+  badge.addEventListener('blur',()=>{if(fault!=='badge-blur')tip.hidden=true;});
+  let viewport={width:420,height:900},media=true;
+  const widths=[],motionReads=[];
+  const evaluate=(fn,arg)=>{w.__arg=arg;return w.eval('('+fn.toString()+')(__arg)');};
+  const locator=nodes=>({
+    count:async()=>nodes.length,nth:i=>locator([nodes[i]]),
+    evaluate:async(fn,arg)=>{w.__node=nodes[0];w.__arg=arg;return w.eval('('+fn.toString()+')(__node,__arg)');},
+    evaluateAll:async fn=>{w.__nodes=nodes;return w.eval('('+fn.toString()+')(__nodes)');},
+    getAttribute:async key=>nodes[0].getAttribute(key),textContent:async()=>nodes[0].textContent,
+    isVisible:async()=>visible(nodes[0]),focus:async()=>nodes[0].focus(),
+    hover:async()=>{if(nodes[0]===badge)tip.hidden=false;},waitFor:async()=>{},
+    boundingBox:async()=>nodes[0]===badge?{x:154,y:7,width:87,height:22}:{x:0,y:36,width:420,height:864},
+    getByRole:(role,{name}={})=>locator([...nodes[0].querySelectorAll(role==='button'?'button':`[role=${role}]`)].filter(n=>!name||n.textContent===name)),
+  });
+  w.matchMedia=()=>({matches:media});
+  w.__localShares=0;
+  w.getComputedStyle=(node,pseudo)=>{
+    const focused=d.activeElement===node;
+    const s={outlineStyle:focused?'solid':'none',outlineWidth:focused?'2px':'0px',outlineColor:'rgb(255, 255, 255)',backgroundColor:'rgb(0, 0, 0)',boxShadow:'none',visibility:'visible',animationName:'none',animationDuration:'0s',transitionDuration:'0.01s'};
+    if(fault==='resting-shadow'){s.outlineStyle='none';s.outlineWidth='0px';s.boxShadow='0 0 2px black';}
+    if(fault==='same-outline'){s.outlineStyle='solid';s.outlineWidth='2px';}
+    if(fault==='background-outline')s.outlineColor=s.backgroundColor;
+    if(fault==='shadow-focus'){s.outlineStyle='none';s.outlineWidth='0px';s.boxShadow=focused?'0 0 2px white':'none';}
+    if(pseudo||node===bar)motionReads.push([viewport.width,node.tagName,pseudo]);
+    if(node===assistant&&pseudo==='::after'&&(fault==='motion-child'||(fault==='motion-320'&&viewport.width===320)))s.animationName='spin',s.animationDuration='1s';
+    if(node===assistant&&pseudo==='::before'&&fault==='motion-boundary')s.transitionDuration='0.010001s';
+    if(node===assistant&&fault==='motion-zero')s.animationName='spin',s.animationDuration='0s';
+    return s;
+  };
+  const originalMatches=w.Element.prototype.matches;
+  w.Element.prototype.matches=function(selector){return selector===':focus-visible'?d.activeElement===this:originalMatches.call(this,selector);};
+  d.addEventListener('focusin',e=>{if(!dialog.hidden&&!dialog.contains(e.target)&&fault!=='consent-outside')dialog.querySelector('button').focus();});
+  const page={
+    bringToFront:async()=>{},evaluate:async(fn,arg)=>evaluate(fn,arg),
+    locator:s=>locator([...d.querySelectorAll(s)]),
+    getByRole:(role,{name}={})=>locator([...d.querySelectorAll(`[role=${role}]`)].filter(n=>!name||n.getAttribute('aria-label')===name)),
+    viewportSize:()=>({...viewport}),setViewportSize:async v=>{viewport=v;widths.push(v.width);},emulateMedia:async()=>{media=true;},
+    mouse:{move:async()=>{if(fault!=='badge-leave'&&fault!=='badge-initial')tip.hidden=true;}},
+    keyboard:{press:async key=>{
+      if(key==='Escape'){
+        if(!dialog.hidden){dialog.hidden=true;d.querySelector('[data-control=page]').focus();}
+        else if(!menu.hidden){menu.hidden=true;assistant.setAttribute('aria-expanded','false');if(fault!=='assistant-return')assistant.focus();}
+        else if(fault!=='badge-escape')tip.hidden=true;
+      } else if(key==='Enter'&&d.activeElement===assistant){menu.hidden=false;assistant.setAttribute('aria-expanded','true');if(fault!=='assistant-entry')menu.querySelector('button').focus();}
+      else if(key==='Tab'||key==='Shift+Tab'){
+        const nodes=dialog.hidden?[...bar.querySelectorAll('button,[data-tier]')].filter(visible):[...dialog.querySelectorAll('button')];
+        const index=nodes.indexOf(d.activeElement),step=key==='Tab'?1:-1;
+        nodes[(index+step+nodes.length)%nodes.length].focus();
+      }
+    }},
+  };
+  const cdp={send:async(method,args)=>{
+    if(method==='DOM.getDocument')return {root:{nodeId:1}};
+    if(method==='DOM.querySelector')return {nodeId:args.selector};
+    if(method==='Accessibility.getPartialAXTree'){
+      const n=d.querySelector(args.nodeId);
+      const name=fault==='badge-name'&&n===badge?'':n.getAttribute('aria-label')||(n===badge?n.textContent:'');
+      return {nodes:[{ignored:false,name:{value:name}}]};
+    }
+    throw Error('Unexpected CDP method '+method);
+  },detach:async()=>{}};
+  const summary={checks:{}};
+  const code=input.slice(input.indexOf('function keyboardCheck('),input.indexOf('async function closeForRestart('));
+  const run=runInNewContext(code+';({keyboard,keyboardConsent})',{assert,summary,page,context:{newCDPSession:async()=>cdp},clickPage:async()=>{dialog.hidden=false;dialog.querySelector('button').focus();}});
+  try {await (consent?run.keyboardConsent():run.keyboard());return {summary,widths,motionReads,viewport};}
+  finally {dom.window.close();}
+}
+
+test('keyboard fake accepts valid focus, motion and interaction state',async()=>{
+  const h=await keyboardFixture();assert.equal(h.summary.checks.keyboard.visibleFocus,true);
+});
+for(const [fault,check] of [
+  ['resting-shadow','visibleFocus'],['same-outline','visibleFocus'],['background-outline','visibleFocus'],
+  ['motion-child','reducedMotion'],['motion-320','reducedMotion'],['motion-boundary','reducedMotion'],
+  ['badge-initial','badgeInitiallyHidden'],['badge-keyboard','badgeDescription'],['badge-escape','badgeEscape'],['badge-blur','badgeBlur'],['badge-leave','badgeLeave'],
+  ['hidden-name','accessibleNames'],['badge-name','accessibleNames'],
+  ['missing-control','expectedControls'],['extra-control','expectedControls'],
+  ['status-title','statusTooltip'],['status-mismatch','statusTooltip'],
+  ['assistant-entry','assistantFocusEntered'],['assistant-return','assistantFocusRestored'],
+  ['consent-outside','consentExternalFocusTrap'],
+])test('keyboard rejects broken '+fault,async()=>{
+  await assert.rejects(keyboardFixture(fault,source,fault.startsWith('consent')),new RegExp('keyboard\\.'+check));
+});
+
+test('keyboard scans both widths and restores viewport; zero-duration animations and focus shadows pass',async()=>{
+  for(const fault of ['motion-zero','shadow-focus']) {
+    const h=await keyboardFixture(fault);
+    assert.deepEqual(h.widths,[320,420,420]);assert.equal(h.viewport.width,420);
+  }
+});
+
+function keyboardSourceContract(text) {
+  assert.doesNotMatch(text,/keyboardCheck\(\s*[^,]+,\s*(?:true|false)\s*\)/);
+  const integration=text.slice(text.indexOf("if(stage==='upstream')"));
+  const keyboard=integration.indexOf('await keyboard();');
+  for(const next of ['await keyboardConsent();','await clickPage();'])assert.ok(keyboard>=0&&keyboard<integration.indexOf(next),next);
+  assert.match(text,/const expectedControls=\['workspace','assistant','page','approvals','tier','status'\];/);
+}
+test('keyboard source contract rejects literal results, reordered steps and DOM-derived expectations',()=>{
+  keyboardSourceContract(source);
+  for(const mutant of [
+    source.replace("keyboardCheck('tabOrder',", "keyboardCheck('fake',true);keyboardCheck('tabOrder',"),
+    source.replace("keyboardCheck('tabOrder',", "keyboardCheck('fake',false);keyboardCheck('tabOrder',"),
+    source.replace('await keyboard();','').replace('await keyboardConsent();','await keyboardConsent();await keyboard();'),
+    source.replace('await keyboard();','').replace('await clickPage();await page.getByRole', 'await clickPage();await keyboard();await page.getByRole'),
+    source.replace("const expectedControls=['workspace','assistant','page','approvals','tier','status'];",'const expectedControls=await page.locator("[data-control]").evaluateAll(nodes=>nodes.map(n=>n.dataset.control));'),
+  ])assert.throws(()=>keyboardSourceContract(mutant));
+});
