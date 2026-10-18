@@ -184,3 +184,59 @@ All changes remain unstaged and uncommitted on `feat/dsh-native-auth`. The inven
 - `package.json`
 - `packages/addon-sdk/src/validation.ts`
 - `src/core/contracts.ts`
+
+Brief N telemetry correction: Layer 1 found that telemetry injects only sessions and OTel, so feedback requires explicit Cordis injection. Layer 2 found that assistant messages require an append surface marker. Layer 3 found that sessions.create does not bind a persistence writer. Layer 4 found that v4 messages require source.kind. Layer 5 found that v4 also enforces the full request/header, protected system head, turn/step, and tool-resolution grammar. The certification driver now rates real replies to synthetic prompts, committing a rating and then a versioned comment through the canonical feedback service in the managed DISABLED lane and descriptor-validated HTTP in the FEEDBACK_ONLY control. The control is now keyed from the conductor's DEEPSEEK_API_KEY environment variable, included in the in-memory persistence scan, with provider-and-local-sink-only egress; public collectors and all other destinations remain blocked and counted. Live execution remains conductor-only and was not run for this correction.
+
+Brief S (2026-10-17) adds the conductor-only `browser-first/test/dsh-native-browser.live.mjs` and its deterministic contract tests; neither live lane was run while authoring. It requires absolute `DSH_LIVE_PREFIX`, `DSH_LIVE_PLUGIN_PREFIX`, `DSH_LIVE_PLUGIN_TARBALL`, `DSH_LIVE_CHROME_EXECUTABLE` (Chrome for Testing), `DSH_LIVE_BROWSER_OUT` (an existing external directory), and `DSH_LIVE_FINAL_GATE`, plus `DEEPSEEK_API_KEY` supplied only through the environment. Scratch state and the extension copy stay outside both checkouts; the approved input prefixes and verified tarball remain read-only. Evidence uses fixed reasons and screenshot SHA-256 digests, and canonical core-driver gate input is patched only for the two observations, their reasons, and the screenshot attestation; status, blockedReasons and deterministic evidence remain conductor-owned, and the core driver must not run concurrently. Source inspection found that harness management and attributed harness chat currently exist only in the React shell: the MV3 extension has neither surface. The companion therefore fails closed with `harness-ui-unavailable` at that prerequisite, without substituting React, bypassing consent, or claiming screenshots; the remaining UI steps require renewed conductor validation when extension integration exists. Digest and gate-key guard mutations use `rig-mutate` with byte-identical restoration; deterministic success is not live certification.
+
+
+Brief T (2026-10-17) supersedes Brief S's unavailable-extension path. Tom chose
+"React harness-demo shell over the production bridge; not the Chrome extension"
+for `browserVisible` and `pluginCoexistence`, because the extension has no
+harness management UI or attributed harness chat. Extension-surface proof is
+future work. The companion composes the production host and bridge with a
+persistent external registry as the swap demo does, reuses its exported
+`createBridgeClient`, and serves the React shell in `harness-demo` mode on an
+unused loopback port. It selects **Choose Add-ons Manually**, installs and grants
+explicitly through authenticated host transactions, assigns both primary and
+chat-interface owners, and matches browser-composer text and add-on identity
+to signed dispatch/final receipts. No swap-demo behavior or runtime owner was
+changed. The plugin prefix remains read-only; the digest-pinned tarball,
+`--ignore-scripts`, scratch HOME/DSH_HOME, protected-port refusals and sanitized
+summary remain. The gate now additionally records `surface` while preserving
+all unrelated fields. Cleanup uses captured child handles without process-group
+escalation; each swap checks the plugin PID/API before and after the reply and
+checks the bridge's owned-signal audit. No live lanes were run and no commit was
+made for this brief.
+
+Brief T deterministic verification (2026-10-17):
+
+| Command | Result |
+| --- | --- |
+| `node --check browser-first/test/dsh-native-browser.live.mjs` | Exit 0 |
+| `node --test browser-first/test/dsh-native-*.test.mjs` | 132 passed, 0 failed, 0 skipped |
+| `node --test browser-first/test/harness-swap-demo.test.mjs` | 60 passed, 0 failed, 0 skipped; source unchanged |
+| `npm run docs:check` | Passed |
+| `npm run test:docs` | 293 passed, 0 failed, 0 skipped |
+| `git diff --check` | Passed |
+| `node scripts/security-pipeline/run-check.mjs` | 7 checks passed |
+
+Three `rig-mutate` probes each produced one named failing assertion and
+byte-identical restoration: omitted gate surface, removed input-key restriction,
+and an unauthorized change to the unrelated `reply` field. TAP evidence is in
+`/tmp/dsh-brief-t/mutant-{surface,allowed-keys,unrelated-fields}.tap`. Initial
+contracts also failed for the missing surface and obsolete extension path.
+The signed-reply contract rejects tampered signatures, mismatched text, wrong
+session/epoch/generation/turn and an owner ID with an extra suffix (important
+because the native ID starts with the plugin ID). A separate bootstrap contract
+checks every capability currently requested by React's transport. These checks
+use synthetic receipts and fixtures, never live DSH or browser lanes.
+
+**Conductor live completion, 2026-10-17.** The conductor ran `dsh-native-browser.live.mjs` live, in the React harness-demo shell over the production bridge, as Tom decided on 2026-10-17. Both lanes passed. Combined with the core driver's 11 observations, 0.2.0-rc.2 now has 13/13 live observations, labelled conductor-verified with screenshots pending owner review. The live runs exposed four driver defects, not product defects, all fixed:
+
+1. The external gate must live outside every repository. The launcher now uses an external gate folder.
+2. DSH 0.1.5-rc.1 resolves its own host `dsh-tools` at 0.1.5-rc.3, because its packages peer on `^0.1.5-rc.3`. The driver had asserted the DSH version.
+3. `dsh-augmentor@0.2.11` `/api/augmentor/auth` returns the login token as JSON `{token}` and sets no cookie.
+4. The screenshot privacy guard now also admits the shell's static seed greeting, but only as an exact string literal from `src/core/defaults.ts`.
+
+The deterministic Task 12 checks and the final review gate remain.

@@ -3831,7 +3831,7 @@ git commit -m "docs(harness): explain native isolation consent recovery and live
 - Test: `browser-first/test/dsh-native-policy.test.mjs`, `browser-first/test/dsh-native-runtime.test.mjs`, `browser-first/test/dsh-native-credentials.test.mjs`, `browser-first/test/dsh-native-transport.test.mjs`, `browser-first/test/dsh-native-readiness.test.mjs`, `browser-first/test/dsh-native-boundary.test.mjs`, `browser-first/test/dsh-native-host.test.mjs`, `browser-first/test/dsh-native-shutdown.test.mjs`, `browser-first/test/dsh-native-integration.test.mjs`, `browser-first/test/dsh-native-docs.test.mjs`.
 
 **Interfaces:**
-- Consumes: all prior green commits and their behavioral red records; Task 0 exact-package evidence; existing extension/browser surface and authenticated bridge routes.
+- Consumes: all prior green commits and their behavioral red records; Task 0 exact-package evidence; the React harness-demo shell for the two browser observations and authenticated bridge routes.
 - Produces: exact command outcomes and sanitized live proof outside the repository. No test-only success may be labelled live certification. No commit or PR may contain generated bridge config, scratch homes, credentials, transcripts or screenshots.
 
 - [ ] **Write the failing completion assertion:** execute this complete assertion before collecting final evidence. A missing external result correctly fails:
@@ -3872,6 +3872,20 @@ npm run verify:alpha
 ```
 
 The shared TypeScript union and SDK validator change, so Vitest and build are mandatory. Run the existing plugin transport and OpenCode suites as part of `test:browser-first`; neither may be silently skipped.
+
+**2026-10-17 — Tom's Brief T surface decision:** For `browserVisible` and
+`pluginCoexistence`, use the React shell in `harness-demo` mode with the
+production bridge, persistent harness registry, explicit install/grant/owner
+transactions and browser-composer replies matched to signed host finals and
+add-on IDs, following [the harness adapter demo](../addons/harness-adapter-demo.md).
+The evidence must say: "React harness-demo shell over the production bridge; not the Chrome extension".
+The extension has no harness management UI or attributed harness chat;
+extension-surface proof is future work. The companion records
+`surface: "react-harness-demo-shell"` and
+`attestation: "conductor-verified screenshots pending owner review"`, updating
+only those fields, the two lane booleans and their reasons. Browser screenshots
+and plugin/native/plugin/native observations remain conductor-only; authoring
+and deterministic checks do not complete the live checkboxes below.
 
 - [ ] **Conductor-only live completion:** for the sole eligible Task 0 exact install, `0.2.0-rc.2`, use its isolated root and an unused approved port other than 19387 with the production bridge and native manifest. Perform the approved design's eight live-lane steps. Require a real attributed browser reply, two concurrent governed sessions under the selected cookie policy, history/model selection/cancel, active revocation, crash then fresh explicit session, clean bridge restart and old-reference rejection. Record prefix entry count/depth/walk time from a direct call to `validateDshPrefix(prefix, {deadline: Date.now()+30000})`; it returns no secrets. Observe the pre-existing desktop process only through the conductor's own app, keep it running and verify its companion before/after; never attach this integration to that process. Repeat plugin/native slot swaps on the separately pinned supported plugin setup. This plan's automated tests do not substitute for those human-visible observations. If any observation is unavailable, leave its boolean false and certification blocked.
 - [ ] **Run and pass:** after the conductor writes actual sanitized observations to the external `final-gate.json`, rerun the assertion above and review the source commits plus red records. Retain `0.1.5-rc.1` and `0.1.7-rc.2` as `status: "blocked"` with the observer anchor blocker in `liveVersions`; neither may be certified or launched in native mode under this revision. Only `0.2.0-rc.2` may become `status: "certified"`, and only with every production observation true; otherwise record it as blocked too. Passing the accounting assertion is not an all-version support claim; report certified and blocked counts explicitly. The conductor must identify the governing issue before creating a PR into `dev`; issue 519 is a telemetry dependency, not automatically the governing native-auth issue.
