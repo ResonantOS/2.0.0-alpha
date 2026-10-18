@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createBridgeShutdown, installBridgeSignals } from './bridge-shutdown.mjs';
 
 import { spawn } from "node:child_process";
 import { existsSync, realpathSync, statSync } from "node:fs";
@@ -225,6 +226,7 @@ const openCodeBoundary = createOpenCodeBoundary({
     fetchImpl: (...args) => fetch(...args),
     spawnImpl: (cmd, cmdArgs, opts) => spawn(cmd, cmdArgs, opts),
     command: resolveOpenCodeCommand(),
+    installSignalHandlers: false,
     hostname: "127.0.0.1",
     port: process.env.RESONANTOS_OPENCODE_PORT ? Number(process.env.RESONANTOS_OPENCODE_PORT) : undefined,
     env: process.env,
@@ -497,16 +499,11 @@ console.log(JSON.stringify({
 }, null, 2));
 console.log(`Load ${resonantExtension} in Chrome as an unpacked extension.`);
 
-const shutdown = async () => {
-  await flushPendingExtensionPrefs().catch(() => undefined);
-  try { unsubscribeOpenCodeExecution(); } catch { /* noop */ }
-  await openCodeBoundary.dispose().catch(() => undefined);
-  await harnessService.close();
-  await new Promise((resolve) => bridgeInfo.server.close(resolve));
-};
-
-for (const signal of ["SIGINT", "SIGTERM"]) {
-  process.on(signal, () => {
-    void shutdown().finally(() => process.exit(0));
-  });
-}
+const shutdown = createBridgeShutdown({
+  closeHarness: () => harnessService.close(),
+  closeOpenCode: () => openCodeBoundary.dispose(),
+  flushPrefs: () => flushPendingExtensionPrefs(),
+  unsubscribe: () => unsubscribeOpenCodeExecution(),
+  closeServer: () => new Promise((resolve) => bridgeInfo.server.close(resolve)),
+});
+installBridgeSignals({ shutdown });

@@ -5,7 +5,7 @@ const fail = code => Object.assign(new Error(publicHarnessError({ code }).messag
 
 // resolveAdapter is a host-supplied, reviewed factory. Concrete adapters,
 // credentials, network transports and routes are intentionally separate owners.
-export function createHarnessBoundary({ registry, resolveAdapter, maxSessions = 64, cleanupTimeoutMs = 1000, operationTimeoutMs = 30000, eventLimits = {} } = {}) {
+export function createHarnessBoundary({ registry, resolveAdapter, onRetired = () => {}, maxSessions = 64, cleanupTimeoutMs = 1000, operationTimeoutMs = 30000, eventLimits = {} } = {}) {
   if (!registry || typeof resolveAdapter !== 'function' || !Number.isSafeInteger(maxSessions) || maxSessions < 1 ||
       ![cleanupTimeoutMs, operationTimeoutMs].every(value => Number.isSafeInteger(value) && value >= 1 && value <= 2147483647)) throw new TypeError('Host boundary dependencies required.');
   const sessions = new Map(), pending = new Set(), sessionKey = randomBytes(32);
@@ -24,7 +24,7 @@ export function createHarnessBoundary({ registry, resolveAdapter, maxSessions = 
   }
   let closed = false;
   const current = ctx => !closed && !ctx.controller.signal.aborted && registry.isCurrent(ctx.authorization);
-  function check(ctx) { if (!current(ctx)) throw fail('ownership-conflict'); }
+  function check(ctx) { if (!current(ctx)) throw fail(ctx.failureCode ?? 'ownership-conflict'); }
   async function bounded(operation, { timeoutMs = cleanupTimeoutMs, signal, onTimeout } = {}) {
     let timer, onAbort;
     try {
@@ -47,11 +47,15 @@ export function createHarnessBoundary({ registry, resolveAdapter, maxSessions = 
     ctx.disposed = true;
     await bounded(() => ctx.adapter.dispose({ session: ctx.upstream }));
   }
-  function retire(ctx) {
-    ctx.controller.abort(); ctx.turn?.controller.abort(); ctx.bus?.close('ownership-conflict');
-    sessions.delete(ctx.sessionId);
-    // Cleanup is best-effort only after local authority and output are fenced.
-    // Adapter failures must not strand an otherwise durable governance change.
+  function retire(ctx, code = 'ownership-conflict') {
+    if (!ctx.retired) {
+      ctx.retired = true; ctx.failureCode = code;
+      ctx.bus?.close(code);
+      ctx.controller.abort(); ctx.turn?.controller.abort();
+      if (sessions.delete(ctx.sessionId)) {
+        try { onRetired(structuredClone(ctx.ref)); } catch {}
+      }
+    }
     return dispose(ctx).catch(() => {});
   }
   const unsubscribe = registry.onFence(({ slot, addonId, policy }) => {
@@ -72,7 +76,7 @@ export function createHarnessBoundary({ registry, resolveAdapter, maxSessions = 
       return Promise.all(cleanup);
     }
     // No await before aborting *all* affected pending and registered sessions.
-    return Promise.all([...pending, ...sessions.values()].filter(ctx => ctx.authorization.slot === slot).map(retire));
+    return Promise.all([...pending, ...sessions.values()].filter(ctx => ctx.authorization.slot === slot).map(ctx => retire(ctx)));
   });
   const referenceKeys = ['addonId', 'bootEpoch', 'generation', 'sessionId'];
   function exactReference(ref) {
@@ -117,7 +121,15 @@ export function createHarnessBoundary({ registry, resolveAdapter, maxSessions = 
       const ctx = { authorization, controller: new AbortController(), sessionId: signedSessionId(authorization), adapter: null, upstream: null, turn: null, operations: new Set(), disposed: false };
       pending.add(ctx);
       try {
-        ctx.adapter = await resolveAdapter(structuredClone(authorization));
+        ctx.adapter = await resolveAdapter(structuredClone(authorization), {
+          signal: ctx.controller.signal,
+          bindRuntime(epoch) {
+            check(ctx); registry.assertOperation(authorization, 'createSession');
+            if (typeof epoch !== 'string' || !epoch || (ctx.runtimeEpoch && ctx.runtimeEpoch !== epoch)) throw fail('runtime-unavailable');
+            ctx.runtimeEpoch = epoch;
+          },
+        });
+        registry.assertOperation(authorization, 'createSession');
         check(ctx);
         ctx.creating = true;
         try { ctx.upstream = await ctx.adapter.createSession({ signal: ctx.controller.signal }); }
@@ -131,9 +143,16 @@ export function createHarnessBoundary({ registry, resolveAdapter, maxSessions = 
         return structuredClone(ctx.ref);
       } catch (error) {
         try { await dispose(ctx); } catch { /* Authority is already fenced. */ }
-        if (!current(ctx)) throw fail('ownership-conflict');
+        if (!current(ctx)) throw fail(ctx.failureCode ?? 'ownership-conflict');
         throw fail(publicHarnessError(error).code);
       } finally { pending.delete(ctx); }
+    },
+    isLive(ref) {
+      try { const ctx = registered(ref); registry.assertOperation(ctx.authorization, 'createSession'); return true; } catch { return false; }
+    },
+    retireRuntime(epoch, code = 'runtime-unavailable') {
+      const fixed = code === 'deadline-exceeded' ? code : 'runtime-unavailable';
+      return Promise.allSettled([...pending, ...sessions.values()].filter(ctx => typeof epoch === 'string' && epoch && ctx.runtimeEpoch === epoch).map(ctx => retire(ctx, fixed)));
     },
     events(ref) { return registered(ref).bus.subscribe(); },
     invoke(ref, input) {
@@ -193,7 +212,7 @@ export function createHarnessBoundary({ registry, resolveAdapter, maxSessions = 
     selectModel: (ref, input) => call(ref, 'selectModel', input),
     async close() {
       closed = true; unsubscribe();
-      await Promise.allSettled([...pending, ...sessions.values()].map(retire));
+      await Promise.allSettled([...pending, ...sessions.values()].map(ctx => retire(ctx)));
     },
   };
 }

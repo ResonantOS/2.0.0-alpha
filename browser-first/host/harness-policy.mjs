@@ -28,6 +28,9 @@ const ADAPTER_CAPABILITY_FLOOR = Object.freeze(Object.assign(Object.create(null)
 /** Capabilities the named adapter reaches. Empty for an add-on with no reviewed runtime. */
 export function adapterCapabilityFloor(manifest) {
   const adapterId = manifest?.agentRuntime?.adapterId;
+  if (adapterId === 'dsh-typert-v1' && manifest.agentRuntime.authScheme === 'dsh-native-cookie') {
+    return ['agent-runtime', 'network', 'filesystem', 'shell'];
+  }
   return typeof adapterId === 'string' && Object.hasOwn(ADAPTER_CAPABILITY_FLOOR, adapterId)
     ? [...ADAPTER_CAPABILITY_FLOOR[adapterId]] : [];
 }

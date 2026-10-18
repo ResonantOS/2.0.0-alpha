@@ -21,7 +21,8 @@ const BRIDGE_REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..
 const inflight = new Map();
 const children = new Set();
 const writtenPidRecordDirectories = new Map();
-let hooksInstalled = false;
+let exitHooksInstalled = false;
+let signalHooksInstalled = false;
 let stalePidCleanupDone = false;
 let stalePidSkipWrite = false;
 
@@ -116,7 +117,8 @@ export function resetOpencodeServerSingletonForTests() {
   inflight.clear();
   children.clear();
   writtenPidRecordDirectories.clear();
-  hooksInstalled = false;
+  exitHooksInstalled = false;
+  signalHooksInstalled = false;
   stalePidCleanupDone = false;
   stalePidSkipWrite = false;
 }
@@ -197,6 +199,7 @@ export async function ensureOpencodeServer({
   maxWaitMs = 12000,
   pollMs = 300,
   processImpl = process,
+  installSignalHandlers = true,
   pidRecord = createDefaultPidRecord(env),
   pickEphemeralPort = pickFreeLoopbackPort
 } = {}) {
@@ -229,6 +232,7 @@ export async function ensureOpencodeServer({
     maxWaitMs,
     pollMs,
     processImpl,
+    installSignalHandlers,
     pidRecord,
     pickEphemeralPort,
     key
@@ -254,6 +258,7 @@ async function startOpencodeServer({
   maxWaitMs,
   pollMs,
   processImpl,
+  installSignalHandlers,
   pidRecord,
   pickEphemeralPort,
   key
@@ -318,7 +323,7 @@ async function startOpencodeServer({
         try { child?.kill?.(); } catch { /* noop */ }
         throw new Error("OpenCode server does not enforce the bridge credential; refusing to adopt it.");
       }
-      installShutdownHooks(processImpl);
+      installShutdownHooks(processImpl, installSignalHandlers);
       if (!skipWrite) {
         await pidRecord.write(directory, { owner: processImpl.pid, pid: child.pid, port: announcedPort, startedAt: Date.now() });
         trackWrittenPidRecord(pidRecord, directory);
@@ -398,16 +403,19 @@ function clearWrittenPidRecords() {
   writtenPidRecordDirectories.clear();
 }
 
-function installShutdownHooks(processImpl) {
-  if (hooksInstalled) return;
-  hooksInstalled = true;
+function installShutdownHooks(processImpl, installSignalHandlers) {
   const killAll = () => {
     for (const child of children) {
       try { child?.kill?.(); } catch { /* noop */ }
     }
     clearWrittenPidRecords();
   };
-  processImpl.once?.("exit", killAll);
+  if (!exitHooksInstalled) {
+    exitHooksInstalled = true;
+    processImpl.once?.("exit", killAll);
+  }
+  if (!installSignalHandlers || signalHooksInstalled) return;
+  signalHooksInstalled = true;
   for (const sig of ["SIGINT", "SIGTERM"]) {
     processImpl.on?.(sig, () => {
       killAll();
