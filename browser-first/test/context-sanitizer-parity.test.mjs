@@ -151,8 +151,8 @@ const GOLDEN_VECTORS = [
   { name: "labelled secret=", input: `secret=${SECRET.labelledSecret}`, secret: SECRET.labelledSecret },
   { name: "labelled cookie=", input: `cookie=${SECRET.labelledCookie}`, secret: SECRET.labelledCookie },
   { name: "credit-card number", input: `card ${SECRET.creditCard} exp`, secret: SECRET.creditCard },
-  { name: "Authorization: Bearer <token> (#510/#522)", input: `Authorization: Bearer ${SECRET.bearerAuthToken}`, secret: SECRET.bearerAuthToken },
-  { name: "bare Bearer <token> (#510/#522)", input: `auth header Bearer ${SECRET.bareBearerToken} end`, secret: SECRET.bareBearerToken }
+  { name: "Authorization: Bearer <token> (#510/#522)", input: `Authorization: Bearer ${SECRET.bearerAuthToken}`, secret: SECRET.bearerAuthToken, expected: "Authorization: Bearer [redacted]" },
+  { name: "bare Bearer <token> (#510/#522)", input: `auth header Bearer ${SECRET.bareBearerToken} end`, secret: SECRET.bareBearerToken, expected: "auth header Bearer [redacted] end" }
 ];
 
 test("chat-turn sanitizer redacts every secret shape the content-script sanitizer redacts (#410 parity, behavioural)", async () => {
@@ -192,6 +192,14 @@ test("chat-turn sanitizer redacts every secret shape the content-script sanitize
     const contentRedacted = !contentOut.includes(vector.secret);
     const chatRedacted = !chatOut.includes(vector.secret);
     if (contentRedacted && !chatRedacted) leaks.push(vector.name);
+    // For vectors with an exact expectation (the #522 Authorization: Bearer/Basic
+    // cases), assert byte-exact output on BOTH sanitizers. This pins the label-keep
+    // callback: without it chat over-redacts "Authorization: Bearer" to "[redacted]"
+    // and diverges from content, which the superset check above would not catch.
+    if (vector.expected !== undefined) {
+      assert.equal(contentOut, vector.expected, `content.js output for "${vector.name}"`);
+      assert.equal(chatOut, vector.expected, `chat output for "${vector.name}" — label/scheme must survive, not be over-redacted`);
+    }
   }
   assert.deepEqual(
     leaks,
@@ -234,21 +242,11 @@ test("chat-turn sanitizer's redaction patterns are a superset of the content-scr
     "extraction sanity: the PEM private-key pattern must be among the extracted content-script patterns"
   );
 
-  // #522 added a label-preserving refinement to content's labelled-secret pass:
-  // two control-flow guard regexes that decide whether to keep an already-redacted
-  // "authorization: bearer" label. They are NOT secret-matching redaction patterns.
-  // chat's safeContextText strips the same secrets with its simpler always-redact
-  // labelled pattern (the behavioural test above proves the output parity), so
-  // these guards have no chat-side counterpart and must not count as a missing
-  // redaction pattern. Named explicitly (not a blanket rule) so a future change to
-  // either guard re-surfaces here for a human to re-confirm parity.
-  const CONTENT_NON_REDACTION_PATTERNS = new Set([
-    "^authorization\\s*[:=]\\s*['\"]?(?:bearer|basic)$",
-    "^\\s+\\[redacted\\]"
-  ]);
-  const missing = [...contentPatterns].filter(
-    (pattern) => !chatPatterns.has(pattern) && !CONTENT_NON_REDACTION_PATTERNS.has(pattern)
-  );
+  // After the #522 merge chat's safeContextText carries the same label-preserving
+  // refinement as content (the two guard regexes live in chat's labelled-pass
+  // callback too), so no exemption is needed: a straight subset check now holds,
+  // and deleting the callback drops those guards from chat and turns this red.
+  const missing = [...contentPatterns].filter((pattern) => !chatPatterns.has(pattern));
   assert.deepEqual(
     missing,
     [],

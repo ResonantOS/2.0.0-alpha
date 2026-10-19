@@ -42,6 +42,55 @@ export function blockedSiteKeysFromPermissions(permissions) {
   );
 }
 
+// #410/#509: own the blocked-site snapshot and its "loaded" flag in one tested
+// place. The snapshot takes the site-permission STORE (not a reader function) and
+// reaches for its STRICT readSitePermissions by name, so the reader choice lives
+// here, not at the call site: the lenient sitePermissions() — which resolves a
+// failed read to {} — cannot be substituted in, and the snapshot and its
+// siteKeyForUrl come from the same store so they cannot drift apart. The strict
+// reader REJECTS on a failed storage read; on any read error refresh() fails
+// closed — the loaded flag goes (and stays) false, so the predicate withholds
+// every keyable site — then rethrows so the caller's .catch can log/notify. (A
+// reader that resolved a failed read to {} would instead set loaded = true with an
+// empty blocked set and list every site, including blocked ones, in the @tab
+// typeahead and resolver; that readSitePermissions rejects while sitePermissions
+// swallows is pinned in site-permission-store.test.mjs.) A store missing either
+// method is rejected at construction, so a miswire fails loudly here rather than
+// silently failing open.
+export function createBlockedSiteSnapshot({
+  isReadableBrowserTab = () => false,
+  sitePermissionStore
+} = {}) {
+  if (
+    typeof sitePermissionStore?.readSitePermissions !== "function" ||
+    typeof sitePermissionStore?.siteKeyForUrl !== "function"
+  ) {
+    throw new TypeError(
+      "createBlockedSiteSnapshot requires a site-permission store exposing readSitePermissions() and siteKeyForUrl()."
+    );
+  }
+  let blockedSiteKeys = new Set();
+  let loaded = false;
+  const isReadableUnblockedTab = createReadableUnblockedTab({
+    isReadableBrowserTab,
+    siteKeyForUrl: sitePermissionStore.siteKeyForUrl,
+    getBlockedSiteKeys: () => blockedSiteKeys,
+    isPermissionsLoaded: () => loaded
+  });
+  const refresh = async () => {
+    try {
+      // Strict reader, selected by name: the lenient sitePermissions() cannot be
+      // passed in from the call site.
+      blockedSiteKeys = blockedSiteKeysFromPermissions(await sitePermissionStore.readSitePermissions());
+      loaded = true;
+    } catch (error) {
+      loaded = false; // fail closed: cannot know what is blocked, so withhold all
+      throw error;
+    }
+  };
+  return { isReadableUnblockedTab, refresh };
+}
+
 // #410: keep an open @tab typeahead honest across site-permission changes. On
 // each change to the permission store, refresh the blocked-site snapshot and
 // then close any open popup, so it cannot keep showing a site that was just

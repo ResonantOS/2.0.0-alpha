@@ -123,11 +123,23 @@ function resolveMentionTokens(tokens, allTabs, isReadableBrowserTab) {
     // missing: did the mention name an unreadable/internal tab?
     const unreadableHit = unreadable.find((tab) => tabMatches(tab, mention));
     if (unreadableHit) {
+      // A permission-blocked site is still http(s) with a real title/URL. Its skip
+      // reason is posted into the transcript, so name the host only — never echo a
+      // blocked page's title or full URL. Non-http internal tabs keep their label.
+      const hitUrl = String(unreadableHit.url ?? "");
+      let descriptor = unreadableHit.title || hitUrl || "internal tab";
+      if (/^https?:\/\//i.test(hitUrl)) {
+        try {
+          descriptor = new URL(hitUrl).hostname.replace(/^www\./, "") || descriptor;
+        } catch {
+          descriptor = "blocked site";
+        }
+      }
       skipped.push({
         mention,
         quoted,
         tabRef,
-        reason: `Skipped: "${unreadableHit.title || unreadableHit.url || "internal tab"}" is not a readable web page.`,
+        reason: `Skipped: "${descriptor}" is not a readable web page.`,
         title: unreadableHit.title ?? "",
         url: unreadableHit.url ?? ""
       });

@@ -7,6 +7,7 @@ import test from "node:test";
 
 import {
   blockedSiteKeysFromPermissions,
+  createBlockedSiteSnapshot,
   createReadableUnblockedTab,
   wireBlockedSiteTypeahead
 } from "../resonantos-side-panel-extension/src/lib/readable-unblocked-tab.js";
@@ -168,4 +169,98 @@ test("wireBlockedSiteTypeahead ignores unrelated changes and still closes when t
   fire({ sitePerms: { newValue: {} } }, "local");
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.deepEqual(calls, ["refresh", "close"], "the popup is closed after the (rejected) refresh");
+});
+
+// Rejecting real store: storage.get throws, exercised through the REAL
+// createSitePermissionStore.readSitePermissions — not a throwing refresh stub.
+const rejectingStore = () =>
+  createSitePermissionStore({
+    storage: { get: async () => { throw new Error("storage unavailable"); } },
+    sitePermissionStorageKey: "augmentorSitePermissions"
+  });
+
+test("createBlockedSiteSnapshot fails closed when the store's read rejects (#509 Important)", async () => {
+  // A failed permission read must not make the typeahead/resolver fail open: with
+  // the blocked set unknown, no keyable site may be listed. The snapshot is handed
+  // the whole store and selects the STRICT reader itself, so this also pins that
+  // selection: switch the factory to the lenient sitePermissions() and it goes red.
+  const store = rejectingStore();
+  const { isReadableUnblockedTab, refresh } = createBlockedSiteSnapshot({
+    isReadableBrowserTab: isHttp,
+    sitePermissionStore: store
+  });
+
+  await assert.rejects(refresh(), /could not be read/, "a failed read rejects so callers can fail closed");
+  assert.equal(isReadableUnblockedTab({ url: "https://alpha.test/" }), false, "no keyable site is listed after a failed read");
+  assert.equal(isReadableUnblockedTab({ url: "https://blocked.test/" }), false, "a blockable site is certainly not listed");
+});
+
+test("createBlockedSiteSnapshot rejects a store that lacks the strict reader, so the lenient one can't be wired in (#509)", () => {
+  // The snapshot chooses the reader by name from the store, not from a parameter,
+  // so a caller cannot substitute the lenient sitePermissions() that resolves a
+  // failed read to {} (the regression the finding named). A store missing either
+  // method is rejected at construction — a miswire fails loudly here rather than
+  // silently failing open.
+  assert.throws(
+    () => createBlockedSiteSnapshot({ isReadableBrowserTab: isHttp }),
+    /readSitePermissions\(\) and siteKeyForUrl\(\)/,
+    "no store at all is refused"
+  );
+  assert.throws(
+    () => createBlockedSiteSnapshot({ isReadableBrowserTab: isHttp, sitePermissionStore: { siteKeyForUrl } }),
+    /readSitePermissions/,
+    "a store without the strict reader is refused"
+  );
+});
+
+test("createBlockedSiteSnapshot: if the store's strict reader swallowed errors it would fail OPEN (#509 control)", async () => {
+  // Proves why readSitePermissions MUST reject on a failed read (pinned in
+  // site-permission-store.test.mjs). Modelled with a broken store whose strict
+  // reader is the lenient sitePermissions(): a failed read resolves to {}, so
+  // refresh() sets loaded = true with an empty blocked set and lists every keyable
+  // site — the exact regression the finding named. The real snapshot can't reach
+  // this (it selects readSitePermissions by name over a real store), so this control
+  // pins the dependency: a future change making readSitePermissions lenient
+  // re-surfaces here, and the Important test above goes red too.
+  const real = rejectingStore();
+  const brokenStore = { readSitePermissions: real.sitePermissions, siteKeyForUrl: real.siteKeyForUrl };
+  const { isReadableUnblockedTab, refresh } = createBlockedSiteSnapshot({
+    isReadableBrowserTab: isHttp,
+    sitePermissionStore: brokenStore
+  });
+
+  await refresh(); // resolves (error swallowed by the broken reader), does NOT reject
+  assert.equal(isReadableUnblockedTab({ url: "https://alpha.test/" }), true, "control: a swallowing reader lists a keyable site after a failed read");
+});
+
+test("createBlockedSiteSnapshot lists unblocked and hides blocked after a successful load (#509)", async () => {
+  const store = createSitePermissionStore({ storage: memoryStorage(), sitePermissionStorageKey: "augmentorSitePermissions" });
+  await store.setSitePermission("https://blocked.test/", "blocked");
+  const { isReadableUnblockedTab, refresh } = createBlockedSiteSnapshot({
+    isReadableBrowserTab: isHttp,
+    sitePermissionStore: store
+  });
+
+  assert.equal(isReadableUnblockedTab({ url: "https://alpha.test/" }), false, "fails closed until the first load resolves");
+  await refresh();
+  assert.equal(isReadableUnblockedTab({ url: "https://alpha.test/" }), true, "an unblocked site is listed after load");
+  assert.equal(isReadableUnblockedTab({ url: "https://blocked.test/" }), false, "a blocked site stays hidden");
+});
+
+test("createBlockedSiteSnapshot flips back to fail-closed when a later read rejects (#509)", async () => {
+  let fail = false;
+  const store = createSitePermissionStore({
+    storage: { get: async () => { if (fail) throw new Error("gone"); return {}; } },
+    sitePermissionStorageKey: "augmentorSitePermissions"
+  });
+  const { isReadableUnblockedTab, refresh } = createBlockedSiteSnapshot({
+    isReadableBrowserTab: isHttp,
+    sitePermissionStore: store
+  });
+
+  await refresh();
+  assert.equal(isReadableUnblockedTab({ url: "https://alpha.test/" }), true, "listed after a successful load");
+  fail = true;
+  await assert.rejects(refresh(), /could not be read/);
+  assert.equal(isReadableUnblockedTab({ url: "https://alpha.test/" }), false, "a later failed read fails closed again");
 });

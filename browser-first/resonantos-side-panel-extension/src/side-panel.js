@@ -53,7 +53,7 @@ import { createSidePanelScheduledBrowserJobRunner } from "./lib/side-panel-sched
 import { createSidePanelUiController } from "./lib/side-panel-ui-controller.js";
 import { readPersonalizationSettings } from "./lib/personalization-settings.js";
 import { createSitePermissionStore } from "./lib/site-permission-store.js";
-import { blockedSiteKeysFromPermissions, createReadableUnblockedTab, wireBlockedSiteTypeahead } from "./lib/readable-unblocked-tab.js";
+import { createBlockedSiteSnapshot, wireBlockedSiteTypeahead } from "./lib/readable-unblocked-tab.js";
 import { createTabContextController } from "./lib/tab-context-controller.js";
 import { createTabMentionTypeahead } from "./lib/tab-mention-typeahead.js";
 import { createSessionSummaryController } from "./lib/session-summary-controller.js";
@@ -368,23 +368,16 @@ const sitePermissions = sitePermissionStore.sitePermissions;
 // compose it with isReadableBrowserTab so the typeahead and the mention
 // resolver drop blocked sites up front. Other readable-tab consumers keep the
 // plain scheme check.
-let blockedSiteKeys = new Set();
-// #410: the blocked set loads asynchronously, so until the first load resolves
-// the typeahead/resolver predicate must fail closed (treat keyable sites as
-// blocked) rather than list a site whose permission is not yet known.
-let sitePermissionsLoaded = false;
-const refreshBlockedSiteKeys = async () => {
-  blockedSiteKeys = blockedSiteKeysFromPermissions(await sitePermissions());
-  sitePermissionsLoaded = true;
-};
-const isReadableUnblockedTab = createReadableUnblockedTab({
+// The snapshot takes the whole store and reaches for its STRICT readSitePermissions
+// itself (the lenient sitePermissions() cannot be substituted here), owns the
+// "loaded" flag, and fails closed on a failed storage read (withholds every keyable
+// site) instead of listing blocked sites. See createBlockedSiteSnapshot.
+const { isReadableUnblockedTab, refresh: refreshBlockedSiteKeys } = createBlockedSiteSnapshot({
   isReadableBrowserTab,
-  siteKeyForUrl,
-  getBlockedSiteKeys: () => blockedSiteKeys,
-  isPermissionsLoaded: () => sitePermissionsLoaded
+  sitePermissionStore
 });
-// A rejected first load leaves sitePermissionsLoaded false, so the predicate
-// keeps failing closed (lists nothing) rather than surface an unhandled rejection.
+// Kick off the first load. A rejected read leaves the predicate failing closed
+// (lists nothing); the .catch keeps that rejection from being unhandled.
 void refreshBlockedSiteKeys().catch(() => undefined);
 
 // @tab mention typeahead (#252): typing `@` lists open, readable tabs; selecting
