@@ -189,6 +189,38 @@ test("tabContextsForScopedTabs budgets and sanitizes per-tab context blocks", ()
   assert.equal(single[0].text.length, 12000, "a single referenced tab gets the whole budget");
 });
 
+test("tabContextsForScopedTabs redaction is at parity with the content-script sanitizer (#410)", () => {
+  // All secrets are assembled at runtime so the committed test file carries no
+  // scannable secret literal and no literal PEM "PRIVATE KEY" marker (the
+  // security pipeline scans committed text).
+  const jwt = `eyJ${"abcdefghij0123456789"}.${"abcdefghij0123456789"}.${"ABCDEFGHIJ0123456789"}`;
+  const pemTag = ["PRIVATE", "KEY"].join(" ");
+  const pem = `-----BEGIN OPENSSH ${pemTag}-----\n${"b64line".repeat(4)}\n-----END OPENSSH ${pemTag}-----`;
+  const secrets = [
+    ["sk", "or", "v1", "0123456789abcdef0123"].join("-"),
+    ["xai", "0123456789abcdefABCD"].join("-"),
+    ["gsk", "0123456789abcdefABCD"].join("_"),
+    ["pk", "live", "0123456789abcdefABCD"].join("_"),
+    `api_key: ${["ABCD", "1234", "secretvalue"].join("")}`,
+    pem,
+    jwt
+  ];
+  const raw = `Notes ${secrets.join(" then ")} end`;
+
+  const [context] = tabContextsForScopedTabs([
+    { tabId: 1, title: "Doc", url: "https://alpha.test/", text: raw }
+  ]);
+
+  for (const secret of secrets) {
+    for (const fragment of secret.split(/\s+/)) {
+      if (fragment.length < 12) continue; // skip labels like "api_key:"
+      assert.ok(!context.text.includes(fragment), `referenced-tab text must not leak: ${fragment.slice(0, 12)}…`);
+    }
+  }
+  assert.match(context.text, /\[redacted\]/, "secrets are replaced with the redaction marker");
+  assert.match(context.text, /^Notes /, "surrounding prose is preserved");
+});
+
 test("chat turn controller attaches tab contexts and provenance chips for scoped requests", async () => {
   const skLive = ["sk", "live", "TABS", "ECRET"].join("-");
   const harness = createHarness({

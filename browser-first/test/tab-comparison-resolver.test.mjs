@@ -108,6 +108,32 @@ test("resolveTabComparison resolves two readable tabs with title/URL provenance 
   assert.equal(skipped[0].url, "chrome://settings/");
 });
 
+test("a permission-blocked site's skip reason names only its host, not its title or path (#509 Minor)", () => {
+  // tab-context-controller posts skipped[].reason into the transcript. A blocked
+  // site is http(s) with a real title/URL, so the reason must not echo them.
+  const tabs = [
+    { id: 1, title: "Alpha News", url: "https://alpha.test/" },
+    { id: 2, title: "Secret Internal Dashboard", url: "https://blocked.test/private/report?id=42" }
+  ];
+  // blocked.test is permission-blocked: a readable scheme, withheld by the predicate.
+  const unblocked = (tab) =>
+    /^https?:\/\//i.test(String(tab?.url ?? "")) && !/blocked\.test/.test(String(tab?.url ?? ""));
+
+  const { items, skipped } = resolveTabComparison(
+    'compare @"Alpha News" and @"Secret Internal Dashboard"',
+    tabs,
+    unblocked
+  );
+
+  assert.equal(items.length, 1, "only the allowed tab resolves");
+  assert.equal(skipped.length, 1);
+  const reason = skipped[0].reason;
+  assert.match(reason, /not a readable web page/);
+  assert.match(reason, /blocked\.test/, "the host is named so the user knows which reference was dropped");
+  assert.doesNotMatch(reason, /Secret Internal Dashboard/, "the blocked page's title never reaches the transcript");
+  assert.doesNotMatch(reason, /private\/report|id=42/, "the blocked page's path and query never reach the transcript");
+});
+
 test("resolveTabComparison asks for clarification on ambiguous mentions by listing candidate refs", () => {
   const tabs = [
     { id: 1, title: "BBC News", url: "https://bbc.co.uk/news" },
