@@ -148,11 +148,13 @@ test("off closes live SSE before settings acknowledgement", { timeout: 10_000 },
   // The revoke-timeout fallback must not stand in for the close here; it has its own test.
   const heldTimers = { setTimeout: () => ({ unref() { return this; } }), clearTimeout: () => {} };
   const service = createService(root, { fs: recordingFs, timers: heldTimers });
+  let releaseClose = () => {};
+  // Registered before boundaryFixture so it runs before dispose(), which would otherwise wait on the gate forever.
+  t.after(() => releaseClose());
   await service.executeAddonExecutionSettingsUpdate({ addon: "opencode", localCliExecution: true });
   const { boundary } = boundaryFixture(t, { executionEnabled: () => service.openCodeProxyExecutionEnabled() });
   await boundary.run("start", {});
   const sub = await boundary.openEvents("A");
-  let releaseClose;
   let signalTerminate;
   const closeGate = new Promise((resolve) => { releaseClose = resolve; });
   const terminateCalled = new Promise((resolve) => { signalTerminate = resolve; });
@@ -178,9 +180,11 @@ test("off closes live SSE before settings acknowledgement", { timeout: 10_000 },
   const whileHeld = [...order];
   releaseClose();
   const result = await pending;
+  // Read the file itself: the in-memory latch alone would report "disabled" even if the write were wrong.
+  const persisted = JSON.parse(await fsPromises.readFile(path.join(settingsDir, "addon-execution.json"), "utf8"));
   assert.deepEqual(
-    [whileHeld, order, terminateCodes, result.status, await service.openCodeProxyExecutionEnabled()],
-    [["terminate"], ["terminate", "closed", "persist", "ack"], ["OPENCODE_REVOKED"], 200, false],
+    [whileHeld, order, terminateCodes, result.status, await service.openCodeProxyExecutionEnabled(), persisted.opencode.localCliExecution],
+    [["terminate"], ["terminate", "closed", "persist", "ack"], ["OPENCODE_REVOKED"], 200, false, false],
   );
 });
 
