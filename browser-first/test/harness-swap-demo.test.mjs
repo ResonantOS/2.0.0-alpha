@@ -6,6 +6,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { readFile } from 'node:fs/promises';
+import { JSDOM } from 'jsdom';
 import { FIXTURE_SIGNER, createBridgeClient, observeEventStream, runFixtureCertification, verifyEvidence } from '../../scripts/harness-swap-demo.mjs';
 import * as demo from '../../scripts/harness-swap-demo.mjs';
 
@@ -388,4 +390,82 @@ test('the demo launches the browser CI installed when RESONANTOS_LIVE_CHROME_PAT
   assert.deepEqual(demoBrowserLaunchOptions({ headed: false, env: { RESONANTOS_LIVE_CHROME_PATH: '/opt/chrome/chrome' } }),
     { headless: true, executablePath: '/opt/chrome/chrome' });
   assert.deepEqual(demoBrowserLaunchOptions({ headed: false, env: { RESONANTOS_LIVE_CHROME_PATH: '' } }), { headless: true });
+});
+
+test('answer wait fails immediately on a new failed bubble before any dispatch (#521)', async () => {
+  let polls = 0;
+  await assert.rejects(() => demo.waitForDemoAnswer({ addonId: 'addon.openai-compatible-harness', before: 2,
+    readBubbles: async () => { polls++; return [{}, {}, { failed: true, text: 'Runtime unavailable.' }]; },
+    turnReceipts: () => [{ kind: 'route', operation: '/agent/session', ok: true }], completed: () => undefined,
+    timeout: 20 }), error => error.code === 'runtime-unavailable' && /Demo turn failed: runtime-unavailable/.test(error.message));
+  assert.equal(polls, 1);
+});
+
+test('answer wait detects a failure after an initially streaming bubble', async () => {
+  let polls = 0;
+  await assert.rejects(() => demo.waitForDemoAnswer({ addonId: 'addon.test', before: 0,
+    readBubbles: async () => [{ failed: ++polls > 1, text: 'Runtime permission denied.' }],
+    turnReceipts: () => [], completed: () => undefined, timeout: 1000 }), { code: 'permission-denied' });
+  assert.equal(polls, 2);
+});
+
+test('answer wait scopes error events to the registered current turn', async () => {
+  const session = { addonId: 'addon.test', sessionId: 'current', bootEpoch: 'boot', generation: 1 };
+  const receipts = [{ kind: 'route', operation: '/agent/turn', ok: true, request: { session }, result: { turnId: 'turn' } },
+    { kind: 'event', event: { ...session, turnId: 'old', type: 'error', data: { code: 'runtime-unavailable' } } }];
+  receipts.push({ kind: 'route', operation: '/agent/history', ok: false,
+    request: { session: { ...session, sessionId: 'old' } }, error: { code: 'session-not-found' } });
+  const final = { data: { text: 'Answer' } };
+  assert.equal(await demo.waitForDemoAnswer({ addonId: session.addonId, before: 1,
+    readBubbles: async () => [{ failed: true, text: 'Runtime unavailable.' }, { text: 'Answer' }],
+    turnReceipts: () => receipts, completed: () => final, timeout: 20 }), final);
+  receipts.push({ kind: 'event', event: { ...session, turnId: 'turn', type: 'error', data: { code: 'deadline-exceeded' } } });
+  await assert.rejects(() => demo.waitForDemoAnswer({ addonId: session.addonId, before: 0,
+    readBubbles: async () => [], turnReceipts: () => receipts, completed: () => undefined, timeout: 20 }), { code: 'deadline-exceeded' });
+});
+
+test('answer wait reports a current pre-dispatch host failure without exposing raw errors', async () => {
+  await assert.rejects(() => demo.waitForDemoAnswer({ addonId: 'addon.test', before: 0,
+    readBubbles: async () => [], turnReceipts: () => [{ kind: 'route', operation: '/agent/session',
+      request: { addonId: 'addon.test' }, ok: false, error: { code: 'permission-denied', message: 'PRIVATE' } }],
+    completed: () => undefined, timeout: 20 }), error => error.code === 'permission-denied' && !error.message.includes('PRIVATE'));
+});
+
+test('answer wait still requires both a new bubble and a host final receipt', async () => {
+  for (const visible of [false, true]) await assert.rejects(() => demo.waitForDemoAnswer({ addonId: 'addon.test', before: 0,
+    readBubbles: async () => visible ? [{ text: 'Partial' }] : [], turnReceipts: () => [],
+    completed: () => visible ? undefined : { data: { text: 'Answer' } }, timeout: 10 }),
+  new RegExp(`Demo did not observe ${visible ? 'host final reply' : 'visible answer'}`));
+});
+
+
+test('answer wait rejects a fresh failed bubble even when the same poll has a final', async () => {
+  let polls = 0;
+  const final = { data: { text: 'Runtime unavailable.' } };
+  await assert.rejects(() => demo.waitForDemoAnswer({ addonId: 'addon.test', before: 1,
+    readBubbles: async () => { polls++; return [{ text: 'Older answer' }, { failed: true, text: 'Runtime unavailable.' }]; },
+    turnReceipts: () => [], completed: () => final, timeout: 1000 }),
+  error => error.code === 'runtime-unavailable' && /^Demo turn failed: runtime-unavailable\./.test(error.message));
+  assert.equal(polls, 1);
+});
+
+test('readAssistantBubbles reads failed status and renderer text from DOM articles', () => {
+  assert.equal(typeof demo.readAssistantBubbles, 'function');
+  const dom = new JSDOM(`<article class="message-bubble assistant failed"><span>Outside renderer</span><div class="message-renderer">Runtime <strong>unavailable.</strong></div></article>
+    <article class="message-bubble assistant"><div class="message-renderer">Normal answer</div></article>
+    <article class="message-bubble assistant failed">No renderer</article>`);
+  try {
+    const elements = Array.from(dom.window.document.querySelectorAll('article'));
+    assert.deepEqual(demo.readAssistantBubbles(elements), [
+      { failed: true, text: 'Runtime unavailable.' },
+      { failed: false, text: 'Normal answer' },
+      { failed: true, text: '' },
+    ]);
+  } finally { dom.window.close(); }
+});
+
+test('runDemo passes readAssistantBubbles to the Playwright bubble reader', async () => {
+  const source = await readFile(new URL('../../scripts/harness-swap-demo.mjs', import.meta.url), 'utf8');
+  const runDemo = source.slice(source.indexOf('export async function runDemo('));
+  assert.match(runDemo, /readBubbles:\s*\(\) => page\.locator\('article\.message-bubble\.assistant'\)\.evaluateAll\(readAssistantBubbles\)/);
 });
