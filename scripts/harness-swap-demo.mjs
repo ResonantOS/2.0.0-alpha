@@ -8,6 +8,8 @@ import { pathToFileURL } from 'node:url';
 import { canonicalReceipt, receiptFingerprint, createHarnessHostService } from '../browser-first/host/harness-host-service.mjs';
 import { createOpenAICompatibleAdapter } from '../browser-first/host/agent-adapters/openai-compatible.mjs';
 
+import { HARNESS_PUBLIC_ERROR_MESSAGES } from '../packages/addon-sdk/src/contracts.ts';
+
 const ROOT = path.resolve(import.meta.dirname, '..');
 const DSH = 'addon.deepseek-harness', A = 'addon.openai-compatible-harness', B = 'addon.second-compatible';
 const OWNERS = [DSH, A, B];
@@ -186,6 +188,48 @@ async function until(predicate, label, timeout = 30000) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) { const value = await predicate(); if (value) return value; await new Promise(resolve => setTimeout(resolve, 5)); }
   throw new Error(`Demo did not observe ${label}. No live certification was produced.`);
+}
+
+export function readAssistantBubbles(elements) {
+  return elements.map(element => ({
+    failed: element.classList.contains('failed'), text: element.querySelector('.message-renderer')?.textContent ?? '',
+  }));
+}
+
+export async function waitForDemoAnswer({ addonId, before, readBubbles, completed, turnReceipts, timeout = 150000 }) {
+  let visible = false;
+  const deadline = Date.now() + timeout;
+  const fixed = code => Object.hasOwn(HARNESS_PUBLIC_ERROR_MESSAGES, code) ? code : 'runtime-unavailable';
+  const failTurn = code => { throw Object.assign(new Error(`Demo turn failed: ${fixed(code)}. No live certification was produced.`), { code: fixed(code) }); };
+  while (Date.now() < deadline) {
+    // Receipts are scoped by the caller to this answer attempt, then by host
+    // identity here. A delayed terminal event from an older turn is not ours.
+    const receipts = turnReceipts();
+    const invocation = receipts.find(r => r.kind === 'route' && r.operation === '/agent/turn' && r.ok && r.request?.session?.addonId === addonId);
+    const session = invocation?.request.session;
+    for (const receipt of receipts) {
+      if (receipt.kind === 'route' && !receipt.ok &&
+          ['/agent/session', '/agent/select-model', '/agent/history', '/agent/turn', '/agent/events'].includes(receipt.operation) &&
+          (receipt.request?.addonId === addonId || receipt.request?.session?.addonId === addonId) &&
+          (!session || ['addonId', 'sessionId', 'bootEpoch', 'generation'].every(key =>
+            (receipt.request.session ?? receipt.request)[key] === session[key]))) failTurn(receipt.error?.code);
+      const event = receipt.event;
+      if (receipt.kind === 'event' && session && event.turnId === invocation.result.turnId &&
+          ['addonId', 'sessionId', 'bootEpoch', 'generation'].every(key => event[key] === session[key]) &&
+          ['error', 'cancelled'].includes(event.type)) failTurn(event.type === 'cancelled' ? 'cancelled' : event.data?.code);
+    }
+    const bubbles = await readBubbles();
+    const fresh = bubbles.slice(before);
+    for (const bubble of fresh) if (bubble.failed) {
+      const code = Object.entries(HARNESS_PUBLIC_ERROR_MESSAGES).find(([, message]) => message === bubble.text.trim())?.[0];
+      failTurn(code);
+    }
+    visible = fresh.length > 0;
+    const final = completed();
+    if (visible && final) return final;
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  throw new Error(`Demo did not observe ${visible ? 'host final reply' : 'visible answer'}. No live certification was produced.`);
 }
 
 async function demoManifests(bindings = []) {
@@ -492,18 +536,20 @@ export async function runDemo({ evidenceDir, fixture = false, headed = false } =
             await composer.fill(prompt); await page.getByRole('button', { name: 'Send message', exact: true }).click();
             let final;
             try {
-              await until(async () => await page.locator('article.message-bubble.assistant').count() > prior, 'visible answer', 150000);
-              final = await until(completed, 'host final reply', 150000);
+              final = await waitForDemoAnswer({ addonId: manifest.id, before: prior, completed, turnReceipts,
+                readBubbles: () => page.locator('article.message-bubble.assistant').evaluateAll(readAssistantBubbles),
+              });
             } catch (error) {
               const label = /^Demo did not observe (visible answer|host final reply)\./.exec(error.message)?.[1];
-              if (!label) throw error;
+              if (!label && !/^Demo turn failed:/.test(error.message)) throw error;
               const receipts = turnReceipts();
               let after = 'unavailable', lastText = '(unavailable)';
               try {
                 const texts = await page.locator('article.message-bubble.assistant').allTextContents();
                 after = texts.length; lastText = texts.at(-1) ?? '';
               } catch { /* Preserve the timeout if the page can no longer be inspected. */ }
-              error.message = describeStall({ label, before: prior, after, lastText, receipts });
+              const diagnostic = describeStall({ label: label ?? 'host final reply', before: prior, after, lastText, receipts });
+              error.message = label ? diagnostic : `${error.message}\n${diagnostic.split('\n').slice(1).join('\n')}`;
               try {
                 await page.screenshot({ path: path.join(output, `stall-${bootNumber}-${manifest.id}.png`), fullPage: true });
               } catch { /* A failed screenshot must never mask the timeout. */ }
@@ -541,7 +587,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
     }
   } catch (error) {
     console.error(`Harness demo failed (${error?.code ?? error?.name ?? 'Error'}). No live certification.`);
-    if (error?.name === 'AssertionError' || /^Invalid demo evidence:|^Pass an absolute|^Evidence must|^Usage:|^Demo did not observe/.test(error?.message)) console.error(error.message);
+    if (error?.name === 'AssertionError' || /^Invalid demo evidence:|^Pass an absolute|^Evidence must|^Usage:|^Demo did not observe|^Demo turn failed:/.test(error?.message)) console.error(error.message);
     process.exitCode = 1;
   }
 }

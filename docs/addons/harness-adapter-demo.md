@@ -367,6 +367,19 @@ subscription before producing output; this avoids a timer-based subscription
 race and does not alter the live adapters. The full browser fixture still requires loopback
 sockets and Playwright Chromium.
 
+For #521, the confirmed timeout cause was that any new assistant bubble,
+including a failed one, satisfied the visible-answer wait; the driver then
+waited for a final receipt that could never arrive. The driver now fails
+immediately with the fixed public failure code from a new failed bubble or a
+current-turn host failure receipt, retaining the #525 bubble/receipt diagnostics
+and screenshot. A post-delta client failure is not marked `failed` and still
+waits for the deadline unless a current-turn host `error` or `cancelled` event
+arrives. Readiness remains the acknowledged fixture event subscription
+after each bridge boot; fixture completions are injected in memory, with no
+upstream relay listener or cached endpoint health probe. The intermittent
+pre-dispatch failure itself has not yet been identified; this
+fail-fast change does not certify that race as fixed.
+
 ## Security properties
 
 | Boundary | Enforced property and limit |
