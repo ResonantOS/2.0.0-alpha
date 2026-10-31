@@ -256,3 +256,5 @@ foreign listener, unsafe ancestry, home replacement and desktop-port acceptance;
 a readiness mutation fails and restores the custody source byte-identically.
 Existing live-child cancellation and foreign-listener isolation remain covered.
 No live lanes or commits were performed for this brief.
+
+Brief X: the browser-lanes driver accepts all four validated `DSH_LIVE_PLUGIN_{DSH_VERSION,HOST_TOOLS_VERSION,VERSION,TARBALL_SHA1}` overrides (legacy defaults unchanged), supports a shared read-only DSH prefix with isolated homes and ports, and uses `DSH_LIVE_GATE_MODE=observe` to write the full evidence (summary and screenshots) without reading or updating the certified gate; live lanes remain conductor-owned.

@@ -1,8 +1,14 @@
 #!/usr/bin/env node
 /* Conductor-only companion: never run by node:test. No live lane is run on import.
  * Required: DSH_LIVE_PREFIX, DSH_LIVE_PLUGIN_PREFIX, DSH_LIVE_PLUGIN_TARBALL,
- * DSH_LIVE_BROWSER_OUT (existing external directory), DSH_LIVE_FINAL_GATE,
+ * DSH_LIVE_BROWSER_OUT (existing external directory), DSH_LIVE_FINAL_GATE (update mode),
  * DSH_LIVE_CHROME_EXECUTABLE (Chrome for Testing), DEEPSEEK_API_KEY.
+ * DSH_LIVE_GATE_MODE: update (default pins only) or observe (never resolves the gate).
+ * Overrides are all-or-none and require explicit observe:
+ * DSH_LIVE_PLUGIN_DSH_VERSION, DSH_LIVE_PLUGIN_HOST_TOOLS_VERSION,
+ * DSH_LIVE_PLUGIN_VERSION, DSH_LIVE_PLUGIN_TARBALL_SHA1.
+ * Observe requires an empty output directory; both modes write five screenshots.
+ * Passed lanes require all five regular, non-symlink files with matching SHA-256.
  * All paths absolute. Approved input installs/tarball may live in the main
  * checkout's .resonant-rig; output, scratch state and browser profile may not.
  * No prefix is modified. No live output, request body or error is logged.
@@ -15,7 +21,7 @@ import assert from 'node:assert/strict';
 import childProcess from 'node:child_process';
 import { createHash, randomUUID, randomBytes, createPublicKey, verify } from 'node:crypto';
 import { once } from 'node:events';
-import { lstat, mkdir, mkdtemp, open, readFile, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import net from 'node:net';
 import path from 'node:path';
@@ -31,9 +37,28 @@ const PLUGIN_DSH = '0.1.5-rc.1';
 // peer on ^0.1.5-rc.3; the prefix lockfile pins rc.3). The plugin links that host copy.
 const PLUGIN_HOST_TOOLS = '0.1.5-rc.3';
 export const TARBALL_SHA1 = '9a2096ee68652fd9fc171665b8462b71f83de4f1';
+// Exact releases only: no ranges, tags, paths, whitespace or command fragments.
+export function pluginConfig(env = process.env) {
+  const names = ['DSH_LIVE_PLUGIN_DSH_VERSION', 'DSH_LIVE_PLUGIN_HOST_TOOLS_VERSION',
+    'DSH_LIVE_PLUGIN_VERSION', 'DSH_LIVE_PLUGIN_TARBALL_SHA1'];
+  const count = names.filter(name => env[name] !== undefined).length;
+  assert(count === 0 || env.DSH_LIVE_GATE_MODE === 'observe', 'overrides-require-observe');
+  assert(count === 0 || count === names.length, 'plugin-overrides-all-or-none');
+  const [dshVersion, hostToolsVersion, pluginVersion, tarballSha1] = count
+    ? names.map(name => env[name]) : [PLUGIN_DSH, PLUGIN_HOST_TOOLS, '0.2.11', TARBALL_SHA1];
+  for (const value of [dshVersion, hostToolsVersion, pluginVersion]) {
+    assert(typeof value === 'string' && /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(?:alpha|beta|rc)\.(?:0|[1-9][0-9]*))?$/.test(value)
+      && !/\s/.test(value), 'invalid-plugin-version');
+  }
+  assert(typeof tarballSha1 === 'string' && /^[a-f0-9]{40}$/.test(tarballSha1) && tarballSha1.length === 40, 'invalid-plugin-tarball-sha1');
+  const gateMode = env.DSH_LIVE_GATE_MODE ?? 'update';
+  assert(['update', 'observe'].includes(gateMode), 'invalid-gate-mode');
+  return Object.freeze({ dshVersion, hostToolsVersion, pluginVersion, tarballSha1, gateMode });
+}
 export const ATTESTATION = 'conductor-verified screenshots pending owner review';
 const KEYS = ['browserVisible', 'pluginCoexistence'];
-const REASONS = new Set(['passed', 'preflight-failed', 'observation-unproven',
+const REASONS = new Set(['passed', 'preflight-failed', 'observation-unproven', 'evidence-missing',
+  'overrides-require-observe', 'observe-output-not-empty',
   'requires-human-action:install', 'requires-human-action:grant', 'requires-human-action:assign',
   'requires-human-action:chat', 'owned-process-cleanup-unproven', 'interrupted']);
 const inside = (root, value) => { const rel = path.relative(root, value); return rel === '' || (!path.isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${path.sep}`)); };
@@ -79,12 +104,12 @@ async function unusedPort(excluded) {
     try { assertPort(port); if (!excluded.includes(port)) return port; } catch { /* Retry only allocation. */ }
   }
 }
-export async function verifyTarball(file) {
+export async function verifyTarball(file, expectedSha1 = TARBALL_SHA1) {
   assert(path.isAbsolute(file));
   const stat = await lstat(file); assert(stat.isFile() && !stat.isSymbolicLink() && stat.size < 10 * 1024 * 1024);
   const bytes = await readFile(file);
   const digest = createHash('sha1').update(bytes).digest('hex');
-  assert.equal(digest, TARBALL_SHA1, 'tarball-digest-mismatch');
+  assert.equal(digest, expectedSha1, 'tarball-digest-mismatch');
   return bytes;
 }
 function lane(value) {
@@ -92,17 +117,43 @@ function lane(value) {
   assert.equal(value.passed, value.reason === 'passed');
   return { passed: value.passed, reason: value.reason };
 }
-export function summary(results, cleanup, digests = {}) {
+const SCREENSHOTS = ['browser-visible.png', 'plugin-swap-1.png', 'plugin-swap-2.png', 'plugin-swap-3.png', 'plugin-swap-4.png'];
+const validDigest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value) && value.length === 64;
+export async function verifyEvidence(out, results, digests) {
+  try {
+    for (const name of SCREENSHOTS) {
+      assert(validDigest(digests[name]));
+      const file = path.join(out, name), stat = await lstat(file);
+      assert(stat.isFile() && !stat.isSymbolicLink());
+      assert.equal(createHash('sha256').update(await readFile(file)).digest('hex'), digests[name]);
+    }
+  } catch {
+    for (const key of KEYS) results[key] = { passed: false, reason: 'evidence-missing' };
+  }
+}
+export async function assertPluginTools(prefix, tools) {
+  assert(inside(await realpath(prefix), await realpath(tools)), 'plugin-tools-outside-prefix');
+}
+export async function assertLaneIsolation(homes, ports) {
+  const resolved = await Promise.all(homes.map(home => realpath(home)));
+  assert.equal(new Set(resolved).size, homes.length, 'lane-isolation');
+  assert.equal(new Set(ports).size, ports.length, 'lane-isolation');
+}
+export async function assertOutputDirectory(out, mode) {
+  if (mode === 'observe') assert((await readdir(out)).length === 0, 'observe-output-not-empty');
+}
+export function summary(results, cleanup, digests = {}, config = pluginConfig({})) {
   assert.equal(typeof cleanup, 'boolean');
   const evidence = {};
-  for (const name of ['browser-visible.png', 'plugin-swap-1.png', 'plugin-swap-2.png', 'plugin-swap-3.png', 'plugin-swap-4.png']) {
+  for (const name of SCREENSHOTS) {
     if (digests[name] !== undefined) {
-      assert(/^[a-f0-9]{64}$/.test(digests[name])); evidence[name] = digests[name];
+      assert(validDigest(digests[name])); evidence[name] = digests[name];
     }
   }
+  if (KEYS.some(key => results[key]?.passed)) assert(SCREENSHOTS.every(name => validDigest(digests[name])), 'evidence-missing');
   return { surface: SURFACE, surfaceDescription: SURFACE_DESCRIPTION, screenshotSha256: evidence, browserVisible: lane(results.browserVisible), pluginCoexistence: lane(results.pluginCoexistence),
-    cleanup, nativeVersion: VERSION, pluginDshVersion: PLUGIN_DSH, pluginVersion: '0.2.11',
-    expectedTarballSha1: TARBALL_SHA1 };
+    cleanup, nativeVersion: VERSION, pluginDshVersion: config.dshVersion, pluginHostToolsVersion: config.hostToolsVersion, pluginVersion: config.pluginVersion,
+    expectedTarballSha1: config.tarballSha1, gateMode: config.gateMode };
 }
 export function patchGate(gate, results) {
   assert.deepEqual(Object.keys(results).sort(), [...KEYS].sort(), 'gate-key-restriction');
@@ -119,6 +170,9 @@ export function patchGate(gate, results) {
   assert(row.attestation === undefined || row.attestation === ATTESTATION, 'conflicting-attestation');
   row.attestation = ATTESTATION;
   row.surface = SURFACE;
+  // Only default pins can reach update mode; identity additions are fixed here.
+  Object.assign(row, { pluginVersion: '0.2.11', pluginDshVersion: PLUGIN_DSH,
+    pluginHostToolsVersion: PLUGIN_HOST_TOOLS, pluginTarballSha1: TARBALL_SHA1 });
   // status, deterministic, blockedReasons, other observations and metadata are
   // deliberately NOT recalculated: only the conductor owns final certification.
   return next;
@@ -158,7 +212,9 @@ async function atomicWrite(file, data, before) {
     await rename(temporary, file);
   } finally { await rm(temporary, { force: true }); }
 }
-export async function updateGate(file, results) {
+export async function updateGate(file, results, mode = 'update') {
+  assert(['update', 'observe'].includes(mode), 'invalid-gate-mode');
+  if (mode === 'observe') return;
   file = await externalPath(file, { file: true, basename: 'final-gate.json' });
   // Exclusive companion lock; core driver must not run concurrently. Compare
   // original bytes again before replacement so observed concurrent writes fail.
@@ -250,7 +306,7 @@ async function bridgeChild() {
 export async function main() {
   process.umask(0o077);
   const results = Object.fromEntries(KEYS.map(key => [key, { passed: false, reason: 'preflight-failed' }]));
-  const children = new Set(), secrets = new Set(), digests = {}; let browser, bridge, out, gate, scratch, dispatcher, vite;
+  const children = new Set(), secrets = new Set(), digests = {}; let browser, bridge, out, gate, scratch, dispatcher, vite, config;
   const receipts = []; let ready, signalAudit = false;
   let interrupted = false, cleanup = true, starts = 0, exits = 0;
   const interrupt = () => { interrupted = true; void browser?.close().catch(() => {}); };
@@ -268,19 +324,25 @@ export async function main() {
     catch (error) { results[key] = { passed: false, reason: REASONS.has(error.message) ? error.message : 'observation-unproven' }; }
   };
   try {
-    out = await externalPath(process.env.DSH_LIVE_BROWSER_OUT);
-    gate = await externalPath(process.env.DSH_LIVE_FINAL_GATE, { file: true, basename: 'final-gate.json' });
-    // Validate gate shape before any network, process or profile work.
-    const raw = await readFile(gate, 'utf8'); assert.equal(raw, `${JSON.stringify(JSON.parse(raw), null, 2)}\n`);
-    patchGate(JSON.parse(raw), results);
+    config = pluginConfig();
+    const output = await externalPath(process.env.DSH_LIVE_BROWSER_OUT);
+    await assertOutputDirectory(output, config.gateMode);
+    out = output;
+    if (config.gateMode === 'update') {
+      gate = await externalPath(process.env.DSH_LIVE_FINAL_GATE, { file: true, basename: 'final-gate.json' });
+      // Validate gate shape before any network, process or profile work.
+      const raw = await readFile(gate, 'utf8'); assert.equal(raw, `${JSON.stringify(JSON.parse(raw), null, 2)}\n`);
+      patchGate(JSON.parse(raw), results);
+    }
     for (const name of ['DSH_LIVE_PREFIX', 'DSH_LIVE_PLUGIN_PREFIX', 'DSH_LIVE_PLUGIN_TARBALL', 'DSH_LIVE_CHROME_EXECUTABLE']) assert(path.isAbsolute(process.env[name] ?? ''));
     const prefix = await realpath(process.env.DSH_LIVE_PREFIX);
+    // A shared read-only install is allowed; homes and ports below remain distinct.
     const pluginPrefix = await realpath(process.env.DSH_LIVE_PLUGIN_PREFIX);
     const { validateDshPrefix } = await import('../host/dsh-runtime.mjs');
     assert.equal((await validateDshPrefix(prefix, { deadline: Date.now() + 30000 })).version, VERSION);
     const pluginPackage = path.join(pluginPrefix, 'node_modules/@deepseek-ai/dsh');
-    assert.equal(JSON.parse(await readFile(path.join(pluginPackage, 'package.json'), 'utf8')).version, PLUGIN_DSH);
-    const tarball = await verifyTarball(process.env.DSH_LIVE_PLUGIN_TARBALL);
+    assert.equal(JSON.parse(await readFile(path.join(pluginPackage, 'package.json'), 'utf8')).version, config.dshVersion);
+    const tarball = await verifyTarball(process.env.DSH_LIVE_PLUGIN_TARBALL, config.tarballSha1);
     assert(process.env.DEEPSEEK_API_KEY?.trim()); secrets.add(process.env.DEEPSEEK_API_KEY);
     const chrome = await realpath(process.env.DSH_LIVE_CHROME_EXECUTABLE);
     assert.equal(path.basename(chrome), 'Google Chrome for Testing');
@@ -290,9 +352,10 @@ export async function main() {
     scratch = await mkdtemp(path.join(parent, 'dsh-native-browser-'));
     const home = path.join(scratch, 'home'), pluginHome = path.join(scratch, 'plugin-home');
     const dshHome = path.join(scratch, 'native-dsh'), pluginDshHome = path.join(scratch, 'plugin-dsh');
-    for (const dir of [home, pluginHome, path.join(home, 'tmp'), path.join(pluginHome, 'tmp'), pluginDshHome, path.join(scratch, 'user')]) await mkdir(dir, { recursive: true, mode: 0o700 });
+    for (const dir of [home, pluginHome, dshHome, path.join(home, 'tmp'), path.join(pluginHome, 'tmp'), pluginDshHome, path.join(scratch, 'user')]) await mkdir(dir, { recursive: true, mode: 0o700 });
     const bridgePort = await unusedPort([]), nativePort = await unusedPort([bridgePort]), pluginPort = await unusedPort([bridgePort, nativePort]);
     const shellPort = await unusedPort([bridgePort, nativePort, pluginPort]);
+    await assertLaneIsolation([home, pluginHome, dshHome, pluginDshHome], [bridgePort, nativePort, pluginPort, shellPort]);
     const origin = `http://127.0.0.1:${shellPort}`;
     const manifests = {};
     for (const mode of ['native', 'plugin']) {
@@ -405,6 +468,7 @@ export async function main() {
       const text = await page.locator('body').innerText();
       assert(![...secrets].some(value => value && text.includes(value)));
       const png = await page.screenshot();
+      // Evidence is written in both modes; observe mode only leaves the gate untouched.
       await writeFile(path.join(out, name), png, { flag: 'wx', mode: 0o600 });
       digests[name] = createHash('sha256').update(png).digest('hex');
     };
@@ -415,8 +479,8 @@ export async function main() {
       assert.equal(starts - exits, 1); await screenshot('browser-visible.png');
     });
     await step('pluginCoexistence', async () => {
-      const localTarball = path.join(scratch, 'dsh-augmentor-0.2.11.tgz');
-      await writeFile(localTarball, tarball, { mode: 0o600 }); await verifyTarball(localTarball);
+      const localTarball = path.join(scratch, `dsh-augmentor-${config.pluginVersion}.tgz`);
+      await writeFile(localTarball, tarball, { mode: 0o600 }); await verifyTarball(localTarball, config.tarballSha1);
       const pluginEnv = { ...safeEnv(pluginHome), DSH_HOME: pluginDshHome };
       const entry = path.join(pluginPackage, 'lib/bin.js');
       const installer = spawn(process.execPath, [entry, 'plugin', '--profile', 'web', 'add', localTarball,
@@ -424,7 +488,8 @@ export async function main() {
       await until(() => !live(installer), 120000);
       const profile = path.join(pluginDshHome, 'profiles/web');
       if (installer.exitCode === 127) {
-        // DSH accepts tarballs; 127 means its pnpm is absent. Its own command
+        // Both CLI versions accept tarballs and return 127 for absent pnpm
+        // (0.2: dsh/lib/plugin-BGnVfe_D.js and plugin-manager operations). Its own command
         // already initialized this scratch web profile. Avoid peer downloads:
         // DSH's pinned host packages are linked read-only from the exact prefix.
         const npm = spawn('npm', ['install', '--prefix', profile, '--ignore-scripts', '--no-audit', '--no-fund',
@@ -439,12 +504,13 @@ export async function main() {
       const hostRequire = createRequire(path.join(pluginPackage, 'package.json'));
       const toolsEntry = await realpath(hostRequire.resolve('@deepseek-ai/dsh-tools'));
       const tools = path.dirname(path.dirname(toolsEntry));
-      assert.equal(JSON.parse(await readFile(path.join(tools, 'package.json'), 'utf8')).version, PLUGIN_HOST_TOOLS);
+      await assertPluginTools(pluginPrefix, tools);
+      assert.equal(JSON.parse(await readFile(path.join(tools, 'package.json'), 'utf8')).version, config.hostToolsVersion);
       await mkdir(path.join(profile, 'node_modules/@deepseek-ai'), { recursive: true, mode: 0o700 });
       const toolsLink = path.join(profile, 'node_modules/@deepseek-ai/dsh-tools');
       try { await symlink(tools, toolsLink); } catch (error) { if (error.code !== 'EEXIST') throw error; assert.equal(await realpath(toolsLink), tools); }
       const installed = JSON.parse(await readFile(path.join(profile, 'node_modules/dsh-augmentor/package.json'), 'utf8'));
-      assert.equal(installed.version, '0.2.11');
+      assert.equal(installed.version, config.pluginVersion);
       const pluginRequire = createRequire(await realpath(path.join(profile, 'node_modules/dsh-augmentor/package.json')));
       for (const [name, version] of [['ws', '8.21.3'], ['@deepseek-ai/schemastery', '3.18.2']]) {
         assert.equal(installed.dependencies[name], version);
@@ -484,7 +550,7 @@ export async function main() {
         const response = await directFetch(`${manifests.plugin.agentRuntime.endpoint}/api/augmentor`, {
           dispatcher, redirect: 'manual', signal: AbortSignal.timeout(10000) });
         assert.equal(response.status, 200); const value = await response.json();
-        assert.equal(value.name, 'dsh-augmentor'); assert.equal(value.version, '0.2.11');
+        assert.equal(value.name, 'dsh-augmentor'); assert.equal(value.version, config.pluginVersion);
       };
       await install('plugin'); await healthy();
       for (const [index, mode] of ['plugin', 'native', 'plugin', 'native'].entries()) {
@@ -520,9 +586,10 @@ export async function main() {
     if (!cleanup || interrupted) for (const key of KEYS) results[key] = { passed: false, reason: interrupted ? 'interrupted' : 'owned-process-cleanup-unproven' };
     let written = false;
     try {
-      if (out && gate) {
-        await atomicWrite(path.join(out, 'browser-lanes-summary.json'), `${JSON.stringify(summary(results, cleanup, digests), null, 2)}\n`);
-        await updateGate(gate, results); written = true;
+      if (out && config && (gate || config.gateMode === 'observe')) {
+        await verifyEvidence(out, results, digests);
+        await atomicWrite(path.join(out, 'browser-lanes-summary.json'), `${JSON.stringify(summary(results, cleanup, digests, config), null, 2)}\n`);
+        await updateGate(gate, results, config.gateMode); written = true;
       }
     } catch { /* No exception, path, credential or remote body is serialized. */ }
     for (const key of KEYS) console.log(`${results[key].passed ? 'PASS' : 'FAIL'} ${key} ${results[key].reason}`);
