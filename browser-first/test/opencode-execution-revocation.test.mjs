@@ -128,36 +128,64 @@ async function postSettings(service, body, { token, writeToken } = {}) {
   });
 }
 
-test("off closes live SSE before settings acknowledgement", async (t) => {
-  await withTempService(async (service) => {
-    await service.executeAddonExecutionSettingsUpdate({ addon: "opencode", localCliExecution: true });
-    const { boundary } = boundaryFixture(t, { executionEnabled: () => service.openCodeProxyExecutionEnabled() });
-    await boundary.run("start", {});
-    const sub = await boundary.openEvents("A");
-    let closeAt = 0;
-    let eofAt = 0;
-    let release;
-    const closed = new Promise((resolve) => { release = resolve; });
-    sub.attachTransport({
-      bufferedBytes: () => 0,
-      closed,
-      terminate: async () => {
-        await new Promise((resolve) => setTimeout(resolve, 300));
-        closeAt = Date.now();
-        eofAt = Date.now();
-        release();
-      },
-    });
-    const unsubscribe = service.subscribeOpenCodeExecution((enabled) => (enabled ? undefined : boundary.revoke()));
-    const dispatchAt = Date.now();
-    const result = await postSettings(service, { addon: "opencode", localCliExecution: false });
-    const ackAt = Date.now();
-    unsubscribe();
-    assert.deepEqual(
-      [closeAt >= dispatchAt + 300, ackAt > closeAt, eofAt <= ackAt + 1000, result.status],
-      [true, true, true, 200],
-    );
+test("off closes live SSE before settings acknowledgement", { timeout: 10_000 }, async (t) => {
+  // Ordering is checked with an event log, not wall-clock stamps (#528):
+  // close and ack can land in the same millisecond.
+  const root = await mkdtemp(path.join(os.tmpdir(), "ros-opencode-revoke-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const order = [];
+  const terminateCodes = [];
+  let armed = false;
+  const settingsDir = path.join(root, "BrowserFirst", "Settings");
+  const recordingFs = {
+    ...fsPromises,
+    mkdir: async (dirPath, ...args) => {
+      // The settings write and the audit append share this folder; log the first only.
+      if (armed && path.resolve(String(dirPath)) === settingsDir && !order.includes("persist")) order.push("persist");
+      return fsPromises.mkdir(dirPath, ...args);
+    },
+  };
+  // The revoke-timeout fallback must not stand in for the close here; it has its own test.
+  const heldTimers = { setTimeout: () => ({ unref() { return this; } }), clearTimeout: () => {} };
+  const service = createService(root, { fs: recordingFs, timers: heldTimers });
+  let releaseClose = () => {};
+  // Registered before boundaryFixture so it runs before dispose(), which would otherwise wait on the gate forever.
+  t.after(() => releaseClose());
+  await service.executeAddonExecutionSettingsUpdate({ addon: "opencode", localCliExecution: true });
+  const { boundary } = boundaryFixture(t, { executionEnabled: () => service.openCodeProxyExecutionEnabled() });
+  await boundary.run("start", {});
+  const sub = await boundary.openEvents("A");
+  let signalTerminate;
+  const closeGate = new Promise((resolve) => { releaseClose = resolve; });
+  const terminateCalled = new Promise((resolve) => { signalTerminate = resolve; });
+  sub.attachTransport({
+    bufferedBytes: () => 0,
+    closed: closeGate.then(() => { order.push("closed"); }),
+    // Return at once, like a real transport that only starts the close: the ack must wait on `closed`, not on terminate().
+    terminate: async (code) => {
+      order.push("terminate");
+      terminateCodes.push(code);
+      signalTerminate();
+    },
   });
+  const unsubscribe = service.subscribeOpenCodeExecution((enabled) => (enabled ? undefined : boundary.revoke()));
+  t.after(unsubscribe);
+  armed = true;
+  const pending = postSettings(service, { addon: "opencode", localCliExecution: false })
+    .then((result) => { order.push("ack"); return result; });
+  // If the ack lands without ever closing the stream, fail on the order check instead of hanging.
+  await Promise.race([terminateCalled, pending]);
+  // A settings write that skipped the revoke would already have reached mkdir by the next macrotask.
+  await new Promise((resolve) => setImmediate(resolve));
+  const whileHeld = [...order];
+  releaseClose();
+  const result = await pending;
+  // Read the file itself: the in-memory latch alone would report "disabled" even if the write were wrong.
+  const persisted = JSON.parse(await fsPromises.readFile(path.join(settingsDir, "addon-execution.json"), "utf8"));
+  assert.deepEqual(
+    [whileHeld, order, terminateCodes, result.status, await service.openCodeProxyExecutionEnabled(), persisted.opencode.localCliExecution],
+    [["terminate"], ["terminate", "closed", "persist", "ack"], ["OPENCODE_REVOKED"], 200, false, false],
+  );
 });
 
 for (const kind of ["write", "audit"]) {
